@@ -1097,6 +1097,45 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "stored values, relationship targets, and raw payload bytes are compared "
             "privately and intentionally omitted."
         )
+    what_if_data_tables = profile["what_if_data_tables"]
+    if what_if_data_tables["present"]:
+        lines.extend(
+            [
+                "",
+                "## What-If Data Tables",
+                "",
+                f"- **Sensitivity-table masters:** {what_if_data_tables['data_table_count']}",
+                (
+                    "- **One-variable / two-variable tables:** "
+                    f"{what_if_data_tables['one_variable_data_table_count']} / "
+                    f"{what_if_data_tables['two_variable_data_table_count']}"
+                ),
+                (
+                    "- **One-variable row / column orientation:** "
+                    f"{what_if_data_tables['one_variable_row_oriented_count']} / "
+                    f"{what_if_data_tables['one_variable_column_oriented_count']}"
+                ),
+                (
+                    "- **Declared output cells:** "
+                    f"{what_if_data_tables['declared_output_cell_count']}"
+                ),
+                (
+                    "- **Recalculation requested / deleted input references:** "
+                    f"{what_if_data_tables['recalculation_requested_count']} / "
+                    f"{what_if_data_tables['deleted_input_reference_count']}"
+                ),
+            ]
+        )
+        if what_if_data_tables["unrecognized_data_table_count"]:
+            lines.append(
+                "- **Unrecognized or malformed Data Table masters:** "
+                f"{what_if_data_tables['unrecognized_data_table_count']}"
+            )
+        lines.append(
+            "Data Table output ranges, input-cell references, and formula metadata are "
+            "compared privately and intentionally omitted. Cached scenario-output cells "
+            "remain ordinary cell values under the regular cell-diff boundary."
+        )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:
         lines.extend(

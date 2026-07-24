@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.30.0 — 2026-07-25
+
+- Inspect Excel What-If Data Table masters directly from worksheet OOXML
+  (`f t="dataTable"`). Private signatures retain the declared output range,
+  one-/two-variable mode, orientation, input references, deleted-input flags,
+  recalculation request, and supported generic formula metadata without
+  serializing those controls into profiles, `FF034`, or SARIF.
+- Stabilize the workbook reader's `DataTableFormula` representation, eliminating
+  false self-diffs caused by process-local object addresses while preserving
+  ordinary formula add/remove guards with a safe `=TABLE()` placeholder.
+- Emit `FF034` for a material What-If Data Table definition or control change,
+  and add the fail-closed `no_what_if_data_table_changes` policy rule
+  (`FFP034`). Equivalent A1 case/absolute-reference and Boolean spellings are
+  normalized. Missing, malformed, overlapping, or unsupported declarations are
+  visible parser-coverage warnings rather than silently ignored.
+- Do not calculate scenarios, infer a Data Table's output formula, predict
+  recalculation results, or add Data Table inputs to the ordinary dependency
+  graph. Cached scenario-output cells remain under the normal cell-diff
+  boundary.
+
 ## 0.29.0 — 2026-07-24
 
 - Inspect embedded Power Pivot/Data Model packages from the workbook's explicit

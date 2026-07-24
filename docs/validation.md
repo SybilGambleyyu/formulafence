@@ -5,6 +5,32 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel What-If Data Tables — 2026-07-24
+
+FormulaFence 0.30.0 was validated with controlled `.xlsx` fixtures containing
+three raw-OOXML `f t="dataTable"` masters: a one-variable column table, a
+one-variable row table, and a two-variable table. The test suite verifies the
+safe profile counts, a zero-change self-diff, `FF034` on a private input-reference
+change, and `FFP034` under `no_what_if_data_table_changes`. It also checks that
+equivalent lowercase/absolute A1 and Boolean spellings do not create a finding,
+while a deleted input is recorded and a malformed input reference becomes an
+explicit parser-coverage warning. Raw input references and output ranges are
+verified absent from JSON, Markdown, ordinary reports, and SARIF.
+
+As an independent package-compatibility check, FormulaFence inspected the
+public [`sensitivity2d.xlsx` fixture](https://github.com/witanlabs/witan-vs-openpyxl/blob/8a7f538b13b98f7098102bfdc779b8920f63e403/fixtures/sensitivity2d.xlsx)
+from the pinned `witan-vs-openpyxl` source revision, downloaded locally and not
+bundled with this repository. The downloaded workbook SHA-256 was
+`bc5f9efa6ca78ebd986d81b3cf372acc2a72a6a1326178118d0158f988427bcc`.
+FormulaFence found one two-variable master, 25 declared output cells, one
+recalculation request, and no Data Table coverage warning. Comparing the exact
+file to itself produced no changes, which independently confirms stable handling
+of the reader's `DataTableFormula` object representation. This validates static
+OOXML declaration comparison and data minimisation—not scenario calculation,
+cached-output correctness, output-formula inference, or downstream-impact
+analysis. The declaration boundary follows the Open XML
+[`f` (Formula) specification](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_f_topic_ID0E6TY4.html).
+
 ## Embedded Power Pivot/Data Model — 2026-07-24
 
 FormulaFence 0.29.0 was validated with controlled raw-OOXML `.xlsx` packages

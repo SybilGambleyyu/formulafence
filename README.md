@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.29.0/formulafence-0.29.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.30.0/formulafence-0.30.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -69,6 +69,7 @@ rules:
   no_pivot_table_definition_changes: true
   no_slicer_timeline_cache_changes: true
   no_power_pivot_data_model_changes: true
+  no_what_if_data_table_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -106,7 +107,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, Excel What-If Data Tables, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -448,6 +449,26 @@ evaluate DAX, refresh a model, calculate or render a report, infer model-to-cell
 impact, or fetch an external target. The boundary follows Microsoft's
 [PowerPivot Model guidance](https://learn.microsoft.com/en-us/office/vba/excel/concepts/about-the-powerpivot-model-object-in-excel)
 and the Open XML [`x15:dataModel` declaration](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.linq.x15.datamodel?view=openxml-3.0.1).
+
+FormulaFence also inventories Excel **What-If Data Tables**—the sensitivity
+analysis feature, not an Excel table. It reads each OOXML `f` element with
+`t="dataTable"` directly from the worksheet and privately compares the master
+output range, one- or two-variable mode, row/column orientation, input-cell
+references, deleted-input flags, and recalculation request. A material change
+emits `FF034`; enable `no_what_if_data_table_changes` for `FFP034`.
+
+Profiles expose only safe counts for masters, table dimensions, one-/two-variable
+forms, orientation, recalculation requests, deleted inputs, and malformed
+definitions. Output ranges, input references, and raw formula metadata never
+enter the profile, Markdown control section, `FF034` details, or SARIF.
+Equivalent A1 case/absolute-reference spellings and Boolean spellings are
+normalized. A missing, malformed, overlapping, or unsupported definition is a
+visible coverage warning. FormulaFence does not calculate scenarios, infer the
+scenario output formula, predict recalc results, or add Data Table inputs to the
+ordinary dependency graph. Cached output cells remain ordinary cell values under
+the regular cell-diff boundary. The declaration boundary follows the Open XML
+[`f` (Formula) specification](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_f_topic_ID0E6TY4.html)
+and Excel's [What-If Data Table guidance](https://support.microsoft.com/en-us/office/calculate-multiple-results-by-using-a-data-table-e95e2487-6ca6-4413-ad12-77542a5ea50b).
 
 FormulaFence also inventories relationship-backed **worksheet controls, legacy
 VML form controls, and OLE objects**. A worksheet can bind modern `<control>`

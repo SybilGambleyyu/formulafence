@@ -19,6 +19,7 @@ rules:
   no_pivot_table_definition_changes: true
   no_slicer_timeline_cache_changes: true
   no_power_pivot_data_model_changes: true
+  no_what_if_data_table_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -79,6 +80,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_pivot_table_definition_changes` | boolean | A PivotTable binding/layout, cache schema, shared item, cache-record relationship, or bounded cached-record payload changes. Source and refresh controls remain under `no_external_data_connection_changes`. |
 | `no_slicer_timeline_cache_changes` | boolean | A Slicer or Timeline workbook binding, cached filter state, source binding, filtered-PivotTable binding, or direct cache-part relationship changes. |
 | `no_power_pivot_data_model_changes` | boolean | An embedded Power Pivot/Data Model workbook binding, `x15:dataModel` declaration, direct model-part relationship, or bounded raw model payload changes. |
+| `no_what_if_data_table_changes` | boolean | An Excel What-If Data Table master changes its output range, one-/two-variable mode, orientation, input references, deleted-input state, recalculation request, or supported raw formula metadata. This is unrelated to an Excel table definition. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -375,6 +377,25 @@ orphaned, unbound, externally targeted, unexpected directly related,
 oversized, or over-budget material remains a visible coverage warning. Raw
 payload reads are bounded to 512 MiB per part, 512 MiB per workbook, and 16
 parts.
+
+Excel **What-If Data Tables** are formula-bearing sensitivity engines, distinct
+from Excel tables. FormulaFence reads each worksheet's `f t="dataTable"` master
+from raw OOXML and privately compares its declared output range, one-/two-input
+mode, one-variable row/column orientation, input-cell references,
+deleted-input flags, recalculation request, and supported generic formula
+metadata. A material change emits `FF034`; enable
+`no_what_if_data_table_changes` to make it `FFP034` in CI.
+
+Profiles and `FF034` details expose only structural counts: master count,
+one-/two-variable and orientation counts, declared output-cell count,
+recalculation requests, deleted inputs, and malformed-definition count. Input
+references, output ranges, and raw metadata remain private. Equivalent A1
+case/absolute-reference spellings and Boolean spellings are normalized.
+Malformed, missing, overlapping, or unsupported declarations become visible
+coverage warnings. FormulaFence does not calculate a table, infer its output
+formula, predict scenario values, or add its input references to the normal
+dependency graph. Cached scenario-output cells remain under the ordinary
+cell-diff boundary.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

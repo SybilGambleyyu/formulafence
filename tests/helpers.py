@@ -21,7 +21,7 @@ from openpyxl.formatting.rule import (
 from openpyxl.styles import Font, PatternFill, Protection
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
-from openpyxl.worksheet.formula import ArrayFormula
+from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
 from openpyxl.worksheet.table import Table
 
 _DATA_MASHUP_NS = "http://schemas.microsoft.com/DataMashup"
@@ -5604,6 +5604,161 @@ def make_legacy_array_model(path: Path, array_ref: str = "B1:B3") -> Path:
     dashboard["B2"] = "=SUM(Model!B2:B3)"
     workbook.save(path)
     return path
+
+
+def make_what_if_data_table_model(path: Path) -> Path:
+    """Create controlled one- and two-variable What-If Data Table masters."""
+    workbook = Workbook()
+    sensitivity = workbook.active
+    sensitivity.title = "Sensitivity"
+    sensitivity["A1"] = "Controlled scenario analysis"
+    sensitivity["B2"] = 0.05
+    sensitivity["B3"] = 0.1
+    sensitivity["B4"] = 0.15
+    sensitivity["D2"] = "=B2*100"
+    sensitivity["F2"] = "=B2*200"
+    sensitivity["K2"] = "=B2*B3*1000"
+    sensitivity["D3"] = DataTableFormula(
+        ref="D3:D6",
+        dt2D=False,
+        dtr=False,
+        r1="B2",
+        ca=True,
+    )
+    sensitivity["F3"] = DataTableFormula(
+        ref="F3:I3",
+        dt2D=False,
+        dtr=True,
+        r1="B2",
+    )
+    sensitivity["K3"] = DataTableFormula(
+        ref="K3:M5",
+        dt2D=True,
+        r1="B2",
+        r2="B3",
+    )
+    workbook.save(path)
+    return path
+
+
+def change_what_if_data_table_input(path: Path) -> Path:
+    """Change one private Data Table input reference without touching cells."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        formula_tag = f"{{{_SPREADSHEETML_NS}}}f"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        formula = next(
+            element
+            for element in worksheet.iter(formula_tag)
+            if element.get("t") == "dataTable"
+        )
+        formula.set("r1", "B4")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".what-if-data-table-change.tmp.xlsx")
+
+
+def normalize_what_if_data_table_reference_spelling(path: Path) -> Path:
+    """Use equivalent absolute/lowercase OOXML reference spellings."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        formula_tag = f"{{{_SPREADSHEETML_NS}}}f"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        formulas = [
+            element
+            for element in worksheet.iter(formula_tag)
+            if element.get("t") == "dataTable"
+        ]
+        if len(formulas) != 3:
+            raise ValueError("Could not find every What-If Data Table fixture declaration")
+        formulas[0].set("ref", "$d$3:$d$6")
+        formulas[0].set("r1", "$b$2")
+        formulas[0].set("dt2D", "0")
+        formulas[0].set("dtr", "false")
+        formulas[0].set("ca", "true")
+        formulas[1].set("ref", "$f$3:$i$3")
+        formulas[1].set("r1", "$b$2")
+        formulas[1].set("dt2D", "false")
+        formulas[1].set("dtr", "1")
+        formulas[2].set("ref", "$k$3:$m$5")
+        formulas[2].set("r1", "$b$2")
+        formulas[2].set("r2", "$b$3")
+        formulas[2].set("dt2D", "true")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".what-if-data-table-noise.tmp.xlsx")
+
+
+def delete_what_if_data_table_input(path: Path) -> Path:
+    """Mark the first table's input reference deleted in its raw definition."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        formula_tag = f"{{{_SPREADSHEETML_NS}}}f"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        formula = next(
+            element
+            for element in worksheet.iter(formula_tag)
+            if element.get("t") == "dataTable"
+        )
+        formula.set("del1", "1")
+        formula.attrib.pop("r1", None)
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".what-if-data-table-deleted-input.tmp.xlsx")
+
+
+def corrupt_what_if_data_table_input(path: Path) -> Path:
+    """Inject an unsupported private input reference to exercise fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        formula_tag = f"{{{_SPREADSHEETML_NS}}}f"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        formula = next(
+            element
+            for element in worksheet.iter(formula_tag)
+            if element.get("t") == "dataTable"
+        )
+        formula.set("r1", "PrivateInputSheet!B2")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".what-if-data-table-corrupt.tmp.xlsx")
+
+
+def overlap_what_if_data_table_outputs(path: Path) -> Path:
+    """Expand one master range across another master to test fail-closed overlap."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        formula_tag = f"{{{_SPREADSHEETML_NS}}}f"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        formula = next(
+            element
+            for element in worksheet.iter(formula_tag)
+            if element.get("t") == "dataTable"
+        )
+        formula.set("ref", "D3:F6")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".what-if-data-table-overlap.tmp.xlsx")
 
 
 def mark_array_formula_dynamic(path: Path, anchor: str = "B1") -> Path:

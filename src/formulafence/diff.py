@@ -31,6 +31,7 @@ from formulafence.models import (
     QueryTableRefreshSnapshot,
     RibbonCustomizationSnapshot,
     SlicerTimelineCacheSnapshot,
+    WhatIfDataTableSnapshot,
     WorkbookSnapshot,
     WorksheetEmbeddedControlSnapshot,
     XlmMacroSheetSnapshot,
@@ -1297,6 +1298,31 @@ def _workbook_control_changes(
                 "FF033",
                 "high",
                 "Embedded Power Pivot/Data Model definition or payload changed.",
+                details=details,
+            )
+        )
+    if before.what_if_data_tables != after.what_if_data_tables:
+        old_data_tables: WhatIfDataTableSnapshot = before.what_if_data_tables
+        new_data_tables: WhatIfDataTableSnapshot = after.what_if_data_tables
+        details: dict[str, object] = {
+            "before": old_data_tables.to_dict(),
+            "after": new_data_tables.to_dict(),
+        }
+        if old_data_tables.definition_signature != new_data_tables.definition_signature:
+            details["data_table_definition_material_changed"] = True
+        changes.append(
+            Change(
+                "what_if_data_tables_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF034",
+                "high",
+                "What-If Data Table sensitivity definition or control changed.",
                 details=details,
             )
         )

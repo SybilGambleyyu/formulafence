@@ -25,6 +25,8 @@ from openpyxl.utils.cell import column_index_from_string, get_column_letter, ran
 from openpyxl.utils.exceptions import InvalidFileException
 
 from formulafence.formulas import (
+    MAX_EXCEL_COLUMN,
+    MAX_EXCEL_ROW,
     ParsedReference,
     StructuredTable,
     formula_fingerprint,
@@ -65,6 +67,7 @@ from formulafence.models import (
     SheetSnapshot,
     SlicerTimelineCacheSnapshot,
     TableSnapshot,
+    WhatIfDataTableSnapshot,
     WorkbookLoadError,
     WorkbookProtectionSnapshot,
     WorkbookSnapshot,
@@ -437,6 +440,33 @@ class _PowerPivotDataModelMetadata:
 
     data_model: PowerPivotDataModelSnapshot
     warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _WhatIfDataTableMetadata:
+    """Raw What-If Data Table evidence retained before reader loss."""
+
+    data_tables: WhatIfDataTableSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass
+class _WhatIfDataTableDefinition:
+    """One private, raw Data Table declaration while it is being validated."""
+
+    sheet: str
+    coordinate: str | None
+    ref: str | None
+    min_column: int | None
+    min_row: int | None
+    max_column: int | None
+    max_row: int | None
+    two_dimensional: bool | None
+    row_oriented: bool | None
+    recalculation_requested: bool | None
+    deleted_input_reference_count: int
+    signature_entry: tuple[str, str]
+    issues: set[str]
 
 
 @dataclass(frozen=True)
@@ -12249,6 +12279,378 @@ def _dynamic_metadata_indexes(archive: ZipFile) -> set[int]:
     return dynamic_cell_indexes
 
 
+_WHAT_IF_DATA_TABLE_FORMULA_TYPE = "dataTable"
+_WHAT_IF_DATA_TABLE_KNOWN_ATTRIBUTES = frozenset(
+    {
+        "t",
+        "aca",
+        "ref",
+        "dt2D",
+        "dtr",
+        "del1",
+        "del2",
+        "r1",
+        "r2",
+        "ca",
+        "si",
+        "bx",
+    }
+)
+
+
+def _canonical_what_if_data_table_range(
+    value: str | None,
+) -> tuple[str | None, tuple[int, int, int, int] | None]:
+    """Normalize a local A1 range without accepting unbounded sheet spans."""
+    if value is None or not (candidate := value.strip()):
+        return None, None
+    try:
+        min_column, min_row, max_column, max_row = range_boundaries(candidate)
+    except ValueError:
+        return None, None
+    if (
+        min_column is None
+        or min_row is None
+        or max_column is None
+        or max_row is None
+        or min_column < 1
+        or min_row < 1
+        or max_column > MAX_EXCEL_COLUMN
+        or max_row > MAX_EXCEL_ROW
+    ):
+        return None, None
+    anchor = f"{get_column_letter(min_column)}{min_row}"
+    endpoint = f"{get_column_letter(max_column)}{max_row}"
+    return (
+        anchor if anchor == endpoint else f"{anchor}:{endpoint}",
+        (min_column, min_row, max_column, max_row),
+    )
+
+
+def _canonical_what_if_data_table_cell(value: str | None) -> str | None:
+    """Normalize a local single-cell input reference from a Data Table."""
+    reference, bounds = _canonical_what_if_data_table_range(value)
+    if bounds is None:
+        return None
+    min_column, min_row, max_column, max_row = bounds
+    if min_column != max_column or min_row != max_row:
+        return None
+    return reference
+
+
+def _what_if_data_table_boolean(
+    value: str | None,
+    default: bool = False,
+) -> tuple[bool | None, str]:
+    """Read one OOXML boolean while retaining malformed material privately."""
+    if value is None:
+        return default, "true" if default else "false"
+    lowered = value.casefold()
+    if lowered in {"1", "true"}:
+        return True, "true"
+    if lowered in {"0", "false"}:
+        return False, "false"
+    return None, f"invalid:{value}"
+
+
+def _what_if_data_table_shared_index(value: str | None) -> tuple[int | None, str]:
+    """Canonicalize the optional generic formula shared-index attribute."""
+    if value is None:
+        return None, "none"
+    if value.isascii() and value.isdecimal():
+        return int(value), str(int(value))
+    return None, f"invalid:{value}"
+
+
+def _what_if_data_table_metadata(path: Path) -> _WhatIfDataTableMetadata:
+    """Inventory Excel What-If Data Table masters directly from worksheet XML.
+
+    The declarations are data-bearing sensitivity controls rather than ordinary
+    formulas. Raw OOXML is read before openpyxl can reduce them to unstable
+    object representations, while private signatures keep all table ranges and
+    input-cell references out of emitted artifacts.
+    """
+    warnings: set[str] = set()
+    default = WhatIfDataTableSnapshot()
+    definitions: list[_WhatIfDataTableDefinition] = []
+    try:
+        with ZipFile(path) as archive:
+            cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+            formula_tag = f"{{{_SPREADSHEETML_NS}}}f"
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                for cell in worksheet.iter(cell_tag):
+                    formulas = cell.findall(formula_tag)
+                    for formula in formulas:
+                        if formula.get("t") != _WHAT_IF_DATA_TABLE_FORMULA_TYPE:
+                            continue
+
+                        issues: set[str] = set()
+                        coordinate_raw = cell.get("r")
+                        coordinate = _canonical_what_if_data_table_cell(coordinate_raw)
+                        if coordinate is None:
+                            issues.add("invalid-master-coordinate")
+
+                        ref_raw = formula.get("ref")
+                        ref, bounds = _canonical_what_if_data_table_range(ref_raw)
+                        if bounds is None:
+                            issues.add("invalid-output-range")
+
+                        dt2d, dt2d_signature = _what_if_data_table_boolean(
+                            formula.get("dt2D")
+                        )
+                        dtr, dtr_signature = _what_if_data_table_boolean(
+                            formula.get("dtr")
+                        )
+                        deleted_input_1, deleted_input_1_signature = (
+                            _what_if_data_table_boolean(formula.get("del1"))
+                        )
+                        deleted_input_2, deleted_input_2_signature = (
+                            _what_if_data_table_boolean(formula.get("del2"))
+                        )
+                        recalculate, recalculate_signature = _what_if_data_table_boolean(
+                            formula.get("ca")
+                        )
+                        always_calculate, always_calculate_signature = (
+                            _what_if_data_table_boolean(formula.get("aca"))
+                        )
+                        assigns_name, assigns_name_signature = _what_if_data_table_boolean(
+                            formula.get("bx")
+                        )
+                        shared_index, shared_index_signature = (
+                            _what_if_data_table_shared_index(formula.get("si"))
+                        )
+                        boolean_values = (
+                            dt2d,
+                            dtr,
+                            deleted_input_1,
+                            deleted_input_2,
+                            recalculate,
+                            always_calculate,
+                            assigns_name,
+                        )
+                        if any(value is None for value in boolean_values):
+                            issues.add("invalid-boolean")
+                        if formula.get("si") is not None and shared_index is None:
+                            issues.add("invalid-shared-index")
+                        if always_calculate is True or assigns_name is True:
+                            issues.add("unmodelled-generic-formula-control")
+                        if shared_index is not None:
+                            issues.add("unexpected-shared-index")
+
+                        input_1_raw = formula.get("r1")
+                        input_2_raw = formula.get("r2")
+                        input_1 = _canonical_what_if_data_table_cell(input_1_raw)
+                        input_2 = _canonical_what_if_data_table_cell(input_2_raw)
+                        if input_1_raw is not None and input_1 is None:
+                            issues.add("invalid-first-input")
+                        if input_2_raw is not None and input_2 is None:
+                            issues.add("invalid-second-input")
+
+                        if bounds is not None and coordinate is not None:
+                            min_column, min_row, _, _ = bounds
+                            expected_anchor = f"{get_column_letter(min_column)}{min_row}"
+                            if coordinate != expected_anchor:
+                                issues.add("master-does-not-match-output-range")
+
+                        if dt2d is True:
+                            if input_1 is None and deleted_input_1 is not True:
+                                issues.add("missing-first-input")
+                            if input_2 is None and deleted_input_2 is not True:
+                                issues.add("missing-second-input")
+                            if dtr is True:
+                                issues.add("row-orientation-on-two-variable-table")
+                        elif dt2d is False:
+                            if input_1 is None and deleted_input_1 is not True:
+                                issues.add("missing-first-input")
+                            if input_2_raw is not None or deleted_input_2 is True:
+                                issues.add("second-input-on-one-variable-table")
+
+                        unknown_attributes = tuple(
+                            sorted(
+                                (
+                                    _xml_display_name(attribute),
+                                    value,
+                                )
+                                for attribute, value in formula.attrib.items()
+                                if attribute not in _WHAT_IF_DATA_TABLE_KNOWN_ATTRIBUTES
+                            )
+                        )
+                        if unknown_attributes:
+                            issues.add("unknown-attributes")
+                        formula_text = (formula.text or "").strip()
+                        if formula_text:
+                            issues.add("unexpected-formula-text")
+                        child_signatures = tuple(
+                            _private_payload_signature(
+                                ElementTree.tostring(child, encoding="utf-8")
+                            )
+                            for child in formula
+                        )
+                        if child_signatures:
+                            issues.add("unexpected-formula-children")
+                        if len(formulas) != 1:
+                            issues.add("multiple-cell-formulas")
+
+                        coordinate_signature = (
+                            coordinate
+                            if coordinate is not None
+                            else f"invalid:{coordinate_raw or ''}"
+                        )
+                        ref_signature = (
+                            ref if ref is not None else f"invalid:{ref_raw or ''}"
+                        )
+                        input_1_signature = (
+                            input_1
+                            if input_1 is not None
+                            else "none"
+                            if input_1_raw is None
+                            else f"invalid:{input_1_raw}"
+                        )
+                        input_2_signature = (
+                            input_2
+                            if input_2 is not None
+                            else "none"
+                            if input_2_raw is None
+                            else f"invalid:{input_2_raw}"
+                        )
+                        signature_material = (
+                            ("coordinate", coordinate_signature),
+                            ("ref", ref_signature),
+                            ("dt2D", dt2d_signature),
+                            ("dtr", dtr_signature),
+                            ("del1", deleted_input_1_signature),
+                            ("del2", deleted_input_2_signature),
+                            ("r1", input_1_signature),
+                            ("r2", input_2_signature),
+                            ("ca", recalculate_signature),
+                            ("aca", always_calculate_signature),
+                            ("bx", assigns_name_signature),
+                            ("si", shared_index_signature),
+                            ("unknown_attributes", repr(unknown_attributes)),
+                            ("formula_text", formula_text),
+                            ("child_signatures", repr(child_signatures)),
+                            ("formula_count", str(len(formulas))),
+                        )
+                        definitions.append(
+                            _WhatIfDataTableDefinition(
+                                sheet=sheet,
+                                coordinate=coordinate,
+                                ref=ref,
+                                min_column=bounds[0] if bounds is not None else None,
+                                min_row=bounds[1] if bounds is not None else None,
+                                max_column=bounds[2] if bounds is not None else None,
+                                max_row=bounds[3] if bounds is not None else None,
+                                two_dimensional=dt2d,
+                                row_oriented=dtr,
+                                recalculation_requested=recalculate,
+                                deleted_input_reference_count=sum(
+                                    value is True
+                                    for value in (
+                                        deleted_input_1,
+                                        deleted_input_2,
+                                    )
+                                ),
+                                signature_entry=(
+                                    f"{sheet.casefold()}!{coordinate_signature}",
+                                    repr(signature_material),
+                                ),
+                                issues=issues,
+                            )
+                        )
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _WhatIfDataTableMetadata(
+            default,
+            (
+                "FormulaFence could not inspect What-If Data Table OOXML "
+                f"({type(error).__name__}); affected sensitivity controls were not compared.",
+            ),
+        )
+
+    definitions_by_sheet: dict[str, list[_WhatIfDataTableDefinition]] = defaultdict(list)
+    for definition in definitions:
+        if None not in {
+            definition.min_column,
+            definition.min_row,
+            definition.max_column,
+            definition.max_row,
+        }:
+            definitions_by_sheet[definition.sheet.casefold()].append(definition)
+    overlap_found = False
+    for sheet_definitions in definitions_by_sheet.values():
+        for index, definition in enumerate(sheet_definitions):
+            for other in sheet_definitions[index + 1 :]:
+                if (
+                    definition.min_column <= other.max_column
+                    and other.min_column <= definition.max_column
+                    and definition.min_row <= other.max_row
+                    and other.min_row <= definition.max_row
+                ):
+                    definition.issues.add("overlapping-output-ranges")
+                    other.issues.add("overlapping-output-ranges")
+                    overlap_found = True
+    if overlap_found:
+        warnings.add(
+            "FormulaFence found overlapping What-If Data Table output ranges; "
+            "the affected sensitivity controls have a coverage gap."
+        )
+    if any(definition.issues for definition in definitions):
+        warnings.add(
+            "FormulaFence found malformed or unsupported What-If Data Table formula "
+            "metadata; the affected sensitivity controls have a coverage gap."
+        )
+
+    snapshot = WhatIfDataTableSnapshot(
+        data_table_count=len(definitions),
+        one_variable_data_table_count=sum(
+            definition.two_dimensional is False for definition in definitions
+        ),
+        two_variable_data_table_count=sum(
+            definition.two_dimensional is True for definition in definitions
+        ),
+        one_variable_row_oriented_count=sum(
+            definition.two_dimensional is False and definition.row_oriented is True
+            for definition in definitions
+        ),
+        one_variable_column_oriented_count=sum(
+            definition.two_dimensional is False and definition.row_oriented is False
+            for definition in definitions
+        ),
+        declared_output_cell_count=sum(
+            (definition.max_column - definition.min_column + 1)
+            * (definition.max_row - definition.min_row + 1)
+            for definition in definitions
+            if None
+            not in {
+                definition.min_column,
+                definition.min_row,
+                definition.max_column,
+                definition.max_row,
+            }
+        ),
+        recalculation_requested_count=sum(
+            definition.recalculation_requested is True for definition in definitions
+        ),
+        deleted_input_reference_count=sum(
+            definition.deleted_input_reference_count for definition in definitions
+        ),
+        unrecognized_data_table_count=sum(
+            bool(definition.issues) for definition in definitions
+        ),
+        definition_signature=_private_external_data_signature(
+            tuple(sorted(definition.signature_entry for definition in definitions))
+        ),
+    )
+    return _WhatIfDataTableMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
     """Inspect raw markers that openpyxl intentionally does not expose."""
     dynamic_cells: set[CellKey] = set()
@@ -12499,6 +12901,17 @@ def _formula_text(value: object) -> str | None:
     return text if isinstance(text, str) else None
 
 
+def _is_what_if_data_table_formula(cell: object) -> bool:
+    """Return whether openpyxl exposed an OOXML What-If Data Table master."""
+    value = getattr(cell, "value", None)
+    formula_type = getattr(value, "t", None)
+    return (
+        getattr(cell, "data_type", None) == "f"
+        and isinstance(formula_type, str)
+        and formula_type.casefold() == _WHAT_IF_DATA_TABLE_FORMULA_TYPE.casefold()
+    )
+
+
 def _cell_snapshot(
     sheet: str,
     cell: object,
@@ -12509,6 +12922,21 @@ def _cell_snapshot(
     coordinate = cell.coordinate
     value = cell.value
     data_type = cell.data_type
+    if _is_what_if_data_table_formula(cell):
+        # openpyxl stores this control as an object whose default repr embeds a
+        # process-local address. The raw scanner carries the real semantics;
+        # this stable placeholder preserves ordinary formula add/remove guards
+        # without exposing the Data Table's sensitive input references.
+        formula = "=TABLE()"
+        return CellSnapshot(
+            sheet=sheet,
+            coordinate=coordinate,
+            cell_type="formula",
+            value=formula,
+            value_type="what_if_data_table_formula",
+            formula=formula,
+            formula_fingerprint=formula_fingerprint(formula, coordinate),
+        )
     formula = _formula_text(value) if data_type == "f" else None
     if formula is not None:
         return CellSnapshot(
@@ -13111,6 +13539,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         dict(pivot_table_metadata.slicer_timeline_pivot_cache_members_by_id),
     )
     power_pivot_data_model_metadata = _power_pivot_data_model_metadata(source)
+    what_if_data_table_metadata = _what_if_data_table_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -13143,6 +13572,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(pivot_table_metadata.warnings)
     parser_warnings.update(slicer_timeline_metadata.warnings)
     parser_warnings.update(power_pivot_data_model_metadata.warnings)
+    parser_warnings.update(what_if_data_table_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -13224,6 +13654,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             )
             cells[snapshot.location] = snapshot
             nonempty_cells += 1
+            if _is_what_if_data_table_formula(cell):
+                formula_cells += 1
+                continue
             if not snapshot.is_formula or snapshot.formula is None:
                 continue
 
@@ -13356,6 +13789,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         pivot_table_definitions=pivot_table_metadata.pivot_tables,
         slicer_timeline_caches=slicer_timeline_metadata.caches,
         power_pivot_data_model=power_pivot_data_model_metadata.data_model,
+        what_if_data_tables=what_if_data_table_metadata.data_tables,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -13425,6 +13859,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "pivot_table_definitions": snapshot.pivot_table_definitions.profile_dict(),
         "slicer_timeline_caches": snapshot.slicer_timeline_caches.profile_dict(),
         "power_pivot_data_model": snapshot.power_pivot_data_model.profile_dict(),
+        "what_if_data_tables": snapshot.what_if_data_tables.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -13446,6 +13881,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_pivot_table_definitions": snapshot.pivot_table_definitions.present,
             "has_slicer_timeline_caches": snapshot.slicer_timeline_caches.present,
             "has_power_pivot_data_model": snapshot.power_pivot_data_model.present,
+            "has_what_if_data_tables": snapshot.what_if_data_tables.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

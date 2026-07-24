@@ -18,6 +18,9 @@ financial correctness or replace model review.
 - Embedded Power Pivot/Data Model declarations and bounded raw model payloads
   are compared through private fingerprints only; table names, relationships,
   DAX, stored values, and connection details are never emitted.
+- What-If Data Table output ranges, input-cell references, and raw formula
+  metadata are compared through a private signature only. Cached scenario-output
+  cells remain under the normal cell-diff boundary.
 - Protection credential material is never emitted: legacy verifiers, modern
   hashes/salts, protected-range names, and security descriptors are compared
   through private fingerprints and reported only as safe presence/change metadata.
@@ -85,6 +88,19 @@ review prompt, not proof of an error.
   reported as coverage notes and receive no aliases. FormulaFence reports
   adding, removing, or changing mode, plus a fixed CSE output-range change, as
   `FF018`; it does not calculate either array form.
+- Excel What-If Data Tables are distinct from Excel tables. FormulaFence reads
+  each worksheet `f t="dataTable"` master directly from OOXML and privately
+  compares its declared output range, one-/two-variable form, one-variable
+  orientation, input references, deleted-input flags, recalculation request,
+  and supported generic formula metadata. A material change emits `FF034` and
+  can be blocked with `no_what_if_data_table_changes`. Profiles and `FF034`
+  details expose only structural counts, never those references or ranges.
+  Equivalent A1 case/absolute-reference and Boolean spellings are normalized.
+  Missing, malformed, overlapping, or unsupported declarations remain visible
+  coverage warnings. FormulaFence does not calculate scenarios, infer their
+  output formula, predict recalculation results, or add Data Table inputs to
+  the ordinary dependency graph; cached scenario-output cells remain ordinary
+  cell values under the normal diff boundary.
 - Worksheet data-validation controls are inventoried and diffed as compact
   ranges rather than by expanding their target cells. FormulaFence compares the
   validation type, operator, two criteria expressions, blank/dropdown behavior,
@@ -317,7 +333,8 @@ review prompt, not proof of an error.
   payload, XLM macro-sheet packages, RibbonX custom UI packages, Office Web
   Add-in task-pane packages, PivotTable view/cache-schema/shared-item/cached-
   record chains, Slicer and Timeline cache filter-definition chains, embedded
-  Power Pivot/Data Model declaration/raw-payload chains, DrawingML chart
+  Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table
+  declarations, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link

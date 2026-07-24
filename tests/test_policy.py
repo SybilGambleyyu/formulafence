@@ -18,6 +18,7 @@ from .helpers import (
     change_power_query_controls,
     change_ribbon_customization_callback,
     change_slicer_timeline_filter_material,
+    change_what_if_data_table_input,
     change_worksheet_embedded_control_controls,
     change_xlm_macro_sheet_controls,
     make_chart_definition_model,
@@ -37,6 +38,7 @@ from .helpers import (
     make_slicer_timeline_cache_model,
     make_table_model,
     make_three_d_model,
+    make_what_if_data_table_model,
     make_worksheet_embedded_control_model,
     make_xlm_macro_sheet_model,
     mark_array_formula_dynamic,
@@ -362,6 +364,19 @@ def test_policy_can_block_power_pivot_data_model_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP033"}
+
+
+def test_policy_can_block_what_if_data_table_changes(tmp_path) -> None:
+    baseline = make_what_if_data_table_model(tmp_path / "baseline.xlsx")
+    candidate = make_what_if_data_table_model(tmp_path / "candidate.xlsx")
+    change_what_if_data_table_input(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_what_if_data_table_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP034"}
 
 
 def test_policy_can_block_worksheet_embedded_control_changes(tmp_path) -> None:

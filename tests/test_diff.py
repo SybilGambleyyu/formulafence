@@ -35,6 +35,7 @@ from .helpers import (
     change_ribbon_customization_callback,
     change_ribbon_customization_controls,
     change_slicer_timeline_filter_material,
+    change_what_if_data_table_input,
     change_worksheet_embedded_control_controls,
     change_worksheet_embedded_control_payload,
     change_xlm_macro_sheet_controls,
@@ -45,8 +46,10 @@ from .helpers import (
     corrupt_pivot_table_definition_root,
     corrupt_ribbon_customization_root,
     corrupt_slicer_timeline_cache_root,
+    corrupt_what_if_data_table_input,
     corrupt_worksheet_embedded_control_activex_root,
     corrupt_xlm_macro_sheet_root,
+    delete_what_if_data_table_input,
     duplicate_external_link_definition,
     duplicate_external_link_sheet_names,
     externalize_chart_overlay_relationship,
@@ -78,10 +81,13 @@ from .helpers import (
     make_spill_model,
     make_table_model,
     make_three_d_model,
+    make_what_if_data_table_model,
     make_worksheet_embedded_control_model,
     make_xlm_macro_sheet_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
+    normalize_what_if_data_table_reference_spelling,
+    overlap_what_if_data_table_outputs,
     rebind_external_link_declaration,
     rebind_pivot_table_cache_records,
     rebind_power_pivot_data_model,
@@ -2946,7 +2952,6 @@ def test_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
         "Inputs!$B$3:$B$4",
         "private-chart-overlay-baseline.png",
         "private-chart-overlay-candidate.png",
-        "999",
     )
     rendered_artifacts = (
         json.dumps(profile),
@@ -3782,6 +3787,121 @@ def test_data_model_free_workbook_does_not_consume_payload_budget(tmp_path, monk
     assert not any(
         "Power Pivot/Data Model part" in warning for warning in snapshot.parser_warnings
     )
+
+
+def test_what_if_data_tables_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_what_if_data_table_model(tmp_path / "baseline.xlsx")
+    candidate = make_what_if_data_table_model(tmp_path / "candidate.xlsx")
+    change_what_if_data_table_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "what_if_data_tables_changed"
+    )
+
+    assert baseline_snapshot.summary()["what_if_data_table_count"] == 3
+    assert baseline_snapshot.summary()["what_if_data_table_output_cell_count"] == 17
+    assert baseline_snapshot.summary()["has_what_if_data_tables"] is True
+    assert profile["what_if_data_tables"] == {
+        "present": True,
+        "data_table_count": 3,
+        "one_variable_data_table_count": 2,
+        "two_variable_data_table_count": 1,
+        "one_variable_row_oriented_count": 1,
+        "one_variable_column_oriented_count": 1,
+        "declared_output_cell_count": 17,
+        "recalculation_requested_count": 1,
+        "deleted_input_reference_count": 0,
+        "unrecognized_data_table_count": 0,
+    }
+    assert baseline_snapshot.cells[("Sensitivity", "D3")].formula == "=TABLE()"
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## What-If Data Tables" in markdown
+    assert change.details["data_table_definition_material_changed"] is True
+    assert "FF034" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in ("B2", "B4", "D3:D6", "Sensitivity!D3"):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_what_if_data_table_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_what_if_data_table_model(tmp_path / "baseline.xlsx")
+    equivalent = make_what_if_data_table_model(tmp_path / "equivalent.xlsx")
+    normalize_what_if_data_table_reference_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert "what_if_data_tables_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF034" not in {finding.rule_id for finding in report.findings}
+
+
+def test_what_if_data_table_deleted_and_malformed_inputs_fail_closed(tmp_path) -> None:
+    baseline = make_what_if_data_table_model(tmp_path / "baseline.xlsx")
+    deleted = make_what_if_data_table_model(tmp_path / "deleted.xlsx")
+    malformed = make_what_if_data_table_model(tmp_path / "malformed.xlsx")
+    overlapping = make_what_if_data_table_model(tmp_path / "overlapping.xlsx")
+    delete_what_if_data_table_input(deleted)
+    corrupt_what_if_data_table_input(malformed)
+    overlap_what_if_data_table_outputs(overlapping)
+
+    deleted_snapshot = load_snapshot(deleted)
+    deleted_report = compare_snapshots(load_snapshot(baseline), deleted_snapshot)
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    malformed_report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+    overlapping_snapshot = load_snapshot(overlapping)
+
+    assert deleted_snapshot.what_if_data_tables.deleted_input_reference_count == 1
+    assert deleted_snapshot.what_if_data_tables.unrecognized_data_table_count == 0
+    assert "FF034" in {finding.rule_id for finding in deleted_report.findings}
+    assert malformed_snapshot.what_if_data_tables.unrecognized_data_table_count == 1
+    assert any(
+        "malformed or unsupported What-If Data Table" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF034"} <= {
+        finding.rule_id for finding in malformed_report.findings
+    }
+    assert overlapping_snapshot.what_if_data_tables.unrecognized_data_table_count == 2
+    assert any(
+        "overlapping What-If Data Table output ranges" in warning
+        for warning in overlapping_snapshot.parser_warnings
+    )
+
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(malformed_report.to_dict()),
+        report_to_markdown(malformed_report),
+        json.dumps(report_to_sarif(malformed_report)),
+    )
+    assert all(
+        "PrivateInputSheet!B2" not in artifact for artifact in rendered_artifacts
+    )
+
+
+def test_data_table_free_workbook_has_no_sensitivity_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.what_if_data_tables.present is False
+    assert snapshot.what_if_data_tables.data_table_count == 0
+    assert not any("What-If Data Table" in warning for warning in snapshot.parser_warnings)
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

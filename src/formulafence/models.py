@@ -1333,6 +1333,50 @@ class PowerPivotDataModelSnapshot:
 
 
 @dataclass(frozen=True)
+class WhatIfDataTableSnapshot:
+    """Safe aggregate of Excel What-If Data Table definitions.
+
+    What-If Data Tables are formula-bearing sensitivity engines. Their output
+    ranges and input references can disclose model structure, so the private
+    signature retains their canonical definitions while ``to_dict`` exposes
+    only structural counts suitable for review artifacts.
+    """
+
+    data_table_count: int = 0
+    one_variable_data_table_count: int = 0
+    two_variable_data_table_count: int = 0
+    one_variable_row_oriented_count: int = 0
+    one_variable_column_oriented_count: int = 0
+    declared_output_cell_count: int = 0
+    recalculation_requested_count: int = 0
+    deleted_input_reference_count: int = 0
+    unrecognized_data_table_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return self.data_table_count > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural Data Table evidence without references or values."""
+        return {
+            "present": self.present,
+            "data_table_count": self.data_table_count,
+            "one_variable_data_table_count": self.one_variable_data_table_count,
+            "two_variable_data_table_count": self.two_variable_data_table_count,
+            "one_variable_row_oriented_count": self.one_variable_row_oriented_count,
+            "one_variable_column_oriented_count": self.one_variable_column_oriented_count,
+            "declared_output_cell_count": self.declared_output_cell_count,
+            "recalculation_requested_count": self.recalculation_requested_count,
+            "deleted_input_reference_count": self.deleted_input_reference_count,
+            "unrecognized_data_table_count": self.unrecognized_data_table_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -1719,6 +1763,9 @@ class WorkbookSnapshot:
     power_pivot_data_model: PowerPivotDataModelSnapshot = field(
         default_factory=PowerPivotDataModelSnapshot
     )
+    what_if_data_tables: WhatIfDataTableSnapshot = field(
+        default_factory=WhatIfDataTableSnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -1760,6 +1807,11 @@ class WorkbookSnapshot:
             "sheet_count": len(self.sheets),
             "nonempty_cells": len(self.cells),
             "formula_cells": sum(1 for cell in self.cells.values() if cell.is_formula),
+            "what_if_data_table_count": self.what_if_data_tables.data_table_count,
+            "what_if_data_table_output_cell_count": (
+                self.what_if_data_tables.declared_output_cell_count
+            ),
+            "has_what_if_data_tables": self.what_if_data_tables.present,
             "defined_names": len(self.defined_names),
             "table_count": len(self.tables),
             "data_validation_rules": len(self.data_validations),

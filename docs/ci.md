@@ -14,8 +14,8 @@ jobs:
   formulafence:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: >-
@@ -28,7 +28,7 @@ jobs:
           --policy models/formulafence.yml
           --format markdown
           --output formulafence-report.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: formulafence-report

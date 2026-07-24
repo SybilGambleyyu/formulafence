@@ -21,6 +21,8 @@ from .helpers import (
     change_chart_definition_material,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
+    change_filter_visibility_criterion,
+    change_filter_visibility_hidden_row,
     change_legacy_vml_control_controls,
     change_legacy_vml_note,
     change_office_web_addin_auto_show,
@@ -36,12 +38,14 @@ from .helpers import (
     change_ribbon_customization_controls,
     change_scenario_manager_input_value,
     change_slicer_timeline_filter_material,
+    change_table_filter_visibility_criterion,
     change_what_if_data_table_input,
     change_worksheet_embedded_control_controls,
     change_worksheet_embedded_control_payload,
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
     corrupt_chart_definition_root,
+    corrupt_filter_visibility_control,
     corrupt_legacy_vml_control_root,
     corrupt_office_web_addin_definition_root,
     corrupt_pivot_table_definition_root,
@@ -64,6 +68,7 @@ from .helpers import (
     make_data_validation_model,
     make_external_data_refresh_model,
     make_external_link_package_model,
+    make_filter_visibility_model,
     make_implicit_intersection_model,
     make_legacy_array_model,
     make_legacy_vml_control_model,
@@ -89,6 +94,7 @@ from .helpers import (
     make_xlm_macro_sheet_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
+    normalize_filter_visibility_control_spelling,
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
     overlap_what_if_data_table_outputs,
@@ -4028,6 +4034,120 @@ def test_scenario_manager_free_workbook_has_no_inventory(tmp_path) -> None:
     assert snapshot.scenario_manager.present is False
     assert snapshot.scenario_manager.scenario_count == 0
     assert not any("Scenario Manager" in warning for warning in snapshot.parser_warnings)
+
+
+def test_filter_visibility_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_filter_visibility_model(tmp_path / "baseline.xlsx")
+    candidate = make_filter_visibility_model(tmp_path / "candidate.xlsx")
+    table_candidate = make_filter_visibility_model(tmp_path / "table-candidate.xlsx")
+    row_candidate = make_filter_visibility_model(tmp_path / "row-candidate.xlsx")
+    change_filter_visibility_criterion(candidate)
+    change_table_filter_visibility_criterion(table_candidate)
+    change_filter_visibility_hidden_row(row_candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    table_report = compare_snapshots(baseline_snapshot, load_snapshot(table_candidate))
+    row_report = compare_snapshots(baseline_snapshot, load_snapshot(row_candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "filter_visibility_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["filter_visibility_auto_filter_count"] == 2
+    assert baseline_snapshot.summary()["filter_visibility_hidden_row_count"] == 2
+    assert baseline_snapshot.summary()["has_filter_visibility_controls"] is True
+    assert profile["filter_visibility_controls"] == {
+        "present": True,
+        "worksheet_auto_filter_count": 1,
+        "table_auto_filter_count": 1,
+        "filter_column_count": 2,
+        "filter_criterion_count": 2,
+        "sort_state_count": 2,
+        "sort_condition_count": 2,
+        "default_hidden_sheet_count": 1,
+        "hidden_row_count": 2,
+        "outlined_row_count": 2,
+        "collapsed_row_count": 1,
+        "visible_row_override_count": 1,
+        "unrecognized_control_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Filter, sort, and row-visibility controls" in markdown
+    assert change.details["filter_visibility_definition_material_changed"] is True
+    assert "FF036" in {finding.rule_id for finding in report.findings}
+    assert "FF036" in {finding.rule_id for finding in table_report.findings}
+    assert "FF036" in {finding.rule_id for finding in row_report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-WORKSHEET-REGION",
+        "CANDIDATE-PRIVATE-WORKSHEET-REGION",
+        "PRIVATE-TABLE-SEGMENT",
+        "PRIVATE-SORT-LIST",
+        "C2:C5",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_filter_visibility_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_filter_visibility_model(tmp_path / "baseline.xlsx")
+    equivalent = make_filter_visibility_model(tmp_path / "equivalent.xlsx")
+    normalize_filter_visibility_control_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert "filter_visibility_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF036" not in {finding.rule_id for finding in report.findings}
+
+
+def test_filter_visibility_malformed_control_fails_closed(tmp_path) -> None:
+    baseline = make_filter_visibility_model(tmp_path / "baseline.xlsx")
+    malformed = make_filter_visibility_model(tmp_path / "malformed.xlsx")
+    corrupt_filter_visibility_control(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.filter_visibility_controls.unrecognized_control_count == 1
+    assert any(
+        "malformed or unsupported filter, sort, or row-visibility" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF036"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("4294967296" not in artifact for artifact in rendered_artifacts)
+
+
+def test_filter_visibility_free_workbook_has_no_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.filter_visibility_controls.present is False
+    assert snapshot.filter_visibility_controls.worksheet_auto_filter_count == 0
+    assert not any(
+        "filter, sort, or row-visibility" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

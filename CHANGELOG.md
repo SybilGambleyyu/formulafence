@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.32.0 — 2026-07-25
+
+- Inspect worksheet and Table Definition-part AutoFilters directly from raw
+  OOXML, including private filter criteria, selected values, filter-button
+  state, AutoFilter sort state, and sort conditions. Also inspect explicit row
+  `hidden` / outline state and the `sheetFormatPr@zeroHeight` hidden-by-default
+  optimization without serializing criteria, sort keys/lists, table names, or
+  row/range references into profiles, `FF036`, or SARIF.
+- Emit `FF036` for a material filter, sort, or row-visibility control change,
+  and add the fail-closed `no_filter_visibility_changes` policy rule (`FFP036`).
+  Equivalent local A1 case/absolute-reference, Boolean/default, and unsigned
+  integer spellings are normalized; filter-member ordering is canonicalized.
+- Make malformed or unsupported declarations, extensions, and unsafe/missing
+  table relationships visible parser-coverage warnings rather than silently
+  dropping them. FormulaFence does not apply filters, calculate results,
+  determine formula visibility sensitivity, render a report, or track hidden
+  columns.
+
 ## 0.31.0 — 2026-07-25
 
 - Inspect Excel Scenario Manager declarations directly from worksheet OOXML

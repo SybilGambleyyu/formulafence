@@ -51,6 +51,7 @@ from formulafence.models import (
     ExternalDataOpaqueMetadataSnapshot,
     ExternalDataRefreshSettingsSnapshot,
     ExternalLinkPackageSnapshot,
+    FilterVisibilitySnapshot,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
@@ -456,6 +457,14 @@ class _ScenarioManagerMetadata:
     """Raw Scenario Manager evidence retained before reader loss."""
 
     scenario_manager: ScenarioManagerSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _FilterVisibilityMetadata:
+    """Raw filter, sort, and row-visibility evidence retained before reader loss."""
+
+    controls: FilterVisibilitySnapshot
     warnings: tuple[str, ...]
 
 
@@ -13135,6 +13144,817 @@ def _scenario_manager_metadata(path: Path) -> _ScenarioManagerMetadata:
     return _ScenarioManagerMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_FILTER_VISIBILITY_UNSIGNED_INT_MAXIMUM = 4_294_967_295
+_FILTER_VISIBILITY_OUTLINE_LEVEL_MAXIMUM = 255
+_FILTER_VISIBILITY_FILTER_CRITERIA_CHILDREN = frozenset(
+    {
+        "filters",
+        "top10",
+        "customFilters",
+        "dynamicFilter",
+        "colorFilter",
+        "iconFilter",
+    }
+)
+
+
+def _filter_visibility_boolean(
+    value: str | None,
+    default: bool,
+) -> tuple[bool | None, str]:
+    """Normalize one OOXML Boolean while retaining invalid material privately."""
+    return _what_if_data_table_boolean(value, default)
+
+
+def _filter_visibility_unsigned_int(
+    value: str | None,
+    *,
+    maximum: int = _FILTER_VISIBILITY_UNSIGNED_INT_MAXIMUM,
+) -> tuple[int | None, str]:
+    """Normalize one bounded unsigned XML integer for a private signature."""
+    if value is None:
+        return None, "none"
+    candidate = value.strip()
+    if candidate.isascii() and candidate.isdecimal():
+        parsed = int(candidate)
+        if parsed <= maximum:
+            return parsed, str(parsed)
+    return None, f"invalid:{value}"
+
+
+def _filter_visibility_reference(
+    value: str | None,
+) -> tuple[tuple[int, int, int, int] | None, str]:
+    """Normalize a local bounded filter or sort reference without emitting it."""
+    reference, bounds = _canonical_what_if_data_table_range(value)
+    if reference is not None:
+        return bounds, reference
+    return None, "missing" if value is None else f"invalid:{value}"
+
+
+def _filter_visibility_attributes(
+    element: ElementTree.Element,
+    *,
+    known: frozenset[str],
+    issues: set[str],
+    boolean_defaults: Mapping[str, bool] = {},
+    unsigned_ints: frozenset[str] = frozenset(),
+    references: frozenset[str] = frozenset(),
+    required: frozenset[str] = frozenset(),
+    unsigned_int_maximums: Mapping[str, int] = {},
+    string_defaults: Mapping[str, str] = {},
+) -> tuple[tuple[str, str], ...]:
+    """Canonicalize known control attributes and fail closed for unfamiliar ones."""
+    values: dict[str, str] = {
+        name: "true" if value else "false" for name, value in boolean_defaults.items()
+    }
+    values.update(string_defaults)
+    for attribute, value in element.attrib.items():
+        local_name = _xml_local_name(attribute)
+        if _xml_namespace(attribute) is not None or local_name not in known:
+            issues.add("unknown-attribute")
+            values[f"unknown:{_xml_display_name(attribute)}"] = value
+            continue
+        if local_name in boolean_defaults:
+            parsed, signature = _filter_visibility_boolean(
+                value,
+                boolean_defaults[local_name],
+            )
+            if parsed is None:
+                issues.add(f"invalid-{local_name}")
+            values[local_name] = signature
+        elif local_name in unsigned_ints:
+            parsed, signature = _filter_visibility_unsigned_int(
+                value,
+                maximum=unsigned_int_maximums.get(
+                    local_name,
+                    _FILTER_VISIBILITY_UNSIGNED_INT_MAXIMUM,
+                ),
+            )
+            if parsed is None:
+                issues.add(f"invalid-{local_name}")
+            values[local_name] = signature
+        elif local_name in references:
+            bounds, signature = _filter_visibility_reference(value)
+            if bounds is None:
+                issues.add(f"invalid-{local_name}")
+            values[local_name] = signature
+        else:
+            values[local_name] = value
+    for name in required:
+        if name not in values:
+            issues.add(f"missing-{name}")
+            values[name] = "missing"
+    return tuple(sorted(values.items()))
+
+
+def _filter_visibility_unknown_child_signature(
+    element: ElementTree.Element,
+) -> tuple[str, str, str]:
+    """Hash unsupported XML without retaining it in an inspectable object."""
+    return (
+        "unknown",
+        _xml_display_name(element.tag),
+        _private_payload_signature(ElementTree.tostring(element, encoding="utf-8")),
+    )
+
+
+def _filter_visibility_leaf_signature(
+    element: ElementTree.Element,
+    *,
+    known_attributes: frozenset[str],
+    issues: set[str],
+    boolean_defaults: Mapping[str, bool] = {},
+    unsigned_ints: frozenset[str] = frozenset(),
+    references: frozenset[str] = frozenset(),
+    required: frozenset[str] = frozenset(),
+    string_defaults: Mapping[str, str] = {},
+) -> tuple[object, ...]:
+    """Capture a supported leaf declaration while preserving private values only."""
+    children = tuple(
+        _filter_visibility_unknown_child_signature(child) for child in element
+    )
+    if children:
+        issues.add("unexpected-leaf-children")
+    text = element.text if (element.text or "").strip() else None
+    return (
+        _xml_local_name(element.tag),
+        _filter_visibility_attributes(
+            element,
+            known=known_attributes,
+            issues=issues,
+            boolean_defaults=boolean_defaults,
+            unsigned_ints=unsigned_ints,
+            references=references,
+            required=required,
+            string_defaults=string_defaults,
+        ),
+        text,
+        children,
+    )
+
+
+def _filter_visibility_criterion_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+) -> tuple[object, ...]:
+    """Canonicalize one standard AutoFilter criterion without exposing its values."""
+    local_name = _xml_local_name(element.tag)
+    if _xml_namespace(element.tag) != _SPREADSHEETML_NS:
+        issues.add("unsupported-filter-criterion-namespace")
+        return _filter_visibility_unknown_child_signature(element)
+    if local_name == "filters":
+        children: list[tuple[object, ...]] = []
+        for child in element:
+            child_name = _xml_local_name(child.tag)
+            if _xml_namespace(child.tag) != _SPREADSHEETML_NS:
+                issues.add("unsupported-filters-child")
+                children.append(_filter_visibility_unknown_child_signature(child))
+            elif child_name == "filter":
+                children.append(
+                    _filter_visibility_leaf_signature(
+                        child,
+                        known_attributes=frozenset({"val"}),
+                        issues=issues,
+                    )
+                )
+            elif child_name == "dateGroupItem":
+                children.append(
+                    _filter_visibility_leaf_signature(
+                        child,
+                        known_attributes=frozenset(
+                            {
+                                "year",
+                                "month",
+                                "day",
+                                "hour",
+                                "minute",
+                                "second",
+                                "dateTimeGrouping",
+                            }
+                        ),
+                        issues=issues,
+                        unsigned_ints=frozenset(
+                            {"year", "month", "day", "hour", "minute", "second"}
+                        ),
+                        required=frozenset({"dateTimeGrouping"}),
+                    )
+                )
+            else:
+                issues.add("unsupported-filters-child")
+                children.append(_filter_visibility_unknown_child_signature(child))
+        return (
+            local_name,
+            _filter_visibility_attributes(
+                element,
+                known=frozenset({"blank", "calendarType"}),
+                issues=issues,
+                boolean_defaults={"blank": False},
+                string_defaults={"calendarType": "none"},
+            ),
+            tuple(sorted(children, key=repr)),
+        )
+    if local_name == "customFilters":
+        children = []
+        for child in element:
+            if (
+                _xml_namespace(child.tag) == _SPREADSHEETML_NS
+                and _xml_local_name(child.tag) == "customFilter"
+            ):
+                children.append(
+                    _filter_visibility_leaf_signature(
+                        child,
+                        known_attributes=frozenset({"operator", "val"}),
+                        issues=issues,
+                        string_defaults={"operator": "equal"},
+                    )
+                )
+            else:
+                issues.add("unsupported-custom-filters-child")
+                children.append(_filter_visibility_unknown_child_signature(child))
+        if not 1 <= len(children) <= 2:
+            issues.add("invalid-custom-filter-count")
+        return (
+            local_name,
+            _filter_visibility_attributes(
+                element,
+                known=frozenset({"and"}),
+                issues=issues,
+                boolean_defaults={"and": False},
+            ),
+            tuple(sorted(children, key=repr)),
+        )
+    if local_name == "top10":
+        return _filter_visibility_leaf_signature(
+            element,
+            known_attributes=frozenset({"top", "percent", "val", "filterVal"}),
+            issues=issues,
+            boolean_defaults={"top": True, "percent": False},
+            required=frozenset({"val"}),
+        )
+    if local_name == "dynamicFilter":
+        return _filter_visibility_leaf_signature(
+            element,
+            known_attributes=frozenset({"type", "val", "maxVal"}),
+            issues=issues,
+            required=frozenset({"type"}),
+        )
+    if local_name == "colorFilter":
+        return _filter_visibility_leaf_signature(
+            element,
+            known_attributes=frozenset({"dxfId", "cellColor"}),
+            issues=issues,
+            boolean_defaults={"cellColor": False},
+            unsigned_ints=frozenset({"dxfId"}),
+        )
+    if local_name == "iconFilter":
+        return _filter_visibility_leaf_signature(
+            element,
+            known_attributes=frozenset({"iconSet", "iconId"}),
+            issues=issues,
+            unsigned_ints=frozenset({"iconId"}),
+        )
+    issues.add("unsupported-filter-criterion")
+    return _filter_visibility_unknown_child_signature(element)
+
+
+def _filter_visibility_filter_column_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+) -> tuple[tuple[object, ...], int | None, int]:
+    """Canonicalize a filter column and return its ID and criterion count."""
+    column_id, _ = _filter_visibility_unsigned_int(element.get("colId"))
+    if column_id is None:
+        issues.add("invalid-filter-column-id")
+    children: list[tuple[object, ...]] = []
+    criterion_count = 0
+    for child in element:
+        child_name = _xml_local_name(child.tag)
+        if (
+            _xml_namespace(child.tag) == _SPREADSHEETML_NS
+            and child_name in _FILTER_VISIBILITY_FILTER_CRITERIA_CHILDREN
+        ):
+            criterion_count += 1
+            children.append(_filter_visibility_criterion_signature(child, issues))
+        else:
+            issues.add("unsupported-filter-column-child")
+            children.append(_filter_visibility_unknown_child_signature(child))
+    if len(children) > 1:
+        issues.add("multiple-filter-column-criteria")
+    return (
+        (
+            "filterColumn",
+            _filter_visibility_attributes(
+                element,
+                known=frozenset({"colId", "hiddenButton", "showButton"}),
+                issues=issues,
+                boolean_defaults={"hiddenButton": False, "showButton": True},
+                unsigned_ints=frozenset({"colId"}),
+                required=frozenset({"colId"}),
+            ),
+            tuple(sorted(children, key=repr)),
+        ),
+        column_id,
+        criterion_count,
+    )
+
+
+def _filter_visibility_sort_state_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+) -> tuple[tuple[object, ...], int]:
+    """Canonicalize a sort state while retaining keys and lists privately."""
+    conditions: list[tuple[object, ...]] = []
+    extensions: list[tuple[object, ...]] = []
+    for child in element:
+        if (
+            _xml_namespace(child.tag) == _SPREADSHEETML_NS
+            and _xml_local_name(child.tag) == "sortCondition"
+        ):
+            conditions.append(
+                _filter_visibility_leaf_signature(
+                    child,
+                    known_attributes=frozenset(
+                        {
+                            "descending",
+                            "sortBy",
+                            "ref",
+                            "customList",
+                            "dxfId",
+                            "iconSet",
+                            "iconId",
+                        }
+                    ),
+                    issues=issues,
+                    boolean_defaults={"descending": False},
+                    unsigned_ints=frozenset({"dxfId", "iconId"}),
+                    references=frozenset({"ref"}),
+                    required=frozenset({"ref"}),
+                    string_defaults={"sortBy": "value", "iconSet": "3Arrows"},
+                )
+            )
+        else:
+            issues.add("unsupported-sort-state-child")
+            extensions.append(_filter_visibility_unknown_child_signature(child))
+    if len(conditions) > 64:
+        issues.add("too-many-sort-conditions")
+    return (
+        (
+            "sortState",
+            _filter_visibility_attributes(
+                element,
+                known=frozenset({"columnSort", "caseSensitive", "sortMethod", "ref"}),
+                issues=issues,
+                boolean_defaults={"columnSort": False, "caseSensitive": False},
+                references=frozenset({"ref"}),
+                required=frozenset({"ref"}),
+                string_defaults={"sortMethod": "none"},
+            ),
+            tuple(conditions),
+            tuple(sorted(extensions, key=repr)),
+        ),
+        len(conditions),
+    )
+
+
+def _filter_visibility_auto_filter_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+) -> tuple[tuple[object, ...], int, int, int, int]:
+    """Canonicalize one AutoFilter declaration and its private filter material."""
+    bounds, _ = _filter_visibility_reference(element.get("ref"))
+    if bounds is None:
+        issues.add("invalid-auto-filter-reference")
+    filter_columns: list[tuple[object, ...]] = []
+    filter_column_ids: list[int] = []
+    sort_states: list[tuple[object, ...]] = []
+    extensions: list[tuple[object, ...]] = []
+    criterion_count = 0
+    sort_condition_count = 0
+    for child in element:
+        child_name = _xml_local_name(child.tag)
+        if (
+            _xml_namespace(child.tag) == _SPREADSHEETML_NS
+            and child_name == "filterColumn"
+        ):
+            signature, column_id, count = _filter_visibility_filter_column_signature(
+                child,
+                issues,
+            )
+            filter_columns.append(signature)
+            criterion_count += count
+            if column_id is not None:
+                filter_column_ids.append(column_id)
+                if bounds is not None:
+                    min_column, _, max_column, _ = bounds
+                    if column_id >= max_column - min_column + 1:
+                        issues.add("filter-column-out-of-range")
+        elif (
+            _xml_namespace(child.tag) == _SPREADSHEETML_NS
+            and child_name == "sortState"
+        ):
+            signature, count = _filter_visibility_sort_state_signature(child, issues)
+            sort_states.append(signature)
+            sort_condition_count += count
+        else:
+            issues.add("unsupported-auto-filter-child")
+            extensions.append(_filter_visibility_unknown_child_signature(child))
+    if len(filter_column_ids) != len(set(filter_column_ids)):
+        issues.add("duplicate-filter-column")
+    if len(sort_states) > 1:
+        issues.add("multiple-auto-filter-sort-states")
+    return (
+        (
+            "autoFilter",
+            _filter_visibility_attributes(
+                element,
+                known=frozenset({"ref"}),
+                issues=issues,
+                references=frozenset({"ref"}),
+                required=frozenset({"ref"}),
+            ),
+            tuple(sorted(filter_columns, key=repr)),
+            tuple(sort_states),
+            tuple(sorted(extensions, key=repr)),
+        ),
+        len(filter_columns),
+        criterion_count,
+        len(sort_states),
+        sort_condition_count,
+    )
+
+
+def _filter_visibility_row_signature(
+    row: ElementTree.Element,
+    *,
+    default_hidden: bool,
+    issues: set[str],
+) -> tuple[tuple[object, ...], bool, bool, bool, bool] | None:
+    """Capture a semantically relevant row visibility record without its cells."""
+    visibility_attributes = {"hidden", "outlineLevel", "collapsed"}
+    if not any(attribute in row.attrib for attribute in visibility_attributes):
+        return None
+    raw_row_index = row.get("r")
+    row_index, row_index_signature = _filter_visibility_unsigned_int(
+        raw_row_index,
+        maximum=MAX_EXCEL_ROW,
+    )
+    if row_index is None or row_index < 1:
+        issues.add("invalid-row-index")
+    hidden, hidden_signature = _filter_visibility_boolean(row.get("hidden"), False)
+    if hidden is None:
+        issues.add("invalid-row-hidden")
+    outline_level, outline_level_signature = _filter_visibility_unsigned_int(
+        row.get("outlineLevel"),
+        maximum=_FILTER_VISIBILITY_OUTLINE_LEVEL_MAXIMUM,
+    )
+    if row.get("outlineLevel") is None:
+        outline_level = 0
+        outline_level_signature = "0"
+    elif outline_level is None:
+        issues.add("invalid-row-outline-level")
+    collapsed, collapsed_signature = _filter_visibility_boolean(row.get("collapsed"), False)
+    if collapsed is None:
+        issues.add("invalid-row-collapsed")
+    is_hidden = hidden is True
+    is_outlined = bool(outline_level)
+    is_collapsed = collapsed is True
+    is_visible_override = (
+        default_hidden and "hidden" in row.attrib and hidden is False
+    )
+    if not (
+        is_hidden
+        or is_outlined
+        or is_collapsed
+        or is_visible_override
+        or row_index is None
+        or row_index < 1
+        or hidden is None
+        or outline_level is None
+        or collapsed is None
+    ):
+        return None
+    return (
+        (
+            "row",
+            (
+                ("r", row_index_signature),
+                ("hidden", hidden_signature),
+                ("outlineLevel", outline_level_signature),
+                ("collapsed", collapsed_signature),
+            ),
+        ),
+        is_hidden,
+        is_outlined,
+        is_collapsed,
+        is_visible_override,
+    )
+
+
+def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
+    """Inspect filter, sort, and row visibility controls from raw SpreadsheetML.
+
+    Filter member values, custom sort lists, and report ranges can be sensitive.
+    They are canonicalized only inside a private signature. The public snapshot
+    is intentionally limited to structural counts.
+    """
+    warnings: set[str] = set()
+    default = FilterVisibilitySnapshot()
+    entries: list[tuple[str, str]] = []
+    worksheet_auto_filter_count = 0
+    table_auto_filter_count = 0
+    filter_column_count = 0
+    filter_criterion_count = 0
+    sort_state_count = 0
+    sort_condition_count = 0
+    default_hidden_sheet_count = 0
+    hidden_row_count = 0
+    outlined_row_count = 0
+    collapsed_row_count = 0
+    visible_row_override_count = 0
+    unrecognized_control_count = 0
+
+    def add_auto_filter(
+        element: ElementTree.Element,
+        *,
+        key: str,
+        table: bool,
+        multiple: bool,
+    ) -> None:
+        nonlocal worksheet_auto_filter_count
+        nonlocal table_auto_filter_count
+        nonlocal filter_column_count
+        nonlocal filter_criterion_count
+        nonlocal sort_state_count
+        nonlocal sort_condition_count
+        nonlocal unrecognized_control_count
+        issues: set[str] = {"multiple-auto-filters"} if multiple else set()
+        signature, columns, criteria, states, conditions = (
+            _filter_visibility_auto_filter_signature(element, issues)
+        )
+        entries.append((key, repr(signature)))
+        if table:
+            table_auto_filter_count += 1
+        else:
+            worksheet_auto_filter_count += 1
+        filter_column_count += columns
+        filter_criterion_count += criteria
+        sort_state_count += states
+        sort_condition_count += conditions
+        unrecognized_control_count += bool(issues)
+
+    def add_sort_state(
+        element: ElementTree.Element,
+        *,
+        key: str,
+        multiple: bool,
+    ) -> None:
+        nonlocal sort_state_count, sort_condition_count, unrecognized_control_count
+        issues: set[str] = {"multiple-sort-states"} if multiple else set()
+        signature, conditions = _filter_visibility_sort_state_signature(element, issues)
+        entries.append((key, repr(signature)))
+        sort_state_count += 1
+        sort_condition_count += conditions
+        unrecognized_control_count += bool(issues)
+
+    try:
+        with ZipFile(path) as archive:
+            auto_filter_tag = f"{{{_SPREADSHEETML_NS}}}autoFilter"
+            sort_state_tag = f"{{{_SPREADSHEETML_NS}}}sortState"
+            sheet_format_tag = f"{{{_SPREADSHEETML_NS}}}sheetFormatPr"
+            sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+            row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+            table_parts_tag = f"{{{_SPREADSHEETML_NS}}}tableParts"
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                sheet_formats = worksheet.findall(sheet_format_tag)
+                default_hidden = False
+                if sheet_formats:
+                    sheet_format_issues: set[str] = set()
+                    if len(sheet_formats) > 1:
+                        sheet_format_issues.add("multiple-sheet-format-properties")
+                    default_hidden_value, default_hidden_signature = (
+                        _filter_visibility_boolean(
+                            sheet_formats[0].get("zeroHeight"),
+                            False,
+                        )
+                    )
+                    if default_hidden_value is None:
+                        sheet_format_issues.add("invalid-default-row-hidden")
+                    else:
+                        default_hidden = default_hidden_value
+                    if default_hidden or sheet_format_issues:
+                        entries.append(
+                            (
+                                f"default-row-visibility:{sheet.casefold()}",
+                                repr(
+                                    (
+                                        "sheetFormatPr",
+                                        ("zeroHeight", default_hidden_signature),
+                                    )
+                                ),
+                            )
+                        )
+                    default_hidden_sheet_count += default_hidden
+                    unrecognized_control_count += bool(sheet_format_issues)
+
+                auto_filters = worksheet.findall(auto_filter_tag)
+                for auto_filter in auto_filters:
+                    add_auto_filter(
+                        auto_filter,
+                        key=f"worksheet-auto-filter:{sheet.casefold()}",
+                        table=False,
+                        multiple=len(auto_filters) > 1,
+                    )
+                sort_states = worksheet.findall(sort_state_tag)
+                for sort_state in sort_states:
+                    add_sort_state(
+                        sort_state,
+                        key=f"worksheet-sort-state:{sheet.casefold()}",
+                        multiple=len(sort_states) > 1,
+                    )
+
+                row_issues: set[str] = set()
+                for sheet_data in worksheet.findall(sheet_data_tag):
+                    for row in sheet_data.findall(row_tag):
+                        captured = _filter_visibility_row_signature(
+                            row,
+                            default_hidden=default_hidden,
+                            issues=row_issues,
+                        )
+                        if captured is None:
+                            continue
+                        signature, hidden, outlined, collapsed, visible_override = captured
+                        entries.append(
+                            (
+                                f"row-visibility:{sheet.casefold()}",
+                                repr(signature),
+                            )
+                        )
+                        hidden_row_count += hidden
+                        outlined_row_count += outlined
+                        collapsed_row_count += collapsed
+                        visible_row_override_count += visible_override
+                if row_issues:
+                    unrecognized_control_count += 1
+
+                relationship_member = _relationship_part_path(member)
+                has_table_parts = worksheet.find(table_parts_tag) is not None
+                if relationship_member not in archive.namelist():
+                    if has_table_parts:
+                        warnings.add(
+                            "FormulaFence could not locate worksheet table relationships while "
+                            "inspecting filter controls; affected table filters were not compared."
+                        )
+                        entries.append(
+                            (
+                                f"missing-table-relationships:{sheet.casefold()}",
+                                "missing",
+                            )
+                        )
+                        unrecognized_control_count += 1
+                    continue
+                try:
+                    relationships = _package_relationships(archive, member)
+                except (
+                    ElementTree.ParseError,
+                    KeyError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    warnings.add(
+                        "FormulaFence could not inspect worksheet table relationships while "
+                        f"inspecting filter controls ({type(error).__name__}); affected table "
+                        "filters were not compared."
+                    )
+                    entries.append(
+                        (
+                            f"invalid-table-relationships:{sheet.casefold()}",
+                            type(error).__name__,
+                        )
+                    )
+                    unrecognized_control_count += 1
+                    continue
+                table_relationships = [
+                    relationship
+                    for relationship in relationships
+                    if relationship.relationship_type.rsplit("/", maxsplit=1)[-1] == "table"
+                ]
+                for relationship in table_relationships:
+                    if relationship.target is None:
+                        warnings.add(
+                            "FormulaFence found a worksheet table relationship without a safe "
+                            "internal target; affected table filters were not compared."
+                        )
+                        entries.append(
+                            (
+                                f"unsafe-table-relationship:{sheet.casefold()}",
+                                repr((relationship.relationship_type, relationship.target_mode)),
+                            )
+                        )
+                        unrecognized_control_count += 1
+                        continue
+                    try:
+                        table = _xml_root(archive, relationship.target)
+                    except (
+                        ElementTree.ParseError,
+                        KeyError,
+                        OSError,
+                        RuntimeError,
+                        ValueError,
+                    ) as error:
+                        warnings.add(
+                            "FormulaFence could not inspect a worksheet table part while "
+                            f"inspecting filter controls ({type(error).__name__}); affected "
+                            "table filters were not compared."
+                        )
+                        entries.append(
+                            (
+                                f"unreadable-table-part:{sheet.casefold()}",
+                                type(error).__name__,
+                            )
+                        )
+                        unrecognized_control_count += 1
+                        continue
+                    if (
+                        _xml_namespace(table.tag) != _SPREADSHEETML_NS
+                        or _xml_local_name(table.tag) != "table"
+                    ):
+                        warnings.add(
+                            "FormulaFence found a worksheet table part with an unexpected root; "
+                            "affected table filters were not compared."
+                        )
+                        entries.append(
+                            (
+                                f"unexpected-table-root:{sheet.casefold()}",
+                                _private_payload_signature(
+                                    ElementTree.tostring(table, encoding="utf-8")
+                                ),
+                            )
+                        )
+                        unrecognized_control_count += 1
+                        continue
+                    table_auto_filters = table.findall(auto_filter_tag)
+                    for auto_filter in table_auto_filters:
+                        add_auto_filter(
+                            auto_filter,
+                            key=(
+                                "table-auto-filter:"
+                                f"{sheet.casefold()}"
+                            ),
+                            table=True,
+                            multiple=len(table_auto_filters) > 1,
+                        )
+                    table_sort_states = table.findall(sort_state_tag)
+                    for sort_state in table_sort_states:
+                        add_sort_state(
+                            sort_state,
+                            key=(
+                                "table-sort-state:"
+                                f"{sheet.casefold()}"
+                            ),
+                            multiple=len(table_sort_states) > 1,
+                        )
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _FilterVisibilityMetadata(
+            default,
+            (
+                "FormulaFence could not inspect filter and row-visibility OOXML "
+                f"({type(error).__name__}); affected report controls were not compared.",
+            ),
+        )
+
+    if unrecognized_control_count:
+        warnings.add(
+            "FormulaFence found malformed or unsupported filter, sort, or row-visibility "
+            "metadata; the affected report controls have a coverage gap."
+        )
+    snapshot = FilterVisibilitySnapshot(
+        worksheet_auto_filter_count=worksheet_auto_filter_count,
+        table_auto_filter_count=table_auto_filter_count,
+        filter_column_count=filter_column_count,
+        filter_criterion_count=filter_criterion_count,
+        sort_state_count=sort_state_count,
+        sort_condition_count=sort_condition_count,
+        default_hidden_sheet_count=default_hidden_sheet_count,
+        hidden_row_count=hidden_row_count,
+        outlined_row_count=outlined_row_count,
+        collapsed_row_count=collapsed_row_count,
+        visible_row_override_count=visible_row_override_count,
+        unrecognized_control_count=unrecognized_control_count,
+        definition_signature=_private_external_data_signature(tuple(sorted(entries))),
+    )
+    return _FilterVisibilityMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
     """Inspect raw markers that openpyxl intentionally does not expose."""
     dynamic_cells: set[CellKey] = set()
@@ -14025,6 +14845,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     power_pivot_data_model_metadata = _power_pivot_data_model_metadata(source)
     what_if_data_table_metadata = _what_if_data_table_metadata(source)
     scenario_manager_metadata = _scenario_manager_metadata(source)
+    filter_visibility_metadata = _filter_visibility_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -14059,6 +14880,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(power_pivot_data_model_metadata.warnings)
     parser_warnings.update(what_if_data_table_metadata.warnings)
     parser_warnings.update(scenario_manager_metadata.warnings)
+    parser_warnings.update(filter_visibility_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -14277,6 +15099,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         power_pivot_data_model=power_pivot_data_model_metadata.data_model,
         what_if_data_tables=what_if_data_table_metadata.data_tables,
         scenario_manager=scenario_manager_metadata.scenario_manager,
+        filter_visibility_controls=filter_visibility_metadata.controls,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -14348,6 +15171,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "power_pivot_data_model": snapshot.power_pivot_data_model.profile_dict(),
         "what_if_data_tables": snapshot.what_if_data_tables.profile_dict(),
         "scenario_manager": snapshot.scenario_manager.profile_dict(),
+        "filter_visibility_controls": snapshot.filter_visibility_controls.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -14371,6 +15195,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_power_pivot_data_model": snapshot.power_pivot_data_model.present,
             "has_what_if_data_tables": snapshot.what_if_data_tables.present,
             "has_scenario_manager": snapshot.scenario_manager.present,
+            "has_filter_visibility_controls": snapshot.filter_visibility_controls.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

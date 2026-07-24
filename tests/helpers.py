@@ -5810,6 +5810,303 @@ def corrupt_scenario_manager_input(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".scenario-manager-corrupt.tmp.xlsx")
 
 
+def make_filter_visibility_model(path: Path) -> Path:
+    """Create raw OOXML filter and row-visibility controls with private criteria."""
+    workbook = Workbook()
+    report = workbook.active
+    report.title = "Report"
+    report.append(["Department", "Region", "Amount", "Notes", "Visible total"])
+    report.append(["Operations", "North", 100, "ordinary", "=SUBTOTAL(109,C2:C5)"])
+    report.append(["Sales", "South", 200, "ordinary", "=AGGREGATE(9,5,C2:C5)"])
+    report.append(["Finance", "North", 300, "ordinary", None])
+    report.append(["Legal", "West", 400, "ordinary", None])
+
+    table_sheet = workbook.create_sheet("Table Report")
+    table_sheet.append(["Segment", "Value", "Status"])
+    table_sheet.append(["Private A", 10, "Open"])
+    table_sheet.append(["Private B", 20, "Open"])
+    table_sheet.append(["Private C", 30, "Closed"])
+    table_sheet.append(["Private D", 40, "Closed"])
+    table_sheet.add_table(Table(displayName="ReportTable", ref="A1:C5"))
+
+    default_hidden = workbook.create_sheet("Default Hidden")
+    default_hidden["A1"] = "Visible override under a hidden-by-default sheet"
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        auto_filter_tag = f"{{{_SPREADSHEETML_NS}}}autoFilter"
+        filter_column_tag = f"{{{_SPREADSHEETML_NS}}}filterColumn"
+        filters_tag = f"{{{_SPREADSHEETML_NS}}}filters"
+        filter_tag = f"{{{_SPREADSHEETML_NS}}}filter"
+        custom_filters_tag = f"{{{_SPREADSHEETML_NS}}}customFilters"
+        custom_filter_tag = f"{{{_SPREADSHEETML_NS}}}customFilter"
+        sort_state_tag = f"{{{_SPREADSHEETML_NS}}}sortState"
+        sort_condition_tag = f"{{{_SPREADSHEETML_NS}}}sortCondition"
+        sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+        sheet_format_tag = f"{{{_SPREADSHEETML_NS}}}sheetFormatPr"
+        row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        auto_filter = ElementTree.Element(auto_filter_tag, {"ref": "A1:C5"})
+        worksheet_column = ElementTree.SubElement(
+            auto_filter,
+            filter_column_tag,
+            {"colId": "1", "hiddenButton": "0", "showButton": "true"},
+        )
+        worksheet_filters = ElementTree.SubElement(
+            worksheet_column,
+            filters_tag,
+            {"blank": "false", "calendarType": "none"},
+        )
+        ElementTree.SubElement(
+            worksheet_filters,
+            filter_tag,
+            {"val": "PRIVATE-WORKSHEET-REGION"},
+        )
+        worksheet_sort = ElementTree.SubElement(
+            auto_filter,
+            sort_state_tag,
+            {"ref": "A1:C5", "caseSensitive": "false"},
+        )
+        ElementTree.SubElement(
+            worksheet_sort,
+            sort_condition_tag,
+            {"ref": "C2:C5", "descending": "1", "customList": "PRIVATE-SORT-LIST"},
+        )
+        sheet_data_index = next(
+            index
+            for index, child in enumerate(report_xml)
+            if child.tag == sheet_data_tag
+        )
+        report_xml.insert(sheet_data_index + 1, auto_filter)
+        rows = {row.get("r"): row for row in report_xml.iter(row_tag)}
+        rows["3"].set("hidden", "1")
+        rows["3"].set("outlineLevel", "1")
+        rows["4"].set("hidden", "1")
+        rows["4"].set("outlineLevel", "2")
+        rows["4"].set("collapsed", "1")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        table_xml = ElementTree.fromstring(contents["xl/tables/table1.xml"])
+        table_auto_filter = table_xml.find(auto_filter_tag)
+        if table_auto_filter is None:
+            table_auto_filter = ElementTree.Element(auto_filter_tag, {"ref": "A1:C5"})
+            table_columns_tag = f"{{{_SPREADSHEETML_NS}}}tableColumns"
+            table_columns_index = next(
+                index
+                for index, child in enumerate(table_xml)
+                if child.tag == table_columns_tag
+            )
+            table_xml.insert(table_columns_index, table_auto_filter)
+        table_column = ElementTree.SubElement(
+            table_auto_filter,
+            filter_column_tag,
+            {"colId": "0"},
+        )
+        table_filters = ElementTree.SubElement(
+            table_column,
+            custom_filters_tag,
+            {"and": "true"},
+        )
+        ElementTree.SubElement(
+            table_filters,
+            custom_filter_tag,
+            {"operator": "equal", "val": "PRIVATE-TABLE-SEGMENT"},
+        )
+        table_sort = ElementTree.SubElement(table_auto_filter, sort_state_tag, {"ref": "A1:C5"})
+        ElementTree.SubElement(
+            table_sort,
+            sort_condition_tag,
+            {"ref": "B2:B5", "descending": "false"},
+        )
+        contents["xl/tables/table1.xml"] = ElementTree.tostring(
+            table_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        default_hidden_xml = ElementTree.fromstring(contents["xl/worksheets/sheet3.xml"])
+        sheet_format = default_hidden_xml.find(sheet_format_tag)
+        if sheet_format is None:
+            sheet_format = ElementTree.Element(sheet_format_tag)
+            default_hidden_xml.insert(0, sheet_format)
+        sheet_format.set("zeroHeight", "true")
+        default_hidden_row = next(default_hidden_xml.iter(row_tag))
+        default_hidden_row.set("hidden", "false")
+        contents["xl/worksheets/sheet3.xml"] = ElementTree.tostring(
+            default_hidden_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".filter-visibility.tmp.xlsx")
+
+
+def change_filter_visibility_criterion(path: Path) -> Path:
+    """Change a worksheet filter member without touching a cell or formula."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        filter_tag = f"{{{_SPREADSHEETML_NS}}}filter"
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        next(report_xml.iter(filter_tag)).set("val", "CANDIDATE-PRIVATE-WORKSHEET-REGION")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".filter-visibility-criterion.tmp.xlsx")
+
+
+def change_filter_visibility_hidden_row(path: Path) -> Path:
+    """Reveal one raw hidden row without changing cell content."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        row = next(row for row in report_xml.iter(row_tag) if row.get("r") == "3")
+        row.set("hidden", "false")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".filter-visibility-row.tmp.xlsx")
+
+
+def change_table_filter_visibility_criterion(path: Path) -> Path:
+    """Change a table-part filter member without changing table cells."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        custom_filter_tag = f"{{{_SPREADSHEETML_NS}}}customFilter"
+        table_xml = ElementTree.fromstring(contents["xl/tables/table1.xml"])
+        next(table_xml.iter(custom_filter_tag)).set("val", "CANDIDATE-PRIVATE-TABLE-SEGMENT")
+        contents["xl/tables/table1.xml"] = ElementTree.tostring(
+            table_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".table-filter-visibility-criterion.tmp.xlsx")
+
+
+def normalize_filter_visibility_control_spelling(path: Path) -> Path:
+    """Use equivalent local-reference, Boolean, and unsigned-integer spellings."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        auto_filter_tag = f"{{{_SPREADSHEETML_NS}}}autoFilter"
+        filter_column_tag = f"{{{_SPREADSHEETML_NS}}}filterColumn"
+        filters_tag = f"{{{_SPREADSHEETML_NS}}}filters"
+        sort_state_tag = f"{{{_SPREADSHEETML_NS}}}sortState"
+        sort_condition_tag = f"{{{_SPREADSHEETML_NS}}}sortCondition"
+        row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+        sheet_format_tag = f"{{{_SPREADSHEETML_NS}}}sheetFormatPr"
+
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        auto_filter = report_xml.find(auto_filter_tag)
+        if auto_filter is None:
+            raise ValueError("Could not find worksheet AutoFilter fixture")
+        auto_filter.set("ref", "$a$1:$c$5")
+        filter_column = auto_filter.find(filter_column_tag)
+        if filter_column is None:
+            raise ValueError("Could not find worksheet filter-column fixture")
+        filter_column.set("colId", "01")
+        filter_column.set("hiddenButton", "false")
+        filter_column.set("showButton", "1")
+        filters = filter_column.find(filters_tag)
+        if filters is None:
+            raise ValueError("Could not find worksheet filters fixture")
+        filters.set("blank", "0")
+        worksheet_sort = auto_filter.find(sort_state_tag)
+        if worksheet_sort is None:
+            raise ValueError("Could not find worksheet sort-state fixture")
+        worksheet_sort.set("ref", "$A$1:$C$5")
+        worksheet_sort.set("caseSensitive", "0")
+        worksheet_condition = worksheet_sort.find(sort_condition_tag)
+        if worksheet_condition is None:
+            raise ValueError("Could not find worksheet sort-condition fixture")
+        worksheet_condition.set("ref", "$c$2:$c$5")
+        worksheet_condition.set("descending", "true")
+        rows = {row.get("r"): row for row in report_xml.iter(row_tag)}
+        rows["3"].set("hidden", "true")
+        rows["3"].set("outlineLevel", "01")
+        rows["4"].set("hidden", "1")
+        rows["4"].set("outlineLevel", "002")
+        rows["4"].set("collapsed", "true")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        table_xml = ElementTree.fromstring(contents["xl/tables/table1.xml"])
+        table_auto_filter = table_xml.find(auto_filter_tag)
+        if table_auto_filter is None:
+            raise ValueError("Could not find table AutoFilter fixture")
+        table_auto_filter.set("ref", "$A$1:$C$5")
+        table_column = table_auto_filter.find(filter_column_tag)
+        if table_column is None:
+            raise ValueError("Could not find table filter-column fixture")
+        table_column.set("colId", "00")
+        table_sort = table_auto_filter.find(sort_state_tag)
+        if table_sort is None:
+            raise ValueError("Could not find table sort-state fixture")
+        table_sort.set("ref", "$a$1:$c$5")
+        table_condition = table_sort.find(sort_condition_tag)
+        if table_condition is None:
+            raise ValueError("Could not find table sort-condition fixture")
+        table_condition.set("ref", "$B$2:$B$5")
+        table_condition.set("descending", "0")
+        contents["xl/tables/table1.xml"] = ElementTree.tostring(
+            table_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        default_hidden_xml = ElementTree.fromstring(contents["xl/worksheets/sheet3.xml"])
+        sheet_format = default_hidden_xml.find(sheet_format_tag)
+        if sheet_format is None:
+            raise ValueError("Could not find default-hidden sheet-format fixture")
+        sheet_format.set("zeroHeight", "1")
+        default_hidden_row = next(default_hidden_xml.iter(row_tag))
+        default_hidden_row.set("hidden", "0")
+        contents["xl/worksheets/sheet3.xml"] = ElementTree.tostring(
+            default_hidden_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".filter-visibility-noise.tmp.xlsx")
+
+
+def corrupt_filter_visibility_control(path: Path) -> Path:
+    """Inject an invalid filter-column identifier to exercise fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        auto_filter_tag = f"{{{_SPREADSHEETML_NS}}}autoFilter"
+        filter_column_tag = f"{{{_SPREADSHEETML_NS}}}filterColumn"
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        auto_filter = report_xml.find(auto_filter_tag)
+        if auto_filter is None:
+            raise ValueError("Could not find worksheet AutoFilter fixture")
+        filter_column = auto_filter.find(filter_column_tag)
+        if filter_column is None:
+            raise ValueError("Could not find worksheet filter-column fixture")
+        filter_column.set("colId", "4294967296")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".filter-visibility-corrupt.tmp.xlsx")
+
+
 def change_what_if_data_table_input(path: Path) -> Path:
     """Change one private Data Table input reference without touching cells."""
 

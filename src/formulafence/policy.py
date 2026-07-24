@@ -26,6 +26,7 @@ _RULE_FIELDS = {
     "no_power_pivot_data_model_changes",
     "no_what_if_data_table_changes",
     "no_scenario_manager_changes",
+    "no_filter_visibility_changes",
     "no_worksheet_embedded_control_changes",
     "no_new_parser_warnings",
     "no_new_unresolved_references",
@@ -85,6 +86,7 @@ class Policy:
     no_power_pivot_data_model_changes: bool = False
     no_what_if_data_table_changes: bool = False
     no_scenario_manager_changes: bool = False
+    no_filter_visibility_changes: bool = False
     no_worksheet_embedded_control_changes: bool = False
     no_new_parser_warnings: bool = False
     no_new_unresolved_references: bool = False
@@ -126,6 +128,7 @@ rules:
   no_power_pivot_data_model_changes: true
   no_what_if_data_table_changes: true
   no_scenario_manager_changes: true
+  no_filter_visibility_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -248,6 +251,9 @@ def parse_policy(data: object) -> Policy:
         ),
         no_scenario_manager_changes=_boolean_rule(
             rules, "no_scenario_manager_changes"
+        ),
+        no_filter_visibility_changes=_boolean_rule(
+            rules, "no_filter_visibility_changes"
         ),
         no_worksheet_embedded_control_changes=_boolean_rule(
             rules, "no_worksheet_embedded_control_changes"
@@ -603,6 +609,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP035",
                     "high",
                     "Policy forbids Scenario Manager definition and stored-input changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_filter_visibility_changes:
+        for finding in _rule_triggered(report, "FF036"):
+            violations.append(
+                Finding(
+                    "FFP036",
+                    "high",
+                    "Policy forbids filter, sort, and row-visibility control changes.",
                     details=finding.details,
                 )
             )

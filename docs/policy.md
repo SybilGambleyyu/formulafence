@@ -21,6 +21,7 @@ rules:
   no_power_pivot_data_model_changes: true
   no_what_if_data_table_changes: true
   no_scenario_manager_changes: true
+  no_filter_visibility_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -83,6 +84,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_power_pivot_data_model_changes` | boolean | An embedded Power Pivot/Data Model workbook binding, `x15:dataModel` declaration, direct model-part relationship, or bounded raw model payload changes. |
 | `no_what_if_data_table_changes` | boolean | An Excel What-If Data Table master changes its output range, one-/two-variable mode, orientation, input references, deleted-input state, recalculation request, or supported raw formula metadata. This is unrelated to an Excel table definition. |
 | `no_scenario_manager_changes` | boolean | An Excel Scenario Manager worksheet changes its selected/shown scenario state, result-summary references, scenario definition, protection flags, comments/users, stored input values/references, deleted/undone state, or input display number formats. Scenario names, comments, users, values, and references are compared privately. |
+| `no_filter_visibility_changes` | boolean | A worksheet/Table AutoFilter, stored filter criterion, filter sort state, explicitly hidden/outlined/collapsed row, or hidden-by-default sheet setting changes. Criteria, selected values, sort keys/lists, table names, and references are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -398,6 +400,26 @@ coverage warnings. FormulaFence does not calculate a table, infer its output
 formula, predict scenario values, or add its input references to the normal
 dependency graph. Cached scenario-output cells remain under the ordinary
 cell-diff boundary.
+
+Excel filters can change which rows contribute to a report while leaving cell
+contents and formulas unchanged. FormulaFence reads worksheet-level
+`<autoFilter>` / `<sortState>` metadata, AutoFilters and sort state retained in
+Table Definition parts, explicit row `hidden`, `outlineLevel`, and `collapsed`
+attributes, and `sheetFormatPr@zeroHeight` (the hidden-by-default row
+optimization). A material change emits `FF036`; enable
+`no_filter_visibility_changes` to make it `FFP036` in CI.
+
+Profiles and `FF036` details contain only structural counts: worksheet/table
+filters, filter columns and criterion groups, sort states/conditions,
+default-hidden sheets, explicitly hidden/outlined/collapsed rows, visible row
+overrides, and malformed controls. Criteria, selected values, custom lists,
+table names, sort keys, and row/range references remain private. Local A1
+case/absolute-reference spelling, Boolean/default spelling, and unsigned
+integer spelling are normalized. Unsupported extensions, malformed declarations,
+and unsafe or missing table relationships are explicit coverage warnings.
+FormulaFence does not apply a filter, evaluate `SUBTOTAL`/`AGGREGATE`, infer
+which formulas are visibility-sensitive, render a report, or track hidden
+columns.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

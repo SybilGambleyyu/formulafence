@@ -5,6 +5,44 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel filters and row visibility — 2026-07-25
+
+FormulaFence 0.32.0 was validated with controlled raw-OOXML `.xlsx` packages
+containing one worksheet AutoFilter, one Table Definition-part AutoFilter, two
+private criterion groups, two private sort conditions, two explicitly hidden
+outlined rows, one collapsed outline marker, and a `zeroHeight` hidden-by-default
+sheet with an explicit visible-row override. The suite verifies the safe profile
+counts, a zero-change self-diff, `FF036` when only a worksheet criterion, a
+table criterion, or a raw row-hidden flag changes, and `FFP036` under
+`no_filter_visibility_changes`.
+
+Equivalent local A1 case/absolute-reference, Boolean/default, and unsigned
+integer spellings are exercised without a finding. An out-of-range unsigned
+filter-column identifier produces an explicit parser-coverage warning, `FF010`,
+and `FF036` rather than a silent omission. Filter criteria, selected values,
+custom sort lists, and row/range references are verified absent from JSON,
+Markdown, ordinary reports, and SARIF. The controlled criterion-only mutation
+is invisible to the published 0.31.0 wheel: it has no ordinary cell or formula
+change, whereas 0.32.0 emits only `filter_visibility_controls_changed` /
+`FF036`.
+
+As an independent package-compatibility check, FormulaFence profiled the public
+XlsxWriter [`autofilter.py`](https://github.com/jmcnamara/XlsxWriter/blob/main/examples/autofilter.py)
+example and its [`autofilter_data.txt`](https://github.com/jmcnamara/XlsxWriter/blob/main/examples/autofilter_data.txt)
+input, generated locally with XlsxWriter 3.2.9 and not bundled with this
+repository. The resulting `autofilter.xlsx` SHA-256 was
+`ff09b2a3f580fbca170fd94acba46d344f7916ec892f421a460f02404160d2ba`.
+FormulaFence found seven worksheet AutoFilters, seven filter columns and
+criterion groups, 163 explicitly hidden rows, and no visibility-control
+coverage warning. This validates static OOXML declaration comparison and data
+minimisation—not filter application, recalculation, `SUBTOTAL`/`AGGREGATE`
+correctness, formula-sensitivity inference, or rendering. The boundary follows
+Microsoft's [SUBTOTAL documentation](https://support.microsoft.com/en-us/excel/functions/subtotal-function)
+and the Open XML [`autoFilter`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_autoFilter_topic_ID0EIDM4.html),
+[`filterColumn`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_filterColumn_topic_ID0ELVP5.html),
+and [`sheetFormatPr`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_sheetFormatPr_topic_ID0EVAG5.html)
+definitions.
+
 ## Excel Scenario Manager — 2026-07-25
 
 FormulaFence 0.31.0 was validated with controlled raw-OOXML `.xlsx` packages

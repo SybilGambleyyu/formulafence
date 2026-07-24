@@ -86,6 +86,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['scenario_manager_scenario_count']} / "
             f"{workbook['scenario_manager_input_cell_count']}"
         ),
+        (
+            "- **Filter declarations / explicitly hidden rows:** "
+            f"{workbook['filter_visibility_auto_filter_count']} / "
+            f"{workbook['filter_visibility_hidden_row_count']}"
+        ),
         f"- **XLM macro-sheet parts:** {workbook['xlm_macro_sheet_count']}",
         (
             "- **XLM macro-sheet formula cells:** "
@@ -1187,6 +1192,50 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Scenario names, comments, user metadata, input values, input references, and "
             "summary references are compared privately and intentionally omitted."
+        )
+    filter_visibility_controls = profile["filter_visibility_controls"]
+    if filter_visibility_controls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Filter, sort, and row-visibility controls",
+                "",
+                (
+                    "- **Worksheet / table AutoFilters:** "
+                    f"{filter_visibility_controls['worksheet_auto_filter_count']} / "
+                    f"{filter_visibility_controls['table_auto_filter_count']}"
+                ),
+                (
+                    "- **Filter columns / criterion groups:** "
+                    f"{filter_visibility_controls['filter_column_count']} / "
+                    f"{filter_visibility_controls['filter_criterion_count']}"
+                ),
+                (
+                    "- **Sort states / conditions:** "
+                    f"{filter_visibility_controls['sort_state_count']} / "
+                    f"{filter_visibility_controls['sort_condition_count']}"
+                ),
+                (
+                    "- **Default-hidden sheets / explicitly hidden rows:** "
+                    f"{filter_visibility_controls['default_hidden_sheet_count']} / "
+                    f"{filter_visibility_controls['hidden_row_count']}"
+                ),
+                (
+                    "- **Outlined / collapsed rows / visible overrides:** "
+                    f"{filter_visibility_controls['outlined_row_count']} / "
+                    f"{filter_visibility_controls['collapsed_row_count']} / "
+                    f"{filter_visibility_controls['visible_row_override_count']}"
+                ),
+            ]
+        )
+        if filter_visibility_controls["unrecognized_control_count"]:
+            lines.append(
+                "- **Unrecognized or malformed visibility controls:** "
+                f"{filter_visibility_controls['unrecognized_control_count']}"
+            )
+        lines.append(
+            "Filter criteria, selected values, table names, sort keys, custom lists, "
+            "and row/range references are compared privately and intentionally omitted."
         )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:

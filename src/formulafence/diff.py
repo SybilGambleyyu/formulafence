@@ -20,6 +20,7 @@ from formulafence.models import (
     DiffReport,
     ExternalDataConnectionSnapshot,
     ExternalLinkPackageSnapshot,
+    FilterVisibilitySnapshot,
     Finding,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
@@ -1349,6 +1350,31 @@ def _workbook_control_changes(
                 "FF035",
                 "high",
                 "Excel Scenario Manager definition or stored input set changed.",
+                details=details,
+            )
+        )
+    if before.filter_visibility_controls != after.filter_visibility_controls:
+        old_controls: FilterVisibilitySnapshot = before.filter_visibility_controls
+        new_controls: FilterVisibilitySnapshot = after.filter_visibility_controls
+        details: dict[str, object] = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.definition_signature != new_controls.definition_signature:
+            details["filter_visibility_definition_material_changed"] = True
+        changes.append(
+            Change(
+                "filter_visibility_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF036",
+                "high",
+                "Worksheet/table filter, sort, or row-visibility control changed.",
                 details=details,
             )
         )

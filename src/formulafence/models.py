@@ -1432,6 +1432,65 @@ class ScenarioManagerSnapshot:
 
 
 @dataclass(frozen=True)
+class FilterVisibilitySnapshot:
+    """Safe aggregate of Excel filter, sort, and row-visibility controls.
+
+    AutoFilter criteria can contain sensitive customer, product, or financial
+    values, while row identifiers and sort ranges can reveal report structure.
+    The private signature retains canonical declarations for comparison; the
+    public profile deliberately exposes counts only.
+    """
+
+    worksheet_auto_filter_count: int = 0
+    table_auto_filter_count: int = 0
+    filter_column_count: int = 0
+    filter_criterion_count: int = 0
+    sort_state_count: int = 0
+    sort_condition_count: int = 0
+    default_hidden_sheet_count: int = 0
+    hidden_row_count: int = 0
+    outlined_row_count: int = 0
+    collapsed_row_count: int = 0
+    visible_row_override_count: int = 0
+    unrecognized_control_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.worksheet_auto_filter_count
+            or self.table_auto_filter_count
+            or self.default_hidden_sheet_count
+            or self.hidden_row_count
+            or self.outlined_row_count
+            or self.collapsed_row_count
+            or self.visible_row_override_count
+            or self.unrecognized_control_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural visibility evidence without criteria or references."""
+        return {
+            "present": self.present,
+            "worksheet_auto_filter_count": self.worksheet_auto_filter_count,
+            "table_auto_filter_count": self.table_auto_filter_count,
+            "filter_column_count": self.filter_column_count,
+            "filter_criterion_count": self.filter_criterion_count,
+            "sort_state_count": self.sort_state_count,
+            "sort_condition_count": self.sort_condition_count,
+            "default_hidden_sheet_count": self.default_hidden_sheet_count,
+            "hidden_row_count": self.hidden_row_count,
+            "outlined_row_count": self.outlined_row_count,
+            "collapsed_row_count": self.collapsed_row_count,
+            "visible_row_override_count": self.visible_row_override_count,
+            "unrecognized_control_count": self.unrecognized_control_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -1824,6 +1883,9 @@ class WorkbookSnapshot:
     scenario_manager: ScenarioManagerSnapshot = field(
         default_factory=ScenarioManagerSnapshot
     )
+    filter_visibility_controls: FilterVisibilitySnapshot = field(
+        default_factory=FilterVisibilitySnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -1874,6 +1936,14 @@ class WorkbookSnapshot:
             "scenario_manager_scenario_count": self.scenario_manager.scenario_count,
             "scenario_manager_input_cell_count": self.scenario_manager.input_cell_count,
             "has_scenario_manager": self.scenario_manager.present,
+            "filter_visibility_auto_filter_count": (
+                self.filter_visibility_controls.worksheet_auto_filter_count
+                + self.filter_visibility_controls.table_auto_filter_count
+            ),
+            "filter_visibility_hidden_row_count": (
+                self.filter_visibility_controls.hidden_row_count
+            ),
+            "has_filter_visibility_controls": self.filter_visibility_controls.present,
             "defined_names": len(self.defined_names),
             "table_count": len(self.tables),
             "data_validation_rules": len(self.data_validations),

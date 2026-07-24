@@ -25,6 +25,8 @@ financial correctness or replace model review.
   input/result references, and raw declarations are compared through a private
   signature only. Cached worksheet cells remain under the normal cell-diff
   boundary.
+- Filter criteria, selected values, custom sort lists, table names, sort keys,
+  and row/range references are compared through a private signature only.
 - Protection credential material is never emitted: legacy verifiers, modern
   hashes/salts, protected-range names, and security descriptors are compared
   through private fingerprints and reported only as safe presence/change metadata.
@@ -120,6 +122,20 @@ review prompt, not proof of an error.
   result, infer a scenario-to-formula dependency, or fetch an external target;
   cached worksheet cells remain ordinary cell values under the normal diff
   boundary.
+- Excel AutoFilters and row visibility can change which records are shown and
+  which values vertical `SUBTOTAL` formulas include without changing a formula
+  or ordinary cell value. FormulaFence reads worksheet `<autoFilter>` and
+  `<sortState>` elements, the same controls in relationship-backed Table
+  Definition parts, explicit row `hidden`, `outlineLevel`, and `collapsed`
+  attributes, and `sheetFormatPr@zeroHeight`. It privately compares criteria,
+  selected values, custom sort lists, sort keys, and local references; profiles
+  and `FF036` expose only structural counts. Local A1 case/absolute-reference,
+  Boolean/default, and unsigned-integer spellings are normalized. Unsupported
+  extensions, malformed controls, and unsafe/missing table relationships remain
+  visible coverage warnings, and `no_filter_visibility_changes` can block the
+  change as `FFP036`. FormulaFence does not apply filters, calculate
+  `SUBTOTAL`/`AGGREGATE`, infer formula sensitivity, render views, or track
+  hidden columns.
 - Worksheet data-validation controls are inventoried and diffed as compact
   ranges rather than by expanding their target cells. FormulaFence compares the
   validation type, operator, two criteria expressions, blank/dropdown behavior,
@@ -353,7 +369,8 @@ review prompt, not proof of an error.
   Add-in task-pane packages, PivotTable view/cache-schema/shared-item/cached-
   record chains, Slicer and Timeline cache filter-definition chains, embedded
   Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and
-  Scenario Manager declarations, DrawingML chart
+  Scenario Manager declarations, worksheet/Table AutoFilter and row-visibility
+  controls, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link

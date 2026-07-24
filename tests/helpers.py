@@ -30,6 +30,9 @@ _DOCUMENT_RELATIONSHIPS_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 )
 _SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+_OFFICE_2013_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"
+_OFFICE_2016_REVISION10_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision10"
 
 
 def make_model(path: Path) -> Path:
@@ -3416,6 +3419,7 @@ def make_pivot_table_definition_model(path: Path) -> Path:
     package_relationships = _PACKAGE_RELATIONSHIPS_NS
     document_relationships = _DOCUMENT_RELATIONSHIPS_NS
     spreadsheet = _SPREADSHEETML_NS
+    slicer = _OFFICE_2010_SPREADSHEET_NS
 
     def serialize(root: ElementTree.Element) -> bytes:
         return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
@@ -3599,6 +3603,20 @@ def make_pivot_table_definition_model(path: Path) -> Path:
             shared_items,
             f"{{{spreadsheet}}}s",
             {"v": "Private baseline item two"},
+        )
+        cache_extensions = ElementTree.SubElement(
+            cache_definition,
+            f"{{{spreadsheet}}}extLst",
+        )
+        cache_extension = ElementTree.SubElement(
+            cache_extensions,
+            f"{{{spreadsheet}}}ext",
+            {"uri": "{725AE2AE-9491-48BE-B2B4-4EB974FC3084}"},
+        )
+        ElementTree.SubElement(
+            cache_extension,
+            f"{{{slicer}}}pivotCacheDefinition",
+            {"pivotCacheId": "7"},
         )
         contents[cache_definition_member] = serialize(cache_definition)
 
@@ -3938,6 +3956,594 @@ def corrupt_pivot_table_definition_root(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".pivot-definition-corrupt.tmp.xlsx")
+
+
+def _slicer_timeline_fixture_part_names(contents: dict[str, bytes]) -> tuple[str, str, str]:
+    """Return controlled slicer-cache and Timeline-cache package members."""
+    pivot_slicer_member = "xl/slicerCaches/slicerCache1.xml"
+    table_slicer_member = "xl/slicerCaches/slicerCache2.xml"
+    timeline_member = "xl/timelineCaches/timelineCache1.xml"
+    if not {
+        pivot_slicer_member,
+        table_slicer_member,
+        timeline_member,
+    } <= contents.keys():
+        raise ValueError("Fixture does not contain its slicer/Timeline cache parts")
+    return pivot_slicer_member, table_slicer_member, timeline_member
+
+
+def make_slicer_timeline_cache_model(path: Path) -> Path:
+    """Create harmless slicer and Timeline cache material with private sentinels.
+
+    The package is intentionally constructed at the OOXML layer because the
+    workbook reader preserves neither cache definition. It is used only for
+    static comparison and redaction tests, never opened in Office software.
+    """
+    make_pivot_table_definition_model(path)
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+    slicer = _OFFICE_2010_SPREADSHEET_NS
+    timeline = _OFFICE_2013_SPREADSHEET_NS
+    revision10 = _OFFICE_2016_REVISION10_NS
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        extensions = ElementTree.SubElement(workbook, f"{{{spreadsheet}}}extLst")
+        slicer_extension = ElementTree.SubElement(
+            extensions,
+            f"{{{spreadsheet}}}ext",
+            {"uri": "{BBE1A952-AA13-448E-AADC-164F8A28A991}"},
+        )
+        slicer_caches = ElementTree.SubElement(
+            slicer_extension,
+            f"{{{slicer}}}slicerCaches",
+        )
+        ElementTree.SubElement(
+            slicer_caches,
+            f"{{{slicer}}}slicerCache",
+            {f"{{{document_relationships}}}id": "rIdFencePivotSlicer"},
+        )
+        table_slicer_extension = ElementTree.SubElement(
+            extensions,
+            f"{{{spreadsheet}}}ext",
+            {"uri": "{46BE6895-7355-4A93-B00E-2C351335B9C9}"},
+        )
+        table_slicer_caches = ElementTree.SubElement(
+            table_slicer_extension,
+            f"{{{timeline}}}slicerCaches",
+        )
+        ElementTree.SubElement(
+            table_slicer_caches,
+            f"{{{slicer}}}slicerCache",
+            {f"{{{document_relationships}}}id": "rIdFenceTableSlicer"},
+        )
+        timeline_extension = ElementTree.SubElement(
+            extensions,
+            f"{{{spreadsheet}}}ext",
+            {"uri": "{7E03D99C-DC04-49D9-9315-930204A7B6E9}"},
+        )
+        timeline_refs = ElementTree.SubElement(
+            timeline_extension,
+            f"{{{timeline}}}timelineCacheRefs",
+        )
+        ElementTree.SubElement(
+            timeline_refs,
+            f"{{{timeline}}}timelineCacheRef",
+            {f"{{{document_relationships}}}id": "rIdFenceTimeline"},
+        )
+        contents["xl/workbook.xml"] = serialize(workbook)
+
+        workbook_relationships_name = _relationship_member("xl/workbook.xml")
+        workbook_relationships = ElementTree.fromstring(
+            contents[workbook_relationships_name]
+        )
+        for relationship_id, relationship_type, target in (
+            (
+                "rIdFencePivotSlicer",
+                "http://schemas.microsoft.com/office/2007/relationships/slicerCache",
+                "slicerCaches/slicerCache1.xml",
+            ),
+            (
+                "rIdFenceTableSlicer",
+                "http://schemas.microsoft.com/office/2007/relationships/slicerCache",
+                "slicerCaches/slicerCache2.xml",
+            ),
+            (
+                "rIdFenceTimeline",
+                "http://schemas.microsoft.com/office/2010/relationships/TimelineCache",
+                "timelineCaches/timelineCache1.xml",
+            ),
+        ):
+            ElementTree.SubElement(
+                workbook_relationships,
+                f"{{{package_relationships}}}Relationship",
+                {
+                    "Id": relationship_id,
+                    "Type": relationship_type,
+                    "Target": target,
+                },
+            )
+        contents[workbook_relationships_name] = serialize(workbook_relationships)
+
+        pivot_slicer_member = "xl/slicerCaches/slicerCache1.xml"
+        pivot_slicer = ElementTree.Element(
+            f"{{{slicer}}}slicerCacheDefinition",
+            {
+                "name": "Private baseline revenue slicer",
+                "sourceName": "Private baseline business unit",
+            },
+        )
+        pivot_slicer_data = ElementTree.SubElement(
+            pivot_slicer,
+            f"{{{slicer}}}data",
+        )
+        tabular_slicer = ElementTree.SubElement(
+            pivot_slicer_data,
+            f"{{{slicer}}}tabular",
+            {"pivotCacheId": "7"},
+        )
+        pivot_slicer_items = ElementTree.SubElement(
+            tabular_slicer,
+            f"{{{slicer}}}items",
+            {"count": "2"},
+        )
+        ElementTree.SubElement(
+            pivot_slicer_items,
+            f"{{{slicer}}}i",
+            {"x": "0", "s": "1"},
+        )
+        ElementTree.SubElement(
+            pivot_slicer_items,
+            f"{{{slicer}}}i",
+            {"x": "1", "s": "0"},
+        )
+        pivot_slicer_tables = ElementTree.SubElement(
+            pivot_slicer,
+            f"{{{slicer}}}pivotTables",
+            {"count": "1"},
+        )
+        ElementTree.SubElement(
+            pivot_slicer_tables,
+            f"{{{slicer}}}pivotTable",
+            {"tabId": "1", "name": "Private baseline pivot report"},
+        )
+        contents[pivot_slicer_member] = serialize(pivot_slicer)
+
+        table_slicer_member = "xl/slicerCaches/slicerCache2.xml"
+        table_slicer = ElementTree.Element(
+            f"{{{slicer}}}slicerCacheDefinition",
+            {
+                "name": "Private baseline table slicer",
+                "sourceName": "Private baseline table field",
+            },
+        )
+        table_slicer_extensions = ElementTree.SubElement(
+            table_slicer,
+            f"{{{slicer}}}extLst",
+        )
+        table_slicer_extension = ElementTree.SubElement(
+            table_slicer_extensions,
+            f"{{{slicer}}}ext",
+            {"uri": "{2F2917AC-EB37-4324-AD4E-5DD8C200BD13}"},
+        )
+        ElementTree.SubElement(
+            table_slicer_extension,
+            f"{{{timeline}}}tableSlicerCache",
+            {"tableId": "41", "column": "1"},
+        )
+        contents[table_slicer_member] = serialize(table_slicer)
+
+        timeline_member = "xl/timelineCaches/timelineCache1.xml"
+        timeline_cache = ElementTree.Element(
+            f"{{{timeline}}}timelineCacheDefinition",
+            {
+                "name": "Private baseline sales timeline",
+                "sourceName": "Private baseline transaction date",
+                f"{{{revision10}}}uid": "{D75EB4A3-A42F-45D9-8E99-7C310D8EF203}",
+            },
+        )
+        timeline_pivot_tables = ElementTree.SubElement(
+            timeline_cache,
+            f"{{{timeline}}}pivotTables",
+            {"count": "1"},
+        )
+        ElementTree.SubElement(
+            timeline_pivot_tables,
+            f"{{{timeline}}}pivotTable",
+            {"name": "Private baseline pivot report"},
+        )
+        ElementTree.SubElement(
+            timeline_cache,
+            f"{{{timeline}}}state",
+            {
+                "minimalRefreshVersion": "6",
+                "lastRefreshVersion": "6",
+                "pivotCacheId": "7",
+                "filterType": "dateBetween",
+                "singleRangeFilterState": "1",
+            },
+        )
+        timeline_state = timeline_cache.find(f"{{{timeline}}}state")
+        if timeline_state is None:
+            raise ValueError("Fixture did not create a Timeline state")
+        ElementTree.SubElement(
+            timeline_state,
+            f"{{{timeline}}}selection",
+            {
+                "startDate": "2024-01-01T00:00:00Z",
+                "endDate": "2024-03-31T00:00:00Z",
+            },
+        )
+        ElementTree.SubElement(
+            timeline_state,
+            f"{{{timeline}}}bounds",
+            {
+                "startDate": "2023-01-01T00:00:00Z",
+                "endDate": "2024-12-31T00:00:00Z",
+            },
+        )
+        contents[timeline_member] = serialize(timeline_cache)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        override_tag = f"{{{content_types}}}Override"
+        for part_name, content_type in (
+            ("/xl/slicerCaches/slicerCache1.xml", "application/vnd.ms-excel.slicerCache+xml"),
+            ("/xl/slicerCaches/slicerCache2.xml", "application/vnd.ms-excel.slicerCache+xml"),
+            ("/xl/timelineCaches/timelineCache1.xml", "application/vnd.ms-excel.TimelineCache+xml"),
+        ):
+            ElementTree.SubElement(
+                types,
+                override_tag,
+                {"PartName": part_name, "ContentType": content_type},
+            )
+        contents["[Content_Types].xml"] = serialize(types)
+
+    return _rewrite_archive(path, mutate, ".slicer-timeline-cache.tmp.xlsx")
+
+
+def change_slicer_timeline_filter_material(path: Path) -> Path:
+    """Change private slicer selection and Timeline filter state material."""
+    slicer = _OFFICE_2010_SPREADSHEET_NS
+    timeline = _OFFICE_2013_SPREADSHEET_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        pivot_slicer_member, _table_slicer_member, timeline_member = (
+            _slicer_timeline_fixture_part_names(contents)
+        )
+        pivot_slicer = ElementTree.fromstring(contents[pivot_slicer_member])
+        selected_item = next(
+            item
+            for item in pivot_slicer.iter(f"{{{slicer}}}i")
+            if item.get("s") == "1"
+        )
+        selected_item.set("s", "0")
+        contents[pivot_slicer_member] = ElementTree.tostring(
+            pivot_slicer,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        timeline_cache = ElementTree.fromstring(contents[timeline_member])
+        state = timeline_cache.find(f"{{{timeline}}}state")
+        if state is None:
+            raise ValueError("Fixture does not contain a Timeline state")
+        state.set("filterType", "dateEqual")
+        selection = state.find(f"{{{timeline}}}selection")
+        if selection is None:
+            raise ValueError("Fixture does not contain a Timeline selection")
+        selection.set("startDate", "2024-05-14T00:00:00Z")
+        selection.set("endDate", "2024-05-14T00:00:00Z")
+        contents[timeline_member] = ElementTree.tostring(
+            timeline_cache,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".slicer-timeline-filter-change.tmp.xlsx")
+
+
+def set_slicer_timeline_equivalent_defaults(path: Path) -> Path:
+    """Spell out optional slicer defaults and regenerate the Timeline UID."""
+    slicer = _OFFICE_2010_SPREADSHEET_NS
+    timeline = _OFFICE_2013_SPREADSHEET_NS
+    revision10 = _OFFICE_2016_REVISION10_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        pivot_slicer_member, table_slicer_member, timeline_member = (
+            _slicer_timeline_fixture_part_names(contents)
+        )
+        pivot_slicer = ElementTree.fromstring(contents[pivot_slicer_member])
+        tabular = next(pivot_slicer.iter(f"{{{slicer}}}tabular"))
+        tabular.set("sortOrder", "ascending")
+        tabular.set("customListSort", "1")
+        tabular.set("showMissing", "true")
+        tabular.set("crossFilter", "showItemsWithDataAtTop")
+        for item in pivot_slicer.iter(f"{{{slicer}}}i"):
+            if item.get("s") == "0":
+                item.set("s", "false")
+            item.set("nd", "0")
+        contents[pivot_slicer_member] = ElementTree.tostring(
+            pivot_slicer,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        table_slicer = ElementTree.fromstring(contents[table_slicer_member])
+        table_cache = next(table_slicer.iter(f"{{{timeline}}}tableSlicerCache"))
+        table_cache.set("sortOrder", "ascending")
+        table_cache.set("customListSort", "true")
+        table_cache.set("crossFilter", "showItemsWithDataAtTop")
+        contents[table_slicer_member] = ElementTree.tostring(
+            table_slicer,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        timeline_cache = ElementTree.fromstring(contents[timeline_member])
+        timeline_cache.set(
+            f"{{{revision10}}}uid", "{E5E42E16-64AA-4734-B3B0-E0B82821C9DD}"
+        )
+        contents[timeline_member] = ElementTree.tostring(
+            timeline_cache,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".slicer-timeline-defaults.tmp.xlsx")
+
+
+def rebind_slicer_timeline_cache(path: Path) -> Path:
+    """Move one slicer cache to a distinct package target for binding tests."""
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        pivot_slicer_member, _table_slicer_member, _timeline_member = (
+            _slicer_timeline_fixture_part_names(contents)
+        )
+        replacement_member = "xl/slicerCaches/slicerCache3.xml"
+        relationships_name = _relationship_member("xl/workbook.xml")
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        relationship = next(
+            current
+            for current in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if current.get("Id") == "rIdFencePivotSlicer"
+        )
+        relationship.set("Target", "slicerCaches/slicerCache3.xml")
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents[replacement_member] = contents.pop(pivot_slicer_member)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        override_tag = f"{{{content_types}}}Override"
+        for override in types.findall(override_tag):
+            if override.get("PartName") == f"/{pivot_slicer_member}":
+                override.set("PartName", f"/{replacement_member}")
+        contents["[Content_Types].xml"] = ElementTree.tostring(
+            types,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".slicer-timeline-rebind.tmp.xlsx")
+
+
+def renumber_slicer_timeline_relationships(path: Path) -> Path:
+    """Rewrite workbook relationship IDs while retaining filter-cache bindings."""
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    slicer = _OFFICE_2010_SPREADSHEET_NS
+    timeline = _OFFICE_2013_SPREADSHEET_NS
+    replacements = {
+        "rIdFencePivotSlicer": "rIdFenceRenumberedPivotSlicer",
+        "rIdFenceTableSlicer": "rIdFenceRenumberedTableSlicer",
+        "rIdFenceTimeline": "rIdFenceRenumberedTimeline",
+    }
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships_name = _relationship_member("xl/workbook.xml")
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        for relationship in relationships.findall(
+            f"{{{package_relationships}}}Relationship"
+        ):
+            if replacement := replacements.get(relationship.get("Id")):
+                relationship.set("Id", replacement)
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        for element in workbook.iter():
+            if element.tag in {
+                f"{{{slicer}}}slicerCache",
+                f"{{{timeline}}}slicerCache",
+                f"{{{timeline}}}timelineCacheRef",
+            }:
+                relationship_id = element.get(f"{{{document_relationships}}}id")
+                if replacement := replacements.get(relationship_id):
+                    element.set(f"{{{document_relationships}}}id", replacement)
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".slicer-timeline-relationship-renumber.tmp.xlsx")
+
+
+def use_slicer_timeline_2011_relationship_type(path: Path) -> Path:
+    """Use a widely emitted Timeline cache relationship compatibility form."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships_name = _relationship_member("xl/workbook.xml")
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        relationship = next(
+            current
+            for current in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if current.get("Id") == "rIdFenceTimeline"
+        )
+        relationship.set(
+            "Type",
+            "http://schemas.microsoft.com/office/2011/relationships/timelineCache",
+        )
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".slicer-timeline-2011-relationship.tmp.xlsx")
+
+
+def renumber_slicer_timeline_pivot_cache_id(path: Path) -> Path:
+    """Renumber the common Pivot cache ID without changing its target binding."""
+    slicer = _OFFICE_2010_SPREADSHEET_NS
+    timeline = _OFFICE_2013_SPREADSHEET_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        pivot_slicer_member, _table_slicer_member, timeline_member = (
+            _slicer_timeline_fixture_part_names(contents)
+        )
+        _pivot_table_member, cache_definition_member, _cache_records_member = (
+            _pivot_fixture_part_names(contents)
+        )
+
+        cache_definition = ElementTree.fromstring(contents[cache_definition_member])
+        extension = next(
+            cache_definition.iter(f"{{{slicer}}}pivotCacheDefinition")
+        )
+        extension.set("pivotCacheId", "101")
+        contents[cache_definition_member] = ElementTree.tostring(
+            cache_definition,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        pivot_slicer = ElementTree.fromstring(contents[pivot_slicer_member])
+        tabular = next(pivot_slicer.iter(f"{{{slicer}}}tabular"))
+        tabular.set("pivotCacheId", "101")
+        contents[pivot_slicer_member] = ElementTree.tostring(
+            pivot_slicer,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        timeline_cache = ElementTree.fromstring(contents[timeline_member])
+        state = timeline_cache.find(f"{{{timeline}}}state")
+        if state is None:
+            raise ValueError("Fixture does not contain a Timeline state")
+        state.set("pivotCacheId", "101")
+        contents[timeline_member] = ElementTree.tostring(
+            timeline_cache,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".slicer-timeline-cache-id-renumber.tmp.xlsx")
+
+
+def break_slicer_timeline_pivot_cache_binding(path: Path) -> Path:
+    """Leave slicer/Timeline IDs stale after changing their PivotCache extension ID."""
+    slicer = _OFFICE_2010_SPREADSHEET_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _pivot_table_member, cache_definition_member, _cache_records_member = (
+            _pivot_fixture_part_names(contents)
+        )
+        cache_definition = ElementTree.fromstring(contents[cache_definition_member])
+        extension = next(
+            cache_definition.iter(f"{{{slicer}}}pivotCacheDefinition")
+        )
+        extension.set("pivotCacheId", "303")
+        contents[cache_definition_member] = ElementTree.tostring(
+            cache_definition,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".slicer-timeline-broken-pivot-cache-id.tmp.xlsx")
+
+
+def rewrite_slicer_timeline_internal_target_spelling(path: Path) -> Path:
+    """Use equivalent target spellings for workbook filter-cache relationships."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships_name = _relationship_member("xl/workbook.xml")
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        for relationship in relationships.findall(
+            f"{{{package_relationships}}}Relationship"
+        ):
+            if relationship.get("Id") == "rIdFencePivotSlicer":
+                relationship.set("Target", "./slicerCaches/./slicerCache1.xml")
+            elif relationship.get("Id") == "rIdFenceTableSlicer":
+                relationship.set("Target", "./slicerCaches/./slicerCache2.xml")
+            elif relationship.get("Id") == "rIdFenceTimeline":
+                relationship.set("Target", "./timelineCaches/./timelineCache1.xml")
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".slicer-timeline-target-spelling.tmp.xlsx")
+
+
+def externalize_slicer_timeline_cache_relationship(path: Path) -> Path:
+    """Turn one slicer cache target external without exposing its address."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships_name = _relationship_member("xl/workbook.xml")
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        relationship = next(
+            current
+            for current in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if current.get("Id") == "rIdFencePivotSlicer"
+        )
+        relationship.set("Target", "https://example.invalid/private-slicer-cache")
+        relationship.set("TargetMode", "External")
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".slicer-timeline-external-target.tmp.xlsx")
+
+
+def corrupt_slicer_timeline_cache_root(path: Path) -> Path:
+    """Replace one cache root with unexpected XML for coverage tests."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        pivot_slicer_member, _table_slicer_member, _timeline_member = (
+            _slicer_timeline_fixture_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[pivot_slicer_member])
+        root.tag = "notSlicerCacheDefinition"
+        contents[pivot_slicer_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".slicer-timeline-corrupt.tmp.xlsx")
 
 
 def make_chart_definition_model(path: Path) -> Path:

@@ -996,6 +996,64 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "relationship targets, XML, and payload bytes are compared privately and "
             "intentionally omitted."
         )
+    slicer_timeline_caches = profile["slicer_timeline_caches"]
+    if slicer_timeline_caches["present"]:
+        lines.extend(
+            [
+                "",
+                "## Slicer and Timeline cache filter state",
+                "",
+                (
+                    "- **Slicer / Timeline cache parts:** "
+                    f"{slicer_timeline_caches['slicer_cache_part_count']} / "
+                    f"{slicer_timeline_caches['timeline_cache_part_count']}"
+                ),
+                (
+                    "- **Workbook cache bindings (slicer / Timeline):** "
+                    f"{slicer_timeline_caches['slicer_workbook_binding_count']} / "
+                    f"{slicer_timeline_caches['timeline_workbook_binding_count']}"
+                ),
+                (
+                    "- **Pivot-cache bindings (slicer / Timeline):** "
+                    f"{slicer_timeline_caches['slicer_pivot_cache_binding_count']} / "
+                    f"{slicer_timeline_caches['timeline_pivot_cache_binding_count']}"
+                ),
+                (
+                    "- **Table-slicer bindings:** "
+                    f"{slicer_timeline_caches['slicer_table_binding_count']}"
+                ),
+                (
+                    "- **Filtered PivotTable views (slicer / Timeline):** "
+                    f"{slicer_timeline_caches['slicer_pivot_table_binding_count']} / "
+                    f"{slicer_timeline_caches['timeline_pivot_table_binding_count']}"
+                ),
+                (
+                    "- **Slicer items / selected items:** "
+                    f"{slicer_timeline_caches['slicer_item_count']} / "
+                    f"{slicer_timeline_caches['selected_slicer_item_count']}"
+                ),
+                (
+                    "- **Timeline states / filters:** "
+                    f"{slicer_timeline_caches['timeline_state_count']} / "
+                    f"{slicer_timeline_caches['timeline_filter_count']}"
+                ),
+                (
+                    "- **Related package relationships:** "
+                    f"{slicer_timeline_caches['related_relationship_count']} "
+                    f"({slicer_timeline_caches['external_relationship_count']} external)"
+                ),
+            ]
+        )
+        if slicer_timeline_caches["unrecognized_part_count"]:
+            lines.append(
+                "- **Unrecognized or uninspected cache parts/bindings:** "
+                f"{slicer_timeline_caches['unrecognized_part_count']}"
+            )
+        lines.append(
+            "Slicer and Timeline cache names, source fields, selected values, filter ranges, "
+            "PivotTable names, relationship targets, and XML are compared privately and "
+            "intentionally omitted."
+        )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:
         lines.extend(

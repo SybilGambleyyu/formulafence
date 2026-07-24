@@ -22,6 +22,7 @@ _RULE_FIELDS = {
     "no_office_web_addin_changes",
     "no_chart_definition_changes",
     "no_pivot_table_definition_changes",
+    "no_slicer_timeline_cache_changes",
     "no_worksheet_embedded_control_changes",
     "no_new_parser_warnings",
     "no_new_unresolved_references",
@@ -77,6 +78,7 @@ class Policy:
     no_office_web_addin_changes: bool = False
     no_chart_definition_changes: bool = False
     no_pivot_table_definition_changes: bool = False
+    no_slicer_timeline_cache_changes: bool = False
     no_worksheet_embedded_control_changes: bool = False
     no_new_parser_warnings: bool = False
     no_new_unresolved_references: bool = False
@@ -114,6 +116,7 @@ rules:
   no_office_web_addin_changes: true
   no_chart_definition_changes: true
   no_pivot_table_definition_changes: true
+  no_slicer_timeline_cache_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -224,6 +227,9 @@ def parse_policy(data: object) -> Policy:
         ),
         no_pivot_table_definition_changes=_boolean_rule(
             rules, "no_pivot_table_definition_changes"
+        ),
+        no_slicer_timeline_cache_changes=_boolean_rule(
+            rules, "no_slicer_timeline_cache_changes"
         ),
         no_worksheet_embedded_control_changes=_boolean_rule(
             rules, "no_worksheet_embedded_control_changes"
@@ -539,6 +545,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP031",
                     "high",
                     "Policy forbids PivotTable view and cached-data definition changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_slicer_timeline_cache_changes:
+        for finding in _rule_triggered(report, "FF032"):
+            violations.append(
+                Finding(
+                    "FFP032",
+                    "high",
+                    "Policy forbids slicer and Timeline cache filter-state changes.",
                     details=finding.details,
                 )
             )

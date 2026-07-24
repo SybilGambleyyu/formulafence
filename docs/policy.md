@@ -17,6 +17,7 @@ rules:
   no_office_web_addin_changes: true
   no_chart_definition_changes: true
   no_pivot_table_definition_changes: true
+  no_slicer_timeline_cache_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -75,6 +76,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_office_web_addin_changes` | boolean | An Office Web Add-in task-pane workbook binding, task-pane configuration, web-extension definition, or direct relationship changes. |
 | `no_chart_definition_changes` | boolean | A DrawingML chart binding, chart definition, cached series data, chart-overlay shape, direct relationship, or bounded direct related payload changes. |
 | `no_pivot_table_definition_changes` | boolean | A PivotTable binding/layout, cache schema, shared item, cache-record relationship, or bounded cached-record payload changes. Source and refresh controls remain under `no_external_data_connection_changes`. |
+| `no_slicer_timeline_cache_changes` | boolean | A Slicer or Timeline workbook binding, cached filter state, source binding, filtered-PivotTable binding, or direct cache-part relationship changes. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -222,7 +224,7 @@ never appear in profiles or reports; private fingerprints still expose material
 source or identity changes. Any such control change emits `FF023`; enable
 `no_external_data_connection_changes` to make it `FFP023` in CI. FormulaFence
 does not execute a connection, refresh workbook data, determine source trust,
-or model PivotTable layout semantics.
+or calculate a PivotTable report.
 
 FormulaFence separately inventories raw `xl/externalLinks/externalLink*.xml`
 packages. It recognizes external-workbook, DDE, and OLE definitions; privately
@@ -324,7 +326,8 @@ Source definitions and refresh settings remain under `FF023` /
 `no_external_data_connection_changes`, so a refresh-only edit is not reported
 as a PivotTable definition change. FormulaFence does not refresh a cache,
 calculate or render a PivotTable, infer PivotTable-to-cell impact, fetch an
-external target, or interpret OLAP, extension-list, or slicer semantics.
+external target, or interpret OLAP or extension-list semantics. Slicer and
+Timeline cache definitions are compared separately.
 Missing, malformed, orphaned, unbound, oversized, or over-budget material
 remains a visible coverage warning. PivotTable/cache-definition XML reads are
 bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts; raw cache-record
@@ -332,6 +335,26 @@ hashing is bounded to 32 MiB per part, 64 MiB per workbook, and 512 parts. A
 temporary reader copy detaches cache-record relationships before the underlying
 workbook library loads cells, so those raw records are not eagerly materialized;
 the original workbook remains unchanged.
+
+Slicer and Timeline caches can apply an interactive item or date filter to a
+PivotTable, and a Slicer can also filter an Excel table, without changing an
+ordinary worksheet cell. FormulaFence follows documented workbook cache
+declarations and their explicit relationships to bounded cache XML, then
+privately compares cache definitions, item selections, Timeline state/filter
+material, PivotTable/table source bindings, filtered-PivotTable bindings, and
+unexpected direct cache-part relationships. Profiles expose only safe
+structural counts; cache names, source fields, selected values, date ranges,
+PivotTable names, relationship targets, and XML remain private. A material
+change emits `FF032`; enable `no_slicer_timeline_cache_changes` to make it
+`FFP032` in CI. Writer-chosen relationship IDs, equivalent internal target
+spellings, coordinated Slicer/Timeline PivotCache extension-ID renumbering, known optional Slicer
+defaults, Boolean spellings, and Timeline GUIDs are normalized. FormulaFence
+does not apply a filter, calculate or render a PivotTable/table, infer
+downstream cell impact, fetch an external target, or model worksheet/drawing
+Slicer or Timeline view geometry and styles. Missing, malformed, orphaned,
+unbound, externally targeted, oversized, or over-budget material remains a
+visible coverage warning. Cache XML reads are bounded to 16 MiB per part, 64
+MiB per workbook, and 512 parts.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

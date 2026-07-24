@@ -9,6 +9,7 @@ rules:
   no_office_web_addin_changes: true
   no_chart_definition_changes: true
   no_pivot_table_definition_changes: true
+  no_slicer_timeline_cache_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true

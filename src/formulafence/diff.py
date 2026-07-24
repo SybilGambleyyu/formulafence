@@ -29,6 +29,7 @@ from formulafence.models import (
     ProtectionOpaqueMetadataSnapshot,
     QueryTableRefreshSnapshot,
     RibbonCustomizationSnapshot,
+    SlicerTimelineCacheSnapshot,
     WorkbookSnapshot,
     WorksheetEmbeddedControlSnapshot,
     XlmMacroSheetSnapshot,
@@ -1229,6 +1230,43 @@ def _workbook_control_changes(
                 "FF031",
                 "high",
                 "PivotTable view, cache-schema, shared-item, or cached-record material changed.",
+                details=details,
+            )
+        )
+    if before.slicer_timeline_caches != after.slicer_timeline_caches:
+        old_filters: SlicerTimelineCacheSnapshot = before.slicer_timeline_caches
+        new_filters: SlicerTimelineCacheSnapshot = after.slicer_timeline_caches
+        details: dict[str, object] = {
+            "before": old_filters.to_dict(),
+            "after": new_filters.to_dict(),
+        }
+        if old_filters.declaration_signature != new_filters.declaration_signature:
+            details["workbook_cache_binding_changed"] = True
+        if (
+            old_filters.slicer_definition_signature
+            != new_filters.slicer_definition_signature
+        ):
+            details["slicer_filter_state_or_definition_material_changed"] = True
+        if (
+            old_filters.timeline_definition_signature
+            != new_filters.timeline_definition_signature
+        ):
+            details["timeline_filter_state_or_definition_material_changed"] = True
+        if old_filters.relationship_signature != new_filters.relationship_signature:
+            details["related_part_relationships_changed"] = True
+        changes.append(
+            Change(
+                "slicer_timeline_cache_definitions_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF032",
+                "high",
+                "Slicer or Timeline cache filter state or definition changed.",
                 details=details,
             )
         )

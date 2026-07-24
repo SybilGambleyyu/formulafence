@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.27.0/formulafence-0.27.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.28.0/formulafence-0.28.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -67,6 +67,7 @@ rules:
   no_office_web_addin_changes: true
   no_chart_definition_changes: true
   no_pivot_table_definition_changes: true
+  no_slicer_timeline_cache_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -104,7 +105,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -260,7 +261,7 @@ identifiers, cached records, and opaque extension XML; private fingerprints
 still expose a material source or identity change. Any change emits `FF023`;
 enable `no_external_data_connection_changes` for `FFP023`. FormulaFence never
 opens a connection or refreshes data, does not assess source trust or actual
-returned values, and does not model PivotTable layout semantics. The scope follows Microsoft's
+returned values, or calculate a PivotTable report. The scope follows Microsoft's
 [external-data refresh guidance](https://support.microsoft.com/en-us/excel/refresh-an-external-data-connection-in-excel)
 and the [SpreadsheetML Connections part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Connections_topic_ID0EQLGK.html).
 
@@ -388,11 +389,41 @@ also detaches cache-record relationships in a temporary reader copy so the
 underlying workbook library does not eagerly materialize unbounded record data;
 the original workbook is never changed. It does not refresh a cache, calculate
 a PivotTable, render a report, infer PivotTable-to-cell impact, fetch an
-external target, or interpret OLAP, extension-list, or slicer semantics. The
+external target, or interpret OLAP or extension-list semantics. Slicer and
+Timeline cache definitions are compared separately. The
 package boundary follows the OOXML
 [Pivot Table Part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Pivot_topic_ID0ELLAM.html),
 [Pivot Cache Definition Part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Pivot_topic_ID0E1TAM.html),
 and [Pivot Cache Records Part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Pivot_topic_ID0EV2AM.html).
+
+FormulaFence also inventories **Slicer and Timeline cache filter state**. A
+Slicer can apply a cached item selection to a PivotTable or Excel table, and a
+Timeline can apply a cached date filter to a PivotTable, without altering an
+ordinary cell. FormulaFence follows documented workbook extension declarations
+through their explicit workbook relationships to bounded `slicerCache` and
+`TimelineCache` XML. It privately compares cache definitions, item selections,
+Timeline state and filter material, PivotTable/table source bindings, filtered
+PivotTable bindings, and any unexpected direct cache-part relationships. A
+material change emits `FF032`; enable `no_slicer_timeline_cache_changes` for
+`FFP032`.
+
+Profiles expose only safe structural counts for cache parts, source and
+PivotTable bindings, item/selection counts, Timeline states/filters, and
+relationship coverage. Cache names, source fields, selected item values, date
+ranges, PivotTable names, relationship targets, and XML never enter profiles
+or reports. Writer-chosen relationship IDs, equivalent internal target
+spellings, coordinated Slicer/Timeline PivotCache extension-ID renumbering, known optional Slicer
+defaults, Boolean spellings, and Timeline GUIDs are normalized away. Missing,
+malformed, orphaned, unbound, externally targeted, oversized, or over-budget
+material becomes a visible coverage warning. Cache XML reads are bounded to 16
+MiB per part, 64 MiB per workbook, and 512 parts. FormulaFence does not apply a
+filter, calculate or render a PivotTable or table, infer downstream cell
+impact, fetch an external target, or model worksheet/drawing Slicer or Timeline
+view geometry and styles. The boundary follows Microsoft's [Slicer Cache
+part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/7dbb4481-b021-45cc-8bd4-6094b566a5ff),
+[Timeline Cache part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/29a0f58c-d942-4641-8ed0-4f02010326f2),
+[Slicer-to-PivotCache relationship](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/2a393f85-21f9-4a27-a2b7-4867223f4b9a),
+and [Slicer view boundary](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/69c0e0f9-d014-4bd5-9f2d-2f554c715083).
 
 FormulaFence also inventories relationship-backed **worksheet controls, legacy
 VML form controls, and OLE objects**. A worksheet can bind modern `<control>`

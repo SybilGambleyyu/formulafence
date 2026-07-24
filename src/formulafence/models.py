@@ -1213,6 +1213,73 @@ class PivotTableDefinitionSnapshot:
 
 
 @dataclass(frozen=True)
+class SlicerTimelineCacheSnapshot:
+    """Safe aggregate of interactive slicer and Timeline filter-cache material.
+
+    Slicer and Timeline caches can apply report filters to PivotTables or
+    tables without changing an ordinary worksheet cell. Private signatures
+    retain their declarations, filter state, and source bindings for comparison;
+    ``to_dict`` deliberately exposes only structural counts.
+    """
+
+    slicer_cache_part_count: int = 0
+    timeline_cache_part_count: int = 0
+    slicer_workbook_binding_count: int = 0
+    timeline_workbook_binding_count: int = 0
+    slicer_pivot_cache_binding_count: int = 0
+    slicer_table_binding_count: int = 0
+    timeline_pivot_cache_binding_count: int = 0
+    slicer_pivot_table_binding_count: int = 0
+    timeline_pivot_table_binding_count: int = 0
+    slicer_item_count: int = 0
+    selected_slicer_item_count: int = 0
+    timeline_state_count: int = 0
+    timeline_filter_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    unrecognized_part_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    slicer_definition_signature: str | None = field(default=None, repr=False)
+    timeline_definition_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.slicer_cache_part_count
+            or self.timeline_cache_part_count
+            or self.slicer_workbook_binding_count
+            or self.timeline_workbook_binding_count
+            or self.unrecognized_part_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return filter-cache evidence without names, values, or targets."""
+        return {
+            "present": self.present,
+            "slicer_cache_part_count": self.slicer_cache_part_count,
+            "timeline_cache_part_count": self.timeline_cache_part_count,
+            "slicer_workbook_binding_count": self.slicer_workbook_binding_count,
+            "timeline_workbook_binding_count": self.timeline_workbook_binding_count,
+            "slicer_pivot_cache_binding_count": self.slicer_pivot_cache_binding_count,
+            "slicer_table_binding_count": self.slicer_table_binding_count,
+            "timeline_pivot_cache_binding_count": self.timeline_pivot_cache_binding_count,
+            "slicer_pivot_table_binding_count": self.slicer_pivot_table_binding_count,
+            "timeline_pivot_table_binding_count": self.timeline_pivot_table_binding_count,
+            "slicer_item_count": self.slicer_item_count,
+            "selected_slicer_item_count": self.selected_slicer_item_count,
+            "timeline_state_count": self.timeline_state_count,
+            "timeline_filter_count": self.timeline_filter_count,
+            "related_relationship_count": self.related_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+            "unrecognized_part_count": self.unrecognized_part_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -1593,6 +1660,9 @@ class WorkbookSnapshot:
     pivot_table_definitions: PivotTableDefinitionSnapshot = field(
         default_factory=PivotTableDefinitionSnapshot
     )
+    slicer_timeline_caches: SlicerTimelineCacheSnapshot = field(
+        default_factory=SlicerTimelineCacheSnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -1715,6 +1785,12 @@ class WorkbookSnapshot:
             ),
             "pivot_cache_record_count": self.pivot_table_definitions.cache_record_count,
             "has_pivot_table_definitions": self.pivot_table_definitions.present,
+            "slicer_cache_part_count": self.slicer_timeline_caches.slicer_cache_part_count,
+            "timeline_cache_part_count": self.slicer_timeline_caches.timeline_cache_part_count,
+            "selected_slicer_item_count": (
+                self.slicer_timeline_caches.selected_slicer_item_count
+            ),
+            "has_slicer_timeline_caches": self.slicer_timeline_caches.present,
             "chart_host_sheet_count": self.chart_definitions.chart_host_sheet_count,
             "chart_drawing_part_count": self.chart_definitions.chart_drawing_part_count,
             "chart_part_count": self.chart_definitions.chart_part_count,

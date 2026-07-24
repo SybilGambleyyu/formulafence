@@ -16,6 +16,7 @@ from .helpers import (
     change_pivot_table_definition_material,
     change_power_query_controls,
     change_ribbon_customization_callback,
+    change_slicer_timeline_filter_material,
     change_worksheet_embedded_control_controls,
     change_xlm_macro_sheet_controls,
     make_chart_definition_model,
@@ -31,6 +32,7 @@ from .helpers import (
     make_power_query_model,
     make_protection_model,
     make_ribbon_customization_model,
+    make_slicer_timeline_cache_model,
     make_table_model,
     make_three_d_model,
     make_worksheet_embedded_control_model,
@@ -332,6 +334,19 @@ def test_policy_can_block_pivot_table_definition_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP031"}
+
+
+def test_policy_can_block_slicer_timeline_cache_changes(tmp_path) -> None:
+    baseline = make_slicer_timeline_cache_model(tmp_path / "baseline.xlsx")
+    candidate = make_slicer_timeline_cache_model(tmp_path / "candidate.xlsx")
+    change_slicer_timeline_filter_material(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_slicer_timeline_cache_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP032"}
 
 
 def test_policy_can_block_worksheet_embedded_control_changes(tmp_path) -> None:

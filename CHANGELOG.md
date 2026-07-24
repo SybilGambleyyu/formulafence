@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.28.0 — 2026-07-24
+
+- Inspect Slicer and Timeline cache definitions directly from documented
+  workbook extension declarations and explicit workbook relationships. Private
+  fingerprints retain Slicer item selections, Timeline state/filter material,
+  PivotTable/table source bindings, filtered-PivotTable bindings, normalized
+  relationships, and complete cache definitions without serializing cache
+  names, source fields, selected values, date ranges, PivotTable names,
+  relationship targets, or XML.
+- Emit `FF032` for a Slicer/Timeline workbook binding, filter state, cache
+  definition, source binding, filtered-PivotTable binding, or unexpected direct
+  cache-part relationship change, and add the fail-closed
+  `no_slicer_timeline_cache_changes` policy rule (`FFP032`). Relationship IDs,
+  equivalent internal target spellings, coordinated Slicer/Timeline PivotCache
+  extension-ID renumbering,
+  known optional Slicer defaults, Boolean spellings, and Timeline GUIDs are
+  normalized away. Malformed, orphaned, unbound, externally targeted,
+  oversized, over-budget, or unrecognized material remains a visible coverage
+  warning. Cache XML reads are bounded to 16 MiB per part, 64 MiB per workbook,
+  and 512 parts.
+- Treat the documented 2010 Timeline-cache relationship and the widely emitted
+  2011 compatibility relationship as one equivalent workbook binding.
+- Never apply a Slicer or Timeline filter, calculate/render a PivotTable or
+  table, infer downstream cell impact, fetch an external target, or model
+  worksheet/drawing view geometry and styles.
+
 ## 0.27.0 — 2026-07-24
 
 - Inspect PivotTable view definitions, cache schemas, shared cache items, and

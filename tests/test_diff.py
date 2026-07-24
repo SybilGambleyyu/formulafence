@@ -15,6 +15,7 @@ from formulafence.workbook import load_snapshot, profile_snapshot
 from .helpers import (
     add_conditional_formatting_databar_extension,
     add_protected_range,
+    break_slicer_timeline_pivot_cache_binding,
     change_chart_cached_data,
     change_chart_definition_material,
     change_external_data_refresh_controls,
@@ -30,6 +31,7 @@ from .helpers import (
     change_protected_range,
     change_ribbon_customization_callback,
     change_ribbon_customization_controls,
+    change_slicer_timeline_filter_material,
     change_worksheet_embedded_control_controls,
     change_worksheet_embedded_control_payload,
     change_xlm_macro_sheet_controls,
@@ -39,12 +41,14 @@ from .helpers import (
     corrupt_office_web_addin_definition_root,
     corrupt_pivot_table_definition_root,
     corrupt_ribbon_customization_root,
+    corrupt_slicer_timeline_cache_root,
     corrupt_worksheet_embedded_control_activex_root,
     corrupt_xlm_macro_sheet_root,
     duplicate_external_link_definition,
     duplicate_external_link_sheet_names,
     externalize_chart_overlay_relationship,
     externalize_pivot_table_cache_record_relationship,
+    externalize_slicer_timeline_cache_relationship,
     make_chart_definition_model,
     make_conditional_formatting_model,
     make_current_row_table_model,
@@ -65,6 +69,7 @@ from .helpers import (
     make_protection_model,
     make_ribbon_customization_model,
     make_scoped_named_lambda_model,
+    make_slicer_timeline_cache_model,
     make_spill_model,
     make_table_model,
     make_three_d_model,
@@ -74,6 +79,7 @@ from .helpers import (
     mark_array_formula_unclassified,
     rebind_external_link_declaration,
     rebind_pivot_table_cache_records,
+    rebind_slicer_timeline_cache,
     remove_xlm_macro_sheet_related_part_payload,
     renumber_chart_relationships,
     renumber_external_link_declaration_relationships,
@@ -82,6 +88,8 @@ from .helpers import (
     renumber_pivot_table_cache_id,
     renumber_pivot_table_relationships,
     renumber_ribbon_customization_relationships,
+    renumber_slicer_timeline_pivot_cache_id,
+    renumber_slicer_timeline_relationships,
     renumber_worksheet_embedded_control_relationships,
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
@@ -91,11 +99,14 @@ from .helpers import (
     rewrite_office_web_addin_internal_target_spelling,
     rewrite_pivot_table_internal_target_spelling,
     rewrite_ribbon_customization_internal_target_spelling,
+    rewrite_slicer_timeline_internal_target_spelling,
     rewrite_worksheet_embedded_control_internal_target_spelling,
     rewrite_xlm_macro_sheet_internal_target_spelling,
     set_external_data_connection_defaults,
     set_sheet_protection_defaults,
     set_sheet_protection_modern_verifier,
+    set_slicer_timeline_equivalent_defaults,
+    use_slicer_timeline_2011_relationship_type,
 )
 
 
@@ -3323,6 +3334,210 @@ def test_pivotless_workbook_does_not_consume_pivottable_budget(tmp_path, monkeyp
     assert snapshot.pivot_table_definitions.present is False
     assert snapshot.pivot_table_definitions.pivot_table_part_count == 0
     assert not any("PivotTable XML" in warning for warning in snapshot.parser_warnings)
+
+
+def test_slicer_timeline_cache_filters_are_profiled_and_diffed_privately(tmp_path) -> None:
+    baseline = make_slicer_timeline_cache_model(tmp_path / "baseline.xlsx")
+    candidate = make_slicer_timeline_cache_model(tmp_path / "candidate.xlsx")
+    change_slicer_timeline_filter_material(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    filter_change = next(
+        change
+        for change in report.changes
+        if change.kind == "slicer_timeline_cache_definitions_changed"
+    )
+
+    filters = profile["slicer_timeline_caches"]
+    assert baseline_snapshot.summary()["slicer_cache_part_count"] == 2
+    assert baseline_snapshot.summary()["timeline_cache_part_count"] == 1
+    assert baseline_snapshot.summary()["selected_slicer_item_count"] == 1
+    assert filters == {
+        "present": True,
+        "slicer_cache_part_count": 2,
+        "timeline_cache_part_count": 1,
+        "slicer_workbook_binding_count": 2,
+        "timeline_workbook_binding_count": 1,
+        "slicer_pivot_cache_binding_count": 1,
+        "slicer_table_binding_count": 1,
+        "timeline_pivot_cache_binding_count": 1,
+        "slicer_pivot_table_binding_count": 1,
+        "timeline_pivot_table_binding_count": 1,
+        "slicer_item_count": 2,
+        "selected_slicer_item_count": 1,
+        "timeline_state_count": 1,
+        "timeline_filter_count": 0,
+        "related_relationship_count": 0,
+        "external_relationship_count": 0,
+        "unrecognized_part_count": 0,
+    }
+    assert "## Slicer and Timeline cache filter state" in markdown
+    assert filter_change.details["slicer_filter_state_or_definition_material_changed"] is True
+    assert filter_change.details["timeline_filter_state_or_definition_material_changed"] is True
+    assert "FF032" in {finding.rule_id for finding in report.findings}
+    assert "FF031" not in {finding.rule_id for finding in report.findings}
+
+    sensitive_values = (
+        "Private baseline revenue slicer",
+        "Private baseline business unit",
+        "Private baseline table slicer",
+        "Private baseline transaction date",
+        "Private baseline sales timeline",
+        "Private baseline pivot report",
+        "2024-01-01T00:00:00Z",
+        "2024-05-14T00:00:00Z",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_slicer_timeline_relationships_targets_and_pivot_cache_ids_are_normalized(
+    tmp_path,
+) -> None:
+    baseline = make_slicer_timeline_cache_model(tmp_path / "baseline.xlsx")
+    renumbered = make_slicer_timeline_cache_model(tmp_path / "renumbered.xlsx")
+    target_rewritten = make_slicer_timeline_cache_model(tmp_path / "target.xlsx")
+    cache_id_renumbered = make_slicer_timeline_cache_model(tmp_path / "cache-id.xlsx")
+    timeline_2011 = make_slicer_timeline_cache_model(tmp_path / "timeline-2011.xlsx")
+    renumber_slicer_timeline_relationships(renumbered)
+    rewrite_slicer_timeline_internal_target_spelling(target_rewritten)
+    renumber_slicer_timeline_pivot_cache_id(cache_id_renumbered)
+    use_slicer_timeline_2011_relationship_type(timeline_2011)
+
+    reports = (
+        compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered)),
+        compare_snapshots(load_snapshot(baseline), load_snapshot(target_rewritten)),
+        compare_snapshots(load_snapshot(baseline), load_snapshot(cache_id_renumbered)),
+        compare_snapshots(load_snapshot(baseline), load_snapshot(timeline_2011)),
+    )
+
+    for report in reports:
+        rule_ids = {finding.rule_id for finding in report.findings}
+        change_kinds = {change.kind for change in report.changes}
+        assert "slicer_timeline_cache_definitions_changed" not in change_kinds
+        assert "pivot_table_definitions_changed" not in change_kinds
+        assert "pivot_cache_refresh_controls_changed" not in change_kinds
+        assert "FF032" not in rule_ids
+        assert "FF031" not in rule_ids
+        assert "FF023" not in rule_ids
+
+
+def test_slicer_timeline_optional_defaults_and_uids_are_normalized(tmp_path) -> None:
+    baseline = make_slicer_timeline_cache_model(tmp_path / "baseline.xlsx")
+    equivalent = make_slicer_timeline_cache_model(tmp_path / "equivalent.xlsx")
+    set_slicer_timeline_equivalent_defaults(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert "slicer_timeline_cache_definitions_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF032" not in {finding.rule_id for finding in report.findings}
+
+
+def test_slicer_timeline_cache_binding_and_external_targets_are_guarded(tmp_path) -> None:
+    baseline = make_slicer_timeline_cache_model(tmp_path / "baseline.xlsx")
+    rebound = make_slicer_timeline_cache_model(tmp_path / "rebound.xlsx")
+    external = make_slicer_timeline_cache_model(tmp_path / "external.xlsx")
+    broken_pivot_binding = make_slicer_timeline_cache_model(tmp_path / "broken-pivot.xlsx")
+    rebind_slicer_timeline_cache(rebound)
+    externalize_slicer_timeline_cache_relationship(external)
+    break_slicer_timeline_pivot_cache_binding(broken_pivot_binding)
+
+    rebound_report = compare_snapshots(load_snapshot(baseline), load_snapshot(rebound))
+    rebound_change = next(
+        change
+        for change in rebound_report.changes
+        if change.kind == "slicer_timeline_cache_definitions_changed"
+    )
+    external_snapshot = load_snapshot(external)
+    external_profile = profile_snapshot(external_snapshot)
+    external_report = compare_snapshots(load_snapshot(baseline), external_snapshot)
+    broken_pivot_snapshot = load_snapshot(broken_pivot_binding)
+    broken_pivot_report = compare_snapshots(
+        load_snapshot(baseline), broken_pivot_snapshot
+    )
+
+    assert rebound_change.details["workbook_cache_binding_changed"] is True
+    assert "FF032" in {finding.rule_id for finding in rebound_report.findings}
+    assert external_snapshot.slicer_timeline_caches.unrecognized_part_count >= 1
+    assert any(
+        "without a safe internal target" in warning
+        for warning in external_snapshot.parser_warnings
+    )
+    assert "FF032" in {finding.rule_id for finding in external_report.findings}
+    assert broken_pivot_snapshot.slicer_timeline_caches.unrecognized_part_count >= 2
+    assert any(
+        "could not bind a slicer cache to one PivotTable cache definition" in warning
+        for warning in broken_pivot_snapshot.parser_warnings
+    )
+    assert "FF032" in {finding.rule_id for finding in broken_pivot_report.findings}
+    assert "FF031" not in {finding.rule_id for finding in broken_pivot_report.findings}
+    rendered_artifacts = (
+        json.dumps(external_profile),
+        profile_to_markdown(external_profile),
+        json.dumps(external_report.to_dict()),
+        report_to_markdown(external_report),
+        json.dumps(report_to_sarif(external_report)),
+    )
+    assert all(
+        "example.invalid/private-slicer-cache" not in artifact
+        for artifact in rendered_artifacts
+    )
+
+
+def test_slicer_timeline_cache_parts_fail_closed_on_malformed_or_bounded_material(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_slicer_timeline_cache_model(tmp_path / "baseline.xlsx")
+    malformed = make_slicer_timeline_cache_model(tmp_path / "malformed.xlsx")
+    corrupt_slicer_timeline_cache_root(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.slicer_timeline_caches.unrecognized_part_count >= 1
+    assert any(
+        "slicer/Timeline cache part with an unexpected root" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert "slicer_timeline_cache_definitions_changed" in {
+        change.kind for change in malformed_report.changes
+    }
+    assert "FF032" in {finding.rule_id for finding in malformed_report.findings}
+
+    oversized = make_slicer_timeline_cache_model(tmp_path / "oversized.xlsx")
+    monkeypatch.setattr(workbook_module, "_SLICER_TIMELINE_MAX_XML_PART_BYTES", 1)
+    oversized_snapshot = load_snapshot(oversized)
+
+    assert oversized_snapshot.slicer_timeline_caches.unrecognized_part_count >= 1
+    assert any(
+        "oversized slicer/Timeline XML part" in warning
+        for warning in oversized_snapshot.parser_warnings
+    )
+
+
+def test_slicerless_workbook_does_not_consume_filter_cache_budget(tmp_path, monkeypatch) -> None:
+    workbook = make_model(tmp_path / "slicerless.xlsx")
+    monkeypatch.setattr(workbook_module, "_SLICER_TIMELINE_MAX_XML_PART_BYTES", 1)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.slicer_timeline_caches.present is False
+    assert snapshot.slicer_timeline_caches.slicer_cache_part_count == 0
+    assert snapshot.slicer_timeline_caches.timeline_cache_part_count == 0
+    assert not any("slicer/Timeline XML" in warning for warning in snapshot.parser_warnings)
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

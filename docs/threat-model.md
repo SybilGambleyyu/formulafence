@@ -124,7 +124,7 @@ review prompt, not proof of an error.
   parameter values, SSO IDs, cached records, and opaque extension XML remain
   private fingerprints; a material change emits `FF023` and can be blocked with
   `no_external_data_connection_changes`. FormulaFence does **not** connect,
-  refresh data, establish source trust, or model PivotTable layout semantics.
+  refresh data, establish source trust, or calculate/render a PivotTable report.
 - Raw `xl/externalLinks/externalLink*.xml` packages are separately inspected
   for external-workbook, DDE, and OLE definitions. FormulaFence privately binds
   workbook declarations to package parts and fingerprints endpoint
@@ -190,7 +190,8 @@ review prompt, not proof of an error.
   target spellings, and cache-ID renumbering are normalized. FormulaFence does
   **not** refresh a cache, calculate or render a PivotTable, infer
   PivotTable-to-cell impact, fetch an external target, or interpret OLAP,
-  extension-list, or slicer semantics. Missing, malformed, orphaned, unbound,
+  or extension-list semantics. Slicer and Timeline cache definitions are
+  compared separately. Missing, malformed, orphaned, unbound,
   oversized, or over-budget material remains a visible parser-coverage warning.
   PivotTable/cache-definition XML reads are bounded to 16 MiB per part, 64 MiB
   per workbook, and 512 parts; raw cache-record hashes are bounded to 32 MiB per
@@ -198,6 +199,23 @@ review prompt, not proof of an error.
   relationships in a temporary reader copy before the underlying workbook
   library loads cells, so raw records are not eagerly materialized; the original
   workbook is never changed.
+- Slicer and Timeline cache definitions are followed from their documented
+  workbook extension declarations through explicit workbook relationships to
+  bounded cache XML. FormulaFence privately fingerprints Slicer item selection,
+  Timeline state/filter material, cache definitions, PivotTable/table source
+  bindings, filtered-PivotTable bindings, and unexpected direct cache-part
+  relationships while exposing only structural counts. Cache names, source
+  fields, selected values, date ranges, PivotTable names, relationship targets,
+  and XML remain private. A material change emits `FF032` and can be blocked
+  with `no_slicer_timeline_cache_changes`. Relationship IDs, equivalent
+  internal target spellings, coordinated Slicer/Timeline PivotCache extension-ID renumbering, known
+  optional Slicer defaults, Boolean spellings, and Timeline GUIDs are
+  normalized. FormulaFence does **not** apply a filter, calculate/render a
+  PivotTable or table, infer downstream impact, fetch an external target, or
+  model worksheet/drawing Slicer or Timeline view geometry/styles. Missing,
+  malformed, orphaned, unbound, externally targeted, oversized, or over-budget
+  material remains a visible parser-coverage warning. Cache XML reads are
+  bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts.
 - DrawingML chart definitions and cached presentation data are followed from
   standard worksheet or chartsheet `drawing` relationships through chart parts
   and direct `userShapes` overlays. FormulaFence privately fingerprints
@@ -278,11 +296,13 @@ review prompt, not proof of an error.
 - It inventories sheet visibility, defined names, calculation settings, the VBA
   payload, XLM macro-sheet packages, RibbonX custom UI packages, Office Web
   Add-in task-pane packages, PivotTable view/cache-schema/shared-item/cached-
-  record chains, DrawingML chart definition/cached-presentation/overlay chains,
+  record chains, Slicer and Timeline cache filter-definition chains, DrawingML
+  chart definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link
   packages, and private Power Query definition material. It does not yet
-  interpret PivotTable OLAP, extension-list, or slicer semantics; modern
+  interpret PivotTable OLAP or extension-list semantics; apply Slicer/Timeline
+  filters or model their worksheet/drawing view geometry/styles; modern
   `chartEx` or nested-chart semantics; general drawing layout/objects or
   chart-to-cell impact; Ribbon image payloads; VML/drawing control layout or
   comment content; embedded OLE/package formats; worksheet-scoped Web Add-in

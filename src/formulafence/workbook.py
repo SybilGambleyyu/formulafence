@@ -62,6 +62,7 @@ from formulafence.models import (
     RibbonCustomizationSnapshot,
     SheetProtectionSnapshot,
     SheetSnapshot,
+    SlicerTimelineCacheSnapshot,
     TableSnapshot,
     WorkbookLoadError,
     WorkbookProtectionSnapshot,
@@ -95,12 +96,14 @@ _DOCUMENT_RELATIONSHIP_NS = (
 )
 _DYNAMIC_ARRAY_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"
 _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+_OFFICE_2013_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"
 _EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
 _DATA_MASHUP_NS = "http://schemas.microsoft.com/DataMashup"
 _MARKUP_COMPATIBILITY_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 _XML_NAMESPACE_PREFIXES = {
     _SPREADSHEETML_NS: "",
     _OFFICE_2010_SPREADSHEET_NS: "x14:",
+    _OFFICE_2013_SPREADSHEET_NS: "x15:",
     _EXCEL_2006_MAIN_NS: "xm:",
 }
 _GUID_PATTERN = re.compile(
@@ -200,6 +203,15 @@ _PIVOT_CACHE_RECORD_MAX_BYTES = 32 * 1024 * 1024
 _PIVOT_CACHE_RECORD_TOTAL_MAX_BYTES = 64 * 1024 * 1024
 _PIVOT_CACHE_RECORD_TOTAL_MAX_COUNT = 512
 _PIVOT_CACHE_RECORD_HASH_CHUNK_BYTES = 1024 * 1024
+_SLICER_CACHE_PART_PATTERN = re.compile(
+    r"^xl/slicerCaches/[^/]+\.xml$", re.IGNORECASE
+)
+_TIMELINE_CACHE_PART_PATTERN = re.compile(
+    r"^xl/timelineCaches/[^/]+\.xml$", re.IGNORECASE
+)
+_SLICER_TIMELINE_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_SLICER_TIMELINE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_SLICER_TIMELINE_TOTAL_XML_MAX_COUNT = 512
 _ACTIVEX_NS = "http://schemas.microsoft.com/office/2006/activeX"
 _VML_NS = "urn:schemas-microsoft-com:vml"
 _VML_OFFICE_NS = "urn:schemas-microsoft-com:office:office"
@@ -224,6 +236,16 @@ _PIVOT_CACHE_DEFINITION_RELATIONSHIP = (
     f"{_DOCUMENT_RELATIONSHIP_NS}/pivotCacheDefinition"
 )
 _PIVOT_CACHE_RECORDS_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/pivotCacheRecords"
+_SLICER_CACHE_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2007/relationships/slicerCache"
+)
+_TIMELINE_CACHE_RELATIONSHIPS = frozenset(
+    {
+        "http://schemas.microsoft.com/office/2010/relationships/TimelineCache",
+        "http://schemas.microsoft.com/office/2010/relationships/timelineCache",
+        "http://schemas.microsoft.com/office/2011/relationships/timelineCache",
+    }
+)
 _WORKSHEET_ACTIVEX_BINARY_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary"
 )
@@ -236,6 +258,13 @@ _CHART_RELATIONSHIP_ATTRIBUTES = frozenset(
     }
 )
 _PIVOT_RELATIONSHIP_ATTRIBUTES = frozenset(
+    {
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}embed",
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}link",
+    }
+)
+_SLICER_TIMELINE_RELATIONSHIP_ATTRIBUTES = frozenset(
     {
         f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
         f"{{{_DOCUMENT_RELATIONSHIP_NS}}}embed",
@@ -384,6 +413,15 @@ class _PivotTableMetadata:
 
     pivot_tables: PivotTableDefinitionSnapshot
     warnings: tuple[str, ...]
+    slicer_timeline_pivot_cache_members_by_id: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+
+@dataclass(frozen=True)
+class _SlicerTimelineMetadata:
+    """Raw slicer and Timeline cache evidence retained before reader loss."""
+
+    caches: SlicerTimelineCacheSnapshot
+    warnings: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -526,6 +564,35 @@ class _PivotRawRelationship:
         )
 
 
+@dataclass(frozen=True)
+class _SlicerTimelineRawRelationship:
+    """One private slicer/Timeline package relationship and canonical target."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return relationship semantics without writer-chosen identifiers."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        relationship_type = self.relationship_type
+        if relationship_type.casefold() == _SLICER_CACHE_RELATIONSHIP.casefold():
+            relationship_type = _SLICER_CACHE_RELATIONSHIP
+        elif relationship_type.casefold() in {
+            candidate.casefold() for candidate in _TIMELINE_CACHE_RELATIONSHIPS
+        }:
+            relationship_type = "timelineCache"
+        return (
+            relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
 @dataclass
 class _RibbonCustomizationBudget:
     """Bound total custom-UI bytes read across one RibbonX package scan."""
@@ -572,6 +639,14 @@ class _PivotCacheRecordBudget:
 
     remaining_bytes: int = _PIVOT_CACHE_RECORD_TOTAL_MAX_BYTES
     remaining_parts: int = _PIVOT_CACHE_RECORD_TOTAL_MAX_COUNT
+
+
+@dataclass
+class _SlicerTimelineXmlBudget:
+    """Bound slicer and Timeline cache XML bytes in one package scan."""
+
+    remaining_bytes: int = _SLICER_TIMELINE_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _SLICER_TIMELINE_TOTAL_XML_MAX_COUNT
 
 
 @dataclass
@@ -806,10 +881,32 @@ class _PivotCacheDefinitionInspection:
     related_relationship_count: int = 0
     external_relationship_count: int = 0
     cache_record_members: tuple[str, ...] = ()
+    slicer_timeline_cache_ids: tuple[str, ...] = ()
     unrecognized_count: int = 0
     inspected: bool = False
     definition_signature: str | None = None
     cached_shared_item_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _SlicerTimelineCacheInspection:
+    """Private parsed state for one interactive filter-cache definition part."""
+
+    member: str
+    kind: str
+    pivot_cache_binding_count: int = 0
+    table_binding_count: int = 0
+    pivot_table_binding_count: int = 0
+    slicer_item_count: int = 0
+    selected_slicer_item_count: int = 0
+    timeline_state_count: int = 0
+    timeline_filter_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    unrecognized_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
     relationship_signature: str | None = None
 
 
@@ -1244,6 +1341,7 @@ def _xml_fragment(
     *,
     normalise_guids: bool = False,
     normalise_formulas: bool = False,
+    omit_pivot_cache_extension_ids: bool = False,
 ) -> XmlFragmentSnapshot:
     """Capture an XML subtree with deterministic names and attribute ordering."""
     local_name = _xml_local_name(element.tag)
@@ -1271,6 +1369,12 @@ def _xml_fragment(
                 ),
             )
             for attribute, value in element.attrib.items()
+            if not (
+                omit_pivot_cache_extension_ids
+                and _xml_namespace(element.tag) == _OFFICE_2010_SPREADSHEET_NS
+                and local_name == "pivotCacheDefinition"
+                and _xml_local_name(attribute) == "pivotCacheId"
+            )
         )
     )
     children = tuple(
@@ -1278,6 +1382,7 @@ def _xml_fragment(
             child,
             normalise_guids=normalise_guids,
             normalise_formulas=normalise_formulas,
+            omit_pivot_cache_extension_ids=omit_pivot_cache_extension_ids,
         )
         for child in element
     )
@@ -2446,6 +2551,7 @@ def _external_data_opaque_metadata(
     *,
     known_attributes: frozenset[str],
     known_children: frozenset[str] = frozenset(),
+    omit_pivot_cache_extension_ids: bool = False,
 ) -> ExternalDataOpaqueMetadataSnapshot:
     """Fingerprint unknown external-data XML without serializing its contents."""
     entries: list[tuple[str, str]] = []
@@ -2458,7 +2564,12 @@ def _external_data_opaque_metadata(
         entries.append(
             (
                 f"child:{_xml_display_name(child.tag)}",
-                repr(_xml_fragment(child).sort_key()),
+                repr(
+                    _xml_fragment(
+                        child,
+                        omit_pivot_cache_extension_ids=omit_pivot_cache_extension_ids,
+                    ).sort_key()
+                ),
             )
         )
     entries.sort()
@@ -4724,6 +4835,7 @@ def _pivot_cache_snapshot(
                     "maps",
                 }
             ),
+            omit_pivot_cache_extension_ids=True,
         ),
     )
 
@@ -8062,6 +8174,15 @@ def _pivot_xml_fragment(
     attributes: list[tuple[str, str]] = []
     for attribute, value in element.attrib.items():
         attribute_name = _xml_local_name(attribute)
+        if (
+            _xml_namespace(element.tag) == _OFFICE_2010_SPREADSHEET_NS
+            and local_name == "pivotCacheDefinition"
+            and attribute_name == "pivotCacheId"
+        ):
+            # This writer-assigned extension ID is resolved to its cache part by
+            # the slicer/Timeline scanner, which can distinguish a broken link
+            # from a coordinated identifier renumbering.
+            continue
         if attribute in _PIVOT_RELATIONSHIP_ATTRIBUTES:
             relationship = relationship_semantics.get(value)
             resolved = (
@@ -8551,6 +8672,22 @@ def _pivot_cache_definition_inspection(
         element
         for element in root.iter(f"{{{_SPREADSHEETML_NS}}}sharedItems")
     ]
+    slicer_timeline_cache_ids: set[str] = set()
+    for element in root.iter():
+        if (
+            _xml_namespace(element.tag) != _OFFICE_2010_SPREADSHEET_NS
+            or _xml_local_name(element.tag) != "pivotCacheDefinition"
+        ):
+            continue
+        pivot_cache_id = element.get("pivotCacheId")
+        if pivot_cache_id is None:
+            warnings.add(
+                "FormulaFence found a PivotTable cache extension without its required "
+                "slicer/Timeline cache id; affected filters have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        slicer_timeline_cache_ids.add(pivot_cache_id)
     try:
         definition_signature = _private_external_data_signature(
             (
@@ -8606,6 +8743,7 @@ def _pivot_cache_definition_inspection(
             for relationship in relationships
         ),
         cache_record_members=tuple(sorted(cache_record_members, key=str.casefold)),
+        slicer_timeline_cache_ids=tuple(sorted(slicer_timeline_cache_ids)),
         unrecognized_count=unrecognized_count,
         inspected=inspected,
         definition_signature=definition_signature,
@@ -8882,6 +9020,35 @@ def _pivot_table_metadata(path: Path) -> _PivotTableMetadata:
                 record_budget,
             )
 
+            workbook_cache_definition_members = {
+                member
+                for members in cache_members_by_id.values()
+                for member in members
+            }
+            slicer_timeline_pivot_cache_members_by_id: dict[str, set[str]] = defaultdict(
+                set
+            )
+            for inspection in cache_definition_inspections:
+                if (
+                    not inspection.inspected
+                    or inspection.member not in workbook_cache_definition_members
+                ):
+                    continue
+                for pivot_cache_id in inspection.slicer_timeline_cache_ids:
+                    slicer_timeline_pivot_cache_members_by_id[pivot_cache_id].add(
+                        inspection.member
+                    )
+            normalized_slicer_timeline_pivot_cache_members_by_id = tuple(
+                (
+                    pivot_cache_id,
+                    tuple(sorted(members, key=str.casefold)),
+                )
+                for pivot_cache_id, members in sorted(
+                    slicer_timeline_pivot_cache_members_by_id.items(),
+                    key=lambda item: item[0],
+                )
+            )
+
             def aggregate_signature(
                 inspections: list[object], attribute: str
             ) -> str | None:
@@ -9004,7 +9171,778 @@ def _pivot_table_metadata(path: Path) -> _PivotTableMetadata:
                 f"({type(error).__name__}); affected PivotTables were not compared.",
             ),
         )
-    return _PivotTableMetadata(snapshot, tuple(sorted(warnings)))
+    return _PivotTableMetadata(
+        snapshot,
+        tuple(sorted(warnings)),
+        normalized_slicer_timeline_pivot_cache_members_by_id,
+    )
+
+
+def _slicer_timeline_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> tuple[_SlicerTimelineRawRelationship, ...]:
+    """Read interactive-filter relationships without opening their targets."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for slicer/Timeline inspection "
+            f"({type(error).__name__}); affected filters were not compared."
+        )
+        return ()
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting slicer/Timeline filters; "
+            "affected filters were not compared."
+        )
+        return ()
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_SlicerTimelineRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _SlicerTimelineRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting "
+            "slicer/Timeline filters; affected filters may be incomplete."
+        )
+    return tuple(relationships)
+
+
+def _slicer_timeline_relationship_signature(
+    relationships: tuple[_SlicerTimelineRawRelationship, ...],
+) -> str | None:
+    """Fingerprint interactive-filter relationships without identifier churn."""
+    material = sorted(relationship.semantic_key() for relationship in relationships)
+    return _private_external_data_signature(
+        tuple(
+            (f"relationship:{index}", repr(relationship))
+            for index, relationship in enumerate(material)
+        )
+    )
+
+
+def _slicer_timeline_relationship_semantics(
+    relationships: tuple[_SlicerTimelineRawRelationship, ...],
+    warnings: set[str],
+    *,
+    context: str,
+) -> dict[str, tuple[str, str, str]]:
+    """Resolve relationship IDs into stable, private semantic targets."""
+    relationships_by_id: dict[str, list[_SlicerTimelineRawRelationship]] = defaultdict(
+        list
+    )
+    for relationship in relationships:
+        if relationship.relationship_id:
+            relationships_by_id[relationship.relationship_id].append(relationship)
+        else:
+            warnings.add(
+                "FormulaFence found a slicer/Timeline "
+                f"{context} relationship without an id; affected filters have a coverage gap."
+            )
+    semantics: dict[str, tuple[str, str, str]] = {}
+    for relationship_id, matches in relationships_by_id.items():
+        values = sorted(match.semantic_key() for match in matches)
+        if len(values) > 1:
+            warnings.add(
+                "FormulaFence found duplicate slicer/Timeline "
+                f"{context} relationship ids; affected filters have a coverage gap."
+            )
+        semantics[relationship_id] = values[0]
+    return semantics
+
+
+def _slicer_timeline_boolean(value: str) -> str:
+    """Normalize the two accepted OOXML spellings of a Boolean value."""
+    if value.casefold() in {"1", "true"}:
+        return "true"
+    if value.casefold() in {"0", "false"}:
+        return "false"
+    return value
+
+
+def _slicer_timeline_default_attributes(
+    element: ElementTree.Element,
+) -> tuple[tuple[str, str], ...]:
+    """Return known default attributes that compatible writers may omit."""
+    namespace = _xml_namespace(element.tag)
+    local_name = _xml_local_name(element.tag)
+    if (
+        namespace == _OFFICE_2010_SPREADSHEET_NS
+        and local_name in {"tabular", "tabularSlicerCache"}
+    ):
+        return (
+            ("sortOrder", "ascending"),
+            ("customListSort", "true"),
+            ("showMissing", "true"),
+            ("crossFilter", "showItemsWithDataAtTop"),
+        )
+    if namespace == _OFFICE_2013_SPREADSHEET_NS and local_name == "tableSlicerCache":
+        return (
+            ("sortOrder", "ascending"),
+            ("customListSort", "true"),
+            ("crossFilter", "showItemsWithDataAtTop"),
+        )
+    if namespace == _OFFICE_2010_SPREADSHEET_NS and local_name == "i":
+        return (("s", "false"), ("nd", "false"))
+    return ()
+
+
+def _slicer_timeline_xml_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+    *,
+    pivot_cache_members_by_id: Mapping[str, tuple[str, ...]],
+) -> tuple[object, ...]:
+    """Canonicalize private filter XML while resolving volatile link IDs."""
+    local_name = _xml_local_name(element.tag)
+    attribute_values: dict[str, str] = dict(element.attrib)
+    present_attribute_names = {
+        _xml_local_name(attribute) for attribute in attribute_values
+    }
+    for attribute_name, default_value in _slicer_timeline_default_attributes(element):
+        if attribute_name not in present_attribute_names:
+            attribute_values[attribute_name] = default_value
+
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in attribute_values.items():
+        attribute_name = _xml_local_name(attribute)
+        if attribute in _SLICER_TIMELINE_RELATIONSHIP_ATTRIBUTES:
+            relationship = relationship_semantics.get(value)
+            resolved = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+            continue
+        if attribute_name == "pivotCacheId":
+            members = pivot_cache_members_by_id.get(value, ())
+            resolved = (
+                ("pivot-cache-definition", members[0])
+                if len(members) == 1
+                else ("missing-pivot-cache", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+            continue
+        if attribute_name in {"customListSort", "showMissing", "s", "nd"}:
+            value = _slicer_timeline_boolean(value)
+        if local_name == "timelineCacheDefinition" and attribute_name == "uid":
+            value = _normalise_guid(value)
+        attributes.append((_xml_display_name(attribute), value))
+    children = tuple(
+        _slicer_timeline_xml_fragment(
+            child,
+            relationship_semantics,
+            pivot_cache_members_by_id=pivot_cache_members_by_id,
+        )
+        for child in element
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+    )
+
+
+def _slicer_timeline_xml_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _SlicerTimelineXmlBudget,
+) -> tuple[bytes | None, str | None]:
+    """Read one bounded slicer or Timeline XML part without following targets."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded slicer/Timeline XML part count budget; "
+            "affected filters have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("part-count-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a slicer/Timeline XML package part; affected "
+            "filters were not compared."
+        )
+        return None, _private_external_data_signature((("missing-member", member),))
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _SLICER_TIMELINE_MAX_XML_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized slicer/Timeline XML part; "
+            "affected filters have a coverage gap."
+        )
+        return None, _private_external_data_signature((("oversized-part", metadata),))
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded slicer/Timeline XML read budget; affected "
+            "filters have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a slicer/Timeline XML package part "
+            f"({type(error).__name__}); affected filters were not compared."
+        )
+        return None, _private_external_data_signature((("unreadable-part", metadata),))
+
+
+def _slicer_timeline_relationship_kind(relationship_type: str) -> str | None:
+    """Return the filter-cache kind represented by a workbook relationship."""
+    if relationship_type.casefold() == _SLICER_CACHE_RELATIONSHIP.casefold():
+        return "slicer"
+    if relationship_type.casefold() in {
+        candidate.casefold() for candidate in _TIMELINE_CACHE_RELATIONSHIPS
+    }:
+        return "timeline"
+    return None
+
+
+def _slicer_timeline_cache_inspection(
+    archive: ZipFile,
+    member: str,
+    kind: str,
+    warnings: set[str],
+    xml_budget: _SlicerTimelineXmlBudget,
+    pivot_cache_members_by_id: Mapping[str, tuple[str, ...]],
+) -> _SlicerTimelineCacheInspection:
+    """Inspect one cache definition without evaluating its active filter."""
+    relationships = _slicer_timeline_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context=f"{kind} cache",
+    )
+    relationship_semantics = _slicer_timeline_relationship_semantics(
+        relationships,
+        warnings,
+        context=f"{kind} cache",
+    )
+    payload, fallback_signature = _slicer_timeline_xml_payload(
+        archive,
+        member,
+        warnings,
+        xml_budget,
+    )
+    if payload is None:
+        return _SlicerTimelineCacheInspection(
+            member=member,
+            kind=kind,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+            relationship_signature=_slicer_timeline_relationship_signature(relationships),
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a slicer/Timeline cache XML part "
+            f"({type(error).__name__}); affected filters were not compared."
+        )
+        return _SlicerTimelineCacheInspection(
+            member=member,
+            kind=kind,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_slicer_timeline_relationship_signature(relationships),
+        )
+
+    expected_namespace = (
+        _OFFICE_2010_SPREADSHEET_NS
+        if kind == "slicer"
+        else _OFFICE_2013_SPREADSHEET_NS
+    )
+    expected_root = "slicerCacheDefinition" if kind == "slicer" else "timelineCacheDefinition"
+    if (
+        _xml_local_name(root.tag) != expected_root
+        or _xml_namespace(root.tag) != expected_namespace
+    ):
+        warnings.add(
+            "FormulaFence found a slicer/Timeline cache part with an unexpected root; "
+            "affected filters were not compared."
+        )
+        return _SlicerTimelineCacheInspection(
+            member=member,
+            kind=kind,
+            related_relationship_count=len(relationships),
+            external_relationship_count=sum(
+                relationship.target_mode.casefold() != "internal"
+                for relationship in relationships
+            ),
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_slicer_timeline_relationship_signature(relationships),
+        )
+
+    unrecognized_count = 0
+    if relationships:
+        warnings.add(
+            "FormulaFence found direct relationships on a slicer/Timeline cache part; "
+            "affected filters have a coverage gap."
+        )
+        unrecognized_count += len(relationships)
+
+    pivot_cache_binding_count = 0
+    table_binding_count = 0
+    pivot_table_binding_count = 0
+    slicer_item_count = 0
+    selected_slicer_item_count = 0
+    timeline_state_count = 0
+    timeline_filter_count = 0
+    elements = tuple(root.iter())
+    if kind == "slicer":
+        pivot_cache_elements = tuple(
+            element
+            for element in elements
+            if _xml_namespace(element.tag) == _OFFICE_2010_SPREADSHEET_NS
+            and _xml_local_name(element.tag)
+            in {"tabular", "olap", "tabularSlicerCache", "olapSlicerCache"}
+        )
+        table_elements = tuple(
+            element
+            for element in elements
+            if _xml_namespace(element.tag) == _OFFICE_2013_SPREADSHEET_NS
+            and _xml_local_name(element.tag) == "tableSlicerCache"
+        )
+        pivot_cache_binding_count = len(pivot_cache_elements)
+        table_binding_count = len(table_elements)
+        pivot_table_binding_count = sum(
+            _xml_namespace(element.tag) == _OFFICE_2010_SPREADSHEET_NS
+            and _xml_local_name(element.tag) == "pivotTable"
+            for element in elements
+        )
+        slicer_items = tuple(
+            element
+            for element in elements
+            if _xml_namespace(element.tag) == _OFFICE_2010_SPREADSHEET_NS
+            and _xml_local_name(element.tag) == "i"
+        )
+        slicer_item_count = len(slicer_items)
+        selected_slicer_item_count = sum(
+            _slicer_timeline_boolean(element.get("s", "false")) == "true"
+            for element in slicer_items
+        )
+        for element in pivot_cache_elements:
+            pivot_cache_id = element.get("pivotCacheId")
+            if pivot_cache_id is None:
+                warnings.add(
+                    "FormulaFence found a slicer cache without a PivotTable cache id; "
+                    "affected filters have a coverage gap."
+                )
+                unrecognized_count += 1
+            elif len(pivot_cache_members_by_id.get(pivot_cache_id, ())) != 1:
+                warnings.add(
+                    "FormulaFence could not bind a slicer cache to one PivotTable cache "
+                    "definition; affected filters have a coverage gap."
+                )
+                unrecognized_count += 1
+        for element in table_elements:
+            if element.get("tableId") is None or element.get("column") is None:
+                warnings.add(
+                    "FormulaFence found a table slicer cache without a complete table binding; "
+                    "affected filters have a coverage gap."
+                )
+                unrecognized_count += 1
+    else:
+        state_elements = tuple(
+            element
+            for element in elements
+            if _xml_namespace(element.tag) == _OFFICE_2013_SPREADSHEET_NS
+            and _xml_local_name(element.tag) == "state"
+        )
+        timeline_state_count = len(state_elements)
+        timeline_filter_count = sum(
+            _xml_namespace(element.tag) == _OFFICE_2013_SPREADSHEET_NS
+            and _xml_local_name(element.tag) == "timelinePivotFilter"
+            for element in elements
+        )
+        pivot_table_binding_count = sum(
+            _xml_namespace(element.tag) == _OFFICE_2013_SPREADSHEET_NS
+            and _xml_local_name(element.tag) == "pivotTable"
+            for element in elements
+        )
+        pivot_cache_binding_count = len(state_elements)
+        if not state_elements:
+            warnings.add(
+                "FormulaFence found a Timeline cache without state material; affected "
+                "filters have a coverage gap."
+            )
+            unrecognized_count += 1
+        for element in state_elements:
+            pivot_cache_id = element.get("pivotCacheId")
+            if pivot_cache_id is None:
+                warnings.add(
+                    "FormulaFence found a Timeline cache state without a PivotTable cache "
+                    "id; affected filters have a coverage gap."
+                )
+                unrecognized_count += 1
+            elif len(pivot_cache_members_by_id.get(pivot_cache_id, ())) != 1:
+                warnings.add(
+                    "FormulaFence could not bind a Timeline cache to one PivotTable cache "
+                    "definition; affected filters have a coverage gap."
+                )
+                unrecognized_count += 1
+
+    try:
+        definition_signature = _private_external_data_signature(
+            (
+                (
+                    f"{kind}-cache",
+                    repr(
+                        _slicer_timeline_xml_fragment(
+                            root,
+                            relationship_semantics,
+                            pivot_cache_members_by_id=pivot_cache_members_by_id,
+                        )
+                    ),
+                ),
+            )
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested slicer/Timeline "
+            "cache definition; affected filters were not compared."
+        )
+        definition_signature = _private_payload_signature(payload)
+        inspected = False
+        unrecognized_count += 1
+    else:
+        inspected = True
+    return _SlicerTimelineCacheInspection(
+        member=member,
+        kind=kind,
+        pivot_cache_binding_count=pivot_cache_binding_count,
+        table_binding_count=table_binding_count,
+        pivot_table_binding_count=pivot_table_binding_count,
+        slicer_item_count=slicer_item_count,
+        selected_slicer_item_count=selected_slicer_item_count,
+        timeline_state_count=timeline_state_count,
+        timeline_filter_count=timeline_filter_count,
+        related_relationship_count=len(relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in relationships
+        ),
+        unrecognized_count=unrecognized_count,
+        inspected=inspected,
+        definition_signature=definition_signature,
+        relationship_signature=_slicer_timeline_relationship_signature(relationships),
+    )
+
+
+def _slicer_timeline_metadata(
+    path: Path,
+    pivot_cache_members_by_id: Mapping[str, tuple[str, ...]],
+) -> _SlicerTimelineMetadata:
+    """Inspect slicer and Timeline caches before a workbook reader omits them.
+
+    The scan is package-only: it neither applies a filter nor evaluates a
+    PivotTable. It follows only workbook relationships to bounded cache XML and
+    records private structural fingerprints for review.
+    """
+    warnings: set[str] = set()
+    default = SlicerTimelineCacheSnapshot()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                workbook_root = _xml_root(archive, "xl/workbook.xml")
+            except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+                return _SlicerTimelineMetadata(
+                    default,
+                    (
+                        "FormulaFence could not map workbook OOXML for slicer/Timeline "
+                        f"inspection ({type(error).__name__}); affected filters were not compared.",
+                    ),
+                )
+
+            workbook_relationships = _slicer_timeline_raw_relationships(
+                archive,
+                "xl/workbook.xml",
+                warnings,
+                context="workbook",
+            )
+            relationships_by_id: dict[
+                str, list[_SlicerTimelineRawRelationship]
+            ] = defaultdict(list)
+            for relationship in workbook_relationships:
+                if relationship.relationship_id:
+                    relationships_by_id[relationship.relationship_id].append(relationship)
+
+            normalized_pivot_cache_members_by_id = {
+                cache_id: tuple(sorted(members, key=str.casefold))
+                for cache_id, members in pivot_cache_members_by_id.items()
+            }
+
+            declarations: list[tuple[str, str | None]] = []
+            for element in workbook_root.iter():
+                if (
+                    _xml_namespace(element.tag)
+                    in {_OFFICE_2010_SPREADSHEET_NS, _OFFICE_2013_SPREADSHEET_NS}
+                    and _xml_local_name(element.tag) == "slicerCache"
+                ):
+                    declarations.append(
+                        ("slicer", element.get(f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"))
+                    )
+                elif (
+                    _xml_namespace(element.tag) == _OFFICE_2013_SPREADSHEET_NS
+                    and _xml_local_name(element.tag) == "timelineCacheRef"
+                ):
+                    declarations.append(
+                        ("timeline", element.get(f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"))
+                    )
+
+            declaration_entries: list[tuple[str, str]] = []
+            declared_relationship_ids: set[str] = set()
+            slicer_members: set[str] = set()
+            timeline_members: set[str] = set()
+            slicer_workbook_binding_count = 0
+            timeline_workbook_binding_count = 0
+            unrecognized_declaration_count = 0
+            for kind, relationship_id in declarations:
+                if relationship_id is None:
+                    warnings.add(
+                        "FormulaFence found a slicer/Timeline workbook declaration without a "
+                        "relationship; affected filters have a coverage gap."
+                    )
+                    declaration_entries.append((f"missing-{kind}-binding", ""))
+                    unrecognized_declaration_count += 1
+                    continue
+                declared_relationship_ids.add(relationship_id)
+                matches = relationships_by_id.get(relationship_id, ())
+                if len(matches) != 1:
+                    warnings.add(
+                        "FormulaFence could not resolve one slicer/Timeline workbook "
+                        "declaration to exactly one relationship; affected filters have a "
+                        "coverage gap."
+                    )
+                    declaration_entries.append(
+                        (f"unresolved-{kind}-binding", relationship_id)
+                    )
+                    unrecognized_declaration_count += 1
+                    continue
+                relationship = matches[0]
+                actual_kind = _slicer_timeline_relationship_kind(
+                    relationship.relationship_type
+                )
+                if actual_kind != kind:
+                    warnings.add(
+                        "FormulaFence found a slicer/Timeline workbook declaration with an "
+                        "unexpected relationship type; affected filters have a coverage gap."
+                    )
+                    declaration_entries.append(
+                        (
+                            f"invalid-{kind}-binding",
+                            repr(relationship.semantic_key()),
+                        )
+                    )
+                    unrecognized_declaration_count += 1
+                    continue
+                if (
+                    relationship.target_mode.casefold() != "internal"
+                    or relationship.safe_target is None
+                ):
+                    warnings.add(
+                        "FormulaFence found a slicer/Timeline workbook declaration without a "
+                        "safe internal target; affected filters were not compared."
+                    )
+                    declaration_entries.append(
+                        (
+                            f"external-{kind}-binding",
+                            repr(relationship.semantic_key()),
+                        )
+                    )
+                    unrecognized_declaration_count += 1
+                    continue
+                declaration_entries.append((f"{kind}-cache-part", relationship.safe_target))
+                if kind == "slicer":
+                    slicer_members.add(relationship.safe_target)
+                    slicer_workbook_binding_count += 1
+                else:
+                    timeline_members.add(relationship.safe_target)
+                    timeline_workbook_binding_count += 1
+
+            for relationship in workbook_relationships:
+                kind = _slicer_timeline_relationship_kind(relationship.relationship_type)
+                if kind is None or relationship.relationship_id in declared_relationship_ids:
+                    continue
+                warnings.add(
+                    "FormulaFence found a slicer/Timeline workbook relationship not bound "
+                    "by a cache declaration; affected filters have a coverage gap."
+                )
+                declaration_entries.append(
+                    (f"unbound-{kind}-workbook-relationship", repr(relationship.semantic_key()))
+                )
+                unrecognized_declaration_count += 1
+
+            referenced_slicer_members = set(slicer_members)
+            referenced_timeline_members = set(timeline_members)
+            for entry in archive.infolist():
+                member = entry.filename
+                if _SLICER_CACHE_PART_PATTERN.fullmatch(member):
+                    slicer_members.add(member)
+                    if member not in referenced_slicer_members:
+                        warnings.add(
+                            "FormulaFence found a slicer cache package part not bound by an "
+                            "inspected workbook declaration; affected filters have a coverage gap."
+                        )
+                        declaration_entries.append(("orphan-slicer-cache-part", member))
+                        unrecognized_declaration_count += 1
+                elif _TIMELINE_CACHE_PART_PATTERN.fullmatch(member):
+                    timeline_members.add(member)
+                    if member not in referenced_timeline_members:
+                        warnings.add(
+                            "FormulaFence found a Timeline cache package part not bound by an "
+                            "inspected workbook declaration; affected filters have a coverage gap."
+                        )
+                        declaration_entries.append(("orphan-timeline-cache-part", member))
+                        unrecognized_declaration_count += 1
+
+            xml_budget = _SlicerTimelineXmlBudget()
+            inspections: list[_SlicerTimelineCacheInspection] = []
+            for kind, members in (
+                ("slicer", slicer_members),
+                ("timeline", timeline_members),
+            ):
+                for member in sorted(members, key=str.casefold):
+                    inspections.append(
+                        _slicer_timeline_cache_inspection(
+                            archive,
+                            member,
+                            kind,
+                            warnings,
+                            xml_budget,
+                            normalized_pivot_cache_members_by_id,
+                        )
+                    )
+
+            def aggregate_signature(
+                selected: list[_SlicerTimelineCacheInspection],
+                attribute: str,
+            ) -> str | None:
+                material = sorted(
+                    (inspection.member, value)
+                    for inspection in selected
+                    if (value := getattr(inspection, attribute)) is not None
+                )
+                return _private_external_data_signature(tuple(material))
+
+            slicer_inspections = [
+                inspection for inspection in inspections if inspection.kind == "slicer"
+            ]
+            timeline_inspections = [
+                inspection for inspection in inspections if inspection.kind == "timeline"
+            ]
+            declaration_entries.sort()
+            snapshot = SlicerTimelineCacheSnapshot(
+                slicer_cache_part_count=len(slicer_members),
+                timeline_cache_part_count=len(timeline_members),
+                slicer_workbook_binding_count=slicer_workbook_binding_count,
+                timeline_workbook_binding_count=timeline_workbook_binding_count,
+                slicer_pivot_cache_binding_count=sum(
+                    inspection.pivot_cache_binding_count
+                    for inspection in slicer_inspections
+                ),
+                slicer_table_binding_count=sum(
+                    inspection.table_binding_count for inspection in slicer_inspections
+                ),
+                timeline_pivot_cache_binding_count=sum(
+                    inspection.pivot_cache_binding_count
+                    for inspection in timeline_inspections
+                ),
+                slicer_pivot_table_binding_count=sum(
+                    inspection.pivot_table_binding_count
+                    for inspection in slicer_inspections
+                ),
+                timeline_pivot_table_binding_count=sum(
+                    inspection.pivot_table_binding_count
+                    for inspection in timeline_inspections
+                ),
+                slicer_item_count=sum(
+                    inspection.slicer_item_count for inspection in slicer_inspections
+                ),
+                selected_slicer_item_count=sum(
+                    inspection.selected_slicer_item_count
+                    for inspection in slicer_inspections
+                ),
+                timeline_state_count=sum(
+                    inspection.timeline_state_count
+                    for inspection in timeline_inspections
+                ),
+                timeline_filter_count=sum(
+                    inspection.timeline_filter_count
+                    for inspection in timeline_inspections
+                ),
+                related_relationship_count=sum(
+                    inspection.related_relationship_count for inspection in inspections
+                ),
+                external_relationship_count=sum(
+                    inspection.external_relationship_count for inspection in inspections
+                ),
+                unrecognized_part_count=(
+                    unrecognized_declaration_count
+                    + sum(inspection.unrecognized_count for inspection in inspections)
+                ),
+                declaration_signature=_private_external_data_signature(
+                    tuple(declaration_entries)
+                ),
+                slicer_definition_signature=aggregate_signature(
+                    slicer_inspections, "definition_signature"
+                ),
+                timeline_definition_signature=aggregate_signature(
+                    timeline_inspections, "definition_signature"
+                ),
+                relationship_signature=aggregate_signature(
+                    inspections, "relationship_signature"
+                ),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _SlicerTimelineMetadata(
+            default,
+            (
+                "FormulaFence could not inspect slicer/Timeline cache OOXML "
+                f"({type(error).__name__}); affected filters were not compared.",
+            ),
+        )
+    return _SlicerTimelineMetadata(snapshot, tuple(sorted(warnings)))
 
 
 def _pivot_reader_cache_record_replacements(
@@ -11726,6 +12664,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     ribbon_customization_metadata = _ribbon_customization_metadata(source)
     office_web_addin_metadata = _office_web_addin_metadata(source)
     pivot_table_metadata = _pivot_table_metadata(source)
+    slicer_timeline_metadata = _slicer_timeline_metadata(
+        source,
+        dict(pivot_table_metadata.slicer_timeline_pivot_cache_members_by_id),
+    )
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -11756,6 +12698,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(ribbon_customization_metadata.warnings)
     parser_warnings.update(office_web_addin_metadata.warnings)
     parser_warnings.update(pivot_table_metadata.warnings)
+    parser_warnings.update(slicer_timeline_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -11967,6 +12910,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
         pivot_table_definitions=pivot_table_metadata.pivot_tables,
+        slicer_timeline_caches=slicer_timeline_metadata.caches,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -12034,6 +12978,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
         "pivot_table_definitions": snapshot.pivot_table_definitions.profile_dict(),
+        "slicer_timeline_caches": snapshot.slicer_timeline_caches.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -12053,6 +12998,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_ribbon_customization": snapshot.ribbon_customization.present,
             "has_office_web_addins": snapshot.office_web_addins.present,
             "has_pivot_table_definitions": snapshot.pivot_table_definitions.present,
+            "has_slicer_timeline_caches": snapshot.slicer_timeline_caches.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

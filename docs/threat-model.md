@@ -49,8 +49,12 @@ review prompt, not proof of an error.
   them.
 - Ordinary lexical names inside inline `LET` expressions and `LAMBDA` bodies
   are not workbook references and are excluded from unresolved-token reporting;
-  FormulaFence still traces the static dependencies around them. Spilled-range
-  behavior and named LAMBDA/custom-function calls remain outside this subset.
+  FormulaFence still traces the static dependencies around them. A defined name
+  whose whole definition is a static `LAMBDA` can also be expanded at a call
+  site, preserving name scope and explicit argument edges. FormulaFence accepts
+  standard and `_xlfn.LAMBDA`/`_xlpm.`/`_xlop.` OOXML spellings. Spilled ranges,
+  recursive or non-static named LAMBDAs, and arbitrary custom functions remain
+  outside this subset and stay visible as coverage gaps.
 - Static internal 3-D A1 references such as `Jan:Mar!B2:B10` are expanded over
   every worksheet in the endpoint tab span. FormulaFence compares the resolved
   span when the same 3-D formula survives a workbook change, because moving,

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.8.0/formulafence-0.8.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.9.0/formulafence-0.9.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -85,7 +85,7 @@ allowed_changes:
 | Capability | What it catches |
 | --- | --- |
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
-| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges and formula-defined names, `LET`/inline-`LAMBDA`, Excel-table, and 3-D worksheet references |
+| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, and 3-D worksheet references |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
@@ -126,8 +126,19 @@ names; the static A1, named, and table references around them remain graph
 edges. The implementation follows Excel's documented
 [LET scope](https://support.microsoft.com/en-us/excel/functions/let-function)
 and [LAMBDA parameter syntax](https://support.microsoft.com/en-us/excel/functions/lambda-function).
-Spilled-range behavior and named LAMBDA/custom-function calls remain separate
-coverage limits rather than inferred dependencies.
+
+FormulaFence also follows a call to a workbook- or worksheet-local defined name
+when its complete definition is one statically resolvable `LAMBDA` expression.
+For `=ToCelsius(A2)`, the caller keeps its explicit `A2` edge and gains the
+function's static internal dependencies; nested named-LAMBDA calls and
+formula-defined names that call a named LAMBDA are resolved the same way. It
+recognizes both human-authored formulas and the `_xlfn.LAMBDA` / `_xlpm.` /
+`_xlop.` OOXML spelling produced by Excel-compatible writers. Definition scope
+and worksheet-local precedence are preserved. Relative, cyclic, external,
+dynamic, 3-D, tokenizer-unsupported, or otherwise non-static LAMBDAs remain a
+visible unresolved reference at each call site. Spilled ranges and arbitrary
+VBA, add-in, or other custom functions remain coverage limits rather than
+inferred dependencies.
 
 FormulaFence also expands internal static 3-D A1 references such as
 `Jan:Mar!B2:B10` over every worksheet tab between the named endpoints. Profiles

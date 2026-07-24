@@ -4,6 +4,7 @@ from formulafence.formulas import (
     extract_references,
     formula_fingerprint,
     inspect_formula,
+    lambda_parameter_count,
 )
 
 
@@ -115,6 +116,82 @@ def test_formula_inspection_respects_inline_lambda_parameters() -> None:
     )
     assert reduce_call.unresolved_range_tokens == ()
     assert namespaced_let.unresolved_range_tokens == ()
+
+
+def test_named_lambda_definition_detection_requires_one_valid_top_level_lambda() -> None:
+    assert lambda_parameter_count("=LAMBDA(value,value+1)") == 1
+    assert lambda_parameter_count("=_xlfn.LAMBDA(42)") == 0
+    assert (
+        lambda_parameter_count(
+            "=_xlfn.LAMBDA(_xlpm.temp,_xlpm.temp+Inputs!B2)"
+        )
+        == 1
+    )
+    assert lambda_parameter_count("=_xlfn.LAMBDA(_xlop.value,_xlop.value)") == 1
+    assert lambda_parameter_count("=LAMBDA(value,value)(1)") is None
+    assert lambda_parameter_count("=LAMBDA(A1,A1)") is None
+    assert lambda_parameter_count("=SUM(LAMBDA(value,value)(1))") is None
+
+
+def test_formula_inspection_expands_named_lambda_calls_without_shadowing_locals() -> None:
+    named_functions = {
+        "tocelsius": (
+            ParsedReference("Inputs", 2, 2, 2, 2, raw="ToCelsius"),
+        ),
+        "unsafelookup": None,
+        "f": (
+            ParsedReference("ShouldNotAppear", 1, 1, 1, 1, raw="F"),
+        ),
+    }
+    static_call = inspect_formula(
+        "=ToCelsius(A2)", named_function_references=named_functions
+    )
+    unsafe_call = inspect_formula(
+        "=UnsafeLookup(A2)", named_function_references=named_functions
+    )
+    locally_bound_call = inspect_formula(
+        "=LET(f,LAMBDA(x,x+Inputs!B2),f(A2))",
+        named_function_references=named_functions,
+    )
+    serialized_lambda = inspect_formula(
+        "=_xlfn.LAMBDA(_xlpm.temp,_xlpm.temp+Inputs!B2)(A2)"
+    )
+    optional_serialized_lambda = inspect_formula(
+        "=_xlfn.LAMBDA(_xlop.temp,_xlpm.temp+Inputs!B2)(A2)"
+    )
+    spaced_serialized_lambda = inspect_formula(
+        "=_xlfn.LAMBDA(_xlop.temp, _xlfn.LET(_xlpm.rate, Inputs!B2, "
+        "_xlpm.temp*_xlpm.rate))(A2)"
+    )
+    serialized_let = inspect_formula("=_xlfn.LET(_xlpm.rate,Inputs!B2,_xlpm.rate*2)")
+
+    assert static_call.references == (
+        ParsedReference("Inputs", 2, 2, 2, 2, raw="ToCelsius"),
+        ParsedReference(None, 1, 2, 1, 2, raw="A2"),
+    )
+    assert static_call.unresolved_range_tokens == ()
+    assert unsafe_call.references == (
+        ParsedReference(None, 1, 2, 1, 2, raw="A2"),
+    )
+    assert unsafe_call.unresolved_range_tokens == ("UnsafeLookup",)
+    assert locally_bound_call.references == (
+        ParsedReference("Inputs", 2, 2, 2, 2, raw="Inputs!B2"),
+        ParsedReference(None, 1, 2, 1, 2, raw="A2"),
+    )
+    assert locally_bound_call.unresolved_range_tokens == ()
+    assert serialized_lambda.references == (
+        ParsedReference("Inputs", 2, 2, 2, 2, raw="Inputs!B2"),
+        ParsedReference(None, 1, 2, 1, 2, raw="A2"),
+    )
+    assert serialized_lambda.unresolved_range_tokens == ()
+    assert optional_serialized_lambda.references == serialized_lambda.references
+    assert optional_serialized_lambda.unresolved_range_tokens == ()
+    assert spaced_serialized_lambda.references == serialized_lambda.references
+    assert spaced_serialized_lambda.unresolved_range_tokens == ()
+    assert serialized_let.references == (
+        ParsedReference("Inputs", 2, 2, 2, 2, raw="Inputs!B2"),
+    )
+    assert serialized_let.unresolved_range_tokens == ()
 
 
 def test_formula_inspection_never_treats_a_cell_reference_as_a_local_variable() -> None:

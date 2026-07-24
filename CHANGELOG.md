@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0 — 2026-07-24
+
+- Expand calls to workbook- and worksheet-local defined names whose complete
+  definitions are statically resolvable `LAMBDA` expressions, including nested
+  named-LAMBDA calls and formula-defined names that call them.
+- Preserve Excel name scope and local-name precedence for callable definitions.
+  Recognize OOXML formula definitions without a leading `=` and serialized
+  `_xlfn.LAMBDA`, `_xlpm.`, and `_xlop.` local-name forms.
+- Leave dynamic, relative, cyclic, external, 3-D, tokenizer-unsupported, and
+  otherwise non-static named LAMBDAs visible as unresolved references at their
+  call sites rather than creating guessed graph edges.
+
 ## 0.4.0 — 2026-07-24
 
 - Resolve the conservative, fully qualified Excel-table subset: table names,

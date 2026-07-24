@@ -54,7 +54,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_broken_references` | boolean | A formula adds `#REF!`. |
 | `no_macro_changes` | boolean | The `xl/vbaProject.bin` payload is added, removed, or has a different SHA-256. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
-| `no_new_unresolved_references` | boolean | A formula adds a name, table reference, or other range token that cannot be resolved statically. |
+| `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
 | `no_new_dynamic_references` | boolean | A formula adds a dynamic reference function such as `INDIRECT` or `OFFSET`. |
 | `no_table_definition_changes` | boolean | An Excel table is added, removed, moved, renamed, or has its columns/header/total-row configuration changed. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
@@ -86,7 +86,18 @@ Within a formula, ordinary `LET` bindings and inline `LAMBDA` parameters are
 treated as lexical local names rather than unresolved workbook names. This
 preserves the static dependencies in their value expressions and bodies,
 including nested lambdas in higher-order Excel functions. Spilled ranges and
-named LAMBDA/custom-function calls remain outside this static subset.
+arbitrary custom functions remain outside this static subset.
+
+A call to a workbook- or worksheet-local defined name is also resolved when
+the complete definition is one statically resolvable `LAMBDA` expression. The
+caller retains its explicit argument references and receives the static
+dependencies of the function body, including through nested named-LAMBDA calls
+and formula-defined names. FormulaFence recognizes normal formula text plus the
+`_xlfn.LAMBDA`, `_xlpm.`, and `_xlop.` OOXML serialization used by
+Excel-compatible writers. Dynamic, relative, cyclic, external, 3-D, or
+tokenizer-unsupported definitions remain unresolved at their call site, so
+`no_new_unresolved_references` can make newly introduced instances a hard CI
+failure.
 
 Static internal 3-D A1 references such as `Jan:Mar!B2:B10` are expanded across
 every tab between their endpoints in workbook order. FormulaFence records the

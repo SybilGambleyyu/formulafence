@@ -20,6 +20,7 @@ from formulafence.formulas import (
     formula_fingerprint,
     has_broken_reference,
     inspect_formula,
+    lambda_parameter_count,
     parse_reference_token,
     reference_lookup_key,
 )
@@ -187,13 +188,27 @@ class _FormulaDefinedName:
 def _formula_defined_name(
     name: str, definition: object, scope: str | None
 ) -> _FormulaDefinedName | None:
-    """Return a formula-valued defined name, excluding ordinary destinations."""
+    """Return a formula-valued defined name, excluding ordinary destinations.
+
+    OOXML stores the text of a defined-name formula without its leading equals
+    sign, while older writer output commonly retains one. ``DefinedName.type``
+    lets us preserve ordinary A1 destinations and normalize either formula
+    spelling before sending it through the formula tokenizer.
+    """
     attr_text = getattr(definition, "attr_text", None)
     if not isinstance(attr_text, str):
         return None
     formula = attr_text.strip()
-    if not formula.startswith("="):
+    if not formula:
         return None
+    if not formula.startswith("="):
+        try:
+            definition_type = getattr(definition, "type", None)
+        except Exception:  # pragma: no cover - malformed name text is workbook-specific
+            definition_type = None
+        if definition_type == "RANGE":
+            return None
+        formula = f"={formula}"
     return _FormulaDefinedName(reference_lookup_key(name), formula, scope)
 
 
@@ -210,17 +225,20 @@ def _named_reference_maps(
 ) -> tuple[
     dict[str, tuple[ParsedReference, ...]],
     dict[str, dict[str, tuple[ParsedReference, ...]]],
+    dict[str, tuple[ParsedReference, ...] | None],
+    dict[str, dict[str, tuple[ParsedReference, ...] | None]],
 ]:
-    """Build direct and safely expandable formula-defined name maps.
+    """Build direct, formula-defined, and callable named-LAMBDA maps.
 
     Formula-valued names are expanded only when every dependency is statically
     visible and internal. Relative references, dynamic functions, unresolved
-    tokens, cycles, external links, and 3-D spans remain unresolved at a use
-    site instead of producing a guessed graph edge.
+    tokens, recursive LAMBDAs, external links, and 3-D spans remain unresolved
+    at a use site instead of producing a guessed graph edge.
     """
     workbook_names = getattr(workbook, "defined_names", {})
     global_references: dict[str, tuple[ParsedReference, ...]] = {}
     global_formulas: dict[str, _FormulaDefinedName] = {}
+    global_lambdas: dict[str, _FormulaDefinedName] = {}
     try:
         workbook_items = workbook_names.items()
     except AttributeError:
@@ -230,7 +248,12 @@ def _named_reference_maps(
             continue
         formula_definition = _formula_defined_name(str(name), definition, None)
         if formula_definition is not None:
-            global_formulas[formula_definition.key] = formula_definition
+            target = (
+                global_lambdas
+                if lambda_parameter_count(formula_definition.formula) is not None
+                else global_formulas
+            )
+            target[formula_definition.key] = formula_definition
             continue
         references = _definition_references(str(name), definition)
         if references:
@@ -238,6 +261,7 @@ def _named_reference_maps(
 
     local_references: dict[str, dict[str, tuple[ParsedReference, ...]]] = {}
     local_formulas: dict[str, dict[str, _FormulaDefinedName]] = {}
+    local_lambdas: dict[str, dict[str, _FormulaDefinedName]] = {}
     sheet_titles: dict[str, str] = {}
     for worksheet in getattr(workbook, "worksheets", ()):
         scope = worksheet.title.casefold()
@@ -251,7 +275,12 @@ def _named_reference_maps(
         for name, definition in worksheet_items:
             formula_definition = _formula_defined_name(str(name), definition, scope)
             if formula_definition is not None:
-                local_formulas.setdefault(scope, {})[formula_definition.key] = formula_definition
+                target = (
+                    local_lambdas
+                    if lambda_parameter_count(formula_definition.formula) is not None
+                    else local_formulas
+                )
+                target.setdefault(scope, {})[formula_definition.key] = formula_definition
                 continue
             references = _definition_references(str(name), definition)
             if not references:
@@ -265,73 +294,102 @@ def _named_reference_maps(
         for scope, definitions in local_formulas.items()
         for key, definition in definitions.items()
     }
-    resolved_global: dict[str, tuple[ParsedReference, ...]] = {}
-    resolved_local: dict[str, dict[str, tuple[ParsedReference, ...]]] = {}
+    qualified_lambdas = {
+        _qualified_name_key(sheet_titles[scope], key): definition
+        for scope, definitions in local_lambdas.items()
+        for key, definition in definitions.items()
+    }
+    resolved_definitions: dict[tuple[str | None, str], tuple[ParsedReference, ...]] = {}
     resolving: set[tuple[str | None, str]] = set()
     failed: set[tuple[str | None, str]] = set()
+
+    def identity_for(definition: _FormulaDefinedName) -> tuple[str | None, str]:
+        return definition.scope, definition.key
 
     def cached_references(
         definition: _FormulaDefinedName,
     ) -> tuple[ParsedReference, ...] | None:
-        if definition.scope is None:
-            return resolved_global.get(definition.key)
-        return resolved_local.get(definition.scope, {}).get(definition.key)
+        return resolved_definitions.get(identity_for(definition))
 
     def has_cached_references(definition: _FormulaDefinedName) -> bool:
-        if definition.scope is None:
-            return definition.key in resolved_global
-        return definition.key in resolved_local.get(definition.scope, {})
-
-    def store_references(
-        definition: _FormulaDefinedName, references: tuple[ParsedReference, ...]
-    ) -> None:
-        if definition.scope is None:
-            resolved_global[definition.key] = references
-            return
-        resolved_local.setdefault(definition.scope, {})[definition.key] = references
+        return identity_for(definition) in resolved_definitions
 
     def visible_references(scope: str | None) -> dict[str, tuple[ParsedReference, ...]]:
-        references = {**global_references, **resolved_global}
+        references = dict(global_references)
+        for key, definition in global_formulas.items():
+            if cached := cached_references(definition):
+                references[key] = cached
+            elif has_cached_references(definition):
+                references[key] = ()
         for local_scope, values in local_references.items():
             for key, local_values in values.items():
                 references[_qualified_name_key(sheet_titles[local_scope], key)] = local_values
-        for local_scope, values in resolved_local.items():
-            for key, local_values in values.items():
-                references[_qualified_name_key(sheet_titles[local_scope], key)] = local_values
+        for local_scope, definitions in local_formulas.items():
+            for key, definition in definitions.items():
+                if cached := cached_references(definition):
+                    references[_qualified_name_key(sheet_titles[local_scope], key)] = cached
+                elif has_cached_references(definition):
+                    references[_qualified_name_key(sheet_titles[local_scope], key)] = ()
         if scope is not None:
             references.update(local_references.get(scope, {}))
-            references.update(resolved_local.get(scope, {}))
+            for key, definition in local_formulas.get(scope, {}).items():
+                if cached := cached_references(definition):
+                    references[key] = cached
+                elif has_cached_references(definition):
+                    references[key] = ()
         return references
 
-    def formula_definition_for(
+    def visible_named_functions(
+        scope: str | None,
+    ) -> dict[str, tuple[ParsedReference, ...] | None]:
+        functions: dict[str, tuple[ParsedReference, ...] | None] = {
+            key: cached_references(definition)
+            for key, definition in global_lambdas.items()
+        }
+        for local_scope, definitions in local_lambdas.items():
+            for key, definition in definitions.items():
+                functions[_qualified_name_key(sheet_titles[local_scope], key)] = (
+                    cached_references(definition)
+                )
+        if scope is not None:
+            for key, definition in local_lambdas.get(scope, {}).items():
+                functions[key] = cached_references(definition)
+        return functions
+
+    def named_definition_for(
         token: str, scope: str | None
     ) -> _FormulaDefinedName | None:
         key = reference_lookup_key(token)
         if qualified := qualified_formulas.get(key):
             return qualified
+        if qualified := qualified_lambdas.get(key):
+            return qualified
         if "!" in key:
             return None
         if scope is not None and (local := local_formulas.get(scope, {}).get(key)):
             return local
-        return global_formulas.get(key)
+        if scope is not None and (local := local_lambdas.get(scope, {}).get(key)):
+            return local
+        return global_formulas.get(key) or global_lambdas.get(key)
 
-    def resolve_formula_definition(
+    def resolve_definition(
         definition: _FormulaDefinedName,
     ) -> tuple[ParsedReference, ...] | None:
-        identity = (definition.scope, definition.key)
+        identity = identity_for(definition)
         if has_cached_references(definition):
             return cached_references(definition)
         if identity in failed or identity in resolving:
             return None
 
         resolving.add(identity)
-        resolved: tuple[ParsedReference, ...] | None = None
+        resolved_references: tuple[ParsedReference, ...] | None = None
         try:
             inspection = inspect_formula(
                 definition.formula,
                 named_references=visible_references(definition.scope),
                 structured_tables=structured_tables,
                 sheet_order=sheet_order,
+                named_function_references=visible_named_functions(definition.scope),
             )
             can_expand = not (
                 has_broken_reference(definition.formula)
@@ -341,8 +399,8 @@ def _named_reference_maps(
             )
             if can_expand:
                 for token in inspection.unresolved_range_tokens:
-                    dependency = formula_definition_for(token, definition.scope)
-                    if dependency is None or resolve_formula_definition(dependency) is None:
+                    dependency = named_definition_for(token, definition.scope)
+                    if dependency is None or resolve_definition(dependency) is None:
                         can_expand = False
                         break
             if can_expand:
@@ -351,6 +409,7 @@ def _named_reference_maps(
                     named_references=visible_references(definition.scope),
                     structured_tables=structured_tables,
                     sheet_order=sheet_order,
+                    named_function_references=visible_named_functions(definition.scope),
                 )
                 if (
                     inspection.unresolved_range_tokens
@@ -364,39 +423,74 @@ def _named_reference_maps(
                 ):
                     can_expand = False
             if can_expand:
-                resolved = tuple(dict.fromkeys(inspection.references))
+                resolved_references = tuple(dict.fromkeys(inspection.references))
         finally:
             resolving.remove(identity)
 
-        if resolved is None:
+        if resolved_references is None:
             failed.add(identity)
             return None
-        store_references(definition, resolved)
-        return resolved
+        resolved_definitions[identity] = resolved_references
+        return resolved_references
 
     for definition in global_formulas.values():
-        resolve_formula_definition(definition)
+        resolve_definition(definition)
+    for definition in global_lambdas.values():
+        resolve_definition(definition)
     for definitions in local_formulas.values():
         for definition in definitions.values():
-            resolve_formula_definition(definition)
+            resolve_definition(definition)
+    for definitions in local_lambdas.values():
+        for definition in definitions.values():
+            resolve_definition(definition)
 
-    global_result = {**global_references, **resolved_global}
+    global_result = dict(global_references)
+    for key, definition in global_formulas.items():
+        if cached := cached_references(definition):
+            global_result[key] = cached
+        elif has_cached_references(definition):
+            global_result[key] = ()
     for scope, values in local_references.items():
         for key, references in values.items():
             global_result[_qualified_name_key(sheet_titles[scope], key)] = references
-    for scope, values in resolved_local.items():
-        for key, references in values.items():
-            global_result[_qualified_name_key(sheet_titles[scope], key)] = references
+    for scope, definitions in local_formulas.items():
+        for key, definition in definitions.items():
+            if cached := cached_references(definition):
+                global_result[_qualified_name_key(sheet_titles[scope], key)] = cached
+            elif has_cached_references(definition):
+                global_result[_qualified_name_key(sheet_titles[scope], key)] = ()
 
     local_result: dict[str, dict[str, tuple[ParsedReference, ...]]] = {}
     for scope in set(local_references) | set(local_formulas):
-        references = {
-            **local_references.get(scope, {}),
-            **resolved_local.get(scope, {}),
-        }
+        references = dict(local_references.get(scope, {}))
+        for key, definition in local_formulas.get(scope, {}).items():
+            if cached := cached_references(definition):
+                references[key] = cached
+            elif has_cached_references(definition):
+                references[key] = ()
         if references:
             local_result[scope] = references
-    return global_result, local_result
+
+    global_function_result: dict[str, tuple[ParsedReference, ...] | None] = {
+        key: cached_references(definition)
+        for key, definition in global_lambdas.items()
+    }
+    for scope, definitions in local_lambdas.items():
+        for key, definition in definitions.items():
+            global_function_result[_qualified_name_key(sheet_titles[scope], key)] = (
+                cached_references(definition)
+            )
+
+    local_function_result: dict[
+        str, dict[str, tuple[ParsedReference, ...] | None]
+    ] = {}
+    for scope, definitions in local_lambdas.items():
+        functions = {
+            key: cached_references(definition) for key, definition in definitions.items()
+        }
+        if functions:
+            local_function_result[scope] = functions
+    return global_result, local_result, global_function_result, local_function_result
 
 
 def _table_columns(
@@ -519,14 +613,21 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     tables = _table_snapshots(workbook)
     structured_tables = _structured_table_map(tables)
     sheet_order = tuple(worksheet.title for worksheet in workbook.worksheets)
-    global_named_references, local_named_references = _named_reference_maps(
-        workbook, structured_tables, sheet_order
-    )
+    (
+        global_named_references,
+        local_named_references,
+        global_named_functions,
+        local_named_functions,
+    ) = _named_reference_maps(workbook, structured_tables, sheet_order)
 
     for worksheet in workbook.worksheets:
         named_references = {
             **global_named_references,
             **local_named_references.get(worksheet.title.casefold(), {}),
+        }
+        named_functions = {
+            **global_named_functions,
+            **local_named_functions.get(worksheet.title.casefold(), {}),
         }
         nonempty_cells = 0
         formula_cells = 0
@@ -550,10 +651,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 broken_references.add(snapshot.location)
             inspection = inspect_formula(
                 snapshot.formula,
-                named_references,
-                structured_tables,
-                snapshot.location,
-                sheet_order,
+                named_references=named_references,
+                structured_tables=structured_tables,
+                origin=snapshot.location,
+                sheet_order=sheet_order,
+                named_function_references=named_functions,
             )
             if inspection.unresolved_range_tokens:
                 unresolved_reference_tokens[snapshot.location] = inspection.unresolved_range_tokens

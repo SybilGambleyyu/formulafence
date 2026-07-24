@@ -13,6 +13,8 @@ from .helpers import (
     make_let_model,
     make_model,
     make_named_formula_model,
+    make_named_lambda_model,
+    make_scoped_named_lambda_model,
     make_table_model,
     make_three_d_model,
     rewrite,
@@ -209,6 +211,92 @@ def test_let_variables_do_not_hide_static_dependency_paths(tmp_path) -> None:
     change = next(change for change in report.changes if change.location == ("Inputs", "B2"))
 
     assert change.impacted_cells == (("Dashboard", "B2"), ("Model", "B2"))
+
+
+def test_named_lambdas_expand_static_paths_through_nested_calls_and_named_formulas(
+    tmp_path,
+) -> None:
+    baseline = make_named_lambda_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_lambda_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Inputs"]["B2"], "value", 0.2))
+
+    snapshot = load_snapshot(baseline)
+    assert snapshot.unresolved_reference_tokens == {}
+    assert snapshot.direct_dependents(("Inputs", "B2")) == {
+        ("Model", "B2"),
+        ("Model", "B3"),
+        ("Model", "B4"),
+    }
+    assert snapshot.direct_dependents(("Inputs", "B3")) == {
+        ("Model", "B3"),
+        ("Model", "B4"),
+    }
+    assert snapshot.direct_dependents(("Inputs", "B4")) == {
+        ("Model", "B2"),
+        ("Model", "B3"),
+        ("Model", "B4"),
+    }
+
+    report = compare_snapshots(snapshot, load_snapshot(candidate))
+    change = next(change for change in report.changes if change.location == ("Inputs", "B2"))
+
+    assert change.impacted_cells == (
+        ("Dashboard", "B2"),
+        ("Model", "B2"),
+        ("Model", "B3"),
+        ("Model", "B4"),
+    )
+
+
+def test_unsafe_or_recursive_named_lambdas_remain_visible_coverage_gaps(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    workbook_path = make_model(tmp_path / "candidate.xlsx")
+
+    def add_unsafe_named_lambdas(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName("UnsafeLookup", attr_text="=LAMBDA(address,INDIRECT(address))")
+        )
+        workbook.defined_names.add(
+            DefinedName(
+                "RecursiveCount",
+                attr_text="=LAMBDA(value,IF(value=0,0,RecursiveCount(value-1)))",
+            )
+        )
+        workbook["Model"]["D2"] = "=UnsafeLookup(Inputs!A1)"
+        workbook["Model"]["D3"] = "=RecursiveCount(3)"
+
+    rewrite(workbook_path, add_unsafe_named_lambdas)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.unresolved_reference_tokens == {
+        ("Model", "D2"): ("UnsafeLookup",),
+        ("Model", "D3"): ("RecursiveCount",),
+    }
+    assert snapshot.direct_dependents(("Inputs", "A1")) == {("Model", "D2")}
+    report = compare_snapshots(load_snapshot(baseline), snapshot)
+    assert {
+        (finding.rule_id, finding.location)
+        for finding in report.findings
+    } >= {
+        ("FF011", ("Model", "D2")),
+        ("FF011", ("Model", "D3")),
+    }
+
+
+def test_named_lambda_calls_follow_worksheet_scope_and_qualified_local_names(tmp_path) -> None:
+    snapshot = load_snapshot(make_scoped_named_lambda_model(tmp_path / "scoped.xlsx"))
+
+    assert snapshot.unresolved_reference_tokens == {}
+    assert snapshot.direct_dependents(("Inputs", "B2")) == {("Report", "B2")}
+    assert snapshot.direct_dependents(("Inputs", "B3")) == {
+        ("Model", "B2"),
+        ("Report", "B3"),
+    }
+    assert snapshot.direct_dependents(("Model", "A2")) == {("Model", "B2")}
+    assert snapshot.direct_dependents(("Report", "A2")) == {
+        ("Report", "B2"),
+        ("Report", "B3"),
+    }
 
 
 def test_diff_surfaces_new_static_coverage_gaps(tmp_path) -> None:

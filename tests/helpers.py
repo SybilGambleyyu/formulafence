@@ -152,6 +152,76 @@ def make_let_model(path: Path) -> Path:
     return path
 
 
+def make_named_lambda_model(path: Path) -> Path:
+    """Create reusable named LAMBDAs plus a formula-defined name that calls one."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Named LAMBDA inputs"
+    inputs["B2"] = 0.1
+    inputs["B3"] = 100
+    inputs["B4"] = 32
+
+    model = workbook.create_sheet("Model")
+    model["A1"] = "Named LAMBDA calculations"
+    model["B2"] = "=ToCelsius(Inputs!B4)"
+    model["B3"] = "=AdjustedCelsius(Inputs!B4)"
+    model["B4"] = "=NamedAdjustedValue"
+
+    dashboard = workbook.create_sheet("Dashboard")
+    dashboard["A1"] = "Named LAMBDA output"
+    dashboard["B2"] = "=Model!B4"
+
+    workbook.defined_names.add(
+        DefinedName(
+            "ToCelsius",
+            attr_text="_xlfn.LAMBDA(_xlpm.temp,(5/9)*(_xlpm.temp-32)+Inputs!$B$2)",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "AdjustedCelsius",
+            attr_text="_xlfn.LAMBDA(_xlpm.temp,ToCelsius(_xlpm.temp)+Inputs!$B$3)",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName("NamedAdjustedValue", attr_text="AdjustedCelsius(Inputs!$B$4)")
+    )
+    workbook.save(path)
+    return path
+
+
+def make_scoped_named_lambda_model(path: Path) -> Path:
+    """Create global and worksheet-local LAMBDAs with the same callable name."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["B2"] = 2
+    inputs["B3"] = 3
+
+    model = workbook.create_sheet("Model")
+    model["A2"] = 10
+    model["B2"] = "=Scale(A2)"
+
+    report = workbook.create_sheet("Report")
+    report["A2"] = 10
+    report["B2"] = "=Scale(A2)"
+    report["B3"] = "=Model!Scale(A2)"
+
+    workbook.defined_names.add(
+        DefinedName("Scale", attr_text="=LAMBDA(value,value*Inputs!$B$2)")
+    )
+    model.defined_names.add(
+        DefinedName(
+            "Scale",
+            attr_text="=LAMBDA(value,value*Inputs!$B$3)",
+            localSheetId=1,
+        )
+    )
+    workbook.save(path)
+    return path
+
+
 def rewrite(path: Path, mutate: Callable[[Workbook], None]) -> Path:
     """Load, mutate, and save a fixture in place."""
     from openpyxl import load_workbook

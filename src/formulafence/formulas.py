@@ -27,7 +27,9 @@ _A1_LOCAL_IDENTIFIER_CONFLICT = re.compile(r"[A-Z]{1,3}[1-9][0-9]*", re.IGNORECA
 _R1C1_LOCAL_IDENTIFIER_CONFLICT = re.compile(
     r"R[1-9][0-9]*C[1-9][0-9]*", re.IGNORECASE
 )
+_SERIALIZED_LOCAL_PREFIXES = ("_xlpm.", "_xlop.")
 _GROUP_TOKEN_TYPES = {"FUNC", "PAREN", "ARRAY"}
+_WHITESPACE_TOKEN_TYPES = {"WSPACE", "WHITE-SPACE"}
 
 
 @dataclass(frozen=True)
@@ -157,7 +159,7 @@ def formula_fingerprint(formula: str, origin: str) -> str:
 
     parts: list[str] = []
     for token in tokens:
-        if token.type == "WSPACE":
+        if _is_whitespace(token):
             continue
         if token.type == "OPERAND" and token.subtype == "RANGE":
             parts.append(_normalise_range_token(token.value, origin))
@@ -679,6 +681,11 @@ def _is_group_close(token: object) -> bool:
     )
 
 
+def _is_whitespace(token: object) -> bool:
+    """Handle the whitespace labels emitted by supported openpyxl versions."""
+    return getattr(token, "type", None) in _WHITESPACE_TOKEN_TYPES
+
+
 def _matching_group_close(tokens: Sequence[object], opening: int, end: int) -> int | None:
     """Find a matching formula-token group close without parsing Excel values."""
     depth = 0
@@ -716,14 +723,36 @@ def _function_argument_spans(
     return tuple(spans)
 
 
+def _local_scope_key(value: str) -> str:
+    """Normalize a local name while hiding OOXML parameter-marker prefixes."""
+    token = value.strip()
+    normalized_token = token.casefold()
+    for prefix in _SERIALIZED_LOCAL_PREFIXES:
+        if normalized_token.startswith(prefix):
+            identifier = token[len(prefix) :]
+            if _LOCAL_IDENTIFIER.fullmatch(identifier):
+                return identifier.casefold()
+    return reference_lookup_key(token)
+
+
 def _simple_local_identifier(
-    tokens: Sequence[object], start: int, end: int
+    tokens: Sequence[object],
+    start: int,
+    end: int,
+    *,
+    allow_serialized_local_prefix: bool = False,
 ) -> tuple[int, str] | None:
-    """Return one conservative LET/LAMBDA identifier declaration token."""
+    """Return one conservative LET/LAMBDA identifier declaration token.
+
+    Excel-compatible writers may serialize LAMBDA parameters or local values
+    with ``_xlpm.`` or ``_xlop.`` prefixes. They are accepted only at a
+    LET/LAMBDA declaration so an ordinary dotted defined name cannot be
+    mistaken for a local variable.
+    """
     meaningful = [
         position
         for position in range(start, end)
-        if getattr(tokens[position], "type", None) != "WSPACE"
+        if not _is_whitespace(tokens[position])
     ]
     if len(meaningful) != 1:
         return None
@@ -735,21 +764,83 @@ def _simple_local_identifier(
     ):
         return None
     value = str(getattr(token, "value", "")).strip()
-    if not _LOCAL_IDENTIFIER.fullmatch(value):
+    identifier = value
+    if allow_serialized_local_prefix:
+        normalized_value = value.casefold()
+        for prefix in _SERIALIZED_LOCAL_PREFIXES:
+            if normalized_value.startswith(prefix):
+                identifier = value[len(prefix) :]
+                break
+    if not _LOCAL_IDENTIFIER.fullmatch(identifier):
         return None
     if (
-        value.casefold() in {"r", "c"}
-        or _A1_LOCAL_IDENTIFIER_CONFLICT.fullmatch(value)
-        or _R1C1_LOCAL_IDENTIFIER_CONFLICT.fullmatch(value)
+        identifier.casefold() in {"r", "c"}
+        or _A1_LOCAL_IDENTIFIER_CONFLICT.fullmatch(identifier)
+        or _R1C1_LOCAL_IDENTIFIER_CONFLICT.fullmatch(identifier)
     ):
         return None
-    return position, value.casefold()
+    return position, _local_scope_key(value)
 
 
 def _function_name(token: object) -> str:
     """Normalize function names, including Excel's OOXML namespace prefixes."""
     value = str(getattr(token, "value", "")).rstrip("(").strip().upper()
     return value.rsplit(".", 1)[-1]
+
+
+def _function_lookup_key(token: object) -> str:
+    """Normalize a callable defined-name token without losing sheet qualification."""
+    return reference_lookup_key(str(getattr(token, "value", "")).rstrip("(").strip())
+
+
+def lambda_parameter_count(formula: str) -> int | None:
+    """Return a valid top-level LAMBDA definition's parameter count, if present.
+
+    A workbook-defined LAMBDA is callable only when its full definition is one
+    ``LAMBDA(...)`` expression. This intentionally rejects formulas that merely
+    contain a lambda, malformed parameter lists, and trailing invocations so a
+    caller cannot mistake an arbitrary defined formula for a custom function.
+    """
+    try:
+        tokens = Tokenizer(formula).items
+    except Exception:
+        return None
+    meaningful = [
+        position
+        for position, token in enumerate(tokens)
+        if not _is_whitespace(token)
+    ]
+    if not meaningful:
+        return None
+    opening = meaningful[0]
+    token = tokens[opening]
+    if not (
+        getattr(token, "type", None) == "FUNC"
+        and getattr(token, "subtype", None) == "OPEN"
+        and _function_name(token) == "LAMBDA"
+    ):
+        return None
+    closing = _matching_group_close(tokens, opening, len(tokens))
+    if closing is None or any(position > closing for position in meaningful):
+        return None
+    arguments = _function_argument_spans(tokens, opening + 1, closing)
+    if not arguments:
+        return None
+    calculation_start, calculation_end = arguments[-1]
+    if not any(
+        not _is_whitespace(tokens[position])
+        for position in range(calculation_start, calculation_end)
+    ):
+        return None
+    parameters: set[str] = set()
+    for start, end in arguments[:-1]:
+        declaration = _simple_local_identifier(
+            tokens, start, end, allow_serialized_local_prefix=True
+        )
+        if declaration is None or declaration[1] in parameters:
+            return None
+        parameters.add(declaration[1])
+    return len(parameters)
 
 
 def _local_variable_token_indexes(tokens: Sequence[object]) -> set[int]:
@@ -775,9 +866,14 @@ def _local_variable_token_indexes(tokens: Sequence[object]) -> set[int]:
                 if getattr(token, "type", None) == "FUNC":
                     arguments = _function_argument_spans(tokens, body_start, closing)
                     name = _function_name(token)
-                    if name == "LET":
+                    local_callable = _local_scope_key(
+                        str(getattr(token, "value", "")).rstrip("(")
+                    ) in scope
+                    if local_callable:
+                        local_indexes.add(position)
+                    if name == "LET" and not local_callable:
                         visit_let(arguments, scope)
-                    elif name == "LAMBDA":
+                    elif name == "LAMBDA" and not local_callable:
                         visit_lambda(arguments, scope)
                     else:
                         visit(body_start, closing, scope)
@@ -788,7 +884,7 @@ def _local_variable_token_indexes(tokens: Sequence[object]) -> set[int]:
             if (
                 getattr(token, "type", None) == "OPERAND"
                 and getattr(token, "subtype", None) == "RANGE"
-                and reference_lookup_key(str(getattr(token, "value", ""))) in scope
+                and _local_scope_key(str(getattr(token, "value", ""))) in scope
             ):
                 local_indexes.add(position)
             position += 1
@@ -800,7 +896,9 @@ def _local_variable_token_indexes(tokens: Sequence[object]) -> set[int]:
             return
         declarations: list[tuple[int, str]] = []
         for start, end in arguments[:-1:2]:
-            declaration = _simple_local_identifier(tokens, start, end)
+            declaration = _simple_local_identifier(
+                tokens, start, end, allow_serialized_local_prefix=True
+            )
             if declaration is None:
                 for fallback_start, fallback_end in arguments:
                     visit(fallback_start, fallback_end, scope)
@@ -823,7 +921,9 @@ def _local_variable_token_indexes(tokens: Sequence[object]) -> set[int]:
             return
         declarations: list[tuple[int, str]] = []
         for start, end in arguments[:-1]:
-            declaration = _simple_local_identifier(tokens, start, end)
+            declaration = _simple_local_identifier(
+                tokens, start, end, allow_serialized_local_prefix=True
+            )
             if declaration is None:
                 for fallback_start, fallback_end in arguments:
                     visit(fallback_start, fallback_end, scope)
@@ -849,20 +949,26 @@ def inspect_formula(
     structured_tables: Mapping[str, StructuredTable] | None = None,
     origin: tuple[str, str] | None = None,
     sheet_order: Sequence[str] | None = None,
+    named_function_references: (
+        Mapping[str, Sequence[ParsedReference] | None] | None
+    ) = None,
 ) -> FormulaInspection:
     """Inspect static reference coverage while resolving known named ranges.
 
-    A caller provides a case-folded name-to-range map assembled from the
+    A caller provides case-folded name and named-LAMBDA maps assembled from the
     workbook. Supported fully qualified table references are resolved from table
     metadata, context-bound row references require the formula origin, and
     3-D references require workbook tab order. Other non-A1 tokens are returned
-    explicitly instead of being silently omitted from the graph.
+    explicitly instead of being silently omitted from the graph. A ``None``
+    named-function value records a known LAMBDA whose definition is not safe to
+    expand, so its call remains a visible coverage gap.
     """
     try:
         tokens = Tokenizer(formula).items
     except Exception:
         return FormulaInspection((), (), (), tokenization_failed=True)
     resolved_names = named_references or {}
+    resolved_named_functions = named_function_references or {}
     resolved_tables = structured_tables or {}
     references: list[ParsedReference] = []
     unresolved_range_tokens: list[str] = []
@@ -894,7 +1000,15 @@ def inspect_formula(
                 continue
             unresolved_range_tokens.append(token.value)
         elif token.type == "FUNC" and token.subtype == "OPEN":
-            function_name = token.value.rstrip("(").strip().upper()
+            if position not in local_variable_indexes:
+                function_key = _function_lookup_key(token)
+                if function_key in resolved_named_functions:
+                    function_references = resolved_named_functions[function_key]
+                    if function_references is None:
+                        unresolved_range_tokens.append(token.value.rstrip("(").strip())
+                    else:
+                        references.extend(function_references)
+            function_name = _function_name(token)
             if function_name in _DYNAMIC_REFERENCE_FUNCTIONS:
                 dynamic_reference_functions.append(function_name)
     return FormulaInspection(

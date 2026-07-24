@@ -78,7 +78,46 @@ Foresight workbooks contain no `LET` or `LAMBDA` formulas, so they remain a
 compatibility regression check rather than evidence for the new syntax.
 
 This is lexical static inspection, not an Excel evaluator. Spilled ranges and
-named LAMBDA/custom-function calls remain explicit limits.
+arbitrary custom-function calls remain explicit limits.
+
+## Named LAMBDA calls and OOXML serialization — 2026-07-24
+
+FormulaFence 0.9.0 expands a named `LAMBDA` call only when the complete
+definition is statically visible and internal. [Microsoft documents that a
+LAMBDA moved into Name Manager becomes a reusable named function, callable like
+a native Excel function](https://support.microsoft.com/en-us/excel/functions/lambda-function).
+The externally maintained
+[Vertex42 LAMBDA Library template](https://www.vertex42.com/lambda/templates.html)
+was downloaded locally for compatibility validation only and is not bundled
+with FormulaFence. The inspected file had SHA-256
+`24e62d67f177ca02f9f8b6dc0381ccee88f12ba8ac9a6902ab7f25a98d0f5b71`.
+
+| Measure | Result |
+| --- | ---: |
+| Sheets | 11 |
+| Non-empty cells | 8,284 |
+| Formula cells | 933 |
+| Defined names | 121 |
+| Top-level named LAMBDAs | 116 |
+| Statically resolved named LAMBDAs | 99 |
+| Unsafe or unsupported named LAMBDAs left visible | 17 |
+| Formula cells with unresolved coverage notes | 36 |
+
+The template uses the OOXML spellings `_xlfn.LAMBDA`, `_xlpm.`, and `_xlop.`,
+and stores formula-defined names without a leading `=`. FormulaFence recognizes
+those forms, including nested named-function calls. The 99 safe definitions in
+this library have no static worksheet-cell inputs, so they resolve to an empty
+internal dependency set; the remaining 17 stay explicit because their bodies
+contain unsupported or non-static constructs. This is expected fail-closed
+coverage behavior, not a judgment about the library.
+
+The controlled graph fixture uses the same serialized notation for a
+`ToCelsius` function that reads `Inputs!B2`, an `AdjustedCelsius` function that
+calls it and reads `Inputs!B3`, and a formula-defined name that calls the latter.
+Changing `Inputs!B2` reached all three model callers and the dashboard output.
+Worksheet-local functions with the same name correctly shadowed workbook-level
+functions, while dynamic and recursive named LAMBDAs remained unresolved at the
+call site. No formula was evaluated during either check.
 
 ## Public structured-reference example — 2026-07-24
 

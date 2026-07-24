@@ -27,6 +27,7 @@ from .helpers import (
     change_ignored_error_target,
     change_legacy_vml_control_controls,
     change_legacy_vml_note,
+    change_named_sheet_view_criterion,
     change_office_web_addin_auto_show,
     change_office_web_addin_controls,
     change_pivot_table_definition_material,
@@ -50,6 +51,7 @@ from .helpers import (
     corrupt_filter_visibility_control,
     corrupt_ignored_error_control,
     corrupt_legacy_vml_control_root,
+    corrupt_named_sheet_view_control,
     corrupt_office_web_addin_definition_root,
     corrupt_pivot_table_definition_root,
     corrupt_ribbon_customization_root,
@@ -82,6 +84,7 @@ from .helpers import (
     make_model,
     make_named_formula_model,
     make_named_lambda_model,
+    make_named_sheet_view_model,
     make_office_web_addin_model,
     make_pivot_table_definition_model,
     make_power_pivot_data_model,
@@ -101,6 +104,7 @@ from .helpers import (
     mark_array_formula_unclassified,
     normalize_filter_visibility_control_spelling,
     normalize_ignored_error_control_spelling,
+    normalize_named_sheet_view_control_spelling,
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
     overlap_what_if_data_table_outputs,
@@ -4280,6 +4284,130 @@ def test_ignored_error_free_workbook_has_no_inventory(tmp_path) -> None:
     assert snapshot.ignored_error_controls.present is False
     assert snapshot.ignored_error_controls.ignored_error_rule_count == 0
     assert not any("ignored-error" in warning for warning in snapshot.parser_warnings)
+
+
+def test_named_sheet_views_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_named_sheet_view_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_sheet_view_model(tmp_path / "candidate.xlsx")
+    change_named_sheet_view_criterion(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "named_sheet_views_changed"
+    )
+
+    assert baseline_snapshot.summary()["named_sheet_view_count"] == 2
+    assert baseline_snapshot.summary()["named_sheet_view_filter_count"] == 2
+    assert baseline_snapshot.summary()["has_named_sheet_views"] is True
+    assert profile["named_sheet_views"] == {
+        "present": True,
+        "worksheet_count": 1,
+        "part_count": 1,
+        "named_sheet_view_count": 2,
+        "named_filter_count": 2,
+        "column_filter_count": 2,
+        "filter_criterion_count": 2,
+        "sort_rule_count": 2,
+        "sort_condition_count": 2,
+        "unrecognized_named_sheet_view_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Excel Named Sheet Views" in markdown
+    assert change.details["named_sheet_view_definition_material_changed"] is True
+    assert "FF038" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "Private baseline review",
+        "Private alternate review",
+        "PRIVATE-NAMED-VIEW-REGION",
+        "PRIVATE-ALTERNATE-NAMED-VIEW-REGION",
+        "CANDIDATE-PRIVATE-NAMED-VIEW-REGION",
+        "PRIVATE-NAMED-VIEW-SORT-LIST",
+        "A1:C5",
+        "C2:C5",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_named_sheet_views_reconcile_table_owned_filters(tmp_path) -> None:
+    baseline = make_named_sheet_view_model(
+        tmp_path / "baseline.xlsx",
+        table_owned=True,
+    )
+    candidate = make_named_sheet_view_model(
+        tmp_path / "candidate.xlsx",
+        table_owned=True,
+    )
+    change_named_sheet_view_criterion(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+
+    assert baseline_snapshot.named_sheet_views.unrecognized_named_sheet_view_count == 0
+    assert not any(
+        "Named Sheet View" in warning for warning in baseline_snapshot.parser_warnings
+    )
+    assert "FF038" in {finding.rule_id for finding in report.findings}
+
+
+def test_named_sheet_view_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_named_sheet_view_model(tmp_path / "baseline.xlsx")
+    equivalent = make_named_sheet_view_model(tmp_path / "equivalent.xlsx")
+    normalize_named_sheet_view_control_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert "named_sheet_views_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF038" not in {finding.rule_id for finding in report.findings}
+
+
+def test_named_sheet_view_malformed_control_fails_closed(tmp_path) -> None:
+    baseline = make_named_sheet_view_model(tmp_path / "baseline.xlsx")
+    malformed = make_named_sheet_view_model(tmp_path / "malformed.xlsx")
+    corrupt_named_sheet_view_control(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.named_sheet_views.unrecognized_named_sheet_view_count == 1
+    assert any(
+        "malformed or unsupported Named Sheet View" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF038"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("4294967296" not in artifact for artifact in rendered_artifacts)
+
+
+def test_named_sheet_view_free_workbook_has_no_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.named_sheet_views.present is False
+    assert snapshot.named_sheet_views.named_sheet_view_count == 0
+    assert not any("Named Sheet View" in warning for warning in snapshot.parser_warnings)
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

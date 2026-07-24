@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.33.0/formulafence-0.33.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.34.0/formulafence-0.34.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -73,6 +73,7 @@ rules:
   no_scenario_manager_changes: true
   no_filter_visibility_changes: true
   no_ignored_error_changes: true
+  no_named_sheet_view_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -110,7 +111,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-visibility and ignored-error controls, Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-visibility, ignored-error, and Named Sheet View controls, Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -548,6 +549,32 @@ error-checking options, or infer a suppressed warning's downstream impact. The
 boundary follows the OOXML [`ignoredError`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_ignoredError_topic_ID0EVK24.html)
 definition and Microsoft's Office 2010 [`ignoredErrors`](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/0d164d85-23bf-4d43-87c5-9fcde148aabe)
 documentation.
+
+FormulaFence also inventories modern Excel **Named Sheet Views**. A saved view
+is stored in a relationship-backed part and can retain an alternate AutoFilter
+criterion or sort order that changes what a reviewer sees without changing a
+cell, formula, or the worksheet's active filter. FormulaFence follows the
+worksheet relationship to each Named Sheet View part, privately compares the
+view definition, and reconciles each stored filter to its base AutoFilter using
+Excel's documented AutoFilter UID, table-ID, then worksheet-filter sequence. A
+material change emits `FF038`; enable `no_named_sheet_view_changes` for
+`FFP038`.
+
+Profiles expose only structural counts for worksheets, relationship-backed
+parts, named views, alternate filters, column filters, criterion groups, sort
+rules/conditions, and unrecognized controls. View names, IDs, criteria, target
+ranges, table bindings, table-column IDs, and sort keys never enter profiles,
+Markdown control sections, `FF038` details, or SARIF. Equivalent GUID, local
+A1 case/absolute-reference, Boolean/default, and unsigned-integer spellings are
+normalized. Missing, ambiguous, mismatched, malformed, unsupported, oversized,
+or unsafe parts and filter bindings become visible coverage warnings. FormulaFence
+does not activate or render a saved view, calculate a filtered result, infer
+formula visibility sensitivity, repair a mismatched declaration, or support
+full differential-format, future extension, or rich-sort semantics. The boundary follows Microsoft's
+[`Named Sheet Views` part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/4b4d6448-d997-4ebe-9153-5c2c67d16972),
+[`CT_NsvFilter`](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/e132d9cc-c711-4fb3-aa28-e7356a791b1c),
+and [reconciliation](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/dd6b2cb8-b5b3-43b1-a5bd-dccdd9c0864a)
+definitions.
 
 FormulaFence also inventories relationship-backed **worksheet controls, legacy
 VML form controls, and OLE objects**. A worksheet can bind modern `<control>`

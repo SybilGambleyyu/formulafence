@@ -32,7 +32,9 @@ _DOCUMENT_RELATIONSHIPS_NS = (
 _SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
 _OFFICE_2013_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"
+_OFFICE_2014_REVISION_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
 _OFFICE_2016_REVISION10_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision10"
+_NAMED_SHEET_VIEW_NS = "http://schemas.microsoft.com/office/spreadsheetml/2019/namedsheetviews"
 
 
 def make_model(path: Path) -> Path:
@@ -6105,6 +6107,293 @@ def corrupt_filter_visibility_control(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".filter-visibility-corrupt.tmp.xlsx")
+
+
+def make_named_sheet_view_model(path: Path, *, table_owned: bool = False) -> Path:
+    """Create modern alternate filter/sort views with private OOXML settings."""
+    workbook = Workbook()
+    report = workbook.active
+    report.title = "Named View Report"
+    report.append(["Region", "Department", "Amount"])
+    report.append(["North", "Operations", 100])
+    report.append(["South", "Sales", 200])
+    report.append(["North", "Finance", 300])
+    report.append(["West", "Legal", 400])
+    if table_owned:
+        report.add_table(Table(displayName="NamedViewTable", ref="A1:C5"))
+    workbook.save(path)
+
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    named_view_relationship = (
+        "http://schemas.microsoft.com/office/2019/04/relationships/namedSheetView"
+    )
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_view(
+        root: ElementTree.Element,
+        *,
+        name: str,
+        view_id: str,
+        filter_id: str,
+        region: str,
+        sort_ref: str,
+    ) -> None:
+        view = ElementTree.SubElement(
+            root,
+            f"{{{_NAMED_SHEET_VIEW_NS}}}namedSheetView",
+            {"name": name, "id": view_id},
+        )
+        named_filter = ElementTree.SubElement(
+            view,
+            f"{{{_NAMED_SHEET_VIEW_NS}}}nsvFilter",
+            {
+                "filterId": filter_id,
+                "ref": "A1:C5",
+                "tableId": "1" if table_owned else "0",
+            },
+        )
+        column_filter = ElementTree.SubElement(
+            named_filter,
+            f"{{{_NAMED_SHEET_VIEW_NS}}}columnFilter",
+            {"colId": "1", "id": "{11111111-1111-1111-1111-111111111111}"},
+        )
+        filter_column = ElementTree.SubElement(
+            column_filter,
+            f"{{{_NAMED_SHEET_VIEW_NS}}}filter",
+            {"colId": "1"},
+        )
+        filters = ElementTree.SubElement(
+            filter_column,
+            f"{{{_SPREADSHEETML_NS}}}filters",
+            {"blank": "false", "calendarType": "none"},
+        )
+        ElementTree.SubElement(
+            filters,
+            f"{{{_SPREADSHEETML_NS}}}filter",
+            {"val": region},
+        )
+        sort_rules = ElementTree.SubElement(
+            named_filter,
+            f"{{{_NAMED_SHEET_VIEW_NS}}}sortRules",
+            {"caseSensitive": "false", "sortMethod": "none"},
+        )
+        sort_rule = ElementTree.SubElement(
+            sort_rules,
+            f"{{{_NAMED_SHEET_VIEW_NS}}}sortRule",
+            {"colId": "2", "id": "{22222222-2222-2222-2222-222222222222}"},
+        )
+        ElementTree.SubElement(
+            sort_rule,
+            f"{{{_NAMED_SHEET_VIEW_NS}}}sortCondition",
+            {
+                "ref": sort_ref,
+                "descending": "false",
+                "customList": "PRIVATE-NAMED-VIEW-SORT-LIST",
+            },
+        )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        if table_owned:
+            table_auto_filter_tag = f"{{{_SPREADSHEETML_NS}}}autoFilter"
+            table_xml = ElementTree.fromstring(contents["xl/tables/table1.xml"])
+            table_auto_filter = table_xml.find(table_auto_filter_tag)
+            if table_auto_filter is None:
+                raise ValueError("Could not find Named Sheet View table AutoFilter fixture")
+            table_auto_filter.set(
+                f"{{{_OFFICE_2014_REVISION_NS}}}uid",
+                "{00000000-0001-0000-0000-000000000000}",
+            )
+            contents["xl/tables/table1.xml"] = serialize(table_xml)
+        else:
+            worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+            sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+            auto_filter = ElementTree.Element(
+                f"{{{_SPREADSHEETML_NS}}}autoFilter",
+                {
+                    "ref": "A1:C5",
+                    f"{{{_OFFICE_2014_REVISION_NS}}}uid": (
+                        "{00000000-0001-0000-0000-000000000000}"
+                    ),
+                },
+            )
+            sheet_data_index = next(
+                index for index, child in enumerate(worksheet) if child.tag == sheet_data_tag
+            )
+            worksheet.insert(sheet_data_index + 1, auto_filter)
+            contents["xl/worksheets/sheet1.xml"] = serialize(worksheet)
+
+        relationship_member = "xl/worksheets/_rels/sheet1.xml.rels"
+        relationships = (
+            ElementTree.fromstring(contents[relationship_member])
+            if relationship_member in contents
+            else ElementTree.Element(f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships")
+        )
+        ElementTree.SubElement(
+            relationships,
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship",
+            {
+                "Id": "rIdFenceNamedSheetView",
+                "Type": named_view_relationship,
+                "Target": "../namedSheetViews/namedSheetView1.xml",
+            },
+        )
+        contents[relationship_member] = serialize(relationships)
+
+        named_views = ElementTree.Element(
+            f"{{{_NAMED_SHEET_VIEW_NS}}}namedSheetViews"
+        )
+        filter_id = (
+            "{00000000-0002-0000-0000-000000000000}"
+            if table_owned
+            else "{00000000-0001-0000-0000-000000000000}"
+        )
+        add_view(
+            named_views,
+            name="Private baseline review",
+            view_id="{33333333-3333-3333-3333-333333333333}",
+            filter_id=filter_id,
+            region="PRIVATE-NAMED-VIEW-REGION",
+            sort_ref="C2:C5",
+        )
+        add_view(
+            named_views,
+            name="Private alternate review",
+            view_id="{44444444-4444-4444-4444-444444444444}",
+            filter_id=filter_id,
+            region="PRIVATE-ALTERNATE-NAMED-VIEW-REGION",
+            sort_ref="C2:C5",
+        )
+        contents["xl/namedSheetViews/namedSheetView1.xml"] = serialize(named_views)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        ElementTree.SubElement(
+            types,
+            f"{{{content_types}}}Override",
+            {
+                "PartName": "/xl/namedSheetViews/namedSheetView1.xml",
+                "ContentType": "application/vnd.ms-excel.namedsheetviews+xml",
+            },
+        )
+        contents["[Content_Types].xml"] = serialize(types)
+
+    return _rewrite_archive(path, mutate, ".named-sheet-views.tmp.xlsx")
+
+
+def change_named_sheet_view_criterion(path: Path) -> Path:
+    """Change an alternate-view filter member without touching cells or formulas."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        named_views = ElementTree.fromstring(
+            contents["xl/namedSheetViews/namedSheetView1.xml"]
+        )
+        standard_filter_tag = f"{{{_SPREADSHEETML_NS}}}filter"
+        next(named_views.iter(standard_filter_tag)).set(
+            "val",
+            "CANDIDATE-PRIVATE-NAMED-VIEW-REGION",
+        )
+        contents["xl/namedSheetViews/namedSheetView1.xml"] = ElementTree.tostring(
+            named_views,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".named-sheet-view-criterion.tmp.xlsx")
+
+
+def normalize_named_sheet_view_control_spelling(path: Path) -> Path:
+    """Use equivalent GUID, reference, Boolean, and integer spellings."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        auto_filter_tag = f"{{{_SPREADSHEETML_NS}}}autoFilter"
+        auto_filter = worksheet.find(auto_filter_tag)
+        if auto_filter is None:
+            raise ValueError("Could not find Named Sheet View AutoFilter fixture")
+        replacement_filter_id = "{55555555-5555-5555-5555-555555555555}"
+        auto_filter.set("ref", "$a$1:$c$5")
+        auto_filter.set(
+            f"{{{_OFFICE_2014_REVISION_NS}}}uid",
+            replacement_filter_id,
+        )
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        named_views = ElementTree.fromstring(
+            contents["xl/namedSheetViews/namedSheetView1.xml"]
+        )
+        for view_index, view in enumerate(
+        named_views.findall(f"{{{_NAMED_SHEET_VIEW_NS}}}namedSheetView"),
+            start=6,
+        ):
+            view.set(
+                "id",
+                f"{{{str(view_index) * 8}-5555-5555-5555-555555555555}}",
+            )
+            named_filter = view.find(f"{{{_NAMED_SHEET_VIEW_NS}}}nsvFilter")
+            if named_filter is None:
+                raise ValueError("Could not find Named Sheet View filter fixture")
+            named_filter.set("filterId", replacement_filter_id)
+            named_filter.set("ref", "$A$1:$C$5")
+            named_filter.set("tableId", "00")
+            column_filter = named_filter.find(
+                f"{{{_NAMED_SHEET_VIEW_NS}}}columnFilter"
+            )
+            if column_filter is None:
+                raise ValueError("Could not find Named Sheet View column-filter fixture")
+            column_filter.set("colId", "01")
+            inner_filter = column_filter.find(f"{{{_NAMED_SHEET_VIEW_NS}}}filter")
+            if inner_filter is None:
+                raise ValueError("Could not find Named Sheet View inner-filter fixture")
+            inner_filter.set("colId", "01")
+            filters = inner_filter.find(f"{{{_SPREADSHEETML_NS}}}filters")
+            if filters is None:
+                raise ValueError("Could not find Named Sheet View filters fixture")
+            filters.set("blank", "0")
+            sort_rules = named_filter.find(f"{{{_NAMED_SHEET_VIEW_NS}}}sortRules")
+            if sort_rules is None:
+                raise ValueError("Could not find Named Sheet View sort-rules fixture")
+            sort_rules.set("caseSensitive", "0")
+            sort_rule = sort_rules.find(f"{{{_NAMED_SHEET_VIEW_NS}}}sortRule")
+            if sort_rule is None:
+                raise ValueError("Could not find Named Sheet View sort-rule fixture")
+            sort_rule.set("colId", "02")
+            condition = sort_rule.find(f"{{{_NAMED_SHEET_VIEW_NS}}}sortCondition")
+            if condition is None:
+                raise ValueError("Could not find Named Sheet View sort-condition fixture")
+            condition.set("ref", "$c$2:$c$5")
+            condition.set("descending", "0")
+        contents["xl/namedSheetViews/namedSheetView1.xml"] = ElementTree.tostring(
+            named_views,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".named-sheet-view-noise.tmp.xlsx")
+
+
+def corrupt_named_sheet_view_control(path: Path) -> Path:
+    """Inject an invalid alternate-view column ID to exercise fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        named_views = ElementTree.fromstring(
+            contents["xl/namedSheetViews/namedSheetView1.xml"]
+        )
+        column_filter = next(
+            named_views.iter(f"{{{_NAMED_SHEET_VIEW_NS}}}columnFilter")
+        )
+        column_filter.set("colId", "4294967296")
+        contents["xl/namedSheetViews/namedSheetView1.xml"] = ElementTree.tostring(
+            named_views,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".named-sheet-view-corrupt.tmp.xlsx")
 
 
 def make_ignored_error_model(path: Path) -> Path:

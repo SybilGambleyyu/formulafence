@@ -23,6 +23,7 @@ rules:
   no_scenario_manager_changes: true
   no_filter_visibility_changes: true
   no_ignored_error_changes: true
+  no_named_sheet_view_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -87,6 +88,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_scenario_manager_changes` | boolean | An Excel Scenario Manager worksheet changes its selected/shown scenario state, result-summary references, scenario definition, protection flags, comments/users, stored input values/references, deleted/undone state, or input display number formats. Scenario names, comments, users, values, and references are compared privately. |
 | `no_filter_visibility_changes` | boolean | A worksheet/Table AutoFilter, stored filter criterion, filter sort state, explicitly hidden/outlined/collapsed row, or hidden-by-default sheet setting changes. Criteria, selected values, sort keys/lists, table names, and references are compared privately. |
 | `no_ignored_error_changes` | boolean | A standard or Office 2010 extension ignored-error declaration changes a per-range suppression of Excel evaluation, formula-consistency, range-omission, unlocked-formula, empty-reference, list-validation, calculated-column, text-number, or two-digit-year warnings. Targets and exact suppressions are compared privately. |
+| `no_named_sheet_view_changes` | boolean | A relationship-backed Excel Named Sheet View, alternate AutoFilter criterion, sort rule, or reconciled base-filter binding changes. View names, IDs, criteria, ranges, table bindings, and sort keys are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -441,6 +443,26 @@ attributes, flags, targets, or child markup are explicit coverage warnings.
 FormulaFence does not decide whether Excel would display a warning, calculate a
 formula, repair an error, change application-level error checking, or infer
 downstream impact.
+
+Modern Excel Named Sheet Views can retain alternate filter and sort settings in
+separate relationship-backed worksheet parts, leaving ordinary cells and the
+active AutoFilter unchanged. FormulaFence follows the documented Named Sheet
+View relationship, compares each saved-view declaration privately, and resolves
+its filter target by AutoFilter UID, table ID, then worksheet-owned AutoFilter.
+A material change emits `FF038`; enable `no_named_sheet_view_changes` to make
+it `FFP038` in CI.
+
+Profiles and `FF038` details expose only structural counts: worksheets, parts,
+views, alternate filters, column filters, criterion groups, sort rules,
+conditions, and unrecognized controls. View names, IDs, criteria, target
+ranges, table bindings, table-column IDs, and sort keys remain private.
+Equivalent GUID, local A1 case/absolute-reference, Boolean/default, and
+unsigned-integer spellings are normalized. Missing, ambiguous, mismatched,
+malformed, unsupported, oversized, or unsafe parts/bindings are explicit
+coverage warnings. FormulaFence does not activate/render a saved view,
+calculate its filtered result, infer formula visibility sensitivity, repair
+metadata, or interpret full differential-format, future extension, or rich-sort
+semantics.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

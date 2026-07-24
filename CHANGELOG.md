@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.34.0 — 2026-07-25
+
+- Inspect modern Excel Named Sheet Views from the documented relationship-backed
+  worksheet parts, retaining view names, IDs, alternate filter criteria, target
+  ranges, table bindings, table-column IDs, and sort keys only in private
+  signatures—not profiles, `FF038`, or SARIF.
+- Reconcile each stored filter to its base AutoFilter using Excel's documented
+  UID, table-ID, then worksheet-owned fallback sequence. Normalize equivalent
+  GUID, local A1 case/absolute-reference, Boolean/default, and unsigned-integer
+  spellings while making a resolved target rebinding material to the diff.
+- Emit `FF038` for a Named Sheet View definition, alternate filter/sort rule, or
+  binding change; add the fail-closed `no_named_sheet_view_changes` policy rule
+  (`FFP038`).
+- Make missing, ambiguous, mismatched, malformed, unsupported, oversized, and
+  unsafe relationship parts or filter bindings visible parser-coverage warnings
+  rather than silently dropping them. FormulaFence does not activate/render a
+  saved view, calculate a filtered result, infer formula visibility sensitivity,
+  repair metadata, or interpret full differential-format, future extension, or
+  rich-sort semantics.
+
 ## 0.33.0 — 2026-07-25
 
 - Inspect standard worksheet `ignoredErrors` declarations and Office 2010

@@ -23,6 +23,7 @@ from formulafence.models import (
     FilterVisibilitySnapshot,
     Finding,
     IgnoredErrorSnapshot,
+    NamedSheetViewSnapshot,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
@@ -1402,6 +1403,32 @@ def _workbook_control_changes(
                 "high",
                 "Excel ignored-error controls changed; review warnings may be suppressed "
                 "or restored.",
+                details=details,
+            )
+        )
+    if before.named_sheet_views != after.named_sheet_views:
+        old_views: NamedSheetViewSnapshot = before.named_sheet_views
+        new_views: NamedSheetViewSnapshot = after.named_sheet_views
+        details: dict[str, object] = {
+            "before": old_views.to_dict(),
+            "after": new_views.to_dict(),
+        }
+        if old_views.definition_signature != new_views.definition_signature:
+            details["named_sheet_view_definition_material_changed"] = True
+        changes.append(
+            Change(
+                "named_sheet_views_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF038",
+                "high",
+                "Excel Named Sheet View controls changed; alternate filter or sort views "
+                "may show a different report.",
                 details=details,
             )
         )

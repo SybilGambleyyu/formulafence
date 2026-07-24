@@ -1552,6 +1552,55 @@ class IgnoredErrorSnapshot:
 
 
 @dataclass(frozen=True)
+class NamedSheetViewSnapshot:
+    """Safe aggregate of modern Excel Named Sheet View declarations.
+
+    A Named Sheet View can preserve alternate AutoFilter criteria and sort
+    rules outside ordinary worksheet cells. View names, IDs, criteria, target
+    ranges, table bindings, and sort keys remain inside the private signature;
+    the public profile exposes structural counts only.
+    """
+
+    worksheet_count: int = 0
+    part_count: int = 0
+    named_sheet_view_count: int = 0
+    named_filter_count: int = 0
+    column_filter_count: int = 0
+    filter_criterion_count: int = 0
+    sort_rule_count: int = 0
+    sort_condition_count: int = 0
+    unrecognized_named_sheet_view_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.part_count
+            or self.named_sheet_view_count
+            or self.named_filter_count
+            or self.unrecognized_named_sheet_view_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural Named Sheet View evidence without private settings."""
+        return {
+            "present": self.present,
+            "worksheet_count": self.worksheet_count,
+            "part_count": self.part_count,
+            "named_sheet_view_count": self.named_sheet_view_count,
+            "named_filter_count": self.named_filter_count,
+            "column_filter_count": self.column_filter_count,
+            "filter_criterion_count": self.filter_criterion_count,
+            "sort_rule_count": self.sort_rule_count,
+            "sort_condition_count": self.sort_condition_count,
+            "unrecognized_named_sheet_view_count": self.unrecognized_named_sheet_view_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -1950,6 +1999,9 @@ class WorkbookSnapshot:
     ignored_error_controls: IgnoredErrorSnapshot = field(
         default_factory=IgnoredErrorSnapshot
     )
+    named_sheet_views: NamedSheetViewSnapshot = field(
+        default_factory=NamedSheetViewSnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -2011,6 +2063,9 @@ class WorkbookSnapshot:
             "ignored_error_rule_count": self.ignored_error_controls.ignored_error_rule_count,
             "ignored_error_target_range_count": self.ignored_error_controls.target_range_count,
             "has_ignored_error_controls": self.ignored_error_controls.present,
+            "named_sheet_view_count": self.named_sheet_views.named_sheet_view_count,
+            "named_sheet_view_filter_count": self.named_sheet_views.named_filter_count,
+            "has_named_sheet_views": self.named_sheet_views.present,
             "defined_names": len(self.defined_names),
             "table_count": len(self.tables),
             "data_validation_rules": len(self.data_validations),

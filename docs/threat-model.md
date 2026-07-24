@@ -152,6 +152,22 @@ review prompt, not proof of an error.
   FormulaFence does not decide whether Excel would display a warning, calculate
   a formula, repair an error, alter application-level error checking, or infer
   a suppressed warning's downstream impact.
+- Modern Excel Named Sheet Views retain alternate filter and sort settings in
+  relationship-backed worksheet parts, potentially changing a saved report view
+  without changing ordinary cells or the active AutoFilter. FormulaFence follows
+  those parts, privately compares view definitions, and resolves each filter by
+  AutoFilter UID, table ID, then worksheet-owned AutoFilter. It emits `FF038`;
+  `no_named_sheet_view_changes` can block the change as `FFP038`. Profiles and
+  `FF038` details expose only counts for parts, views, alternate filters,
+  columns, criterion groups, sort rules/conditions, and unrecognized controls;
+  names, IDs, criteria, ranges, table bindings, table-column IDs, and sort keys
+  remain private. Equivalent GUID, local A1 case/absolute-reference,
+  Boolean/default, and unsigned-integer spellings are normalized. Missing,
+  ambiguous, mismatched, malformed, unsupported, oversized, or unsafe
+  parts/bindings remain visible coverage warnings. FormulaFence does not
+  activate/render a saved view, calculate a filtered result, infer formula
+  visibility sensitivity, repair metadata, or interpret future extension/rich-
+  sort or full differential-format semantics.
 - Worksheet data-validation controls are inventoried and diffed as compact
   ranges rather than by expanding their target cells. FormulaFence compares the
   validation type, operator, two criteria expressions, blank/dropdown behavior,
@@ -386,7 +402,8 @@ review prompt, not proof of an error.
   record chains, Slicer and Timeline cache filter-definition chains, embedded
   Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and
   Scenario Manager declarations, worksheet/Table AutoFilter and row-visibility
-  controls, ignored-error warning suppressions, DrawingML chart
+  controls, ignored-error warning suppressions, relationship-backed Named Sheet
+  View controls, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link
@@ -394,7 +411,8 @@ review prompt, not proof of an error.
   interpret PivotTable OLAP or other extension-list semantics; deserialize or execute
   Power Pivot/Data Model content; apply Slicer/Timeline filters or model their
   worksheet/drawing view geometry/styles; modern
-  `chartEx` or nested-chart semantics; general drawing layout/objects or
+  `chartEx` or nested-chart semantics; future Named Sheet View extension/rich-
+  sort or full differential-format semantics; general drawing layout/objects or
   chart-to-cell impact; Ribbon image payloads; VML/drawing control layout or
   comment content; embedded OLE/package formats; worksheet-scoped Web Add-in
   markup; Power Query runtime behavior or returned data; ordinary styles beyond

@@ -1285,6 +1285,41 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Target ranges and individual warning suppressions are compared privately and "
             "intentionally omitted."
         )
+    named_sheet_views = profile["named_sheet_views"]
+    if named_sheet_views["present"]:
+        lines.extend(
+            [
+                "",
+                "## Excel Named Sheet Views",
+                "",
+                (
+                    "- **Worksheets / relationship-backed parts / named views:** "
+                    f"{named_sheet_views['worksheet_count']} / "
+                    f"{named_sheet_views['part_count']} / "
+                    f"{named_sheet_views['named_sheet_view_count']}"
+                ),
+                (
+                    "- **Alternate filters / column filters / criterion groups:** "
+                    f"{named_sheet_views['named_filter_count']} / "
+                    f"{named_sheet_views['column_filter_count']} / "
+                    f"{named_sheet_views['filter_criterion_count']}"
+                ),
+                (
+                    "- **Sort rules / conditions:** "
+                    f"{named_sheet_views['sort_rule_count']} / "
+                    f"{named_sheet_views['sort_condition_count']}"
+                ),
+            ]
+        )
+        if named_sheet_views["unrecognized_named_sheet_view_count"]:
+            lines.append(
+                "- **Unrecognized or malformed Named Sheet View controls:** "
+                f"{named_sheet_views['unrecognized_named_sheet_view_count']}"
+            )
+        lines.append(
+            "View names, IDs, criteria, target ranges, table bindings, and sort keys are "
+            "compared privately and intentionally omitted."
+        )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:
         lines.extend(

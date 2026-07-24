@@ -53,6 +53,7 @@ from formulafence.models import (
     ExternalLinkPackageSnapshot,
     FilterVisibilitySnapshot,
     IgnoredErrorSnapshot,
+    NamedSheetViewSnapshot,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
@@ -104,14 +105,20 @@ _DOCUMENT_RELATIONSHIP_NS = (
 _DYNAMIC_ARRAY_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"
 _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
 _OFFICE_2013_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"
+_OFFICE_2014_REVISION_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+_OFFICE_2015_REVISION2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2015/revision2"
 _EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
+_NAMED_SHEET_VIEW_NS = "http://schemas.microsoft.com/office/spreadsheetml/2019/namedsheetviews"
 _DATA_MASHUP_NS = "http://schemas.microsoft.com/DataMashup"
 _MARKUP_COMPATIBILITY_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 _XML_NAMESPACE_PREFIXES = {
     _SPREADSHEETML_NS: "",
     _OFFICE_2010_SPREADSHEET_NS: "x14:",
     _OFFICE_2013_SPREADSHEET_NS: "x15:",
+    _OFFICE_2014_REVISION_NS: "xr:",
+    _OFFICE_2015_REVISION2_NS: "xr2:",
     _EXCEL_2006_MAIN_NS: "xm:",
+    _NAMED_SHEET_VIEW_NS: "nsv:",
 }
 _GUID_PATTERN = re.compile(
     r"\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -475,6 +482,26 @@ class _IgnoredErrorMetadata:
 
     controls: IgnoredErrorSnapshot
     warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _NamedSheetViewMetadata:
+    """Raw modern Named Sheet View evidence retained before reader loss."""
+
+    views: NamedSheetViewSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _NamedSheetViewAutoFilterBinding:
+    """One private AutoFilter target available to a Named Sheet View."""
+
+    owner: str
+    reference_signature: str
+    reference_bounds: tuple[int, int, int, int] | None
+    table_id: int | None = None
+    uid: str | None = None
+    table_column_uids: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass
@@ -1299,6 +1326,15 @@ _POWER_QUERY_VOLATILE_METADATA_TYPES = frozenset(
 )
 _POWER_QUERY_FORMULA_MEMBER = "Formulas/Section1.m"
 _POWER_QUERY_MAX_FORMULA_BYTES = 16 * 1024 * 1024
+_NAMED_SHEET_VIEW_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2019/04/relationships/namedSheetView"
+)
+_NAMED_SHEET_VIEW_MAX_PART_BYTES = 16 * 1024 * 1024
+_NAMED_SHEET_VIEW_TOTAL_MAX_BYTES = 64 * 1024 * 1024
+_NAMED_SHEET_VIEW_TOTAL_MAX_COUNT = 512
+_FILTER_VISIBILITY_AUTO_FILTER_UID_NAMESPACES = frozenset(
+    {_OFFICE_2014_REVISION_NS, _OFFICE_2015_REVISION2_NS}
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -13460,6 +13496,8 @@ def _filter_visibility_attributes(
     required: frozenset[str] = frozenset(),
     unsigned_int_maximums: Mapping[str, int] = {},
     string_defaults: Mapping[str, str] = {},
+    guid_attributes: frozenset[str] = frozenset(),
+    ignored_namespaced_attributes: frozenset[tuple[str, str]] = frozenset(),
 ) -> tuple[tuple[str, str], ...]:
     """Canonicalize known control attributes and fail closed for unfamiliar ones."""
     values: dict[str, str] = {
@@ -13468,7 +13506,10 @@ def _filter_visibility_attributes(
     values.update(string_defaults)
     for attribute, value in element.attrib.items():
         local_name = _xml_local_name(attribute)
-        if _xml_namespace(attribute) is not None or local_name not in known:
+        namespace = _xml_namespace(attribute)
+        if (namespace, local_name) in ignored_namespaced_attributes:
+            continue
+        if namespace is not None or local_name not in known:
             issues.add("unknown-attribute")
             values[f"unknown:{_xml_display_name(attribute)}"] = value
             continue
@@ -13496,6 +13537,13 @@ def _filter_visibility_attributes(
             if bounds is None:
                 issues.add(f"invalid-{local_name}")
             values[local_name] = signature
+        elif local_name in guid_attributes:
+            candidate = value.strip()
+            if _GUID_PATTERN.fullmatch(candidate):
+                values[local_name] = "{GUID}"
+            else:
+                issues.add(f"invalid-{local_name}")
+                values[local_name] = f"invalid:{value}"
         else:
             values[local_name] = value
     for name in required:
@@ -13774,11 +13822,35 @@ def _filter_visibility_sort_state_signature(
     )
 
 
+def _filter_visibility_auto_filter_uid(
+    element: ElementTree.Element,
+    issues: set[str],
+) -> str | None:
+    """Read an optional revision-2 AutoFilter UID without treating GUID churn as semantic."""
+    values = [
+        value
+        for attribute, value in element.attrib.items()
+        if _xml_namespace(attribute) in _FILTER_VISIBILITY_AUTO_FILTER_UID_NAMESPACES
+        and _xml_local_name(attribute) == "uid"
+    ]
+    if not values:
+        return None
+    if len(values) != 1:  # pragma: no cover - ElementTree de-duplicates exact attributes
+        issues.add("multiple-auto-filter-uids")
+        return None
+    candidate = values[0].strip()
+    if not _GUID_PATTERN.fullmatch(candidate):
+        issues.add("invalid-auto-filter-uid")
+        return None
+    return candidate.casefold()
+
+
 def _filter_visibility_auto_filter_signature(
     element: ElementTree.Element,
     issues: set[str],
 ) -> tuple[tuple[object, ...], int, int, int, int]:
     """Canonicalize one AutoFilter declaration and its private filter material."""
+    _filter_visibility_auto_filter_uid(element, issues)
     bounds, _ = _filter_visibility_reference(element.get("ref"))
     if bounds is None:
         issues.add("invalid-auto-filter-reference")
@@ -13829,6 +13901,12 @@ def _filter_visibility_auto_filter_signature(
                 issues=issues,
                 references=frozenset({"ref"}),
                 required=frozenset({"ref"}),
+                ignored_namespaced_attributes=frozenset(
+                    {
+                        (namespace, "uid")
+                        for namespace in _FILTER_VISIBILITY_AUTO_FILTER_UID_NAMESPACES
+                    }
+                ),
             ),
             tuple(sorted(filter_columns, key=repr)),
             tuple(sort_states),
@@ -14210,6 +14288,820 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
         definition_signature=_private_external_data_signature(tuple(sorted(entries))),
     )
     return _FilterVisibilityMetadata(snapshot, tuple(sorted(warnings)))
+
+
+def _named_sheet_view_guid(value: str | None) -> str | None:
+    """Return one valid GUID in a stable private form, if present."""
+    if value is None:
+        return None
+    candidate = value.strip()
+    return candidate.casefold() if _GUID_PATTERN.fullmatch(candidate) else None
+
+
+def _named_sheet_view_auto_filter_binding(
+    element: ElementTree.Element,
+    *,
+    owner: str,
+    table_id: int | None,
+    fallback_reference: str | None = None,
+    table_column_uids: tuple[tuple[str, int], ...] = (),
+    issues: set[str],
+) -> _NamedSheetViewAutoFilterBinding:
+    """Capture one base AutoFilter used by a Named Sheet View reconciliation."""
+    raw_reference = element.get("ref") or fallback_reference
+    reference_bounds, reference_signature = _filter_visibility_reference(raw_reference)
+    if reference_bounds is None:
+        issues.add("invalid-named-sheet-view-base-filter-reference")
+    uid_values = [
+        value
+        for attribute, value in element.attrib.items()
+        if _xml_namespace(attribute) in _FILTER_VISIBILITY_AUTO_FILTER_UID_NAMESPACES
+        and _xml_local_name(attribute) == "uid"
+    ]
+    if len(uid_values) > 1:
+        issues.add("multiple-named-sheet-view-base-filter-uids")
+    uid = _named_sheet_view_guid(uid_values[0]) if uid_values else None
+    if any(_named_sheet_view_guid(value) is None for value in uid_values):
+        issues.add("invalid-named-sheet-view-base-filter-uid")
+    return _NamedSheetViewAutoFilterBinding(
+        owner=owner,
+        reference_signature=reference_signature,
+        reference_bounds=reference_bounds,
+        table_id=table_id,
+        uid=uid,
+        table_column_uids=table_column_uids,
+    )
+
+
+def _named_sheet_view_table_column_uids(
+    table: ElementTree.Element,
+    issues: set[str],
+) -> tuple[tuple[str, int], ...]:
+    """Read private table-column UIDs for the documented reconciliation path."""
+    table_columns_tag = f"{{{_SPREADSHEETML_NS}}}tableColumns"
+    table_column_tag = f"{{{_SPREADSHEETML_NS}}}tableColumn"
+    table_columns = table.find(table_columns_tag)
+    if table_columns is None:
+        return ()
+    captured: list[tuple[str, int]] = []
+    for index, table_column in enumerate(table_columns.findall(table_column_tag)):
+        values = [
+            value
+            for attribute, value in table_column.attrib.items()
+            if _xml_namespace(attribute) in _FILTER_VISIBILITY_AUTO_FILTER_UID_NAMESPACES
+            and _xml_local_name(attribute) == "uid"
+        ]
+        if len(values) > 1:
+            issues.add("multiple-named-sheet-view-table-column-uids")
+            continue
+        uid = _named_sheet_view_guid(values[0]) if values else None
+        if values and uid is None:
+            issues.add("invalid-named-sheet-view-table-column-uid")
+        if uid is not None:
+            captured.append((uid, index))
+    if len({uid for uid, _ in captured}) != len(captured):
+        issues.add("duplicate-named-sheet-view-table-column-uid")
+    return tuple(sorted(captured))
+
+
+def _named_sheet_view_base_filter_bindings(
+    archive: ZipFile,
+    *,
+    worksheet_member: str,
+    relationships: tuple[_PackageRelationship, ...],
+) -> tuple[tuple[_NamedSheetViewAutoFilterBinding, ...], tuple[str, ...]]:
+    """Collect the worksheet and table AutoFilters that a view can target.
+
+    Modern Excel resolves a Named Sheet View filter by its AutoFilter UID, then
+    by a table ID, then by a worksheet-owned AutoFilter. This inventory allows
+    FormulaFence to compare the resolved target rather than treating GUID
+    churn as a material change.
+    """
+    issues: set[str] = set()
+    bindings: list[_NamedSheetViewAutoFilterBinding] = []
+    auto_filter_tag = f"{{{_SPREADSHEETML_NS}}}autoFilter"
+    table_tag = f"{{{_SPREADSHEETML_NS}}}table"
+    try:
+        worksheet = _xml_root(archive, worksheet_member)
+    except (
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ):
+        return (), ("unreadable-named-sheet-view-worksheet",)
+
+    worksheet_filters = worksheet.findall(auto_filter_tag)
+    if len(worksheet_filters) > 1:
+        issues.add("multiple-named-sheet-view-worksheet-auto-filters")
+    for auto_filter in worksheet_filters:
+        bindings.append(
+            _named_sheet_view_auto_filter_binding(
+                auto_filter,
+                owner="worksheet",
+                table_id=None,
+                issues=issues,
+            )
+        )
+
+    table_relationships = [
+        relationship
+        for relationship in relationships
+        if relationship.relationship_type.rsplit("/", maxsplit=1)[-1] == "table"
+    ]
+    table_part_bytes = 0
+    for relationship_index, relationship in enumerate(table_relationships):
+        if relationship_index >= _NAMED_SHEET_VIEW_TOTAL_MAX_COUNT:
+            issues.add("named-sheet-view-table-part-count-limit")
+            break
+        if relationship.target is None:
+            issues.add("unsafe-named-sheet-view-table-relationship")
+            continue
+        try:
+            table_part_size = archive.getinfo(relationship.target).file_size
+        except KeyError:
+            issues.add("missing-named-sheet-view-table")
+            continue
+        if table_part_size > _NAMED_SHEET_VIEW_MAX_PART_BYTES:
+            issues.add("oversized-named-sheet-view-table")
+            continue
+        if table_part_bytes + table_part_size > _NAMED_SHEET_VIEW_TOTAL_MAX_BYTES:
+            issues.add("named-sheet-view-table-size-limit")
+            continue
+        table_part_bytes += table_part_size
+        try:
+            table = _xml_root(archive, relationship.target)
+        except (
+            ElementTree.ParseError,
+            KeyError,
+            OSError,
+            RuntimeError,
+            ValueError,
+        ):
+            issues.add("unreadable-named-sheet-view-table")
+            continue
+        if _xml_namespace(table.tag) != _SPREADSHEETML_NS or table.tag != table_tag:
+            issues.add("unexpected-named-sheet-view-table-root")
+            continue
+        table_id, _ = _filter_visibility_unsigned_int(table.get("id"))
+        if table_id is None or table_id == 0:
+            issues.add("invalid-named-sheet-view-table-id")
+            continue
+        table_reference = table.get("ref")
+        table_column_uids = _named_sheet_view_table_column_uids(table, issues)
+        table_filters = table.findall(auto_filter_tag)
+        if len(table_filters) > 1:
+            issues.add("multiple-named-sheet-view-table-auto-filters")
+        for auto_filter in table_filters:
+            bindings.append(
+                _named_sheet_view_auto_filter_binding(
+                    auto_filter,
+                    owner="table",
+                    table_id=table_id,
+                    fallback_reference=table_reference,
+                    table_column_uids=table_column_uids,
+                    issues=issues,
+                )
+            )
+
+    uids = [binding.uid for binding in bindings if binding.uid is not None]
+    if len(uids) != len(set(uids)):
+        issues.add("duplicate-named-sheet-view-auto-filter-uid")
+    table_ids = [binding.table_id for binding in bindings if binding.table_id is not None]
+    if len(table_ids) != len(set(table_ids)):
+        issues.add("duplicate-named-sheet-view-table-id")
+    return tuple(bindings), tuple(sorted(issues))
+
+
+def _named_sheet_view_resolve_filter_binding(
+    element: ElementTree.Element,
+    *,
+    bindings: tuple[_NamedSheetViewAutoFilterBinding, ...],
+    issues: set[str],
+) -> _NamedSheetViewAutoFilterBinding | None:
+    """Resolve an nsvFilter using Excel's documented priority sequence."""
+    filter_id = _named_sheet_view_guid(element.get("filterId"))
+    if filter_id is not None:
+        matches = [binding for binding in bindings if binding.uid == filter_id]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            issues.add("ambiguous-named-sheet-view-filter-uid")
+            return None
+
+    table_id, _ = _filter_visibility_unsigned_int(element.get("tableId"))
+    if table_id is None:
+        issues.add("unmatched-named-sheet-view-filter")
+        return None
+    if table_id:
+        matches = [binding for binding in bindings if binding.table_id == table_id]
+    else:
+        matches = [binding for binding in bindings if binding.owner == "worksheet"]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        issues.add("ambiguous-named-sheet-view-filter-target")
+    else:
+        issues.add("unmatched-named-sheet-view-filter")
+    return None
+
+
+def _named_sheet_view_binding_signature(
+    binding: _NamedSheetViewAutoFilterBinding | None,
+) -> tuple[str, ...]:
+    """Keep a resolved target private while making rebinding material to a diff."""
+    if binding is None:
+        return ("unmatched",)
+    return (
+        "bound",
+        binding.owner,
+        binding.reference_signature,
+        "none" if binding.table_id is None else str(binding.table_id),
+    )
+
+
+def _named_sheet_view_validate_column_binding(
+    element: ElementTree.Element,
+    *,
+    binding: _NamedSheetViewAutoFilterBinding | None,
+    issues: set[str],
+) -> None:
+    """Verify a view's column target can reconcile to its base AutoFilter."""
+    if binding is None:
+        return
+    column_id, _ = _filter_visibility_unsigned_int(element.get("colId"))
+    column_uid = _named_sheet_view_guid(element.get("id"))
+    if binding.owner == "table" and column_uid is not None:
+        if any(uid == column_uid for uid, _ in binding.table_column_uids):
+            return
+    if column_id is None or binding.reference_bounds is None:
+        issues.add("unmatched-named-sheet-view-column")
+        return
+    minimum_column, _, maximum_column, _ = binding.reference_bounds
+    if column_id >= maximum_column - minimum_column + 1:
+        issues.add("named-sheet-view-column-out-of-range")
+
+
+def _named_sheet_view_column_filter_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+    *,
+    binding: _NamedSheetViewAutoFilterBinding | None,
+) -> tuple[tuple[object, ...], int]:
+    """Canonicalize one Named Sheet View column filter without exposing criteria."""
+    filters: list[tuple[object, ...]] = []
+    extensions: list[tuple[object, ...]] = []
+    criterion_count = 0
+    outer_column_id, _ = _filter_visibility_unsigned_int(element.get("colId"))
+    _named_sheet_view_validate_column_binding(
+        element,
+        binding=binding,
+        issues=issues,
+    )
+    for child in element:
+        if (
+            _xml_namespace(child.tag) in {_SPREADSHEETML_NS, _NAMED_SHEET_VIEW_NS}
+            and _xml_local_name(child.tag) == "filter"
+        ):
+            signature, inner_column_id, count = _filter_visibility_filter_column_signature(
+                child,
+                issues,
+            )
+            if (
+                outer_column_id is not None
+                and inner_column_id is not None
+                and outer_column_id != inner_column_id
+            ):
+                issues.add("mismatched-named-sheet-view-column-filter-id")
+            filters.append(signature)
+            criterion_count += count
+        else:
+            issues.add("unsupported-named-sheet-view-column-filter-child")
+            extensions.append(_filter_visibility_unknown_child_signature(child))
+    return (
+        (
+            "columnFilter",
+            _filter_visibility_attributes(
+                element,
+                known=frozenset({"colId", "id"}),
+                issues=issues,
+                unsigned_ints=frozenset({"colId"}),
+                required=frozenset({"colId"}),
+                guid_attributes=frozenset({"id"}),
+            ),
+            tuple(sorted(filters, key=repr)),
+            tuple(sorted(extensions, key=repr)),
+        ),
+        criterion_count,
+    )
+
+
+def _named_sheet_view_sort_rule_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+    *,
+    binding: _NamedSheetViewAutoFilterBinding | None,
+) -> tuple[tuple[object, ...], int]:
+    """Canonicalize one Named Sheet View sort rule without exposing its range."""
+    conditions: list[tuple[object, ...]] = []
+    extensions: list[tuple[object, ...]] = []
+    _named_sheet_view_validate_column_binding(
+        element,
+        binding=binding,
+        issues=issues,
+    )
+    for child in element:
+        namespace = _xml_namespace(child.tag)
+        local_name = _xml_local_name(child.tag)
+        if namespace in {_NAMED_SHEET_VIEW_NS, _OFFICE_2010_SPREADSHEET_NS} and local_name == (
+            "sortCondition"
+        ):
+            conditions.append(
+                _filter_visibility_leaf_signature(
+                    child,
+                    known_attributes=frozenset(
+                        {
+                            "descending",
+                            "sortBy",
+                            "ref",
+                            "customList",
+                            "dxfId",
+                            "iconSet",
+                            "iconId",
+                        }
+                    ),
+                    issues=issues,
+                    boolean_defaults={"descending": False},
+                    unsigned_ints=frozenset({"dxfId", "iconId"}),
+                    references=frozenset({"ref"}),
+                    required=frozenset({"ref"}),
+                    string_defaults={"sortBy": "value", "iconSet": "3Arrows"},
+                )
+            )
+        else:
+            issues.add("unsupported-named-sheet-view-sort-rule-child")
+            extensions.append(_filter_visibility_unknown_child_signature(child))
+    if len(conditions) > 1:
+        issues.add("multiple-named-sheet-view-sort-conditions")
+    return (
+        (
+            "sortRule",
+            _filter_visibility_attributes(
+                element,
+                known=frozenset({"colId", "id"}),
+                issues=issues,
+                unsigned_ints=frozenset({"colId"}),
+                required=frozenset({"colId"}),
+                guid_attributes=frozenset({"id"}),
+            ),
+            tuple(conditions),
+            tuple(sorted(extensions, key=repr)),
+        ),
+        len(conditions),
+    )
+
+
+def _named_sheet_view_sort_rules_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+    *,
+    binding: _NamedSheetViewAutoFilterBinding | None,
+) -> tuple[tuple[object, ...], int, int]:
+    """Canonicalize one Named Sheet View sort-rule container."""
+    rules: list[tuple[object, ...]] = []
+    extensions: list[tuple[object, ...]] = []
+    condition_count = 0
+    for child in element:
+        if (
+            _xml_namespace(child.tag) == _NAMED_SHEET_VIEW_NS
+            and _xml_local_name(child.tag) == "sortRule"
+        ):
+            signature, count = _named_sheet_view_sort_rule_signature(
+                child,
+                issues,
+                binding=binding,
+            )
+            rules.append(signature)
+            condition_count += count
+        else:
+            issues.add("unsupported-named-sheet-view-sort-rules-child")
+            extensions.append(_filter_visibility_unknown_child_signature(child))
+    if len(rules) > 64:
+        issues.add("too-many-named-sheet-view-sort-rules")
+    return (
+        (
+            "sortRules",
+            _filter_visibility_attributes(
+                element,
+                known=frozenset({"sortMethod", "caseSensitive"}),
+                issues=issues,
+                boolean_defaults={"caseSensitive": False},
+                string_defaults={"sortMethod": "none"},
+            ),
+            tuple(rules),
+            tuple(sorted(extensions, key=repr)),
+        ),
+        len(rules),
+        condition_count,
+    )
+
+
+def _named_sheet_view_filter_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+    *,
+    bindings: tuple[_NamedSheetViewAutoFilterBinding, ...],
+) -> tuple[tuple[object, ...], int, int, int, int]:
+    """Canonicalize one alternate Named Sheet View filter and sort declaration."""
+    column_filters: list[tuple[object, ...]] = []
+    sort_rules: list[tuple[object, ...]] = []
+    extensions: list[tuple[object, ...]] = []
+    criterion_count = 0
+    sort_rule_count = 0
+    sort_condition_count = 0
+    binding = _named_sheet_view_resolve_filter_binding(
+        element,
+        bindings=bindings,
+        issues=issues,
+    )
+    for child in element:
+        if (
+            _xml_namespace(child.tag) == _NAMED_SHEET_VIEW_NS
+            and _xml_local_name(child.tag) == "columnFilter"
+        ):
+            signature, count = _named_sheet_view_column_filter_signature(
+                child,
+                issues,
+                binding=binding,
+            )
+            column_filters.append(signature)
+            criterion_count += count
+        elif (
+            _xml_namespace(child.tag) == _NAMED_SHEET_VIEW_NS
+            and _xml_local_name(child.tag) == "sortRules"
+        ):
+            signature, rules, conditions = _named_sheet_view_sort_rules_signature(
+                child,
+                issues,
+                binding=binding,
+            )
+            sort_rules.append(signature)
+            sort_rule_count += rules
+            sort_condition_count += conditions
+        else:
+            issues.add("unsupported-named-sheet-view-filter-child")
+            extensions.append(_filter_visibility_unknown_child_signature(child))
+    if len(sort_rules) > 1:
+        issues.add("multiple-named-sheet-view-sort-rule-containers")
+    return (
+        (
+            "nsvFilter",
+            _named_sheet_view_binding_signature(binding),
+            _filter_visibility_attributes(
+                element,
+                known=frozenset({"filterId", "ref", "tableId"}),
+                issues=issues,
+                unsigned_ints=frozenset({"tableId"}),
+                references=frozenset({"ref"}),
+                required=frozenset({"filterId"}),
+                string_defaults={"ref": "none", "tableId": "none"},
+                guid_attributes=frozenset({"filterId"}),
+            ),
+            tuple(sorted(column_filters, key=repr)),
+            tuple(sort_rules),
+            tuple(sorted(extensions, key=repr)),
+        ),
+        len(column_filters),
+        criterion_count,
+        sort_rule_count,
+        sort_condition_count,
+    )
+
+
+def _named_sheet_view_part_signature(
+    root: ElementTree.Element,
+    issues: set[str],
+    *,
+    bindings: tuple[_NamedSheetViewAutoFilterBinding, ...],
+) -> tuple[tuple[object, ...], int, int, int, int, int, int]:
+    """Canonicalize one Named Sheet Views part while retaining settings privately."""
+    named_views: list[tuple[object, ...]] = []
+    extensions: list[tuple[object, ...]] = []
+    filter_count = 0
+    column_filter_count = 0
+    criterion_count = 0
+    sort_rule_count = 0
+    sort_condition_count = 0
+    for child in root:
+        if (
+            _xml_namespace(child.tag) == _NAMED_SHEET_VIEW_NS
+            and _xml_local_name(child.tag) == "namedSheetView"
+        ):
+            filters: list[tuple[object, ...]] = []
+            view_extensions: list[tuple[object, ...]] = []
+            for view_child in child:
+                if (
+                    _xml_namespace(view_child.tag) == _NAMED_SHEET_VIEW_NS
+                    and _xml_local_name(view_child.tag) == "nsvFilter"
+                ):
+                    signature, columns, criteria, rules, conditions = (
+                        _named_sheet_view_filter_signature(
+                            view_child,
+                            issues,
+                            bindings=bindings,
+                        )
+                    )
+                    filters.append(signature)
+                    filter_count += 1
+                    column_filter_count += columns
+                    criterion_count += criteria
+                    sort_rule_count += rules
+                    sort_condition_count += conditions
+                else:
+                    issues.add("unsupported-named-sheet-view-child")
+                    view_extensions.append(
+                        _filter_visibility_unknown_child_signature(view_child)
+                    )
+            named_views.append(
+                (
+                    "namedSheetView",
+                    _filter_visibility_attributes(
+                        child,
+                        known=frozenset({"name", "id"}),
+                        issues=issues,
+                        required=frozenset({"name", "id"}),
+                        guid_attributes=frozenset({"id"}),
+                    ),
+                    tuple(sorted(filters, key=repr)),
+                    tuple(sorted(view_extensions, key=repr)),
+                )
+            )
+        else:
+            issues.add("unsupported-named-sheet-views-child")
+            extensions.append(_filter_visibility_unknown_child_signature(child))
+    return (
+        (
+            "namedSheetViews",
+            _filter_visibility_attributes(
+                root,
+                known=frozenset(),
+                issues=issues,
+                ignored_namespaced_attributes=frozenset(
+                    {(_MARKUP_COMPATIBILITY_NS, "Ignorable")}
+                ),
+            ),
+            tuple(sorted(named_views, key=repr)),
+            tuple(sorted(extensions, key=repr)),
+        ),
+        len(named_views),
+        filter_count,
+        column_filter_count,
+        criterion_count,
+        sort_rule_count,
+        sort_condition_count,
+    )
+
+
+def _named_sheet_view_metadata(path: Path) -> _NamedSheetViewMetadata:
+    """Inspect relationship-backed modern Excel Named Sheet Views from raw OOXML.
+
+    View names, filter values, sort keys, and targets can be sensitive. Their
+    complete canonical forms are retained only inside ``definition_signature``;
+    public output contains counts and coverage state.
+    """
+    warnings: set[str] = set()
+    default = NamedSheetViewSnapshot()
+    entries: list[tuple[str, str]] = []
+    worksheets_with_views: set[str] = set()
+    part_count = 0
+    named_sheet_view_count = 0
+    named_filter_count = 0
+    column_filter_count = 0
+    filter_criterion_count = 0
+    sort_rule_count = 0
+    sort_condition_count = 0
+    unrecognized_named_sheet_view_count = 0
+    total_part_bytes = 0
+    inspected_part_count = 0
+
+    try:
+        with ZipFile(path) as archive:
+            for sheet, worksheet_member in _worksheet_xml_paths(archive).items():
+                relationship_member = _relationship_part_path(worksheet_member)
+                if relationship_member not in archive.namelist():
+                    continue
+                try:
+                    relationships = _package_relationships(archive, worksheet_member)
+                except (
+                    ElementTree.ParseError,
+                    KeyError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    warnings.add(
+                        "FormulaFence could not inspect worksheet relationships while "
+                        f"reading Named Sheet Views ({type(error).__name__}); affected "
+                        "alternate views were not compared."
+                    )
+                    entries.append(
+                        (
+                            f"named-sheet-views-relationships:{sheet.casefold()}",
+                            type(error).__name__,
+                        )
+                    )
+                    unrecognized_named_sheet_view_count += 1
+                    continue
+                view_relationships = [
+                    relationship
+                    for relationship in relationships
+                    if relationship.relationship_type == _NAMED_SHEET_VIEW_RELATIONSHIP
+                ]
+                if not view_relationships:
+                    continue
+                worksheets_with_views.add(sheet.casefold())
+                bindings, binding_issues = _named_sheet_view_base_filter_bindings(
+                    archive,
+                    worksheet_member=worksheet_member,
+                    relationships=relationships,
+                )
+                if binding_issues:
+                    warnings.add(
+                        "FormulaFence could not fully reconcile Named Sheet Views to their "
+                        "base AutoFilters; affected alternate filter and sort controls have "
+                        "a coverage gap."
+                    )
+                    entries.append(
+                        (
+                            f"named-sheet-view-bindings:{sheet.casefold()}",
+                            repr(binding_issues),
+                        )
+                    )
+                    unrecognized_named_sheet_view_count += 1
+                part_count += len(view_relationships)
+                seen_targets: set[str] = set()
+                for relationship_index, relationship in enumerate(view_relationships):
+                    context = (
+                        f"named-sheet-views:{sheet.casefold()}:{relationship_index}"
+                    )
+                    if relationship.target is None:
+                        warnings.add(
+                            "FormulaFence found an unsafe or external Named Sheet View "
+                            "relationship; the affected alternate view was not compared."
+                        )
+                        entries.append(
+                            (
+                                f"{context}:unsafe-relationship",
+                                repr(
+                                    (
+                                        relationship.relationship_type,
+                                        relationship.target_mode,
+                                    )
+                                ),
+                            )
+                        )
+                        unrecognized_named_sheet_view_count += 1
+                        continue
+                    if relationship.target in seen_targets:
+                        warnings.add(
+                            "FormulaFence found repeated Named Sheet View relationships; "
+                            "the affected alternate view has a coverage gap."
+                        )
+                        entries.append(
+                            (f"{context}:repeated-target", "repeated")
+                        )
+                        unrecognized_named_sheet_view_count += 1
+                        continue
+                    seen_targets.add(relationship.target)
+                    if inspected_part_count >= _NAMED_SHEET_VIEW_TOTAL_MAX_COUNT:
+                        warnings.add(
+                            "FormulaFence did not inspect all Named Sheet View parts because "
+                            "the part-count limit was exceeded."
+                        )
+                        entries.append((f"{context}:part-count-limit", "exceeded"))
+                        unrecognized_named_sheet_view_count += 1
+                        continue
+                    try:
+                        part_size = archive.getinfo(relationship.target).file_size
+                    except KeyError:
+                        warnings.add(
+                            "FormulaFence could not locate a Named Sheet View part; the "
+                            "affected alternate view was not compared."
+                        )
+                        entries.append((f"{context}:missing-part", "missing"))
+                        unrecognized_named_sheet_view_count += 1
+                        continue
+                    if part_size > _NAMED_SHEET_VIEW_MAX_PART_BYTES:
+                        warnings.add(
+                            "FormulaFence did not fully read an oversized Named Sheet View "
+                            "part; the affected alternate view has a coverage gap."
+                        )
+                        entries.append((f"{context}:part-size-limit", str(part_size)))
+                        unrecognized_named_sheet_view_count += 1
+                        continue
+                    if total_part_bytes + part_size > _NAMED_SHEET_VIEW_TOTAL_MAX_BYTES:
+                        warnings.add(
+                            "FormulaFence did not inspect all Named Sheet View parts because "
+                            "the aggregate XML-size limit was exceeded."
+                        )
+                        entries.append((f"{context}:total-size-limit", str(part_size)))
+                        unrecognized_named_sheet_view_count += 1
+                        continue
+                    total_part_bytes += part_size
+                    inspected_part_count += 1
+                    try:
+                        root = _xml_root(archive, relationship.target)
+                    except (
+                        ElementTree.ParseError,
+                        KeyError,
+                        OSError,
+                        RuntimeError,
+                        ValueError,
+                    ) as error:
+                        warnings.add(
+                            "FormulaFence could not read a Named Sheet View part "
+                            f"({type(error).__name__}); the affected alternate view was not "
+                            "compared."
+                        )
+                        entries.append((f"{context}:unreadable-part", type(error).__name__))
+                        unrecognized_named_sheet_view_count += 1
+                        continue
+                    if (
+                        _xml_namespace(root.tag) != _NAMED_SHEET_VIEW_NS
+                        or _xml_local_name(root.tag) != "namedSheetViews"
+                    ):
+                        warnings.add(
+                            "FormulaFence found a Named Sheet View relationship with an "
+                            "unexpected root; the affected alternate view was not compared."
+                        )
+                        entries.append(
+                            (
+                                f"{context}:unexpected-root",
+                                _private_payload_signature(
+                                    ElementTree.tostring(root, encoding="utf-8")
+                                ),
+                            )
+                        )
+                        unrecognized_named_sheet_view_count += 1
+                        continue
+                    issues: set[str] = set()
+                    (
+                        signature,
+                        views,
+                        filters,
+                        columns,
+                        criteria,
+                        rules,
+                        conditions,
+                    ) = _named_sheet_view_part_signature(
+                        root,
+                        issues,
+                        bindings=bindings,
+                    )
+                    entries.append((context, repr(signature)))
+                    named_sheet_view_count += views
+                    named_filter_count += filters
+                    column_filter_count += columns
+                    filter_criterion_count += criteria
+                    sort_rule_count += rules
+                    sort_condition_count += conditions
+                    unrecognized_named_sheet_view_count += bool(issues)
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _NamedSheetViewMetadata(
+            default,
+            (
+                "FormulaFence could not inspect Named Sheet View OOXML "
+                f"({type(error).__name__}); alternate filter and sort controls were not "
+                "compared.",
+            ),
+        )
+
+    if unrecognized_named_sheet_view_count:
+        warnings.add(
+            "FormulaFence found malformed or unsupported Named Sheet View metadata; "
+            "alternate filter and sort controls have a coverage gap."
+        )
+    snapshot = NamedSheetViewSnapshot(
+        worksheet_count=len(worksheets_with_views),
+        part_count=part_count,
+        named_sheet_view_count=named_sheet_view_count,
+        named_filter_count=named_filter_count,
+        column_filter_count=column_filter_count,
+        filter_criterion_count=filter_criterion_count,
+        sort_rule_count=sort_rule_count,
+        sort_condition_count=sort_condition_count,
+        unrecognized_named_sheet_view_count=unrecognized_named_sheet_view_count,
+        definition_signature=_private_external_data_signature(tuple(sorted(entries))),
+    )
+    return _NamedSheetViewMetadata(snapshot, tuple(sorted(warnings)))
 
 
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
@@ -15104,6 +15996,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     scenario_manager_metadata = _scenario_manager_metadata(source)
     filter_visibility_metadata = _filter_visibility_metadata(source)
     ignored_error_metadata = _ignored_error_metadata(source)
+    named_sheet_view_metadata = _named_sheet_view_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -15140,6 +16033,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(scenario_manager_metadata.warnings)
     parser_warnings.update(filter_visibility_metadata.warnings)
     parser_warnings.update(ignored_error_metadata.warnings)
+    parser_warnings.update(named_sheet_view_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -15360,6 +16254,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         scenario_manager=scenario_manager_metadata.scenario_manager,
         filter_visibility_controls=filter_visibility_metadata.controls,
         ignored_error_controls=ignored_error_metadata.controls,
+        named_sheet_views=named_sheet_view_metadata.views,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -15433,6 +16328,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "scenario_manager": snapshot.scenario_manager.profile_dict(),
         "filter_visibility_controls": snapshot.filter_visibility_controls.profile_dict(),
         "ignored_error_controls": snapshot.ignored_error_controls.profile_dict(),
+        "named_sheet_views": snapshot.named_sheet_views.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -15458,6 +16354,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_scenario_manager": snapshot.scenario_manager.present,
             "has_filter_visibility_controls": snapshot.filter_visibility_controls.present,
             "has_ignored_error_controls": snapshot.ignored_error_controls.present,
+            "has_named_sheet_views": snapshot.named_sheet_views.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

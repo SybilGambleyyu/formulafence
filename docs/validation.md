@@ -5,6 +5,46 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel Named Sheet Views — 2026-07-25
+
+FormulaFence 0.34.0 was validated with controlled raw-OOXML `.xlsx` packages
+containing one relationship-backed Named Sheet View part, two private named
+views, two alternate filters, two column filters and criterion groups, and two
+sort rules/conditions. The suite verifies safe profile counts, a zero-change
+self-diff, `FF038` for a criterion-only saved-view change, and `FFP038` under
+`no_named_sheet_view_changes`. A second controlled fixture uses a table-owned
+AutoFilter and exercises Excel's table-ID reconciliation fallback.
+
+Equivalent GUID, local A1 case/absolute-reference, Boolean/default, and
+unsigned-integer spellings are exercised without a finding. An out-of-range
+alternate-view column identifier produces an explicit parser-coverage warning,
+`FF010`, and `FF038` rather than a silent omission. View names, IDs, criteria,
+target ranges, table bindings, table-column IDs, and sort keys are verified
+absent from JSON, Markdown, ordinary reports, and SARIF. The controlled
+criterion-only mutation has no ordinary cell, formula, or active-AutoFilter
+change and is invisible to the published 0.33.0 wheel (`0` changes, no
+findings); a freshly installed 0.34.0 wheel emits exactly one
+`named_sheet_views_changed` change and `FF038` (then `FFP038` with the starter
+policy).
+
+As an independent package-compatibility check, a fresh 0.34.0 wheel profiled
+LibreOffice's public
+[`NamedSheetViews.xlsx`](https://raw.githubusercontent.com/LibreOffice/core/6e6bf902f0e4849e4fdb180e5a9e859028e40a1e/sc/qa/unit/data/xlsx/NamedSheetViews.xlsx)
+fixture at commit `6e6bf902f0e4849e4fdb180e5a9e859028e40a1e`. The downloaded
+workbook SHA-256 was
+`896f863f92dc5fc05ce7b038272261106a0d40f6fb77abff7bc149880346eaef`.
+FormulaFence found one worksheet and relationship-backed part, two views/two
+alternate filters, two column filters and criterion groups, two sort
+rules/conditions, and no Named Sheet View coverage warning. This validates
+static declaration and reconciliation comparison plus data minimisation—not
+whether Excel/LibreOffice will activate or render a saved view, calculate a
+filtered result, repair metadata, infer formula visibility sensitivity, or
+interpret differential-format, extension, or rich-sort behavior. The boundary
+follows Microsoft's [Named Sheet Views part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/4b4d6448-d997-4ebe-9153-5c2c67d16972),
+[`CT_NsvFilter`](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/e132d9cc-c711-4fb3-aa28-e7356a791b1c),
+and [reconciliation](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/dd6b2cb8-b5b3-43b1-a5bd-dccdd9c0864a)
+definitions.
+
 ## Excel ignored-error controls — 2026-07-25
 
 FormulaFence 0.33.0 was validated with controlled raw-OOXML `.xlsx` packages

@@ -14,6 +14,7 @@ from .helpers import (
     change_filter_visibility_criterion,
     change_ignored_error_target,
     change_legacy_vml_control_controls,
+    change_named_sheet_view_criterion,
     change_office_web_addin_auto_show,
     change_pivot_table_definition_material,
     change_power_pivot_data_model_payload,
@@ -34,6 +35,7 @@ from .helpers import (
     make_legacy_array_model,
     make_legacy_vml_control_model,
     make_model,
+    make_named_sheet_view_model,
     make_office_web_addin_model,
     make_pivot_table_definition_model,
     make_power_pivot_data_model,
@@ -422,6 +424,19 @@ def test_policy_can_block_ignored_error_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP037"}
+
+
+def test_policy_can_block_named_sheet_view_changes(tmp_path) -> None:
+    baseline = make_named_sheet_view_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_sheet_view_model(tmp_path / "candidate.xlsx")
+    change_named_sheet_view_criterion(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_named_sheet_view_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP038"}
 
 
 def test_policy_can_block_worksheet_embedded_control_changes(tmp_path) -> None:

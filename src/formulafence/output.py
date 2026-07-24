@@ -42,6 +42,14 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         ),
         f"- **Dynamic array formulas:** {workbook['dynamic_array_formula_cells']}",
         (
+            "- **Observed dynamic-array output ranges:** "
+            f"{workbook['dynamic_array_observed_output_ranges']}"
+        ),
+        (
+            "- **Formulas reading observed dynamic output members:** "
+            f"{workbook['dynamic_array_output_reference_cells']}"
+        ),
+        (
             "- **Unclassified array formulas:** "
             f"{workbook['unclassified_array_formula_cells']}"
         ),
@@ -132,12 +140,59 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "formula reads them; the range is not expanded into virtual cells."
         )
     if features["dynamic_array_formula_cells"]:
-        lines.extend(["", "## Dynamic-array formula anchors", ""])
+        lines.extend(
+            [
+                "",
+                "## Dynamic-array formula anchors",
+                "",
+                "| Anchor | Observed output range | Observed output cells |",
+                "| --- | --- | ---: |",
+            ]
+        )
+        observed_ranges = {
+            array_range["anchor"]: array_range
+            for array_range in features["dynamic_array_observed_output_ranges"]
+        }
         for location in features["dynamic_array_formula_cells"]:
+            array_range = observed_ranges.get(location)
+            if array_range is None:
+                lines.append(f"| {_markdown_escape(location)} | unavailable | — |")
+                continue
             lines.append(
-                f"- Dynamic-array anchor at `{location}` "
-                "(current spill extent is not used as a fixed dependency alias)"
+                "| {anchor} | {ref} | {output_cell_count} |".format(
+                    anchor=_markdown_escape(location),
+                    ref=_markdown_escape(array_range["ref"]),
+                    output_cell_count=array_range["output_cell_count"],
+                )
             )
+        lines.append(
+            "The output range is observed from this workbook, not fixed: Excel can "
+            "resize it during recalculation. FormulaFence only links a static formula "
+            "back to the anchor when it currently reads a non-anchor output member."
+        )
+    if features["dynamic_array_output_reference_cells"]:
+        lines.extend(
+            [
+                "",
+                "## Observed dynamic-array output-member references",
+                "",
+                "| Formula | Dynamic anchor | Observed spill range |",
+                "| --- | --- | --- |",
+            ]
+        )
+        for issue in features["dynamic_array_output_reference_cells"]:
+            for reference in issue["references"]:
+                lines.append(
+                    "| {location} | {anchor} | {observed_range} |".format(
+                        location=_markdown_escape(issue["location"]),
+                        anchor=_markdown_escape(reference["anchor"]),
+                        observed_range=_markdown_escape(reference["observed_range"]),
+                    )
+                )
+        lines.append(
+            "These graph aliases explain the currently observed relationship; a future "
+            "recalculation can grow, shrink, or block the spill."
+        )
     if (
         features["parser_warnings"]
         or features["unresolved_reference_cells"]

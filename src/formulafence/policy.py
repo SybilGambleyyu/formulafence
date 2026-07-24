@@ -21,6 +21,7 @@ _RULE_FIELDS = {
     "no_new_unresolved_references",
     "no_new_dynamic_references",
     "no_new_spill_references",
+    "no_new_dynamic_array_output_references",
     "no_new_implicit_intersections",
     "no_array_formula_semantics_changes",
     "no_new_tokenization_failures",
@@ -63,6 +64,7 @@ class Policy:
     no_new_unresolved_references: bool = False
     no_new_dynamic_references: bool = False
     no_new_spill_references: bool = False
+    no_new_dynamic_array_output_references: bool = False
     no_new_implicit_intersections: bool = False
     no_array_formula_semantics_changes: bool = False
     no_new_tokenization_failures: bool = False
@@ -87,6 +89,7 @@ rules:
   no_new_unresolved_references: true
   no_new_dynamic_references: true
   no_new_spill_references: true
+  no_new_dynamic_array_output_references: true
   no_new_implicit_intersections: true
   no_array_formula_semantics_changes: true
   no_new_tokenization_failures: true
@@ -179,6 +182,9 @@ def parse_policy(data: object) -> Policy:
         no_new_unresolved_references=_boolean_rule(rules, "no_new_unresolved_references"),
         no_new_dynamic_references=_boolean_rule(rules, "no_new_dynamic_references"),
         no_new_spill_references=_boolean_rule(rules, "no_new_spill_references"),
+        no_new_dynamic_array_output_references=_boolean_rule(
+            rules, "no_new_dynamic_array_output_references"
+        ),
         no_new_implicit_intersections=_boolean_rule(
             rules, "no_new_implicit_intersections"
         ),
@@ -293,6 +299,20 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP015",
                     "high",
                     "Policy forbids new dynamic-array spill references.",
+                    finding.location,
+                    details=finding.details,
+                )
+            )
+    if policy.no_new_dynamic_array_output_references:
+        for finding in _rule_triggered(report, "FF019"):
+            violations.append(
+                Finding(
+                    "FFP019",
+                    "high",
+                    (
+                        "Policy forbids newly observed dynamic-array output-member "
+                        "references."
+                    ),
                     finding.location,
                     details=finding.details,
                 )

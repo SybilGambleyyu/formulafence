@@ -12,6 +12,7 @@ from .helpers import (
     make_model,
     make_table_model,
     make_three_d_model,
+    mark_array_formula_dynamic,
     rewrite,
 )
 
@@ -129,6 +130,28 @@ def test_policy_can_block_array_formula_semantics_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP018"}
+
+
+def test_policy_can_block_new_dynamic_array_output_member_references(tmp_path) -> None:
+    baseline = make_legacy_array_model(tmp_path / "baseline.xlsx")
+
+    def remove_member_consumers(workbook) -> None:
+        workbook["Model"]["C2"] = None
+        workbook["Dashboard"]["B2"] = None
+
+    rewrite(baseline, remove_member_consumers)
+    candidate = make_legacy_array_model(tmp_path / "candidate.xlsx")
+    mark_array_formula_dynamic(baseline)
+    mark_array_formula_dynamic(candidate)
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_new_dynamic_array_output_references": True},
+        }
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP019"}
 
 
 def test_policy_can_block_table_definition_changes(tmp_path) -> None:

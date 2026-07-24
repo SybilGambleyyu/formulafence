@@ -62,6 +62,7 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
 
     content = policy.read_text(encoding="utf-8")
     assert "no_new_spill_references: true" in content
+    assert "no_new_dynamic_array_output_references: true" in content
     assert "no_new_implicit_intersections: true" in content
     assert "no_array_formula_semantics_changes: true" in content
     assert "no_new_tokenization_failures: true" in content

@@ -8,6 +8,7 @@ rules:
   no_new_unresolved_references: true
   no_new_dynamic_references: true
   no_new_spill_references: true
+  no_new_dynamic_array_output_references: true
   no_new_implicit_intersections: true
   no_array_formula_semantics_changes: true
   no_new_tokenization_failures: true

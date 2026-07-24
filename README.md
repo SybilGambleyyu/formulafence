@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.12.0/formulafence-0.12.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.13.0/formulafence-0.13.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -66,6 +66,7 @@ rules:
   no_new_unresolved_references: true
   no_new_dynamic_references: true
   no_new_spill_references: true
+  no_new_dynamic_array_output_references: true
   no_new_implicit_intersections: true
   no_array_formula_semantics_changes: true
   no_new_tokenization_failures: true
@@ -89,7 +90,7 @@ allowed_changes:
 | Capability | What it catches |
 | --- | --- |
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
-| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, and fixed legacy CSE-array result members |
+| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
@@ -168,9 +169,14 @@ alias from the CSE anchor (for example `Model!B1`) to that consumer. Thus a
 change to an input of `{=LEN(Inputs!A1:A3)}` can reach a downstream `=B2*10`
 calculation even though Excel stores the formula only at `B1`. The profile
 lists each declared fixed range. An OOXML dynamic-array marker (`cm` resolving
-to `XLDAPR`/`fDynamic`) is inventoried as a dynamic anchor instead; its current
-or future spill extent is never treated as fixed. Unknown array metadata stays
-visible as a parser coverage warning with no aliases. FormulaFence emits
+to `XLDAPR`/`fDynamic`) records the current serialized output range as an
+**observed** spill surface. If a static formula reads a non-anchor member such
+as `Model!B2`, FormulaFence adds the same compact anchor-to-consumer graph edge
+and records the relationship in the profile. It never calls that range fixed:
+Excel can grow, shrink, or block a spill during recalculation. A newly observed
+output-member relationship emits `FF019`; enable
+`no_new_dynamic_array_output_references` for `FFP019`. Unknown array metadata
+stays visible as a parser coverage warning with no aliases. FormulaFence emits
 `FF018` when a legacy-CSE or dynamic-array formula is added, removed, or changes
 mode, or when a legacy CSE fixed output range changes; enable
 `no_array_formula_semantics_changes` for `FFP018`. This follows Microsoft's

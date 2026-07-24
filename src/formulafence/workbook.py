@@ -30,6 +30,7 @@ from formulafence.models import (
     ArrayFormulaRange,
     CellKey,
     CellSnapshot,
+    DynamicArrayOutputReference,
     RangeDependency,
     SheetSnapshot,
     TableSnapshot,
@@ -81,6 +82,7 @@ class _ArrayFormulaClassification:
     refs: dict[CellKey, str]
     legacy_ranges: tuple[ArrayFormulaRange, ...]
     dynamic_cells: set[CellKey]
+    dynamic_ranges: tuple[ArrayFormulaRange, ...]
     unclassified_cells: set[CellKey]
     warnings: tuple[str, ...]
 
@@ -298,12 +300,14 @@ def _is_array_formula(cell: object) -> bool:
 def _classify_array_formulas(
     workbook: object, metadata: _ArrayFormulaMetadata
 ) -> _ArrayFormulaClassification:
-    """Classify legacy fixed CSE outputs without guessing dynamic spill extent."""
+    """Classify array formulas without treating dynamic extents as fixed."""
     kinds: dict[CellKey, str] = {}
     refs: dict[CellKey, str] = {}
     legacy_ranges: list[ArrayFormulaRange] = []
     dynamic_cells: set[CellKey] = set()
+    dynamic_ranges: list[ArrayFormulaRange] = []
     unclassified_cells: set[CellKey] = set()
+    warnings = set(metadata.warnings)
     for worksheet in getattr(workbook, "worksheets", ()):
         for cell in worksheet._cells.values():  # noqa: SLF001 - sparse workbook safety
             if not _is_array_formula(cell):
@@ -316,6 +320,16 @@ def _classify_array_formulas(
             if location in metadata.dynamic_cells:
                 kinds[location] = "dynamic"
                 dynamic_cells.add(location)
+                array_range = _array_formula_range(worksheet.title, cell)
+                if array_range is None:
+                    warnings.add(
+                        "FormulaFence could not read one or more observed dynamic-array "
+                        "output ranges; non-anchor output aliases were not traced for "
+                        "those anchors."
+                    )
+                    continue
+                refs[location] = array_range.ref
+                dynamic_ranges.append(array_range)
                 continue
             if location in metadata.unclassified_cells:
                 kinds[location] = "unclassified"
@@ -330,7 +344,6 @@ def _classify_array_formulas(
             refs[location] = array_range.ref
             legacy_ranges.append(array_range)
 
-    warnings = set(metadata.warnings)
     if unclassified_cells:
         warnings.add(
             "FormulaFence could not classify one or more OOXML array formulas; "
@@ -341,6 +354,7 @@ def _classify_array_formulas(
         refs=refs,
         legacy_ranges=tuple(legacy_ranges),
         dynamic_cells=dynamic_cells,
+        dynamic_ranges=tuple(dynamic_ranges),
         unclassified_cells=unclassified_cells,
         warnings=tuple(sorted(warnings)),
     )
@@ -372,6 +386,68 @@ def _array_formula_output_dependents(
             if dependency.intersects(array_range):
                 dependents[array_range.location].add(dependency.dependent)
     return {anchor: cells for anchor, cells in dependents.items() if cells}
+
+
+def _dynamic_array_output_dependents(
+    dynamic_ranges: tuple[ArrayFormulaRange, ...],
+    reverse_dependencies: Mapping[CellKey, set[CellKey]],
+    range_dependencies: list[RangeDependency],
+) -> tuple[
+    dict[CellKey, set[CellKey]],
+    dict[CellKey, tuple[DynamicArrayOutputReference, ...]],
+]:
+    """Link observed dynamic spill members to their current formula consumers.
+
+    Dynamic-array output ranges may resize during recalculation, so this is not
+    a fixed-range assertion. It records only a formula that currently reads at
+    least one non-anchor member, without materializing individual spill cells.
+    """
+    ranges_by_sheet: dict[str, list[ArrayFormulaRange]] = defaultdict(list)
+    for array_range in dynamic_ranges:
+        if array_range.has_multiple_outputs:
+            ranges_by_sheet[array_range.sheet].append(array_range)
+
+    dependents: dict[CellKey, set[CellKey]] = defaultdict(set)
+    references: dict[CellKey, set[DynamicArrayOutputReference]] = defaultdict(set)
+
+    def add_reference(array_range: ArrayFormulaRange, dependent: CellKey) -> None:
+        if dependent == array_range.location:
+            return
+        dependents[array_range.location].add(dependent)
+        references[dependent].add(
+            DynamicArrayOutputReference(
+                anchor=array_range.location,
+                observed_ref=array_range.ref,
+            )
+        )
+
+    for source, formula_cells in reverse_dependencies.items():
+        for array_range in ranges_by_sheet.get(source[0], ()):
+            if source != array_range.location and array_range.contains(source):
+                for dependent in formula_cells:
+                    add_reference(array_range, dependent)
+    for dependency in range_dependencies:
+        for array_range in ranges_by_sheet.get(dependency.source_sheet, ()):
+            if array_range.intersects_non_anchor(dependency):
+                add_reference(array_range, dependency.dependent)
+
+    return (
+        {anchor: cells for anchor, cells in dependents.items() if cells},
+        {
+            dependent: tuple(
+                sorted(
+                    values,
+                    key=lambda reference: (
+                        reference.anchor[0].casefold(),
+                        reference.anchor[1],
+                        reference.observed_ref,
+                    ),
+                )
+            )
+            for dependent, values in references.items()
+            if values
+        },
+    )
 
 
 def _formula_text(value: object) -> str | None:
@@ -927,6 +1003,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             refs={},
             legacy_ranges=(),
             dynamic_cells=set(),
+            dynamic_ranges=(),
             unclassified_cells=set(),
             warnings=(),
         )
@@ -1051,11 +1128,27 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             max_column=worksheet.max_column,
         )
 
-    array_formula_output_dependents = _array_formula_output_dependents(
+    legacy_array_formula_output_dependents = _array_formula_output_dependents(
         array_formula_classification.legacy_ranges,
         reverse_dependencies,
         range_dependencies,
     )
+    (
+        dynamic_array_formula_output_dependents,
+        dynamic_array_output_references,
+    ) = _dynamic_array_output_dependents(
+        array_formula_classification.dynamic_ranges,
+        reverse_dependencies,
+        range_dependencies,
+    )
+    array_formula_output_dependents = {
+        anchor: set(legacy_array_formula_output_dependents.get(anchor, set()))
+        | dynamic_array_formula_output_dependents.get(anchor, set())
+        for anchor in (
+            set(legacy_array_formula_output_dependents)
+            | set(dynamic_array_formula_output_dependents)
+        )
+    }
 
     return WorkbookSnapshot(
         path=source,
@@ -1074,6 +1167,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         implicit_intersection_tokens=implicit_intersection_tokens,
         legacy_array_formula_ranges=array_formula_classification.legacy_ranges,
         dynamic_array_formula_cells=array_formula_classification.dynamic_cells,
+        dynamic_array_formula_ranges=array_formula_classification.dynamic_ranges,
+        dynamic_array_output_references=dynamic_array_output_references,
         unclassified_array_formula_cells=array_formula_classification.unclassified_cells,
         array_formula_output_dependents=array_formula_output_dependents,
         tokenization_failure_cells=tokenization_failure_cells,
@@ -1156,6 +1251,22 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "dynamic_array_formula_cells": [
                 display_location(location)
                 for location in sorted(snapshot.dynamic_array_formula_cells)
+            ],
+            "dynamic_array_observed_output_ranges": [
+                array_range.to_dict()
+                for array_range in sorted(
+                    snapshot.dynamic_array_formula_ranges,
+                    key=lambda array_range: (array_range.sheet.casefold(), array_range.anchor),
+                )
+            ],
+            "dynamic_array_output_reference_cells": [
+                {
+                    "location": display_location(location),
+                    "references": [reference.to_dict() for reference in references],
+                }
+                for location, references in sorted(
+                    snapshot.dynamic_array_output_references.items()
+                )
             ],
             "unclassified_array_formula_cells": [
                 display_location(location)

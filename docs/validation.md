@@ -201,7 +201,7 @@ serialized `SINGLE`, horizontal and rectangular direct ranges, string safety,
 unsupported `@A1#`, dynamic `@OFFSET`, table `[@Column]` separation, and
 formula-defined-name containment.
 
-## Legacy CSE output aliases versus dynamic arrays — 2026-07-24
+## Fixed CSE and observed dynamic-array output aliases — 2026-07-24
 
 Microsoft distinguishes a legacy Ctrl+Shift+Enter array's fixed output range
 from a dynamic array whose spill can resize. [XlsxWriter documents the same
@@ -217,19 +217,23 @@ maintained XlsxWriter 3.2.9. Each had `Inputs!A1:A3`, an array formula at
 | Form | Baseline SHA-256 | Stored anchor | FormulaFence result |
 | --- | --- | --- | --- |
 | CSE | `fdf2dba62f5390cfc88137470b22709415651d88b9ced9a116fe5ba8e601ca42` | `<f t="array" ref="B1:B3">LEN(Inputs!A1:A3)</f>` | Fixed legacy range `B1:B3`; anchor reaches `Model!C2` and `Dashboard!B2`. |
-| Dynamic | `cf0b83ba83d4ef85bc767e67e45764691cff6735016fea8d3890e11ba7173b7a` | `<c r="B1" cm="1"><f t="array" ref="B1:B3">…` plus `XLDAPR` `fDynamic="1"` metadata | Dynamic anchor recorded; no fixed-output aliases. |
+| Dynamic | `55155034f7115a417cb26ba815890d5bad7540a5f90c26ec5a1de93cd91a45c4` | `<c r="B1" cm="1"><f t="array" ref="B1:B3">…` plus `XLDAPR` `fDynamic="1"` metadata | Observed range `B1:B3`; anchor reaches `Model!C2` and `Dashboard!B2`. |
 
-Changing `Inputs!A2` in the CSE candidate produced the exact paths
+Changing `Inputs!A2` in the XlsxWriter dynamic candidate (SHA-256
+`81d06efe44c9b023d5d5f2b6f349fd9eb5a9b497997d3d5836bb643be746b3a1`)
+produced the exact paths
 `Inputs!A2 → Model!B1 → Model!C2` and
-`Inputs!A2 → Model!B1 → Dashboard!B2`. The equivalent dynamic candidate only
-reached `Model!B1`, which is intentional: a current spill ref is not proof of
-a stable future extent. A separate compact-range fixture declared
-`B1:XFD1048576`; FormulaFence retained eight stored cells while linking the
-known consumers, demonstrating that it does not materialize an output node for
-every declared CSE result cell. A same-text ordinary-to-CSE transition and a
-`B1:B3`-to-`B1:B4` fixed-range transition each emitted `FF018`; changing only a
-dynamic cached ref did not. This validates storage classification and graph
-behavior, not Excel calculation results.
+`Inputs!A2 → Model!B1 → Dashboard!B2`; the CSE fixture produces the same
+paths. The dynamic links are explicitly **observed**, not fixed: a profile
+records the current OOXML range and each formula reading a non-anchor member,
+but FormulaFence never predicts a later spill size or blocker. A separate
+`B1:B3`-to-`B1:B4` dynamic fixture with an unchanged `=B4*10` at `Model!C4`
+emitted `FF019` at `Model!C4`, because the new observed extent reached that
+formula; it did not emit `FF018` for a fixed-range change. A compact-range
+fixture declared `B1:XFD1048576`; FormulaFence retained eight stored cells
+while linking known consumers, demonstrating that it does not materialize an
+output node for every result cell. This validates OOXML classification and
+static graph behavior, not Excel calculation results.
 
 ## Public structured-reference example — 2026-07-24
 

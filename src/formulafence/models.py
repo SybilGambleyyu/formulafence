@@ -141,11 +141,13 @@ class RangeDependency:
 
 @dataclass(frozen=True)
 class ArrayFormulaRange:
-    """The fixed result range declared by one legacy CSE array formula.
+    """The declared result range from one array formula.
 
     Excel stores the formula only at ``anchor``. The remaining cells in ``ref``
-    are result members, not independent formulas, so FormulaFence preserves the
-    range compactly and creates no per-cell aliases.
+    are result members, not independent formulas. For legacy CSE formulas the
+    range is fixed; for dynamic arrays it is the currently observed extent.
+    FormulaFence preserves either form compactly rather than creating one graph
+    node per result cell.
     """
 
     sheet: str
@@ -184,11 +186,38 @@ class ArrayFormulaRange:
             and self.min_row <= row <= self.max_row
         )
 
+    def intersects_non_anchor(self, dependency: RangeDependency) -> bool:
+        """Return whether a dependency intersects any result member after anchor."""
+        if not dependency.intersects(self):
+            return False
+        min_column = max(self.min_column, dependency.min_column)
+        max_column = min(self.max_column, dependency.max_column)
+        min_row = max(self.min_row, dependency.min_row)
+        max_row = min(self.max_row, dependency.max_row)
+        if min_column != max_column or min_row != max_row:
+            return True
+        return (min_column, min_row) != (self.min_column, self.min_row)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "anchor": display_location(self.location),
             "ref": display_location((self.sheet, self.ref)),
             "output_cell_count": self.output_cell_count,
+        }
+
+
+@dataclass(frozen=True)
+class DynamicArrayOutputReference:
+    """One formula reading a non-anchor cell of an observed dynamic spill."""
+
+    anchor: CellKey
+    observed_ref: str
+
+    def to_dict(self) -> dict[str, str]:
+        sheet, _ = self.anchor
+        return {
+            "anchor": display_location(self.anchor) or "",
+            "observed_range": display_location((sheet, self.observed_ref)) or "",
         }
 
 
@@ -264,6 +293,10 @@ class WorkbookSnapshot:
     )
     legacy_array_formula_ranges: tuple[ArrayFormulaRange, ...] = ()
     dynamic_array_formula_cells: set[CellKey] = field(default_factory=set)
+    dynamic_array_formula_ranges: tuple[ArrayFormulaRange, ...] = ()
+    dynamic_array_output_references: dict[
+        CellKey, tuple[DynamicArrayOutputReference, ...]
+    ] = field(default_factory=dict)
     unclassified_array_formula_cells: set[CellKey] = field(default_factory=set)
     array_formula_output_dependents: dict[CellKey, set[CellKey]] = field(
         default_factory=dict
@@ -306,6 +339,12 @@ class WorkbookSnapshot:
                 for array_range in self.legacy_array_formula_ranges
             ),
             "dynamic_array_formula_cells": len(self.dynamic_array_formula_cells),
+            "dynamic_array_observed_output_ranges": len(
+                self.dynamic_array_formula_ranges
+            ),
+            "dynamic_array_output_reference_cells": len(
+                self.dynamic_array_output_references
+            ),
             "unclassified_array_formula_cells": len(
                 self.unclassified_array_formula_cells
             ),

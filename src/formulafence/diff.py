@@ -525,6 +525,67 @@ def _array_formula_semantics_changes(
     return changes, findings
 
 
+def _dynamic_array_output_reference_changes(
+    before: WorkbookSnapshot, after: WorkbookSnapshot
+) -> tuple[list[Change], list[Finding]]:
+    """Report formulas newly intersecting an observed dynamic spill member.
+
+    The relationship is deliberately keyed by consumer and anchor, rather than
+    its observed range text. A dynamic array can resize during recalc, so a
+    changed cached extent alone must not act like a fixed-range semantic change.
+    """
+    changes: list[Change] = []
+    findings: list[Finding] = []
+    for location in sorted(after.dynamic_array_output_references, key=_location_sort_key):
+        previous_anchors = {
+            reference.anchor
+            for reference in before.dynamic_array_output_references.get(location, ())
+        }
+        new_references = tuple(
+            reference
+            for reference in after.dynamic_array_output_references[location]
+            if reference.anchor not in previous_anchors
+        )
+        if not new_references:
+            continue
+        impact_analysis = analyze_downstream_impact(location, before, after)
+        sampled_impacts = tuple(
+            sorted(impact_analysis.impacted, key=_location_sort_key)[:_IMPACT_SAMPLE_SIZE]
+        )
+        details: dict[str, object] = {
+            "references": [reference.to_dict() for reference in new_references],
+        }
+        if sampled_impacts:
+            details["impact_paths"] = _serialise_impact_paths(
+                sampled_impacts, impact_analysis.paths
+            )
+        if impact_analysis.truncated:
+            details["impact_truncated_at"] = _IMPACT_NODE_LIMIT
+        changes.append(
+            Change(
+                "dynamic_array_output_reference_added",
+                location,
+                "medium",
+                impact_count=len(impact_analysis.impacted),
+                impacted_cells=sampled_impacts,
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF019",
+                "medium",
+                (
+                    "Formula newly intersects a non-anchor member of an observed "
+                    "dynamic-array spill; the observed output extent can resize."
+                ),
+                location,
+                details=details,
+            )
+        )
+    return changes, findings
+
+
 def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> DiffReport:
     """Compare workbook semantics and attach local dependency impact to each edit."""
     changes: list[Change] = []
@@ -730,6 +791,11 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(array_formula_changes)
     findings.extend(array_formula_findings)
+    dynamic_array_reference_changes, dynamic_array_reference_findings = (
+        _dynamic_array_output_reference_changes(before, after)
+    )
+    changes.extend(dynamic_array_reference_changes)
+    findings.extend(dynamic_array_reference_findings)
     control_changes, control_findings = _workbook_control_changes(before, after)
     changes.extend(control_changes)
     findings.extend(control_findings)

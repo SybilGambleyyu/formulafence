@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.0 — 2026-07-24
+
+- Trace formulas that read a non-anchor member of a dynamic array's current
+  OOXML output range. The compact anchor-to-consumer edge makes an input of a
+  dynamic array reach its current direct and range consumers without expanding
+  the spill into virtual cells.
+- Preserve the safety boundary: dynamic output ranges are profiled as observed,
+  not fixed, because recalculation can grow, shrink, or block a spill. Profiles
+  list the observed range and every linked output-member consumer.
+- Emit `FF019` when a formula newly intersects an observed non-anchor dynamic
+  output member, including when a changed observed extent reaches an unchanged
+  formula. Add `no_new_dynamic_array_output_references` (`FFP019`) as a
+  fail-closed policy control.
+
 ## 0.12.0 — 2026-07-24
 
 - Trace fixed legacy CSE array output members without expanding their declared

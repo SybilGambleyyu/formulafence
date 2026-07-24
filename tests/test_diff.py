@@ -460,7 +460,7 @@ def test_legacy_cse_output_aliases_do_not_expand_a_declared_huge_range(tmp_path)
     }
 
 
-def test_dynamic_array_metadata_stays_visible_without_fixed_output_aliases(tmp_path) -> None:
+def test_dynamic_array_metadata_traces_observed_output_member_consumers(tmp_path) -> None:
     workbook = make_legacy_array_model(tmp_path / "dynamic.xlsx")
     mark_array_formula_dynamic(workbook)
 
@@ -470,9 +470,100 @@ def test_dynamic_array_metadata_stays_visible_without_fixed_output_aliases(tmp_p
     assert snapshot.legacy_array_formula_ranges == ()
     assert snapshot.dynamic_array_formula_cells == {("Model", "B1")}
     assert snapshot.unclassified_array_formula_cells == set()
-    assert snapshot.direct_dependents(("Model", "B1")) == set()
+    assert snapshot.direct_dependents(("Model", "B1")) == {
+        ("Dashboard", "B2"),
+        ("Model", "C2"),
+    }
+    assert snapshot.summary()["dynamic_array_observed_output_ranges"] == 1
+    assert snapshot.summary()["dynamic_array_output_reference_cells"] == 2
     assert profile["features"]["dynamic_array_formula_cells"] == ["Model!B1"]
+    assert profile["features"]["dynamic_array_observed_output_ranges"] == [
+        {
+            "anchor": "Model!B1",
+            "ref": "Model!B1:B3",
+            "output_cell_count": 3,
+        }
+    ]
+    assert profile["features"]["dynamic_array_output_reference_cells"] == [
+        {
+            "location": "Dashboard!B2",
+            "references": [
+                {"anchor": "Model!B1", "observed_range": "Model!B1:B3"}
+            ],
+        },
+        {
+            "location": "Model!C2",
+            "references": [
+                {"anchor": "Model!B1", "observed_range": "Model!B1:B3"}
+            ],
+        },
+    ]
     assert "## Dynamic-array formula anchors" in profile_to_markdown(profile)
+    assert "observed from this workbook, not fixed" in profile_to_markdown(profile)
+
+
+def test_dynamic_array_observed_output_aliases_connect_input_changes(tmp_path) -> None:
+    baseline = make_legacy_array_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_array_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Inputs"]["A2"], "value", "BBBB"))
+    mark_array_formula_dynamic(baseline)
+    mark_array_formula_dynamic(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    change = next(change for change in report.changes if change.location == ("Inputs", "A2"))
+
+    assert change.impacted_cells == (
+        ("Dashboard", "B2"),
+        ("Model", "B1"),
+        ("Model", "C2"),
+    )
+    assert change.details["impact_paths"] == [
+        {
+            "target": "Dashboard!B2",
+            "path": ["Inputs!A2", "Model!B1", "Dashboard!B2"],
+        },
+        {"target": "Model!B1", "path": ["Inputs!A2", "Model!B1"]},
+        {
+            "target": "Model!C2",
+            "path": ["Inputs!A2", "Model!B1", "Model!C2"],
+        },
+    ]
+
+
+def test_dynamic_array_anchor_references_do_not_create_observed_member_aliases(tmp_path) -> None:
+    workbook = make_legacy_array_model(tmp_path / "dynamic-anchor-only.xlsx")
+
+    def use_anchor_only(workbook) -> None:
+        workbook["Model"]["C2"] = "=B1*10"
+        workbook["Dashboard"]["B2"] = "=Model!B1"
+
+    rewrite(workbook, use_anchor_only)
+    mark_array_formula_dynamic(workbook)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.direct_dependents(("Model", "B1")) == {
+        ("Dashboard", "B2"),
+        ("Model", "C2"),
+    }
+    assert snapshot.dynamic_array_output_references == {}
+
+
+def test_dynamic_array_observed_output_aliases_stay_compact_for_huge_ranges(tmp_path) -> None:
+    workbook = make_legacy_array_model(
+        tmp_path / "large-dynamic.xlsx", "B1:XFD1048576"
+    )
+    mark_array_formula_dynamic(workbook)
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.cells) == 8
+    assert snapshot.summary()["dynamic_array_observed_output_ranges"] == 1
+    assert snapshot.dynamic_array_formula_ranges[0].output_cell_count > 1_000_000
+    assert snapshot.direct_dependents(("Model", "B1")) == {
+        ("Dashboard", "B2"),
+        ("Model", "C2"),
+    }
 
 
 def test_unclassified_array_metadata_is_a_visible_coverage_limit(tmp_path) -> None:
@@ -560,6 +651,61 @@ def test_dynamic_array_cached_extent_change_is_not_a_fixed_range_change(tmp_path
         if change.kind
         in {"array_formula_mode_changed", "legacy_array_output_range_changed"}
     }
+    assert not {finding.rule_id for finding in report.findings if finding.rule_id == "FF018"}
+    assert not {finding.rule_id for finding in report.findings if finding.rule_id == "FF019"}
+
+
+def test_new_dynamic_array_output_member_consumers_emit_ff019(tmp_path) -> None:
+    baseline = make_legacy_array_model(tmp_path / "baseline.xlsx")
+
+    def remove_member_consumers(workbook) -> None:
+        workbook["Model"]["C2"] = None
+        workbook["Dashboard"]["B2"] = None
+
+    rewrite(baseline, remove_member_consumers)
+    candidate = make_legacy_array_model(tmp_path / "candidate.xlsx")
+    mark_array_formula_dynamic(baseline)
+    mark_array_formula_dynamic(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    changes = {
+        change.location: change
+        for change in report.changes
+        if change.kind == "dynamic_array_output_reference_added"
+    }
+    findings = {
+        finding.location: finding for finding in report.findings if finding.rule_id == "FF019"
+    }
+
+    assert set(changes) == {("Dashboard", "B2"), ("Model", "C2")}
+    assert set(findings) == set(changes)
+    assert changes[("Model", "C2")].details["references"] == [
+        {"anchor": "Model!B1", "observed_range": "Model!B1:B3"}
+    ]
+    assert "observed dynamic-array spill" in findings[("Model", "C2")].message
+
+
+def test_dynamic_array_extent_growth_only_flags_new_member_relationships(tmp_path) -> None:
+    baseline = make_legacy_array_model(tmp_path / "baseline.xlsx", "B1:B3")
+    candidate = make_legacy_array_model(tmp_path / "candidate.xlsx", "B1:B4")
+
+    def add_future_member_consumer(workbook) -> None:
+        workbook["Model"]["C4"] = "=B4*10"
+
+    rewrite(baseline, add_future_member_consumer)
+    rewrite(candidate, add_future_member_consumer)
+    mark_array_formula_dynamic(baseline)
+    mark_array_formula_dynamic(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    ff019 = [finding for finding in report.findings if finding.rule_id == "FF019"]
+
+    assert [(finding.location, finding.details["references"]) for finding in ff019] == [
+        (
+            ("Model", "C4"),
+            [{"anchor": "Model!B1", "observed_range": "Model!B1:B4"}],
+        )
+    ]
     assert not {finding.rule_id for finding in report.findings if finding.rule_id == "FF018"}
 
 

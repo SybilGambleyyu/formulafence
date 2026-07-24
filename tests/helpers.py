@@ -57,6 +57,26 @@ def make_table_model(path: Path) -> Path:
     return path
 
 
+def make_current_row_table_model(path: Path) -> Path:
+    """Create calculated-column formulas using three current-row spellings."""
+    workbook = Workbook()
+    data = workbook.active
+    data.title = "Data"
+    data.append(["Sales Amount", "Rate", "Value"])
+    data.append([10, 0.1, "=[@[Sales Amount]]*[@Rate]"])
+    data.append([20, 0.2, "=[Sales Amount]*[Rate]"])
+    data.append([30, 0.3, "=Sales[[#This Row],[Sales Amount]]*Sales[@Rate]"])
+    data.add_table(Table(displayName="Sales", ref="A1:C4"))
+    data["E1"] = "Adjacent current-row output"
+    data["E2"] = "=Sales[[#This Row],[Sales Amount]]"
+
+    report = workbook.create_sheet("Report")
+    report["A1"] = "Current-row table output"
+    report["B2"] = "=SUM(Sales[Value])"
+    workbook.save(path)
+    return path
+
+
 def rewrite(path: Path, mutate: Callable[[Workbook], None]) -> Path:
     """Load, mutate, and save a fixture in place."""
     from openpyxl import load_workbook

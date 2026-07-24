@@ -65,12 +65,16 @@ single material workbook, then expand policy only after reviewing the model's
 actual change patterns.
 
 Ordinary workbook and sheet-local names with static A1 destinations are resolved
-into the dependency graph. FormulaFence also resolves the conservative,
-fully-qualified Excel-table subset: a table name, a column or contiguous column
-range, and `#All`/`#Data`/`#Headers`/`#Totals` regions. The coverage controls
-are for remaining cases—such as named formulas, this-row (`@`) table syntax,
-exotic bracket escapes, and dynamic address construction—where FormulaFence
-intentionally does not guess at dependencies.
+into the dependency graph. FormulaFence also resolves a conservative Excel-table
+subset: a table name, a column or contiguous column range,
+`#All`/`#Data`/`#Headers`/`#Totals`, and provably row-scoped references. An
+unqualified `[Column]` or `[@Column]` is resolved only when its formula cell is
+inside one table's data body. A qualified `Table[@Column]` or
+`Table[[#This Row],[Column]:[Other Column]]` is resolved when the formula is on
+the named table's data row, including an adjacent cell on that worksheet. The
+coverage controls are for remaining cases—such as named formulas, header/total
+row current-row syntax, exotic bracket escapes, and dynamic address
+construction—where FormulaFence intentionally does not guess at dependencies.
 
 ## Exit status
 

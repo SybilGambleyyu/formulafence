@@ -64,7 +64,7 @@ def test_formula_inspection_resolves_static_structured_table_references() -> Non
     assert inspection.unresolved_range_tokens == ()
 
 
-def test_formula_inspection_keeps_this_row_table_references_visible() -> None:
+def test_formula_inspection_requires_table_data_origin_for_this_row_references() -> None:
     sales = StructuredTable(
         name="Sales",
         sheet="Data",
@@ -78,6 +78,96 @@ def test_formula_inspection_keeps_this_row_table_references_visible() -> None:
 
     assert inspection.references == ()
     assert inspection.unresolved_range_tokens == ("Sales[@Amount]",)
+
+
+def test_formula_inspection_resolves_current_row_table_references_in_context() -> None:
+    sales = StructuredTable(
+        name="Sales",
+        sheet="Data",
+        ref="A1:C4",
+        columns=("Sales Amount", "Rate", "Value"),
+        header_row_count=1,
+        totals_row_count=0,
+    )
+
+    inspection = inspect_formula(
+        "=[@[Sales Amount]]+[@Rate]+[Sales Amount]+[[Sales Amount]:[Rate]]"
+        "+Sales[@Rate]+Sales[[#This Row],[Sales Amount]]"
+        "+Sales[[#This Row],[Sales Amount]:[Rate]]",
+        structured_tables={"sales": sales},
+        origin=("Data", "C3"),
+    )
+
+    assert inspection.references == (
+        ParsedReference("Data", 1, 3, 1, 3, raw="[@[Sales Amount]]"),
+        ParsedReference("Data", 2, 3, 2, 3, raw="[@Rate]"),
+        ParsedReference("Data", 1, 3, 1, 3, raw="[Sales Amount]"),
+        ParsedReference("Data", 1, 3, 2, 3, raw="[[Sales Amount]:[Rate]]"),
+        ParsedReference("Data", 2, 3, 2, 3, raw="Sales[@Rate]"),
+        ParsedReference(
+            "Data", 1, 3, 1, 3, raw="Sales[[#This Row],[Sales Amount]]"
+        ),
+        ParsedReference(
+            "Data", 1, 3, 2, 3, raw="Sales[[#This Row],[Sales Amount]:[Rate]]"
+        ),
+    )
+    assert inspection.unresolved_range_tokens == ()
+
+
+def test_formula_inspection_keeps_invalid_current_row_references_visible() -> None:
+    sales = StructuredTable(
+        name="Sales",
+        sheet="Data",
+        ref="A1:C5",
+        columns=("Amount", "Rate", "Value"),
+        header_row_count=1,
+        totals_row_count=1,
+    )
+
+    outside = inspect_formula(
+        "=Sales[@Amount]", structured_tables={"sales": sales}, origin=("Report", "B2")
+    )
+    header = inspect_formula(
+        "=[@Amount]", structured_tables={"sales": sales}, origin=("Data", "A1")
+    )
+    adjacent_unqualified = inspect_formula(
+        "=[Amount]", structured_tables={"sales": sales}, origin=("Data", "D3")
+    )
+    total = inspect_formula(
+        "=Sales[[#This Row],[Amount]]",
+        structured_tables={"sales": sales},
+        origin=("Data", "C5"),
+    )
+
+    assert outside.unresolved_range_tokens == ("Sales[@Amount]",)
+    assert header.unresolved_range_tokens == ("[@Amount]",)
+    assert adjacent_unqualified.unresolved_range_tokens == ("[Amount]",)
+    assert total.unresolved_range_tokens == ("Sales[[#This Row],[Amount]]",)
+
+
+def test_formula_inspection_resolves_qualified_this_row_from_an_adjacent_cell() -> None:
+    sales = StructuredTable(
+        name="Sales",
+        sheet="Data",
+        ref="A1:C5",
+        columns=("Amount", "Rate", "Value"),
+        header_row_count=1,
+        totals_row_count=1,
+    )
+
+    inspection = inspect_formula(
+        "=Sales[@Amount]+Sales[[#This Row],[Amount]:[Rate]]",
+        structured_tables={"sales": sales},
+        origin=("Data", "D3"),
+    )
+
+    assert inspection.references == (
+        ParsedReference("Data", 1, 3, 1, 3, raw="Sales[@Amount]"),
+        ParsedReference(
+            "Data", 1, 3, 2, 3, raw="Sales[[#This Row],[Amount]:[Rate]]"
+        ),
+    )
+    assert inspection.unresolved_range_tokens == ()
 
 
 def test_formula_inspection_resolves_table_header_data_and_total_regions() -> None:

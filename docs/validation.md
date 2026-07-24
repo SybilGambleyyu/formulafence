@@ -42,7 +42,7 @@ machine-readable scope for the limitation.
 
 ## Public structured-reference example — 2026-07-24
 
-FormulaFence 0.4.0 was also profiled against the public
+FormulaFence 0.5.0 was also profiled against the public
 [Excel Easy structured-reference example](https://www.excel-easy.com/examples/structured-references.html).
 The downloaded workbook was used locally for compatibility validation only and
 is not bundled with FormulaFence. Its profile reported one Excel table, 79
@@ -54,6 +54,27 @@ downstream formula cells**, including the table's total and an output formula
 outside the table. This validates that FormulaFence turns the supported table
 forms into real dependency edges while still reporting unsupported forms as
 coverage notes.
+
+## Current-row structured references — 2026-07-24
+
+FormulaFence 0.5.0 adds context-bound table-row edges without evaluating a
+formula. [Microsoft documents `@` and `#This Row` as references to the
+formula's row](https://support.microsoft.com/en-us/excel/using-structured-references-with-excel-tables),
+while noting that the same syntax in a header or total row returns an error. We
+also checked the adjacent-cell case against
+[ClosedXML's independently maintained structured-reference test](https://github.com/ClosedXML/ClosedXML/blob/4e89dcedd83cad553e84d2d97f77fc3d7deb630f/ClosedXML.Tests/Excel/CalcEngine/StructuredReferenceTests.cs),
+which exercises `TableName[[#This Row],…]` from a cell beside the table on a
+data row.
+
+In a controlled local workbook, a `Sales` table used all three common
+calculated-column spellings: `[@[Sales Amount]]`, `[Sales Amount]`, and
+`Sales[[#This Row],[Sales Amount]]`. A neighboring cell used the qualified
+`#This Row` form. The baseline had zero unresolved reference tokens. Replacing
+the first row's input value produced exactly three downstream formula cells:
+the matching calculated-column cell, the adjacent qualified-reference cell,
+and the external `SUM(Sales[Value])` output. FormulaFence did not report the
+other two table rows as impacted. This validates graph precision for the
+supported subset; it does not claim to recalculate or certify Excel results.
 
 ## Controlled local change
 

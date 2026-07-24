@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.4.0/formulafence-0.4.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.5.0/formulafence-0.5.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -99,8 +99,13 @@ maintained financial-model compatibility check.
 
 For Excel tables, FormulaFence statically resolves a table name, a single
 column or contiguous column range, and the `#All`, `#Data`, `#Headers`, and
-`#Totals` regions. This-row (`@`) references and complex bracket escapes remain
-explicit coverage notes. The supported subset follows Excel's documented
+`#Totals` regions. It also resolves row-scoped `@` / `#This Row` references
+when their formula location proves the row: unqualified forms such as
+`[@[Sales Amount]]` and `[Sales Amount]` only inside a table data cell, plus
+qualified forms such as `Sales[@Amount]` and
+`Sales[[#This Row],[Amount]:[Rate]]` anywhere on that table's data row. Header,
+total, cross-sheet, ambiguous, and complex bracket-escape cases remain explicit
+coverage notes. The supported subset follows Excel's documented
 [structured-reference semantics](https://support.microsoft.com/en-us/excel/using-structured-references-with-excel-tables).
 
 ## Development

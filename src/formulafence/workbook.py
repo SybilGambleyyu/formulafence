@@ -359,7 +359,12 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             formula_cells += 1
             if has_broken_reference(snapshot.formula):
                 broken_references.add(snapshot.location)
-            inspection = inspect_formula(snapshot.formula, named_references, structured_tables)
+            inspection = inspect_formula(
+                snapshot.formula,
+                named_references,
+                structured_tables,
+                snapshot.location,
+            )
             if inspection.unresolved_range_tokens:
                 unresolved_reference_tokens[snapshot.location] = inspection.unresolved_range_tokens
             if inspection.dynamic_reference_functions:

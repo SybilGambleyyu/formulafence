@@ -8,7 +8,7 @@ from formulafence.diff import compare_snapshots
 from formulafence.output import profile_to_markdown, report_to_markdown
 from formulafence.workbook import load_snapshot, profile_snapshot
 
-from .helpers import make_model, make_table_model, rewrite
+from .helpers import make_current_row_table_model, make_model, make_table_model, rewrite
 
 
 def test_formula_to_value_traces_cross_sheet_downstream_impact(tmp_path) -> None:
@@ -176,6 +176,28 @@ def test_table_definition_change_is_a_semantic_control_change(tmp_path) -> None:
 
     assert any(change.kind == "table_definition_changed" for change in report.changes)
     assert any(finding.rule_id == "FF013" for finding in report.findings)
+
+
+def test_current_row_table_references_trace_only_the_matching_row(tmp_path) -> None:
+    baseline = make_current_row_table_model(tmp_path / "baseline.xlsx")
+    candidate = make_current_row_table_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Data"]["A2"], "value", 100))
+
+    baseline_snapshot = load_snapshot(baseline)
+    assert baseline_snapshot.unresolved_reference_tokens == {}
+    assert baseline_snapshot.direct_dependents(("Data", "A2")) == {
+        ("Data", "C2"),
+        ("Data", "E2"),
+    }
+    assert baseline_snapshot.direct_dependents(("Data", "A3")) == {("Data", "C3")}
+    assert baseline_snapshot.direct_dependents(("Data", "A4")) == {("Data", "C4")}
+
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(change for change in report.changes if change.location == ("Data", "A2"))
+
+    assert change.impacted_cells == (("Data", "C2"), ("Data", "E2"), ("Report", "B2"))
+    assert ("Data", "C3") not in change.impacted_cells
+    assert ("Data", "C4") not in change.impacted_cells
 
 
 def test_snapshot_captures_parser_coverage_warnings(tmp_path, monkeypatch) -> None:

@@ -32,14 +32,18 @@ review prompt, not proof of an error.
 - Supported files are `.xlsx` and `.xlsm`; legacy `.xls` and password-protected
   workbooks are outside scope.
 - Ordinary workbook and sheet-local names with static A1 destinations are
-  resolved into the dependency graph. FormulaFence also resolves fully qualified
-  table names, static columns/contiguous column ranges, and
+  resolved into the dependency graph. FormulaFence also resolves table names,
+  static columns/contiguous column ranges, and
   `#All`/`#Data`/`#Headers`/`#Totals` regions; it inventories and diffs the
-  table definitions that give those references meaning. This-row (`@`) table
-  syntax, `INDIRECT`, `OFFSET`, named formulas, exotic bracket escapes, dynamic
-  array behavior, cube functions, add-ins, and custom functions cannot always
-  be statically resolved. FormulaFence flags newly introduced unresolved tokens
-  and `INDIRECT`/`OFFSET` use, but does not fabricate dependencies for them.
+  table definitions that give those references meaning. It resolves `@` and
+  `#This Row` only when the formula location statically identifies a named
+  table's data row; unqualified current-row forms additionally require the
+  formula cell itself to be in that table. Header/total-row, cross-sheet,
+  ambiguous, and complex bracket-escape table syntax, `INDIRECT`, `OFFSET`,
+  named formulas, dynamic array behavior, cube functions, add-ins, and custom
+  functions cannot always be statically resolved. FormulaFence flags newly
+  introduced unresolved tokens and `INDIRECT`/`OFFSET` use, but does not
+  fabricate dependencies for them.
 - Explicit external-workbook references are detected. References assembled from
   text or macro code are not.
 - It inventories sheet visibility, defined names, calculation settings, and the

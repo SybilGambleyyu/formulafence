@@ -1,0 +1,14 @@
+version: 1
+rules:
+  no_formula_to_value: true
+  no_new_external_links: true
+  no_new_broken_references: true
+  no_macro_changes: true
+  max_changed_formulas: 5
+  max_downstream_impact: 10
+
+protected_cells:
+  - Dashboard!B12
+
+allowed_changes:
+  - Inputs!B2:B100

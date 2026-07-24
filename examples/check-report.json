@@ -1,0 +1,86 @@
+{
+  "after": {
+    "broken_reference_cells": 0,
+    "defined_names": 0,
+    "external_reference_cells": 0,
+    "file_type": "xlsx",
+    "formula_cells": 1,
+    "has_vba": false,
+    "nonempty_cells": 6,
+    "path": "examples/candidate-risky.xlsx",
+    "sha256": "4f2a31e14a6e4f2f8d56066564c7b06f1440294277bbf2175b4f74e31da995b0",
+    "sheet_count": 3
+  },
+  "before": {
+    "broken_reference_cells": 0,
+    "defined_names": 0,
+    "external_reference_cells": 0,
+    "file_type": "xlsx",
+    "formula_cells": 2,
+    "has_vba": false,
+    "nonempty_cells": 6,
+    "path": "examples/baseline.xlsx",
+    "sha256": "5f44a24575449c4c71a8bbe4956a236ed0b8b066f7019b25dc913b42de3b4e3f",
+    "sheet_count": 3
+  },
+  "changes": [
+    {
+      "after": {
+        "cell_type": "value",
+        "formula": null,
+        "formula_fingerprint": null,
+        "location": "Model!B2",
+        "value": 250,
+        "value_type": "int"
+      },
+      "before": {
+        "cell_type": "formula",
+        "formula": "=Inputs!B2*2",
+        "formula_fingerprint": "inputs!R[0]C[0]*2",
+        "location": "Model!B2",
+        "value": "=Inputs!B2*2",
+        "value_type": "formula"
+      },
+      "details": {},
+      "impact_count": 1,
+      "impacted_cells": [
+        "Dashboard!B12"
+      ],
+      "kind": "formula_to_value",
+      "location": "Model!B2",
+      "severity": "high"
+    }
+  ],
+  "findings": [
+    {
+      "details": {
+        "impact_count": 1
+      },
+      "location": "Model!B2",
+      "message": "Formula was replaced with a value.",
+      "rule_id": "FF001",
+      "severity": "high"
+    },
+    {
+      "location": "Model!B2",
+      "message": "Policy forbids replacing a formula with a value.",
+      "rule_id": "FFP001",
+      "severity": "high"
+    },
+    {
+      "location": "Model!B2",
+      "message": "Policy permits changes only inside allowed_changes ranges.",
+      "rule_id": "FFP007",
+      "severity": "high"
+    }
+  ],
+  "schema_version": "1.0",
+  "summary": {
+    "change_count": 1,
+    "finding_count": 3,
+    "findings_by_severity": {
+      "high": 3
+    },
+    "highest_severity": "high"
+  }
+}

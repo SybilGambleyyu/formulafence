@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "formulafence"
+version = "0.1.0"
+description = "Local-first spreadsheet change assurance for CI and audit workflows."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "FormulaFence contributors" },
+]
+keywords = ["excel", "xlsx", "spreadsheet", "audit", "ci", "risk", "formula"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Financial and Insurance Industry",
+  "Intended Audience :: Information Technology",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Office/Business :: Financial",
+  "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+  "openpyxl>=3.1.5,<4",
+  "PyYAML>=6.0.2,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "ruff>=0.8,<1",
+]
+
+[project.scripts]
+formulafence = "formulafence.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/formulafence/formulafence"
+Documentation = "https://github.com/formulafence/formulafence#readme"
+Repository = "https://github.com/formulafence/formulafence"
+Issues = "https://github.com/formulafence/formulafence/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/formulafence"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

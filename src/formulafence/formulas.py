@@ -31,6 +31,10 @@ _SERIALIZED_LOCAL_PREFIXES = ("_xlpm.", "_xlop.")
 _GROUP_TOKEN_TYPES = {"FUNC", "PAREN", "ARRAY"}
 _WHITESPACE_TOKEN_TYPES = {"WSPACE", "WHITE-SPACE"}
 _SPILL_REFERENCE_FUNCTION = "ANCHORARRAY"
+_IMPLICIT_INTERSECTION_FUNCTION = "SINGLE"
+# This private tokenizer-only wrapper preserves the semantic distinction of a
+# literal ``@A1`` while avoiding an ambiguity with a user-authored SINGLE().
+_LITERAL_IMPLICIT_INTERSECTION_FUNCTION = "_FORMULAFENCE_IMPLICIT_INTERSECTION"
 # ``#`` is not understood by openpyxl's tokenizer, even though it is Excel's
 # display syntax for a spilled-array reference. Keep the accepted grammar
 # intentionally narrow: one internal A1 anchor, optionally sheet-qualified.
@@ -41,6 +45,18 @@ _LITERAL_SPILL_REFERENCE = re.compile(
     r"(?P<reference>(?:(?:'(?:[^']|'')*'|[A-Z0-9_.]+)!)?"
     r"\$?[A-Z]{1,3}\$?[1-9][0-9]*)"
     r"#(?=$|[ \t\r\n,;)}+\-*/^&=<>%])",
+    re.IGNORECASE,
+)
+# Like ``#``, Excel's display-only implicit-intersection operator is outside
+# openpyxl's reference grammar. Only rewrite a direct, internal A1 reference or
+# A1 range. Table current-row syntax, named expressions, external references,
+# 3-D spans, spill combinations, and malformed forms remain untouched so they
+# can never be mistaken for a static dependency.
+_LITERAL_IMPLICIT_INTERSECTION_REFERENCE = re.compile(
+    r"(?<![A-Z0-9_.'\"!:@$\[\]])"
+    r"@(?P<reference>(?:(?:'(?:[^']|'')*'|[A-Z0-9_.]+)!)?"
+    r"\$?[A-Z]{1,3}\$?[1-9][0-9]*(?::\$?[A-Z]{1,3}\$?[1-9][0-9]*)?)"
+    r"(?=$|[ \t\r\n,;)}+\-*/^&=<>%])",
     re.IGNORECASE,
 )
 
@@ -75,6 +91,7 @@ class FormulaInspection:
     three_d_reference_tokens: tuple[str, ...] = ()
     tokenization_failed: bool = False
     spill_reference_tokens: tuple[str, ...] = ()
+    implicit_intersection_tokens: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,7 +183,7 @@ def formula_fingerprint(formula: str, origin: str) -> str:
     openpyxl's tokenizer and only rewrites A1 references in `OPERAND/RANGE`
     tokens, leaving literals and function arguments untouched.
     """
-    tokens, _ = _tokenize_formula(formula, preserve_literal_spill_operator=True)
+    tokens, _, _ = _tokenize_formula(formula, preserve_literal_spill_operator=True)
     if tokens is None:  # pragma: no cover - defensive against malformed formulas
         return formula.strip()
 
@@ -177,7 +194,7 @@ def formula_fingerprint(formula: str, origin: str) -> str:
         if token.type == "OPERAND" and token.subtype == "RANGE":
             parts.append(_normalise_range_token(token.value, origin))
         else:
-            parts.append(token.value)
+            parts.append(_fingerprint_token_value(token))
     return "".join(parts)
 
 
@@ -274,17 +291,53 @@ def _rewrite_literal_spill_references(
     return "".join(parts), tuple(dict.fromkeys(literal_spill_tokens))
 
 
+def _rewrite_literal_implicit_intersection_references(
+    formula: str,
+) -> tuple[str, tuple[str, ...]]:
+    """Make direct ``@A1`` references tokenizable without guessing their scope.
+
+    Excel normally serializes persisted implicit intersection as ``SINGLE()``,
+    but the display syntax can still appear in authoring tools. The private
+    wrapper lets the rest of the inspection retain the operator as a distinct
+    semantic feature and, when an origin is available, select a direct static
+    range precisely.
+    """
+    masked_formula = _mask_double_quoted_strings(formula)
+    parts: list[str] = []
+    literal_tokens: list[str] = []
+    cursor = 0
+    for match in _LITERAL_IMPLICIT_INTERSECTION_REFERENCE.finditer(masked_formula):
+        reference = formula[match.start("reference") : match.end("reference")]
+        if parse_reference_token(reference) is None:
+            continue
+        parts.append(formula[cursor : match.start()])
+        parts.append(f"{_LITERAL_IMPLICIT_INTERSECTION_FUNCTION}({reference})")
+        cursor = match.end()
+        literal_tokens.append(formula[match.start() : match.end()])
+    if not literal_tokens:
+        return formula, ()
+    parts.append(formula[cursor:])
+    return "".join(parts), tuple(dict.fromkeys(literal_tokens))
+
+
 def _tokenize_formula(
     formula: str, *, preserve_literal_spill_operator: bool = False
-) -> tuple[tuple[object, ...] | None, tuple[str, ...]]:
-    """Tokenize a formula after a narrow, non-evaluating spill compatibility pass."""
+) -> tuple[tuple[object, ...] | None, tuple[str, ...], tuple[str, ...]]:
+    """Tokenize after narrow spill and implicit-intersection compatibility passes."""
+    tokenizer_formula, literal_implicit_intersection_tokens = (
+        _rewrite_literal_implicit_intersection_references(formula)
+    )
     tokenizer_formula, literal_spill_tokens = _rewrite_literal_spill_references(
-        formula, preserve_operator=preserve_literal_spill_operator
+        tokenizer_formula, preserve_operator=preserve_literal_spill_operator
     )
     try:
-        return tuple(Tokenizer(tokenizer_formula).items), literal_spill_tokens
+        return (
+            tuple(Tokenizer(tokenizer_formula).items),
+            literal_spill_tokens,
+            literal_implicit_intersection_tokens,
+        )
     except Exception:
-        return None, literal_spill_tokens
+        return None, literal_spill_tokens, literal_implicit_intersection_tokens
 
 
 def resolve_3d_reference(
@@ -871,12 +924,29 @@ def _simple_local_identifier(
 def _function_name(token: object) -> str:
     """Normalize function names, including Excel's OOXML namespace prefixes."""
     value = str(getattr(token, "value", "")).rstrip("(").strip().upper()
-    return value.rsplit(".", 1)[-1]
+    return value.rsplit(".", 1)[-1].lstrip("@")
 
 
 def _function_lookup_key(token: object) -> str:
     """Normalize a callable defined-name token without losing sheet qualification."""
     return reference_lookup_key(str(getattr(token, "value", "")).rstrip("(").strip())
+
+
+def _fingerprint_token_value(token: object) -> str:
+    """Normalize OOXML spellings of the two dynamic-array compatibility functions."""
+    if (
+        getattr(token, "type", None) == "FUNC"
+        and getattr(token, "subtype", None) == "OPEN"
+    ):
+        function_name = _function_name(token)
+        if function_name == _SPILL_REFERENCE_FUNCTION:
+            return f"{_SPILL_REFERENCE_FUNCTION}("
+        if function_name in {
+            _IMPLICIT_INTERSECTION_FUNCTION,
+            _LITERAL_IMPLICIT_INTERSECTION_FUNCTION,
+        }:
+            return f"{_IMPLICIT_INTERSECTION_FUNCTION}("
+    return str(getattr(token, "value", ""))
 
 
 def lambda_parameter_count(formula: str) -> int | None:
@@ -887,7 +957,7 @@ def lambda_parameter_count(formula: str) -> int | None:
     contain a lambda, malformed parameter lists, and trailing invocations so a
     caller cannot mistake an arbitrary defined formula for a custom function.
     """
-    tokens, _ = _tokenize_formula(formula)
+    tokens, _, _ = _tokenize_formula(formula)
     if tokens is None:
         return None
     meaningful = [
@@ -1028,6 +1098,103 @@ def _local_variable_token_indexes(tokens: Sequence[object]) -> set[int]:
     return local_indexes
 
 
+def _implicit_intersection_selection(
+    reference: ParsedReference, origin: tuple[str, str]
+) -> ParsedReference | None:
+    """Return the one static cell selected by a direct implicit intersection.
+
+    Microsoft documents implicit intersection as selecting the input on the
+    formula's row or column. A one-dimensional range can therefore be resolved
+    exactly. For a two-dimensional range, selection is only certain when the
+    formula cell lies within it. All other forms deliberately fall back to the
+    normal conservative range edge instead of inventing a selected cell.
+    """
+    if reference.is_external or None in {
+        reference.min_column,
+        reference.min_row,
+        reference.max_column,
+        reference.max_row,
+    }:
+        return None
+    try:
+        origin_row, origin_column = coordinate_to_tuple(origin[1])
+    except ValueError:
+        return None
+
+    min_column = reference.min_column
+    min_row = reference.min_row
+    max_column = reference.max_column
+    max_row = reference.max_row
+    if min_column == max_column and min_row == max_row:
+        selected_column, selected_row = min_column, min_row
+    elif min_column == max_column and min_row <= origin_row <= max_row:
+        selected_column, selected_row = min_column, origin_row
+    elif min_row == max_row and min_column <= origin_column <= max_column:
+        selected_column, selected_row = origin_column, min_row
+    elif (
+        min_column <= origin_column <= max_column
+        and min_row <= origin_row <= max_row
+    ):
+        selected_column, selected_row = origin_column, origin_row
+    else:
+        return None
+    return ParsedReference(
+        reference.sheet,
+        selected_column,
+        selected_row,
+        selected_column,
+        selected_row,
+        raw=reference.raw,
+        is_external=reference.is_external,
+    )
+
+
+def _implicit_intersection_reference_replacements(
+    tokens: Sequence[object], origin: tuple[str, str] | None
+) -> dict[int, ParsedReference]:
+    """Map direct SINGLE() operands to precise static dependency cells."""
+    if origin is None:
+        return {}
+    replacements: dict[int, ParsedReference] = {}
+    for position, token in enumerate(tokens):
+        if not (
+            getattr(token, "type", None) == "FUNC"
+            and getattr(token, "subtype", None) == "OPEN"
+            and _function_name(token)
+            in {
+                _IMPLICIT_INTERSECTION_FUNCTION,
+                _LITERAL_IMPLICIT_INTERSECTION_FUNCTION,
+            }
+        ):
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if len(arguments) != 1:
+            continue
+        start, end = arguments[0]
+        meaningful = [
+            index for index in range(start, end) if not _is_whitespace(tokens[index])
+        ]
+        if len(meaningful) != 1:
+            continue
+        reference_position = meaningful[0]
+        reference_token = tokens[reference_position]
+        if not (
+            getattr(reference_token, "type", None) == "OPERAND"
+            and getattr(reference_token, "subtype", None) == "RANGE"
+        ):
+            continue
+        reference = parse_reference_token(str(getattr(reference_token, "value", "")))
+        if reference is None:
+            continue
+        selected = _implicit_intersection_selection(reference, origin)
+        if selected is not None:
+            replacements[reference_position] = selected
+    return replacements
+
+
 def inspect_formula(
     formula: str,
     named_references: Mapping[str, Sequence[ParsedReference]] | None = None,
@@ -1048,7 +1215,11 @@ def inspect_formula(
     named-function value records a known LAMBDA whose definition is not safe to
     expand, so its call remains a visible coverage gap.
     """
-    tokens, literal_spill_tokens = _tokenize_formula(formula)
+    (
+        tokens,
+        literal_spill_tokens,
+        literal_implicit_intersection_tokens,
+    ) = _tokenize_formula(formula)
     if tokens is None:
         return FormulaInspection(
             (),
@@ -1056,6 +1227,7 @@ def inspect_formula(
             (),
             tokenization_failed=True,
             spill_reference_tokens=literal_spill_tokens,
+            implicit_intersection_tokens=literal_implicit_intersection_tokens,
         )
     resolved_names = named_references or {}
     resolved_named_functions = named_function_references or {}
@@ -1065,10 +1237,19 @@ def inspect_formula(
     dynamic_reference_functions: list[str] = []
     three_d_reference_tokens: list[str] = []
     spill_reference_tokens: list[str] = list(literal_spill_tokens)
+    implicit_intersection_tokens: list[str] = list(literal_implicit_intersection_tokens)
     local_variable_indexes = _local_variable_token_indexes(tokens)
+    implicit_intersection_replacements = _implicit_intersection_reference_replacements(
+        tokens, origin
+    )
     for position, token in enumerate(tokens):
         if token.type == "OPERAND" and token.subtype == "RANGE":
             if position in local_variable_indexes:
+                continue
+            if token.value.strip().startswith("@"):
+                implicit_intersection_tokens.append(token.value.strip())
+            if selected_reference := implicit_intersection_replacements.get(position):
+                references.append(selected_reference)
                 continue
             reference = parse_reference_token(token.value)
             if reference is not None:
@@ -1091,6 +1272,7 @@ def inspect_formula(
                 continue
             unresolved_range_tokens.append(token.value)
         elif token.type == "FUNC" and token.subtype == "OPEN":
+            raw_function_name = token.value.rstrip("(").strip()
             if position not in local_variable_indexes:
                 function_key = _function_lookup_key(token)
                 if function_key in resolved_named_functions:
@@ -1103,13 +1285,18 @@ def inspect_formula(
             if function_name in _DYNAMIC_REFERENCE_FUNCTIONS:
                 dynamic_reference_functions.append(function_name)
             if function_name == _SPILL_REFERENCE_FUNCTION:
-                spill_reference_tokens.append(token.value.rstrip("(").strip())
+                spill_reference_tokens.append(raw_function_name)
+            if raw_function_name.startswith("@"):
+                implicit_intersection_tokens.append(raw_function_name)
+            elif function_name == _IMPLICIT_INTERSECTION_FUNCTION:
+                implicit_intersection_tokens.append(raw_function_name)
     return FormulaInspection(
         references=tuple(references),
         unresolved_range_tokens=tuple(dict.fromkeys(unresolved_range_tokens)),
         dynamic_reference_functions=tuple(dict.fromkeys(dynamic_reference_functions)),
         three_d_reference_tokens=tuple(dict.fromkeys(three_d_reference_tokens)),
         spill_reference_tokens=tuple(dict.fromkeys(spill_reference_tokens)),
+        implicit_intersection_tokens=tuple(dict.fromkeys(implicit_intersection_tokens)),
     )
 
 

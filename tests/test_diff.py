@@ -10,6 +10,7 @@ from formulafence.workbook import load_snapshot, profile_snapshot
 
 from .helpers import (
     make_current_row_table_model,
+    make_implicit_intersection_model,
     make_let_model,
     make_model,
     make_named_formula_model,
@@ -161,12 +162,23 @@ def test_formula_defined_names_remain_coverage_gaps_when_not_fully_static(tmp_pa
                 attr_text="=SUM(_xlfn.ANCHORARRAY(Inputs!$B$2))",
             )
         )
+        workbook.defined_names.add(
+            DefinedName(
+                "ImplicitMetric",
+                attr_text="=_xlfn.SINGLE(Inputs!$B$2:$B$4)",
+            )
+        )
+        workbook.defined_names.add(
+            DefinedName("LiteralImplicitMetric", attr_text="=@Inputs!$B$2:$B$4")
+        )
         workbook["Summary"]["B5"] = "=RelativeMetric"
         workbook["Summary"]["B6"] = "=DynamicMetric"
         workbook["Summary"]["B7"] = "=CircularMetricA"
         workbook["Summary"]["B8"] = "=PeriodMetric"
         workbook["Summary"]["B9"] = "=SpillMetric"
         workbook["Summary"]["B10"] = "=SerializedSpillMetric"
+        workbook["Summary"]["B11"] = "=ImplicitMetric"
+        workbook["Summary"]["B12"] = "=LiteralImplicitMetric"
 
     rewrite(workbook_path, add_unsafe_formula_names)
     snapshot = load_snapshot(workbook_path)
@@ -178,6 +190,8 @@ def test_formula_defined_names_remain_coverage_gaps_when_not_fully_static(tmp_pa
         ("Summary", "B8"): ("PeriodMetric",),
         ("Summary", "B9"): ("SpillMetric",),
         ("Summary", "B10"): ("SerializedSpillMetric",),
+        ("Summary", "B11"): ("ImplicitMetric",),
+        ("Summary", "B12"): ("LiteralImplicitMetric",),
     }
     assert ("Summary", "B5") not in snapshot.direct_dependents(("Inputs", "B2"))
     assert ("Summary", "B6") not in snapshot.direct_dependents(("Inputs", "B2"))
@@ -185,6 +199,8 @@ def test_formula_defined_names_remain_coverage_gaps_when_not_fully_static(tmp_pa
     assert ("Summary", "B8") not in snapshot.direct_dependents(("Inputs", "B2"))
     assert ("Summary", "B9") not in snapshot.direct_dependents(("Inputs", "B2"))
     assert ("Summary", "B10") not in snapshot.direct_dependents(("Inputs", "B2"))
+    assert ("Summary", "B11") not in snapshot.direct_dependents(("Inputs", "B2"))
+    assert ("Summary", "B12") not in snapshot.direct_dependents(("Inputs", "B2"))
 
 
 def test_formula_defined_names_expand_supported_static_table_references(tmp_path) -> None:
@@ -365,6 +381,25 @@ def test_spill_references_trace_anchors_but_remain_explicit_coverage_limits(tmp_
     assert change.impacted_cells == (("Dashboard", "B2"), ("Model", "B2"))
 
 
+def test_implicit_intersection_traces_the_selected_static_input_and_profiles_it(tmp_path) -> None:
+    workbook = make_implicit_intersection_model(tmp_path / "implicit-intersection.xlsx")
+
+    snapshot = load_snapshot(workbook)
+    profile = profile_snapshot(snapshot)
+
+    assert snapshot.unresolved_reference_tokens == {}
+    assert snapshot.direct_dependents(("Inputs", "B2")) == {("Model", "B2")}
+    assert snapshot.direct_dependents(("Inputs", "B3")) == {("Model", "B3")}
+    assert snapshot.direct_dependents(("Inputs", "B4")) == set()
+    assert snapshot.direct_dependents(("Model", "B2")) == {("Dashboard", "B2")}
+    assert snapshot.summary()["implicit_intersection_cells"] == 2
+    assert profile["features"]["implicit_intersection_cells"] == [
+        {"location": "Model!B2", "tokens": ["_xlfn.SINGLE"]},
+        {"location": "Model!B3", "tokens": ["@Inputs!B2:B4"]},
+    ]
+    assert "## Explicit implicit intersection" in profile_to_markdown(profile)
+
+
 def test_diff_surfaces_new_spill_and_tokenization_coverage_limits(tmp_path) -> None:
     baseline = make_model(tmp_path / "baseline.xlsx")
     candidate = make_model(tmp_path / "candidate.xlsx")
@@ -388,6 +423,26 @@ def test_diff_surfaces_new_spill_and_tokenization_coverage_limits(tmp_path) -> N
         "spill_reference_added",
         "formula_tokenization_failure_added",
     }
+
+
+def test_diff_surfaces_new_implicit_intersection(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    rewrite(
+        candidate,
+        lambda workbook: setattr(
+            workbook["Model"]["D2"], "value", "=@Inputs!B2:B4"
+        ),
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert profile_snapshot(candidate_snapshot)["features"]["implicit_intersection_cells"] == [
+        {"location": "Model!D2", "tokens": ["@Inputs!B2:B4"]}
+    ]
+    assert {finding.rule_id for finding in report.findings} >= {"FF017"}
+    assert {change.kind for change in report.changes} >= {"implicit_intersection_added"}
 
 
 def test_external_defined_name_is_tracked_as_an_external_reference(tmp_path) -> None:

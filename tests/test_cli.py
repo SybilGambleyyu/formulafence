@@ -55,11 +55,12 @@ def test_profile_does_not_expose_cell_values(tmp_path) -> None:
     assert '"formula_cells"' in profile
 
 
-def test_init_policy_includes_spill_and_tokenizer_controls(tmp_path) -> None:
+def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None:
     policy = tmp_path / "formulafence.yml"
 
     assert main(["init", str(policy)]) == 0
 
     content = policy.read_text(encoding="utf-8")
     assert "no_new_spill_references: true" in content
+    assert "no_new_implicit_intersections: true" in content
     assert "no_new_tokenization_failures: true" in content

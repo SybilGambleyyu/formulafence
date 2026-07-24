@@ -163,6 +163,44 @@ as a tokenizer-failure cell, emits `FF016` when newly introduced, and can be
 blocked by `no_new_tokenization_failures`. This ensures a parser failure cannot
 silently erase a formula's dependency coverage.
 
+## Explicit implicit intersection — 2026-07-24
+
+Excel documents `@` as explicit implicit intersection: a range contributes the
+cell on the formula's row or column, while an array contributes its top-left
+value. Its [Formula versus Formula2 guidance](https://learn.microsoft.com/en-us/office/vba/excel/concepts/cells-and-ranges/range-formula-vs-formula2)
+also distinguishes old implicit-intersection evaluation from modern array
+evaluation. The literal `@` is not necessarily what reaches an `.xlsx` file:
+[XlsxWriter documents](https://xlsxwriter.readthedocs.io/working_with_formulas.html)
+that Excel stores the persisted form as `SINGLE()` / `_xlfn.SINGLE()`.
+
+FormulaFence 0.11.0 records literal direct `@A1:A3`, `@` applied to functions,
+and persisted `_xlfn.SINGLE(...)`; profiles list each site and a newly added one
+emits `FF017`. For a direct static A1 range with an unambiguous formula-location
+intersection it adds only the selected cell edge. This is deliberately narrower
+than formula evaluation: complex function results keep their visible static
+inputs, while
+formula-defined names containing explicit intersection remain unresolved at a
+call site because the caller position changes the selection.
+
+An interoperability workbook generated with independently maintained XlsxWriter
+3.2.9 had SHA-256
+`de7ee24b194ceb1c58ace589d3725876bad2aa3d4e45c5b1f9cba428d3837067` and
+stored these formulas as one-cell array formulas:
+
+| Cell | Stored formula | Selected dependency |
+| --- | --- | --- |
+| `B2` | `_xlfn.SINGLE(A1:A3)` | `A2` |
+| `B3` | `_xlfn.SINGLE(A1:A3)` | `A3` |
+
+FormulaFence profiled the workbook with three formula cells, two
+implicit-intersection sites, no dependency from `A1` to either `SINGLE` caller,
+and a direct `B2 → C2` downstream edge. The fixture is generated locally and
+not bundled; it verifies OOXML serialization and static graph behavior, not
+Excel's calculated values. Separate unit fixtures cover literal `@A1:A3`,
+serialized `SINGLE`, horizontal and rectangular direct ranges, string safety,
+unsupported `@A1#`, dynamic `@OFFSET`, table `[@Column]` separation, and
+formula-defined-name containment.
+
 ## Public structured-reference example — 2026-07-24
 
 FormulaFence 0.6.0 was also profiled against the public

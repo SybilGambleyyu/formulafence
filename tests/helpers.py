@@ -5,6 +5,7 @@ from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.formula import ArrayFormula
 from openpyxl.worksheet.table import Table
 
 
@@ -113,6 +114,30 @@ def make_spill_model(path: Path) -> Path:
 
     dashboard = workbook.create_sheet("Dashboard")
     dashboard["A1"] = "Spill-driven output"
+    dashboard["B2"] = "=Model!B2"
+    workbook.save(path)
+    return path
+
+
+def make_implicit_intersection_model(path: Path) -> Path:
+    """Create persisted SINGLE() and literal @ consumers of a static input range."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Implicit-intersection inputs"
+    inputs["B2"] = 10
+    inputs["B3"] = 20
+    inputs["B4"] = 30
+
+    model = workbook.create_sheet("Model")
+    model["A1"] = "Implicit-intersection calculations"
+    model["B2"].value = ArrayFormula(
+        ref="B2", text="=_xlfn.SINGLE(Inputs!B2:B4)"
+    )
+    model["B3"] = "=@Inputs!B2:B4"
+
+    dashboard = workbook.create_sheet("Dashboard")
+    dashboard["A1"] = "Implicit-intersection output"
     dashboard["B2"] = "=Model!B2"
     workbook.save(path)
     return path

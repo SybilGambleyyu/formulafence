@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.10.0/formulafence-0.10.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.11.0/formulafence-0.11.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -66,6 +66,7 @@ rules:
   no_new_unresolved_references: true
   no_new_dynamic_references: true
   no_new_spill_references: true
+  no_new_implicit_intersections: true
   no_new_tokenization_failures: true
   no_table_definition_changes: true
   no_3d_reference_scope_changes: true
@@ -91,7 +92,7 @@ allowed_changes:
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
-| Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, and formula-tokenization failures |
+| Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
 | CI output | Deterministic JSON, reviewer-friendly Markdown, and SARIF |
 
@@ -140,6 +141,23 @@ possible blocking cell. External, 3-D, range, named, implicit-intersection, and
 malformed spill forms remain explicit coverage limits. A formula-defined name
 that contains a spill reference also remains unresolved at its call site rather
 than hiding that dynamic boundary behind a static name edge.
+
+FormulaFence also inventories Excel's explicit implicit-intersection operator:
+the display form `@A1:A3`, function forms such as `@INDEX(...)`, and persisted
+OOXML `_xlfn.SINGLE(...)`. When a direct static A1 cell or range has one
+unambiguous documented row/column intersection, it adds that single-cell
+edge—for example, `=_xlfn.SINGLE(Inputs!B2:B4)` in row 3
+depends on `Inputs!B3`, not every input in the range. Other expressions retain
+their visible static input edges without evaluating Excel. Profiles record each
+recognized explicit use; a new use emits `FF017`, and
+`no_new_implicit_intersections` can require review in CI. This is distinct from
+Excel-table `[@Column]` syntax, which follows the table-specific resolver.
+Formula-defined names containing explicit implicit intersection remain
+unresolved at call sites because their selected cell depends on the caller's
+position. The scope follows Microsoft's
+[implicit-intersection guidance](https://support.microsoft.com/en-us/excel/implicit-intersection-operator)
+and [XlsxWriter's documentation](https://xlsxwriter.readthedocs.io/working_with_formulas.html)
+that persisted `@` behavior uses `SINGLE()`.
 
 FormulaFence also follows a call to a workbook- or worksheet-local defined name
 when its complete definition is one statically resolvable `LAMBDA` expression.

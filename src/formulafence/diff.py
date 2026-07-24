@@ -591,6 +591,31 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
             )
         )
 
+    for location, tokens in _new_coverage_items(
+        before.implicit_intersection_tokens, after.implicit_intersection_tokens
+    ):
+        details = {"tokens": list(tokens)}
+        changes.append(
+            Change(
+                "implicit_intersection_added",
+                location,
+                "medium",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF017",
+                "medium",
+                (
+                    "Formula introduces explicit implicit intersection; it can change which "
+                    "cell a range or array contributes."
+                ),
+                location,
+                details=details,
+            )
+        )
+
     control_changes, control_findings = _workbook_control_changes(before, after)
     changes.extend(control_changes)
     findings.extend(control_findings)

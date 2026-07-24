@@ -54,6 +54,16 @@ review prompt, not proof of an error.
   named, implicit-intersection, and malformed spill forms stay outside this
   subset. A formula-defined name containing a spill reference is not expanded,
   so callers retain a visible coverage gap.
+- Explicit implicit intersection is inventoried for literal `@` display syntax,
+  `@` applied to a function, and persisted `SINGLE()` OOXML. When `SINGLE()`
+  has one direct static A1 cell or range argument with an unambiguous
+  row/column intersection, FormulaFence selects that single-cell edge.
+  Function results, names, table syntax, external/3-D forms, and ambiguous
+  placements retain conservative visible inputs or remain
+  unresolved; FormulaFence never evaluates an expression to discover a value.
+  New explicit uses emit `FF017`. This is separate from supported table
+  current-row `[@Column]` syntax. Formula-defined names containing explicit
+  implicit intersection are not expanded because the caller location matters.
 - Ordinary lexical names inside inline `LET` expressions and `LAMBDA` bodies
   are not workbook references and are excluded from unresolved-token reporting;
   FormulaFence still traces the static dependencies around them. A defined name

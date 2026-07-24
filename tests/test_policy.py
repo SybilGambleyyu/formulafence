@@ -90,6 +90,27 @@ def test_policy_can_block_spill_and_tokenization_coverage_limits(tmp_path) -> No
     assert {"FFP015", "FFP016"} <= rule_ids
 
 
+def test_policy_can_block_implicit_intersection(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    rewrite(
+        candidate,
+        lambda workbook: setattr(
+            workbook["Model"]["D2"], "value", "=@Inputs!B2:B4"
+        ),
+    )
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_new_implicit_intersections": True},
+        }
+    )
+
+    rule_ids = {finding.rule_id for finding in evaluate_policy(report, policy)}
+    assert "FFP017" in rule_ids
+
+
 def test_policy_can_block_table_definition_changes(tmp_path) -> None:
     baseline = make_table_model(tmp_path / "baseline.xlsx")
     candidate = make_table_model(tmp_path / "candidate.xlsx")

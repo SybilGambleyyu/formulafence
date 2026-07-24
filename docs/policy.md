@@ -16,6 +16,7 @@ rules:
   no_new_unresolved_references: true
   no_new_dynamic_references: true
   no_new_spill_references: true
+  no_new_implicit_intersections: true
   no_new_tokenization_failures: true
   no_table_definition_changes: true
   no_3d_reference_scope_changes: true
@@ -59,6 +60,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
 | `no_new_dynamic_references` | boolean | A formula adds a dynamic reference function such as `INDIRECT` or `OFFSET`. |
 | `no_new_spill_references` | boolean | A formula adds a dynamic-array spill reference; FormulaFence traces its anchor but not its variable extent or blockers. |
+| `no_new_implicit_intersections` | boolean | A formula adds explicit `@` / `SINGLE()` implicit intersection, which can change which value a range or array contributes. |
 | `no_new_tokenization_failures` | boolean | A formula is newly introduced that the underlying formula tokenizer cannot inspect. |
 | `no_table_definition_changes` | boolean | An Excel table is added, removed, moved, renamed, or has its columns/header/total-row configuration changed. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
@@ -100,6 +102,17 @@ that could block it. External, 3-D, range, named, implicit-intersection, and
 malformed spill forms remain coverage limits. Formula-defined names containing
 a spill reference are left unresolved at their call sites so this boundary
 cannot be hidden behind a name.
+
+FormulaFence separately inventories explicit implicit intersection: literal
+`@A1:A3`, `@` applied to a function result, and persisted
+`_xlfn.SINGLE(...)`. When `SINGLE()` wraps one direct static A1 cell or range
+with an unambiguous row/column intersection, the formula location selects a
+precise cell edge; otherwise FormulaFence keeps the visible static inputs
+conservatively and never evaluates the expression.
+New instances emit `FF017`; enable `no_new_implicit_intersections` for
+`FFP017`. This does not change the table-specific `[@Column]` / `#This Row`
+resolver. Formula-defined names containing explicit implicit intersection stay
+unresolved at a caller because that caller position is part of the semantics.
 
 When a formula cannot be tokenized at all, FormulaFence records its location in
 the profile and emits `FF016` for a new instance. Enable

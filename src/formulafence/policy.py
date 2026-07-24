@@ -21,6 +21,7 @@ _RULE_FIELDS = {
     "no_new_unresolved_references",
     "no_new_dynamic_references",
     "no_new_spill_references",
+    "no_new_implicit_intersections",
     "no_new_tokenization_failures",
     "no_table_definition_changes",
     "no_3d_reference_scope_changes",
@@ -61,6 +62,7 @@ class Policy:
     no_new_unresolved_references: bool = False
     no_new_dynamic_references: bool = False
     no_new_spill_references: bool = False
+    no_new_implicit_intersections: bool = False
     no_new_tokenization_failures: bool = False
     no_table_definition_changes: bool = False
     no_3d_reference_scope_changes: bool = False
@@ -83,6 +85,7 @@ rules:
   no_new_unresolved_references: true
   no_new_dynamic_references: true
   no_new_spill_references: true
+  no_new_implicit_intersections: true
   no_new_tokenization_failures: true
   no_table_definition_changes: true
   no_3d_reference_scope_changes: true
@@ -173,6 +176,9 @@ def parse_policy(data: object) -> Policy:
         no_new_unresolved_references=_boolean_rule(rules, "no_new_unresolved_references"),
         no_new_dynamic_references=_boolean_rule(rules, "no_new_dynamic_references"),
         no_new_spill_references=_boolean_rule(rules, "no_new_spill_references"),
+        no_new_implicit_intersections=_boolean_rule(
+            rules, "no_new_implicit_intersections"
+        ),
         no_new_tokenization_failures=_boolean_rule(
             rules, "no_new_tokenization_failures"
         ),
@@ -281,6 +287,17 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP015",
                     "high",
                     "Policy forbids new dynamic-array spill references.",
+                    finding.location,
+                    details=finding.details,
+                )
+            )
+    if policy.no_new_implicit_intersections:
+        for finding in _rule_triggered(report, "FF017"):
+            violations.append(
+                Finding(
+                    "FFP017",
+                    "high",
+                    "Policy forbids new explicit implicit-intersection operators.",
                     finding.location,
                     details=finding.details,
                 )

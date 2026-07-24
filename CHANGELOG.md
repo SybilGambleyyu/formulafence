@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.0 — 2026-07-24
+
+- Trace the exact selected cell for direct static A1 implicit intersection,
+  including literal `@A1:A3` and persisted OOXML `_xlfn.SINGLE(A1:A3)` forms.
+  Other explicit intersection expressions retain conservative static input
+  edges instead of being evaluated.
+- Inventory explicit implicit intersection in profiles, emit `FF017` for new
+  uses, and add the fail-closed `no_new_implicit_intersections` policy rule
+  (`FFP017`). Formula-defined names containing this context-dependent behavior
+  remain unresolved at call sites.
+- Normalize direct display and OOXML spellings of `#`/`ANCHORARRAY` and
+  `@`/`SINGLE` in formula fingerprints to avoid a serialization-only formula
+  diff.
+
 ## 0.10.0 — 2026-07-24
 
 - Trace the static anchor behind direct internal `A1#` spilled-array references

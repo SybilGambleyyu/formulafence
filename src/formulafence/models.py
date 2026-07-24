@@ -192,6 +192,9 @@ class WorkbookSnapshot:
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     spill_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
+    implicit_intersection_tokens: dict[CellKey, tuple[str, ...]] = field(
+        default_factory=dict
+    )
     tokenization_failure_cells: set[CellKey] = field(default_factory=set)
 
     def direct_dependents(self, location: CellKey) -> set[CellKey]:
@@ -218,6 +221,7 @@ class WorkbookSnapshot:
             "dynamic_reference_cells": len(self.dynamic_reference_functions),
             "three_d_reference_cells": len(self.three_d_reference_tokens),
             "spill_reference_cells": len(self.spill_reference_tokens),
+            "implicit_intersection_cells": len(self.implicit_intersection_tokens),
             "tokenization_failure_cells": len(self.tokenization_failure_cells),
             "parser_warning_count": len(self.parser_warnings),
         }

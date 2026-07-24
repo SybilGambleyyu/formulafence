@@ -31,6 +31,10 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         f"- **Tables:** {workbook['table_count']}",
         f"- **3-D reference formulas:** {workbook['three_d_reference_cells']}",
         f"- **Spill-reference formulas:** {workbook['spill_reference_cells']}",
+        (
+            "- **Implicit-intersection formulas:** "
+            f"{workbook['implicit_intersection_cells']}"
+        ),
         f"- **Formula tokenizer failures:** {workbook['tokenization_failure_cells']}",
         f"- **VBA payload:** {'present' if workbook['has_vba'] else 'absent'}",
         "",
@@ -85,6 +89,15 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             lines.append(
                 f"- Spill reference at `{issue['location']}`: {tokens} "
                 "(the anchor is traced; dynamic extent and blockers are coverage limits)"
+            )
+    if features["implicit_intersection_cells"]:
+        lines.extend(["", "## Explicit implicit intersection", ""])
+        for issue in features["implicit_intersection_cells"]:
+            tokens = ", ".join(f"`{token}`" for token in issue["tokens"])
+            lines.append(
+                f"- Implicit intersection at `{issue['location']}`: {tokens} "
+                "(direct static A1 ranges resolve to their selected cell; other "
+                "expressions retain conservative input edges)"
             )
     if (
         features["parser_warnings"]

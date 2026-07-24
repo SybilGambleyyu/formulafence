@@ -13,7 +13,17 @@ def test_fingerprint_normalises_relative_copy_patterns() -> None:
     assert formula_fingerprint("=$A2*2", "B2") == formula_fingerprint("=$A3*2", "B3")
     assert formula_fingerprint("=A2*2", "B2") != formula_fingerprint("=A2*3", "B2")
     assert formula_fingerprint("=A1#", "B1") == formula_fingerprint("=A2#", "B2")
+    assert formula_fingerprint("=A1#", "B1") == formula_fingerprint(
+        "=_xlfn.ANCHORARRAY(A1)", "B1"
+    )
     assert formula_fingerprint("=A1#", "B1") != formula_fingerprint("=A1", "B1")
+    assert formula_fingerprint("=@A1:A3", "B2") == formula_fingerprint(
+        "=@A2:A4", "B3"
+    )
+    assert formula_fingerprint("=@A1:A3", "B2") != formula_fingerprint("=A1:A3", "B2")
+    assert formula_fingerprint("=@A1:A3", "B2") == formula_fingerprint(
+        "=_xlfn.SINGLE(A1:A3)", "B2"
+    )
 
 
 def test_extract_references_keeps_external_workbooks_separate() -> None:
@@ -75,10 +85,50 @@ def test_formula_inspection_marks_unsupported_tokenization_failures() -> None:
     malformed = inspect_formula("=SUM(A1#1)")
     range_anchor = inspect_formula("=SUM(A1:B2#)")
     external_anchor = inspect_formula("=SUM([book.xlsx]Sheet1!A1#)")
+    implicit_spill = inspect_formula("=SUM(@A1#)")
 
     assert malformed.tokenization_failed is True
     assert range_anchor.tokenization_failed is True
     assert external_anchor.tokenization_failed is True
+    assert implicit_spill.tokenization_failed is True
+
+
+def test_formula_inspection_traces_direct_implicit_intersection_and_marks_all_forms() -> None:
+    literal = inspect_formula("=SUM(@A1:A3)", origin=("Model", "B2"))
+    serialized = inspect_formula(
+        "=SUM(_xlfn.SINGLE(Inputs!$B$2:$B$4))", origin=("Model", "C3")
+    )
+    function = inspect_formula("=@INDEX(A1:A3,B1)", origin=("Model", "B2"))
+    dynamic_function = inspect_formula("=@OFFSET(A1,1,0)", origin=("Model", "B2"))
+    horizontal = inspect_formula("=@A1:C1", origin=("Model", "B2"))
+    rectangular = inspect_formula("=@A1:C3", origin=("Model", "B2"))
+    outside_range = inspect_formula("=@A1:A3", origin=("Model", "B5"))
+    named_range = inspect_formula("=@NamedRange", origin=("Model", "B2"))
+    table_current_row = inspect_formula("=[@Amount]", origin=("Model", "B2"))
+    string_literal = inspect_formula('=CONCAT("@A1:A3",@A1:A3)', origin=("Model", "B2"))
+
+    assert literal.references == (ParsedReference(None, 1, 2, 1, 2, raw="A1:A3"),)
+    assert literal.unresolved_range_tokens == ()
+    assert literal.implicit_intersection_tokens == ("@A1:A3",)
+    assert serialized.references == (
+        ParsedReference("Inputs", 2, 3, 2, 3, raw="Inputs!$B$2:$B$4"),
+    )
+    assert serialized.implicit_intersection_tokens == ("_xlfn.SINGLE",)
+    assert function.references == (
+        ParsedReference(None, 1, 1, 1, 3, raw="A1:A3"),
+        ParsedReference(None, 2, 1, 2, 1, raw="B1"),
+    )
+    assert function.implicit_intersection_tokens == ("@INDEX",)
+    assert dynamic_function.dynamic_reference_functions == ("OFFSET",)
+    assert dynamic_function.implicit_intersection_tokens == ("@OFFSET",)
+    assert horizontal.references == (ParsedReference(None, 2, 1, 2, 1, raw="A1:C1"),)
+    assert rectangular.references == (ParsedReference(None, 2, 2, 2, 2, raw="A1:C3"),)
+    assert outside_range.references == (ParsedReference(None, 1, 1, 1, 3, raw="A1:A3"),)
+    assert named_range.unresolved_range_tokens == ("@NamedRange",)
+    assert named_range.implicit_intersection_tokens == ("@NamedRange",)
+    assert table_current_row.implicit_intersection_tokens == ()
+    assert string_literal.references == (ParsedReference(None, 1, 2, 1, 2, raw="A1:A3"),)
+    assert string_literal.implicit_intersection_tokens == ("@A1:A3",)
 
 
 def test_formula_inspection_respects_let_lexical_scope() -> None:

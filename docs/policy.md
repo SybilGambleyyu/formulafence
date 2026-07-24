@@ -13,6 +13,8 @@ rules:
   no_new_broken_references: true
   no_macro_changes: true
   no_new_parser_warnings: true
+  no_new_unresolved_references: true
+  no_new_dynamic_references: true
   no_sheet_visibility_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -50,6 +52,8 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_broken_references` | boolean | A formula adds `#REF!`. |
 | `no_macro_changes` | boolean | The `xl/vbaProject.bin` payload is added, removed, or has a different SHA-256. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
+| `no_new_unresolved_references` | boolean | A formula adds a name, table reference, or other range token that cannot be resolved statically. |
+| `no_new_dynamic_references` | boolean | A formula adds a dynamic reference function such as `INDIRECT` or `OFFSET`. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
 | `max_downstream_impact` | non-negative integer | A changed cell reaches more downstream formula cells than allowed. |
@@ -57,6 +61,11 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 All booleans default to `false`; limits default to unset. Start narrowly for a
 single material workbook, then expand policy only after reviewing the model's
 actual change patterns.
+
+Ordinary workbook and sheet-local names with static A1 destinations are resolved
+into the dependency graph. The two coverage controls are for the remaining
+cases—such as named formulas, structured table references, and dynamic address
+construction—where FormulaFence intentionally does not guess at dependencies.
 
 ## Exit status
 

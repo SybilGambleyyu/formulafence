@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
@@ -178,6 +178,19 @@ def _formula_pattern_findings(
                 )
                 break
     return findings
+
+
+def _new_coverage_items(
+    before: Mapping[CellKey, tuple[str, ...]], after: Mapping[CellKey, tuple[str, ...]]
+) -> list[tuple[CellKey, tuple[str, ...]]]:
+    """Return per-cell static-analysis coverage items newly present in a candidate."""
+    additions: list[tuple[CellKey, tuple[str, ...]]] = []
+    for location in sorted(after, key=_location_sort_key):
+        previous = {item.casefold() for item in before.get(location, ())}
+        new_items = tuple(item for item in after[location] if item.casefold() not in previous)
+        if new_items:
+            additions.append((location, new_items))
+    return additions
 
 
 def _workbook_control_changes(
@@ -394,6 +407,53 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
                 "high",
                 "Formula introduces an explicit external-workbook reference.",
                 location,
+            )
+        )
+
+    for location, tokens in _new_coverage_items(
+        before.unresolved_reference_tokens, after.unresolved_reference_tokens
+    ):
+        details = {"tokens": list(tokens)}
+        changes.append(
+            Change(
+                "unresolved_formula_reference_added",
+                location,
+                "medium",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF011",
+                "medium",
+                "Formula introduces a reference that FormulaFence cannot statically resolve.",
+                location,
+                details=details,
+            )
+        )
+
+    for location, functions in _new_coverage_items(
+        before.dynamic_reference_functions, after.dynamic_reference_functions
+    ):
+        details = {"functions": list(functions)}
+        changes.append(
+            Change(
+                "dynamic_formula_reference_added",
+                location,
+                "medium",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF012",
+                "medium",
+                (
+                    "Formula introduces a dynamic reference function; "
+                    "dependency impact may be incomplete."
+                ),
+                location,
+                details=details,
             )
         )
 

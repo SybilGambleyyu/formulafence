@@ -2,6 +2,7 @@
   "after": {
     "broken_reference_cells": 0,
     "defined_names": 0,
+    "dynamic_reference_cells": 0,
     "external_reference_cells": 0,
     "file_type": "xlsx",
     "formula_cells": 1,
@@ -9,12 +10,14 @@
     "nonempty_cells": 6,
     "parser_warning_count": 0,
     "path": "examples/candidate-risky.xlsx",
-    "sha256": "0184966d097c04bb7326e1c256904de54209f8eb7c7f2efe6c0673e9ed5fea13",
-    "sheet_count": 3
+    "sha256": "0b13e5b87d5f0fd7991c7831807589fcd6c5844f2c03ab498712af1a60c28516",
+    "sheet_count": 3,
+    "unresolved_reference_cells": 0
   },
   "before": {
     "broken_reference_cells": 0,
     "defined_names": 0,
+    "dynamic_reference_cells": 0,
     "external_reference_cells": 0,
     "file_type": "xlsx",
     "formula_cells": 2,
@@ -22,8 +25,9 @@
     "nonempty_cells": 6,
     "parser_warning_count": 0,
     "path": "examples/baseline.xlsx",
-    "sha256": "e3275fe8d769d9cda38a11ed78c7ca35426968cacf8b1c9c2ecf80cbd523cffe",
-    "sheet_count": 3
+    "sha256": "94fa64078e3521fb58408a0e411b2e676fab2cc5ef6ee26ab530c6bf0ec3992e",
+    "sheet_count": 3,
+    "unresolved_reference_cells": 0
   },
   "changes": [
     {

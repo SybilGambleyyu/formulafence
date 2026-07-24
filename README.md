@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.2.0/formulafence-0.2.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.3.0/formulafence-0.3.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -63,6 +63,8 @@ rules:
   no_new_broken_references: true
   no_macro_changes: true
   no_new_parser_warnings: true
+  no_new_unresolved_references: true
+  no_new_dynamic_references: true
   max_changed_formulas: 20
   max_downstream_impact: 100
 
@@ -81,11 +83,11 @@ allowed_changes:
 | Capability | What it catches |
 | --- | --- |
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
-| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet references |
+| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet and static named-range references |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
 | Workbook controls | Sheet visibility, defined names, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
-| Coverage changes | New unsupported-workbook parser warnings |
+| Coverage changes | New parser warnings, unresolved formula references, and dynamic-reference functions (`INDIRECT`/`OFFSET`) |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
 | CI output | Deterministic JSON, reviewer-friendly Markdown, and SARIF |
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from openpyxl.formula import Tokenizer
@@ -14,6 +15,7 @@ from openpyxl.utils.cell import (
 
 MAX_EXCEL_ROW = 1_048_576
 MAX_EXCEL_COLUMN = 16_384
+_DYNAMIC_REFERENCE_FUNCTIONS = {"INDIRECT", "OFFSET"}
 
 _CELL_REFERENCE = re.compile(
     r"(?<![A-Z0-9_])(?P<column_absolute>\$?)(?P<column>[A-Z]{1,3})"
@@ -40,6 +42,15 @@ class ParsedReference:
             self.min_column != self.max_column
             or self.min_row != self.max_row
         )
+
+
+@dataclass(frozen=True)
+class FormulaInspection:
+    """Static-reference coverage collected from one formula without evaluation."""
+
+    references: tuple[ParsedReference, ...]
+    unresolved_range_tokens: tuple[str, ...]
+    dynamic_reference_functions: tuple[str, ...]
 
 
 def _last_unquoted_bang(value: str) -> int:
@@ -136,15 +147,15 @@ def formula_fingerprint(formula: str, origin: str) -> str:
 
 
 def parse_reference_token(value: str) -> ParsedReference | None:
-    """Parse a token such as `'Inputs'!$B$2:$B$20` without resolving names."""
+    """Parse an A1 token such as `'Inputs'!$B$2:$B$20` without resolving names."""
     sheet, address = _split_sheet_reference(value)
     normalised_sheet, external = _normalise_sheet_name(sheet)
     if external:
         return ParsedReference(None, None, None, None, None, value, is_external=True)
 
-    # Table references and named ranges arrive as RANGE tokens too, but are not
-    # statically resolvable without a full Excel evaluator. Leave them out rather
-    # than inventing dependencies.
+    # Table references and named ranges arrive as RANGE tokens too. Their
+    # resolution is deliberately handled by inspect_formula, where a workbook
+    # supplied name map is available.
     try:
         min_column, min_row, max_column, max_row = range_boundaries(address)
     except ValueError:
@@ -164,23 +175,69 @@ def parse_reference_token(value: str) -> ParsedReference | None:
     )
 
 
-def extract_references(formula: str) -> list[ParsedReference]:
-    """Return explicit A1-style references from a formula.
+def reference_lookup_key(value: str) -> str:
+    """Normalize a name-like formula token for a case-insensitive lookup.
 
-    Dynamic references constructed with `INDIRECT`, named ranges, structured
-    table references, and add-in functions are deliberately not guessed.
+    This also canonicalizes a sheet-qualified local name such as
+    `'Debt Schedule'!TaxRate` so it can be matched against workbook metadata.
+    External tokens are deliberately returned unchanged apart from case because
+    they are handled as explicit external references before name resolution.
+    """
+    token = value.strip()
+    sheet, address = _split_sheet_reference(token)
+    if sheet is None:
+        return token.casefold()
+    normalized_sheet, external = _normalise_sheet_name(sheet)
+    if normalized_sheet is None or external:
+        return token.casefold()
+    return f"{normalized_sheet.casefold()}!{address.strip().casefold()}"
+
+
+def inspect_formula(
+    formula: str,
+    named_references: Mapping[str, Sequence[ParsedReference]] | None = None,
+) -> FormulaInspection:
+    """Inspect static reference coverage while resolving known named ranges.
+
+    A caller provides a case-folded name-to-range map assembled from the
+    workbook. Table references and other non-A1 tokens that cannot be resolved
+    are returned explicitly instead of being silently omitted from the graph.
     """
     try:
         tokens = Tokenizer(formula).items
     except Exception:
-        return []
+        return FormulaInspection((), (), ())
+    resolved_names = named_references or {}
     references: list[ParsedReference] = []
+    unresolved_range_tokens: list[str] = []
+    dynamic_reference_functions: list[str] = []
     for token in tokens:
         if token.type == "OPERAND" and token.subtype == "RANGE":
             reference = parse_reference_token(token.value)
             if reference is not None:
                 references.append(reference)
-    return references
+                continue
+            named_range = resolved_names.get(reference_lookup_key(token.value))
+            if named_range:
+                references.extend(named_range)
+                continue
+            unresolved_range_tokens.append(token.value)
+        elif token.type == "FUNC" and token.subtype == "OPEN":
+            function_name = token.value.rstrip("(").strip().upper()
+            if function_name in _DYNAMIC_REFERENCE_FUNCTIONS:
+                dynamic_reference_functions.append(function_name)
+    return FormulaInspection(
+        references=tuple(references),
+        unresolved_range_tokens=tuple(dict.fromkeys(unresolved_range_tokens)),
+        dynamic_reference_functions=tuple(dict.fromkeys(dynamic_reference_functions)),
+    )
+
+
+def extract_references(
+    formula: str, named_references: Mapping[str, Sequence[ParsedReference]] | None = None
+) -> list[ParsedReference]:
+    """Return A1-style and supplied named-range references from a formula."""
+    return list(inspect_formula(formula, named_references).references)
 
 
 def has_broken_reference(formula: str) -> bool:

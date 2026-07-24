@@ -38,3 +38,29 @@ def test_policy_rejects_unknown_fields_and_unsafe_selectors() -> None:
         parse_policy({"version": 1, "rules": {"no_formula_to_number": True}})
     with pytest.raises(PolicyError, match="sheet-qualified"):
         parse_policy({"version": 1, "protected_cells": ["B12"]})
+
+
+def test_policy_can_block_new_formula_coverage_gaps(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    rewrite(
+        candidate,
+        lambda workbook: setattr(
+            workbook["Model"]["D2"],
+            "value",
+            '=UnknownMetric+OFFSET(Inputs!B2, 1, 0)',
+        ),
+    )
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {
+                "no_new_unresolved_references": True,
+                "no_new_dynamic_references": True,
+            },
+        }
+    )
+
+    rule_ids = {finding.rule_id for finding in evaluate_policy(report, policy)}
+    assert {"FFP011", "FFP012"} <= rule_ids

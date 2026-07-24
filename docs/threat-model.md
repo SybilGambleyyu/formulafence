@@ -27,13 +27,16 @@ formula-pattern finding means both immediate peers have the same relative
 formula fingerprint while the changed middle cell does not; it is a focused
 review prompt, not proof of an error.
 
-## Deliberate limits in v0.1
+## Deliberate limits
 
 - Supported files are `.xlsx` and `.xlsm`; legacy `.xls` and password-protected
   workbooks are outside scope.
-- `INDIRECT`, `OFFSET`, named formulas, structured table references, dynamic
-  array behavior, cube functions, add-ins, and custom functions cannot always
-  be statically resolved. FormulaFence does not fabricate dependencies for them.
+- Ordinary workbook and sheet-local names with static A1 destinations are
+  resolved into the dependency graph. `INDIRECT`, `OFFSET`, named formulas,
+  structured table references, dynamic array behavior, cube functions, add-ins,
+  and custom functions cannot always be statically resolved. FormulaFence flags
+  newly introduced unresolved tokens and `INDIRECT`/`OFFSET` use, but does not
+  fabricate dependencies for them.
 - Explicit external-workbook references are detected. References assembled from
   text or macro code are not.
 - It inventories sheet visibility, defined names, calculation settings, and the

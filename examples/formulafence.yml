@@ -5,6 +5,8 @@ rules:
   no_new_broken_references: true
   no_macro_changes: true
   no_new_parser_warnings: true
+  no_new_unresolved_references: true
+  no_new_dynamic_references: true
   max_changed_formulas: 5
   max_downstream_impact: 10
 

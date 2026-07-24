@@ -31,6 +31,15 @@ allowing a dependency warning to leak into CI logs. This is a useful result, not
 a pass/fail claim about the model itself: unsupported workbook features should
 remain visible to the reviewer.
 
+## Named and dynamic reference coverage — 2026-07-24
+
+The same local profile under FormulaFence 0.3.0 found 20 workbook or
+sheet-scoped defined names, no unresolved range tokens, and **36 formula cells
+using `INDIRECT`**. Those dynamic cells are now explicit inspection-coverage
+notes rather than silent holes in an impact trace. The result does not judge the
+model's use of `INDIRECT`; it gives a reviewer or policy author a concrete,
+machine-readable scope for the limitation.
+
 ## Controlled local change
 
 On a local, non-distributed copy, we replaced the formula in

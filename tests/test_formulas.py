@@ -1,4 +1,9 @@
-from formulafence.formulas import extract_references, formula_fingerprint
+from formulafence.formulas import (
+    ParsedReference,
+    extract_references,
+    formula_fingerprint,
+    inspect_formula,
+)
 
 
 def test_fingerprint_normalises_relative_copy_patterns() -> None:
@@ -17,3 +22,20 @@ def test_extract_references_keeps_external_workbooks_separate() -> None:
     assert references[1].is_external
     assert references[2].sheet is None
     assert references[2].is_range
+
+
+def test_formula_inspection_resolves_names_and_marks_static_coverage_gaps() -> None:
+    inspection = inspect_formula(
+        '=HeadlineOutput+UnknownMetric+INDIRECT("Inputs!B2")',
+        {
+            "headlineoutput": (
+                ParsedReference("Dashboard", 2, 12, 2, 12, raw="HeadlineOutput"),
+            )
+        },
+    )
+
+    assert inspection.references == (
+        ParsedReference("Dashboard", 2, 12, 2, 12, raw="HeadlineOutput"),
+    )
+    assert inspection.unresolved_range_tokens == ("UnknownMetric",)
+    assert inspection.dynamic_reference_functions == ("INDIRECT",)

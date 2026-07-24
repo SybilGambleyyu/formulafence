@@ -12,7 +12,14 @@ from openpyxl import load_workbook
 from openpyxl.utils.cell import get_column_letter
 from openpyxl.utils.exceptions import InvalidFileException
 
-from formulafence.formulas import extract_references, formula_fingerprint, has_broken_reference
+from formulafence.formulas import (
+    ParsedReference,
+    formula_fingerprint,
+    has_broken_reference,
+    inspect_formula,
+    parse_reference_token,
+    reference_lookup_key,
+)
 from formulafence.models import (
     CellKey,
     CellSnapshot,
@@ -20,6 +27,7 @@ from formulafence.models import (
     SheetSnapshot,
     WorkbookLoadError,
     WorkbookSnapshot,
+    display_location,
     json_safe_value,
 )
 
@@ -105,17 +113,103 @@ def _calculation_settings(workbook: object) -> dict[str, object]:
     }
 
 
+def _definition_text(definition: object) -> str:
+    attr_text = getattr(definition, "attr_text", None)
+    return str(attr_text if attr_text is not None else definition)
+
+
 def _defined_names(workbook: object) -> dict[str, str]:
+    """Inventory workbook and sheet-scoped names with unambiguous local keys."""
     names = getattr(workbook, "defined_names", {})
     result: dict[str, str] = {}
     try:
         items = names.items()
     except AttributeError:
-        return result
+        items = ()
     for name, definition in items:
-        attr_text = getattr(definition, "attr_text", None)
-        result[str(name)] = str(attr_text if attr_text is not None else definition)
+        if getattr(definition, "localSheetId", None) is None:
+            result[str(name)] = _definition_text(definition)
+    for worksheet in getattr(workbook, "worksheets", ()):
+        worksheet_names = getattr(worksheet, "defined_names", {})
+        try:
+            worksheet_items = worksheet_names.items()
+        except AttributeError:
+            continue
+        for name, definition in worksheet_items:
+            result[f"{worksheet.title}!{name}"] = _definition_text(definition)
     return result
+
+
+def _named_destination_reference(
+    name: str, sheet: str, coordinate: str
+) -> ParsedReference | None:
+    """Convert one workbook-defined-name destination into a static range."""
+    parsed = parse_reference_token(f"{sheet}!{coordinate}")
+    if parsed is None:
+        return None
+    return ParsedReference(
+        parsed.sheet,
+        parsed.min_column,
+        parsed.min_row,
+        parsed.max_column,
+        parsed.max_row,
+        raw=name,
+        is_external=parsed.is_external,
+    )
+
+
+def _definition_references(name: str, definition: object) -> tuple[ParsedReference, ...]:
+    """Return only static destinations from an ordinary defined name."""
+    try:
+        destinations = list(definition.destinations)
+    except Exception:  # pragma: no cover - malformed name syntax is workbook-specific
+        return ()
+    return tuple(
+        reference
+        for sheet, coordinate in destinations
+        if (reference := _named_destination_reference(name, sheet, coordinate)) is not None
+    )
+
+
+def _named_reference_maps(
+    workbook: object,
+) -> tuple[
+    dict[str, tuple[ParsedReference, ...]],
+    dict[str, dict[str, tuple[ParsedReference, ...]]],
+]:
+    """Build static global and sheet-local name maps for formula inspection."""
+    workbook_names = getattr(workbook, "defined_names", {})
+    global_references: dict[str, tuple[ParsedReference, ...]] = {}
+    try:
+        workbook_items = workbook_names.items()
+    except AttributeError:
+        workbook_items = ()
+    for name, definition in workbook_items:
+        if getattr(definition, "localSheetId", None) is not None:
+            continue
+        references = _definition_references(str(name), definition)
+        if references:
+            global_references[reference_lookup_key(str(name))] = references
+
+    local_references: dict[str, dict[str, tuple[ParsedReference, ...]]] = {}
+    for worksheet in getattr(workbook, "worksheets", ()):
+        worksheet_names = getattr(worksheet, "defined_names", {})
+        try:
+            worksheet_items = worksheet_names.items()
+        except AttributeError:
+            continue
+        sheet_references: dict[str, tuple[ParsedReference, ...]] = {}
+        for name, definition in worksheet_items:
+            references = _definition_references(str(name), definition)
+            if not references:
+                continue
+            sheet_references[reference_lookup_key(str(name))] = references
+            global_references[
+                reference_lookup_key(f"{worksheet.title}!{name}")
+            ] = references
+        if sheet_references:
+            local_references[worksheet.title.casefold()] = sheet_references
+    return global_references, local_references
 
 
 def load_snapshot(path: str | Path) -> WorkbookSnapshot:
@@ -150,8 +244,15 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     range_dependencies: list[RangeDependency] = []
     external_references: set[CellKey] = set()
     broken_references: set[CellKey] = set()
+    unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
+    dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = {}
+    global_named_references, local_named_references = _named_reference_maps(workbook)
 
     for worksheet in workbook.worksheets:
+        named_references = {
+            **global_named_references,
+            **local_named_references.get(worksheet.title.casefold(), {}),
+        }
         nonempty_cells = 0
         formula_cells = 0
         # _cells lets us avoid traversing a sheet's whole used rectangle when a
@@ -172,7 +273,14 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             formula_cells += 1
             if has_broken_reference(snapshot.formula):
                 broken_references.add(snapshot.location)
-            for reference in extract_references(snapshot.formula):
+            inspection = inspect_formula(snapshot.formula, named_references)
+            if inspection.unresolved_range_tokens:
+                unresolved_reference_tokens[snapshot.location] = inspection.unresolved_range_tokens
+            if inspection.dynamic_reference_functions:
+                dynamic_reference_functions[snapshot.location] = (
+                    inspection.dynamic_reference_functions
+                )
+            for reference in inspection.references:
                 if reference.is_external:
                     external_references.add(snapshot.location)
                     continue
@@ -220,6 +328,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         range_dependencies=range_dependencies,
         external_references=external_references,
         broken_references=broken_references,
+        unresolved_reference_tokens=unresolved_reference_tokens,
+        dynamic_reference_functions=dynamic_reference_functions,
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),
         calculation_settings=_calculation_settings(workbook),
@@ -246,5 +356,19 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             ],
             "has_vba": snapshot.macro_hash is not None,
             "parser_warnings": list(snapshot.parser_warnings),
+            "unresolved_reference_cells": [
+                {
+                    "location": display_location(location),
+                    "tokens": list(tokens),
+                }
+                for location, tokens in sorted(snapshot.unresolved_reference_tokens.items())
+            ],
+            "dynamic_reference_cells": [
+                {
+                    "location": display_location(location),
+                    "functions": list(functions),
+                }
+                for location, functions in sorted(snapshot.dynamic_reference_functions.items())
+            ],
         },
     }

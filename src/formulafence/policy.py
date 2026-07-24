@@ -18,6 +18,8 @@ _RULE_FIELDS = {
     "no_new_broken_references",
     "no_macro_changes",
     "no_new_parser_warnings",
+    "no_new_unresolved_references",
+    "no_new_dynamic_references",
     "no_sheet_visibility_changes",
     "max_changed_formulas",
     "max_downstream_impact",
@@ -52,6 +54,8 @@ class Policy:
     no_new_broken_references: bool = False
     no_macro_changes: bool = False
     no_new_parser_warnings: bool = False
+    no_new_unresolved_references: bool = False
+    no_new_dynamic_references: bool = False
     no_sheet_visibility_changes: bool = False
     max_changed_formulas: int | None = None
     max_downstream_impact: int | None = None
@@ -68,6 +72,8 @@ rules:
   no_new_broken_references: true
   no_macro_changes: true
   no_new_parser_warnings: true
+  no_new_unresolved_references: true
+  no_new_dynamic_references: true
   max_changed_formulas: 20
   max_downstream_impact: 100
 
@@ -152,6 +158,8 @@ def parse_policy(data: object) -> Policy:
         no_new_broken_references=_boolean_rule(rules, "no_new_broken_references"),
         no_macro_changes=_boolean_rule(rules, "no_macro_changes"),
         no_new_parser_warnings=_boolean_rule(rules, "no_new_parser_warnings"),
+        no_new_unresolved_references=_boolean_rule(rules, "no_new_unresolved_references"),
+        no_new_dynamic_references=_boolean_rule(rules, "no_new_dynamic_references"),
         no_sheet_visibility_changes=_boolean_rule(rules, "no_sheet_visibility_changes"),
         max_changed_formulas=_integer_rule(rules, "max_changed_formulas"),
         max_downstream_impact=_integer_rule(rules, "max_downstream_impact"),
@@ -221,6 +229,28 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP010",
                     "high",
                     "Policy forbids new unsupported-workbook coverage warnings.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_new_unresolved_references:
+        for finding in _rule_triggered(report, "FF011"):
+            violations.append(
+                Finding(
+                    "FFP011",
+                    "high",
+                    "Policy forbids newly unresolvable formula references.",
+                    finding.location,
+                    details=finding.details,
+                )
+            )
+    if policy.no_new_dynamic_references:
+        for finding in _rule_triggered(report, "FF012"):
+            violations.append(
+                Finding(
+                    "FFP012",
+                    "high",
+                    "Policy forbids new dynamic reference functions.",
+                    finding.location,
                     details=finding.details,
                 )
             )

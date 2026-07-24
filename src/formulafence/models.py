@@ -164,6 +164,8 @@ class WorkbookSnapshot:
     macro_hash: str | None
     calculation_settings: dict[str, Any]
     parser_warnings: tuple[str, ...]
+    unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
+    dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
 
     def direct_dependents(self, location: CellKey) -> set[CellKey]:
         dependents = set(self.reverse_dependencies.get(location, set()))
@@ -184,6 +186,8 @@ class WorkbookSnapshot:
             "has_vba": self.macro_hash is not None,
             "external_reference_cells": len(self.external_references),
             "broken_reference_cells": len(self.broken_references),
+            "unresolved_reference_cells": len(self.unresolved_reference_tokens),
+            "dynamic_reference_cells": len(self.dynamic_reference_functions),
             "parser_warning_count": len(self.parser_warnings),
         }
 

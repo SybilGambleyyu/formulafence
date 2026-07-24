@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 — 2026-07-24
+
+- Resolve ordinary workbook and sheet-local defined names with static A1
+  destinations into the dependency graph, including explicit references to
+  sheet-local names and names that resolve to external workbooks.
+- Make static-analysis coverage visible: profiles identify unresolved range
+  tokens and dynamic `INDIRECT`/`OFFSET` formulas; diffs report new instances
+  as `FF011` and `FF012`.
+- Add opt-in `no_new_unresolved_references` and `no_new_dynamic_references`
+  policy controls (`FFP011`, `FFP012`) for teams that need to fail closed on
+  new dependency-coverage gaps.
+
 ## 0.2.0 — 2026-07-24
 
 - Add deterministic shortest dependency-path samples to every changed cell's

@@ -50,10 +50,24 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             lines.append(f"- Explicit external reference: `{location}`")
         for location in features["broken_reference_cells"]:
             lines.append(f"- Broken `#REF!` formula: `{location}`")
-    if features["parser_warnings"]:
+    if (
+        features["parser_warnings"]
+        or features["unresolved_reference_cells"]
+        or features["dynamic_reference_cells"]
+    ):
         lines.extend(["", "## Inspection coverage notes", ""])
         for warning in features["parser_warnings"]:
             lines.append(f"- {_markdown_escape(warning)}")
+        for issue in features["unresolved_reference_cells"]:
+            tokens = ", ".join(f"`{token}`" for token in issue["tokens"])
+            lines.append(
+                f"- Non-static formula reference at `{issue['location']}`: {tokens}"
+            )
+        for issue in features["dynamic_reference_cells"]:
+            functions = ", ".join(f"`{function}`" for function in issue["functions"])
+            lines.append(
+                f"- Dynamic reference function at `{issue['location']}`: {functions}"
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -181,7 +195,7 @@ def report_to_sarif(report: DiffReport, extra_findings: Iterable[Finding] = ()) 
                     "driver": {
                         "name": "FormulaFence",
                         "version": __version__,
-                        "informationUri": "https://github.com/formulafence/formulafence",
+                        "informationUri": "https://github.com/SybilGambleyyu/formulafence",
                         "rules": rules,
                     }
                 },

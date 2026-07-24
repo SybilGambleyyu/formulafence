@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.15.0 — 2026-07-24
+
+- Inventory worksheet conditional-formatting controls directly from OOXML:
+  compact target ranges, global precedence, criteria, rule flags, differential
+  styles, color scales, data bars, icon sets, and retained extension fragments.
+- Resolve differential styles rather than comparing unstable `dxfId` values;
+  normalize schema boolean defaults, leading `=` criteria, priority-number
+  gaps, and extension GUID links to avoid writer-only control diffs. Profiles
+  redact criteria, text rules, and raw style/extension XML.
+- Emit `FF021` for changed conditional-formatting controls and add the
+  fail-closed `no_conditional_formatting_changes` policy rule (`FFP021`). The
+  tool records display-control semantics but does not calculate Excel's final
+  conditional formatting result.
+
 ## 0.14.0 — 2026-07-24
 
 - Inventory worksheet data-validation controls as compact target ranges and

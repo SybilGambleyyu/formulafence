@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.14.0/formulafence-0.14.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.15.0/formulafence-0.15.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -72,6 +72,7 @@ rules:
   no_new_tokenization_failures: true
   no_table_definition_changes: true
   no_data_validation_changes: true
+  no_conditional_formatting_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -93,7 +94,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation controls, array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation and conditional-formatting controls, array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -198,6 +199,24 @@ control emits `FF020`; enable
 validation formula or predict whether a user entry will be accepted. The scope
 follows Microsoft's [data-validation guidance](https://support.microsoft.com/en-US/Excel/get-started/apply-data-validation-to-cells)
 and [openpyxl's documented range model](https://openpyxl.readthedocs.io/en/stable/validation.html).
+
+FormulaFence also inventories **conditional-formatting controls** directly from
+worksheet OOXML, because a priority move, `Stop If True` toggle, exception
+formula, or changed red/green threshold can alter what reviewers see without
+altering a normal formula cell. It records compact target ranges, worksheet-wide
+precedence, criteria, rule flags, differential styles, color scales, data bars,
+and icon sets. Differential styles are resolved from their actual OOXML rather
+than their unstable `dxfId`, while omitted boolean defaults, optional leading
+`=` formula spelling, priority-number gaps, and extension GUID links are
+normalized to avoid writer-only noise. Excel-2010 extension fragments are retained as
+opaque local evidence even when the parser cannot model them. Profiles redact
+criteria, text rules, and raw style/extension XML; local change reports retain
+the full before/after control. Any change emits `FF021`; enable
+`no_conditional_formatting_changes` for `FFP021`. FormulaFence does not
+calculate a conditional-formatting formula, resolve a relative rule for every
+target cell, or predict the final visual display. The scope follows Microsoft's
+[conditional-formatting precedence guidance](https://support.microsoft.com/en-us/excel/use-conditional-formatting-to-highlight-information-in-excel)
+and [OOXML conditional-formatting model](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-conditional-formatting).
 
 FormulaFence also follows a call to a workbook- or worksheet-local defined name
 when its complete definition is one statically resolvable `LAMBDA` expression.

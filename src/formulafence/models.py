@@ -207,6 +207,187 @@ class DataValidationSnapshot:
 
 
 @dataclass(frozen=True)
+class XmlFragmentSnapshot:
+    """A deterministic, inspectable OOXML fragment used for control evidence."""
+
+    tag: str
+    attributes: tuple[tuple[str, str], ...] = ()
+    text: str | None = None
+    children: tuple[XmlFragmentSnapshot, ...] = ()
+
+    def sort_key(self) -> tuple[object, ...]:
+        return (
+            self.tag,
+            self.attributes,
+            self.text is not None,
+            self.text or "",
+            tuple(child.sort_key() for child in self.children),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"element": self.tag}
+        if self.attributes:
+            result["attributes"] = dict(self.attributes)
+        if self.text is not None:
+            result["text"] = self.text
+        if self.children:
+            result["children"] = [child.to_dict() for child in self.children]
+        return result
+
+
+@dataclass(frozen=True)
+class ConditionalFormattingSnapshot:
+    """One worksheet conditional-formatting rule and its effective semantics."""
+
+    sheet: str
+    ranges: tuple[str, ...]
+    priority: int
+    rule_type: str
+    operator: str | None
+    formulas: tuple[str, ...]
+    stop_if_true: bool
+    above_average: bool
+    percent: bool
+    bottom: bool
+    rank: int | None
+    std_dev: int | None
+    equal_average: bool
+    text: str | None
+    time_period: str | None
+    differential_style: XmlFragmentSnapshot | None
+    color_scale: XmlFragmentSnapshot | None
+    data_bar: XmlFragmentSnapshot | None
+    icon_set: XmlFragmentSnapshot | None
+    extensions: tuple[XmlFragmentSnapshot, ...] = ()
+
+    @property
+    def target_range_count(self) -> int:
+        return len(self.ranges)
+
+    @property
+    def formula_count(self) -> int:
+        return len(self.formulas)
+
+    @property
+    def formatting_kinds(self) -> tuple[str, ...]:
+        kinds: list[str] = []
+        if self.differential_style is not None:
+            kinds.append("differential style")
+        if self.color_scale is not None:
+            kinds.append("color scale")
+        if self.data_bar is not None:
+            kinds.append("data bar")
+        if self.icon_set is not None:
+            kinds.append("icon set")
+        return tuple(kinds)
+
+    def sort_key(self) -> tuple[object, ...]:
+        return (
+            self.sheet.casefold(),
+            self.priority,
+            self.ranges,
+            self.rule_type,
+            self.operator or "",
+            self.formulas,
+            self.stop_if_true,
+            self.above_average,
+            self.percent,
+            self.bottom,
+            self.rank is not None,
+            self.rank or 0,
+            self.std_dev is not None,
+            self.std_dev or 0,
+            self.equal_average,
+            self.text is not None,
+            self.text or "",
+            self.time_period or "",
+            self.differential_style is not None,
+            self.differential_style.sort_key() if self.differential_style is not None else (),
+            self.color_scale is not None,
+            self.color_scale.sort_key() if self.color_scale is not None else (),
+            self.data_bar is not None,
+            self.data_bar.sort_key() if self.data_bar is not None else (),
+            self.icon_set is not None,
+            self.icon_set.sort_key() if self.icon_set is not None else (),
+            tuple(extension.sort_key() for extension in self.extensions),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return full local evidence, including formulas and formatting fragments."""
+        return {
+            "sheet": self.sheet,
+            "ranges": [
+                display_location((self.sheet, target_range))
+                for target_range in self.ranges
+            ],
+            "priority": self.priority,
+            "type": self.rule_type,
+            "operator": self.operator,
+            "formulas": list(self.formulas),
+            "stop_if_true": self.stop_if_true,
+            "above_average": self.above_average,
+            "percent": self.percent,
+            "bottom": self.bottom,
+            "rank": self.rank,
+            "std_dev": self.std_dev,
+            "equal_average": self.equal_average,
+            "text": self.text,
+            "time_period": self.time_period,
+            "differential_style": (
+                self.differential_style.to_dict()
+                if self.differential_style is not None
+                else None
+            ),
+            "color_scale": self.color_scale.to_dict() if self.color_scale is not None else None,
+            "data_bar": self.data_bar.to_dict() if self.data_bar is not None else None,
+            "icon_set": self.icon_set.to_dict() if self.icon_set is not None else None,
+            "extensions": [extension.to_dict() for extension in self.extensions],
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        """Return reviewable control metadata without formulas or text criteria."""
+        return {
+            "sheet": self.sheet,
+            "ranges": [
+                display_location((self.sheet, target_range))
+                for target_range in self.ranges
+            ],
+            "priority": self.priority,
+            "type": self.rule_type,
+            "operator": self.operator,
+            "formula_count": self.formula_count,
+            "has_text_criterion": self.text is not None,
+            "stop_if_true": self.stop_if_true,
+            "above_average": self.above_average,
+            "percent": self.percent,
+            "bottom": self.bottom,
+            "rank": self.rank,
+            "std_dev": self.std_dev,
+            "equal_average": self.equal_average,
+            "time_period": self.time_period,
+            "formatting": list(self.formatting_kinds),
+            "extension_count": len(self.extensions),
+        }
+
+
+@dataclass(frozen=True)
+class ConditionalFormattingExtensionSnapshot:
+    """An OOXML conditional-formatting extension openpyxl may not model."""
+
+    sheet: str
+    fragment: XmlFragmentSnapshot
+
+    def sort_key(self) -> tuple[object, ...]:
+        return self.sheet.casefold(), self.fragment.sort_key()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"sheet": self.sheet, "extension": self.fragment.to_dict()}
+
+    def profile_dict(self) -> dict[str, Any]:
+        return {"sheet": self.sheet, "element": self.fragment.tag}
+
+
+@dataclass(frozen=True)
 class RangeDependency:
     """A range used by a formula, stored without expanding large Excel ranges."""
 
@@ -389,6 +570,8 @@ class WorkbookSnapshot:
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     tables: dict[str, TableSnapshot] = field(default_factory=dict)
     data_validations: tuple[DataValidationSnapshot, ...] = ()
+    conditional_formatting: tuple[ConditionalFormattingSnapshot, ...] = ()
+    conditional_formatting_extensions: tuple[ConditionalFormattingExtensionSnapshot, ...] = ()
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     spill_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -428,6 +611,13 @@ class WorkbookSnapshot:
             "data_validation_rules": len(self.data_validations),
             "data_validation_target_ranges": sum(
                 validation.target_range_count for validation in self.data_validations
+            ),
+            "conditional_formatting_rules": len(self.conditional_formatting),
+            "conditional_formatting_target_ranges": sum(
+                rule.target_range_count for rule in self.conditional_formatting
+            ),
+            "conditional_formatting_extensions": len(
+                self.conditional_formatting_extensions
             ),
             "has_vba": self.macro_hash is not None,
             "external_reference_cells": len(self.external_references),

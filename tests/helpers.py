@@ -2,9 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import Workbook
+from openpyxl.formatting.rule import (
+    CellIsRule,
+    ColorScaleRule,
+    DataBarRule,
+    FormulaRule,
+    IconSetRule,
+)
+from openpyxl.styles import Font, PatternFill
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.formula import ArrayFormula
@@ -116,6 +125,196 @@ def make_data_validation_model(path: Path, *, reverse_status_targets: bool = Fal
     amount.add("C2:C100")
     inputs.add_data_validation(amount)
     workbook.save(path)
+    return path
+
+
+def make_conditional_formatting_model(path: Path) -> Path:
+    """Create visual review controls with overlapping precedence and builtins."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Controlled metric"
+    for row, value in enumerate((10, -5, 75, 120), start=2):
+        inputs.cell(row, 1, value)
+
+    red_fill = PatternFill(fill_type="solid", fgColor="FFFFC7CE")
+    red_font = Font(color="FF9C0006")
+    green_fill = PatternFill(fill_type="solid", fgColor="FFC6EFCE")
+    green_font = Font(color="FF006100")
+    inputs.conditional_formatting.add(
+        "A2:A100",
+        FormulaRule(
+            formula=["$A2<0"],
+            stopIfTrue=True,
+            fill=red_fill,
+            font=red_font,
+        ),
+    )
+    inputs.conditional_formatting.add(
+        "A2:A100",
+        CellIsRule(
+            operator="greaterThan",
+            formula=["100"],
+            fill=green_fill,
+            font=green_font,
+        ),
+    )
+    inputs.conditional_formatting.add(
+        "B2:B100",
+        ColorScaleRule(
+            start_type="min",
+            start_color="FFF8696B",
+            mid_type="percentile",
+            mid_value=50,
+            mid_color="FFFFEB84",
+            end_type="max",
+            end_color="FF63BE7B",
+        ),
+    )
+    inputs.conditional_formatting.add(
+        "C2:C100",
+        DataBarRule(
+            start_type="min",
+            start_value=None,
+            end_type="max",
+            end_value=None,
+            color="FF638EC6",
+        ),
+    )
+    inputs.conditional_formatting.add(
+        "D2:D100",
+        IconSetRule(
+            "3TrafficLights1",
+            "percent",
+            [0, 33, 67],
+            showValue=None,
+            percent=None,
+            reverse=None,
+        ),
+    )
+    workbook.save(path)
+    return path
+
+
+def reorder_conditional_differential_styles(path: Path) -> Path:
+    """Swap ``dxfs`` and their rule ids without changing any visual rule."""
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry.filename) for entry in archive.infolist()
+        }
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    styles = ElementTree.fromstring(contents["xl/styles.xml"])
+    dxfs = styles.find(f"{{{namespace}}}dxfs")
+    if dxfs is None or len(dxfs) < 2:
+        raise ValueError("Fixture needs at least two conditional differential styles")
+    first, second = dxfs[:2]
+    dxfs[:2] = [second, first]
+    contents["xl/styles.xml"] = ElementTree.tostring(
+        styles,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    rule_tag = f"{{{namespace}}}cfRule"
+    for name, content in tuple(contents.items()):
+        if not name.startswith("xl/worksheets/"):
+            continue
+        worksheet = ElementTree.fromstring(content)
+        for rule in worksheet.iter(rule_tag):
+            if rule.get("dxfId") == "0":
+                rule.set("dxfId", "1")
+            elif rule.get("dxfId") == "1":
+                rule.set("dxfId", "0")
+        contents[name] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+    staging = path.with_suffix(".dxf-order.tmp.xlsx")
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+    staging.replace(path)
+    return path
+
+
+def add_conditional_formatting_databar_extension(
+    path: Path,
+    *,
+    guid: str,
+    axis_color: str,
+    worksheet_extension_uri: str = "{78C0D931-6437-407D-A8EE-F0AAD7539E65}",
+) -> Path:
+    """Add a minimal Excel-2010 data-bar extension that openpyxl does not model."""
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry.filename) for entry in archive.infolist()
+        }
+    main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    x14 = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+    xm = "http://schemas.microsoft.com/office/excel/2006/main"
+    rule_tag = f"{{{main}}}cfRule"
+    data_bar_rule: ElementTree.Element | None = None
+    worksheet_name: str | None = None
+    for name, content in tuple(contents.items()):
+        if not name.startswith("xl/worksheets/"):
+            continue
+        worksheet = ElementTree.fromstring(content)
+        data_bar_rule = next(
+            (rule for rule in worksheet.iter(rule_tag) if rule.get("type") == "dataBar"),
+            None,
+        )
+        if data_bar_rule is None:
+            continue
+        worksheet_name = name
+        base_extensions = ElementTree.SubElement(data_bar_rule, f"{{{main}}}extLst")
+        base_extension = ElementTree.SubElement(
+            base_extensions,
+            f"{{{main}}}ext",
+            {"uri": "{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"},
+        )
+        ElementTree.SubElement(base_extension, f"{{{x14}}}id").text = guid
+
+        worksheet_extensions = ElementTree.SubElement(worksheet, f"{{{main}}}extLst")
+        worksheet_extension = ElementTree.SubElement(
+            worksheet_extensions,
+            f"{{{main}}}ext",
+            {"uri": worksheet_extension_uri},
+        )
+        conditional_formattings = ElementTree.SubElement(
+            worksheet_extension,
+            f"{{{x14}}}conditionalFormattings",
+        )
+        conditional_formatting = ElementTree.SubElement(
+            conditional_formattings,
+            f"{{{x14}}}conditionalFormatting",
+        )
+        extension_rule = ElementTree.SubElement(
+            conditional_formatting,
+            f"{{{x14}}}cfRule",
+            {"type": "dataBar", "id": guid},
+        )
+        extension_data_bar = ElementTree.SubElement(
+            extension_rule,
+            f"{{{x14}}}dataBar",
+            {"minLength": "0", "maxLength": "100", "axisPosition": "middle"},
+        )
+        ElementTree.SubElement(extension_data_bar, f"{{{x14}}}cfvo", {"type": "autoMin"})
+        ElementTree.SubElement(extension_data_bar, f"{{{x14}}}cfvo", {"type": "autoMax"})
+        ElementTree.SubElement(extension_data_bar, f"{{{x14}}}axisColor", {"rgb": axis_color})
+        ElementTree.SubElement(conditional_formatting, f"{{{xm}}}sqref").text = "C2:C100"
+        contents[name] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        break
+    if data_bar_rule is None or worksheet_name is None:
+        raise ValueError("Could not find the fixture data-bar rule")
+    staging = path.with_suffix(".conditional-extension.tmp.xlsx")
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+    staging.replace(path)
     return path
 
 

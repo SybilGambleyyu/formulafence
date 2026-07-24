@@ -13,6 +13,8 @@ from formulafence.models import (
     CellKey,
     CellSnapshot,
     Change,
+    ConditionalFormattingExtensionSnapshot,
+    ConditionalFormattingSnapshot,
     DataValidationSnapshot,
     DiffReport,
     Finding,
@@ -382,6 +384,67 @@ def _workbook_control_changes(
                 "FF020",
                 "high",
                 f"Data-validation controls changed on worksheet: {sheet}.",
+                details=details,
+            )
+        )
+
+    before_conditional_formatting: dict[str, list[ConditionalFormattingSnapshot]] = (
+        defaultdict(list)
+    )
+    after_conditional_formatting: dict[str, list[ConditionalFormattingSnapshot]] = (
+        defaultdict(list)
+    )
+    before_conditional_extensions: dict[
+        str, list[ConditionalFormattingExtensionSnapshot]
+    ] = defaultdict(list)
+    after_conditional_extensions: dict[
+        str, list[ConditionalFormattingExtensionSnapshot]
+    ] = defaultdict(list)
+    for rule in before.conditional_formatting:
+        before_conditional_formatting[rule.sheet].append(rule)
+    for rule in after.conditional_formatting:
+        after_conditional_formatting[rule.sheet].append(rule)
+    for extension in before.conditional_formatting_extensions:
+        before_conditional_extensions[extension.sheet].append(extension)
+    for extension in after.conditional_formatting_extensions:
+        after_conditional_extensions[extension.sheet].append(extension)
+    conditional_sheets = (
+        set(before_conditional_formatting)
+        | set(after_conditional_formatting)
+        | set(before_conditional_extensions)
+        | set(after_conditional_extensions)
+    )
+    for sheet in sorted(conditional_sheets, key=str.casefold):
+        old_rules = tuple(before_conditional_formatting.get(sheet, ()))
+        new_rules = tuple(after_conditional_formatting.get(sheet, ()))
+        old_extensions = tuple(before_conditional_extensions.get(sheet, ()))
+        new_extensions = tuple(after_conditional_extensions.get(sheet, ()))
+        if old_rules == new_rules and old_extensions == new_extensions:
+            continue
+        details = {
+            "sheet": sheet,
+            "before": {
+                "rules": [rule.to_dict() for rule in old_rules],
+                "extensions": [extension.to_dict() for extension in old_extensions],
+            },
+            "after": {
+                "rules": [rule.to_dict() for rule in new_rules],
+                "extensions": [extension.to_dict() for extension in new_extensions],
+            },
+        }
+        changes.append(
+            Change(
+                "conditional_formatting_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF021",
+                "high",
+                f"Conditional-formatting controls changed on worksheet: {sheet}.",
                 details=details,
             )
         )

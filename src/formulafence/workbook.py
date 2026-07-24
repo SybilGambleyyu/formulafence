@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import posixpath
+import re
 import warnings
 from collections import defaultdict
 from collections.abc import Mapping
@@ -30,6 +31,8 @@ from formulafence.models import (
     ArrayFormulaRange,
     CellKey,
     CellSnapshot,
+    ConditionalFormattingExtensionSnapshot,
+    ConditionalFormattingSnapshot,
     DataValidationSnapshot,
     DynamicArrayOutputReference,
     RangeDependency,
@@ -37,6 +40,7 @@ from formulafence.models import (
     TableSnapshot,
     WorkbookLoadError,
     WorkbookSnapshot,
+    XmlFragmentSnapshot,
     display_location,
     json_safe_value,
 )
@@ -62,6 +66,17 @@ _DOCUMENT_RELATIONSHIP_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 )
 _DYNAMIC_ARRAY_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"
+_OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+_EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
+_XML_NAMESPACE_PREFIXES = {
+    _SPREADSHEETML_NS: "",
+    _OFFICE_2010_SPREADSHEET_NS: "x14:",
+    _EXCEL_2006_MAIN_NS: "xm:",
+}
+_GUID_PATTERN = re.compile(
+    r"\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}"
+)
 
 
 @dataclass(frozen=True)
@@ -85,6 +100,15 @@ class _ArrayFormulaClassification:
     dynamic_cells: set[CellKey]
     dynamic_ranges: tuple[ArrayFormulaRange, ...]
     unclassified_cells: set[CellKey]
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ConditionalFormattingMetadata:
+    """Raw worksheet conditional-formatting controls and extension evidence."""
+
+    rules: tuple[ConditionalFormattingSnapshot, ...]
+    extensions: tuple[ConditionalFormattingExtensionSnapshot, ...]
     warnings: tuple[str, ...]
 
 
@@ -156,6 +180,415 @@ def _worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
         if target := relationship_targets.get(relationship_id):
             worksheet_paths[title] = target
     return worksheet_paths
+
+
+def _xml_local_name(tag: str) -> str:
+    """Return an XML local name without discarding a namespace elsewhere."""
+    return tag.rsplit("}", maxsplit=1)[-1]
+
+
+def _xml_namespace(tag: str) -> str | None:
+    """Return an XML namespace, if ``tag`` is namespace-qualified."""
+    if not tag.startswith("{"):
+        return None
+    return tag[1:].split("}", maxsplit=1)[0]
+
+
+def _xml_display_name(tag: str) -> str:
+    """Render a qualified XML name deterministically for local review evidence."""
+    if not tag.startswith("{"):
+        return tag
+    namespace, local_name = tag[1:].split("}", maxsplit=1)
+    if prefix := _XML_NAMESPACE_PREFIXES.get(namespace):
+        return f"{prefix}{local_name}"
+    if namespace == _SPREADSHEETML_NS:
+        return local_name
+    return f"{{{namespace}}}{local_name}"
+
+
+def _normalise_guid(value: str) -> str:
+    """Remove writer-specific GUID noise while retaining extension structure."""
+    return _GUID_PATTERN.sub("{GUID}", value)
+
+
+def _normalise_conditional_formula(value: str) -> str:
+    """Accept the optional leading-equals spelling used by workbook writers."""
+    return value[1:] if value.startswith("=") else value
+
+
+def _is_conditional_guid_link(
+    element: ElementTree.Element,
+    attribute: str | None = None,
+) -> bool:
+    """Return whether an x14 GUID only links a base rule to its extension.
+
+    An ``ext`` element's ``uri`` is a semantic extension-type identifier and
+    must never be normalised away. The known ``x14:id`` / ``x14:cfRule@id``
+    pair, by contrast, is writer-generated linkage between equivalent base and
+    extension rule records.
+    """
+    if _xml_namespace(element.tag) != _OFFICE_2010_SPREADSHEET_NS:
+        return False
+    local_name = _xml_local_name(element.tag)
+    if attribute is None:
+        return local_name == "id"
+    return local_name == "cfRule" and _xml_local_name(attribute) == "id"
+
+
+def _xml_fragment(
+    element: ElementTree.Element,
+    *,
+    normalise_guids: bool = False,
+    normalise_formulas: bool = False,
+) -> XmlFragmentSnapshot:
+    """Capture an XML subtree with deterministic names and attribute ordering."""
+    local_name = _xml_local_name(element.tag)
+    formula_value = normalise_formulas and local_name in {"f", "formula"}
+    value_object = normalise_formulas and local_name == "cfvo" and element.get("type") == "formula"
+
+    def normalise_value(
+        value: str,
+        *,
+        formula: bool = False,
+        guid_link: bool = False,
+    ) -> str:
+        if formula:
+            value = _normalise_conditional_formula(value)
+        return _normalise_guid(value) if normalise_guids and guid_link else value
+
+    attributes = tuple(
+        sorted(
+            (
+                _xml_display_name(attribute),
+                normalise_value(
+                    value,
+                    formula=value_object and _xml_local_name(attribute) == "val",
+                    guid_link=_is_conditional_guid_link(element, attribute),
+                ),
+            )
+            for attribute, value in element.attrib.items()
+        )
+    )
+    children = tuple(
+        _xml_fragment(
+            child,
+            normalise_guids=normalise_guids,
+            normalise_formulas=normalise_formulas,
+        )
+        for child in element
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    if text is not None:
+        text = normalise_value(
+            text,
+            formula=formula_value,
+            guid_link=_is_conditional_guid_link(element),
+        )
+    return XmlFragmentSnapshot(
+        tag=_xml_display_name(element.tag),
+        attributes=attributes,
+        text=text,
+        children=children,
+    )
+
+
+def _conditional_ranges(value: str | None) -> tuple[str, ...]:
+    """Return an order-independent, compact inventory of an ``sqref`` value."""
+    return tuple(sorted({part for part in (value or "").split() if part}, key=str.casefold))
+
+
+def _conditional_bool(
+    value: str | None,
+    default: bool,
+    attribute: str,
+    warnings: set[str],
+) -> bool:
+    """Read one OOXML boolean and preserve the schema default when omitted."""
+    if value is None:
+        return default
+    lowered = value.casefold()
+    if lowered in {"1", "true"}:
+        return True
+    if lowered in {"0", "false"}:
+        return False
+    warnings.add(
+        "FormulaFence could not interpret a conditional-formatting "
+        f"{attribute} boolean; the schema default was used."
+    )
+    return default
+
+
+def _conditional_int(
+    element: ElementTree.Element,
+    attribute: str,
+    warnings: set[str],
+) -> int | None:
+    """Read an optional integer attribute without making malformed XML look safe."""
+    value = element.get(attribute)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        warnings.add(
+            "FormulaFence could not interpret a conditional-formatting "
+            f"{attribute} integer; the affected rule has a coverage gap."
+        )
+        return None
+
+
+def _differential_style_fragments(archive: ZipFile) -> tuple[XmlFragmentSnapshot, ...]:
+    """Resolve conditional-format ``dxfId`` values without trusting their order."""
+    try:
+        styles = _xml_root(archive, "xl/styles.xml")
+    except KeyError:
+        return ()
+    dxfs = styles.find(f"{{{_SPREADSHEETML_NS}}}dxfs")
+    if dxfs is None:
+        return ()
+    return tuple(
+        _xml_fragment(dxf, normalise_formulas=True)
+        for dxf in dxfs.findall(f"{{{_SPREADSHEETML_NS}}}dxf")
+    )
+
+
+def _conditional_rule_snapshot(
+    sheet: str,
+    ranges: tuple[str, ...],
+    rule: ElementTree.Element,
+    differential_styles: tuple[XmlFragmentSnapshot, ...],
+    warnings: set[str],
+) -> ConditionalFormattingSnapshot:
+    """Read one base OOXML ``cfRule`` without calculating its formula."""
+    raw_priority = _conditional_int(rule, "priority", warnings)
+    if raw_priority is None or raw_priority <= 0:
+        warnings.add(
+            "FormulaFence could not read a valid conditional-formatting priority; "
+            "the affected rule has a coverage gap."
+        )
+        raw_priority = 0
+
+    rule_type = rule.get("type") or "unknown"
+    if rule_type == "unknown":
+        warnings.add(
+            "FormulaFence found a conditional-formatting rule without a type; "
+            "the affected rule has a coverage gap."
+        )
+    formula_tag = f"{{{_SPREADSHEETML_NS}}}formula"
+    formulas = tuple(
+        _normalise_conditional_formula(formula.text or "")
+        for formula in rule.findall(formula_tag)
+    )
+    differential_style: XmlFragmentSnapshot | None = None
+    dxf_id = rule.get("dxfId")
+    if dxf_id is not None:
+        parsed_dxf_id = _conditional_int(rule, "dxfId", warnings)
+        if parsed_dxf_id is None or not 0 <= parsed_dxf_id < len(differential_styles):
+            warnings.add(
+                "FormulaFence could not resolve a conditional-formatting differential "
+                "style; the affected rule has a coverage gap."
+            )
+            differential_style = XmlFragmentSnapshot(
+                "unresolved-dxf", (("id", dxf_id),)
+            )
+        else:
+            differential_style = differential_styles[parsed_dxf_id]
+
+    def component(name: str) -> XmlFragmentSnapshot | None:
+        found = rule.find(f"{{{_SPREADSHEETML_NS}}}{name}")
+        return (
+            _xml_fragment(found, normalise_formulas=True)
+            if found is not None
+            else None
+        )
+
+    extension_list = rule.find(f"{{{_SPREADSHEETML_NS}}}extLst")
+    extensions = (
+        tuple(
+            _xml_fragment(
+                extension,
+                normalise_guids=True,
+                normalise_formulas=True,
+            )
+            for extension in extension_list
+        )
+        if extension_list is not None
+        else ()
+    )
+    known_attributes = {
+        "type",
+        "priority",
+        "dxfId",
+        "stopIfTrue",
+        "aboveAverage",
+        "percent",
+        "bottom",
+        "operator",
+        "text",
+        "timePeriod",
+        "rank",
+        "stdDev",
+        "equalAverage",
+    }
+    unmodelled_attributes = tuple(
+        sorted(
+            (
+                _xml_display_name(attribute),
+                value,
+            )
+            for attribute, value in rule.attrib.items()
+            if _xml_local_name(attribute) not in known_attributes
+        )
+    )
+    if unmodelled_attributes:
+        warnings.add(
+            "FormulaFence found unmodelled conditional-formatting rule attributes; "
+            "their raw structure is retained for review."
+        )
+        extensions += (
+            XmlFragmentSnapshot("unmodelled-cf-rule-attributes", unmodelled_attributes),
+        )
+    known_children = {"formula", "colorScale", "dataBar", "iconSet", "extLst"}
+    unmodelled_children = tuple(
+        _xml_fragment(child, normalise_guids=True, normalise_formulas=True)
+        for child in rule
+        if _xml_local_name(child.tag) not in known_children
+    )
+    if unmodelled_children:
+        warnings.add(
+            "FormulaFence found unmodelled conditional-formatting rule children; "
+            "their raw structure is retained for review."
+        )
+        extensions += unmodelled_children
+
+    return ConditionalFormattingSnapshot(
+        sheet=sheet,
+        ranges=ranges,
+        priority=raw_priority,
+        rule_type=rule_type,
+        operator=rule.get("operator"),
+        formulas=formulas,
+        stop_if_true=_conditional_bool(rule.get("stopIfTrue"), False, "stopIfTrue", warnings),
+        above_average=_conditional_bool(
+            rule.get("aboveAverage"), True, "aboveAverage", warnings
+        ),
+        percent=_conditional_bool(rule.get("percent"), False, "percent", warnings),
+        bottom=_conditional_bool(rule.get("bottom"), False, "bottom", warnings),
+        rank=_conditional_int(rule, "rank", warnings),
+        std_dev=_conditional_int(rule, "stdDev", warnings),
+        equal_average=_conditional_bool(
+            rule.get("equalAverage"), False, "equalAverage", warnings
+        ),
+        text=rule.get("text"),
+        time_period=rule.get("timePeriod"),
+        differential_style=differential_style,
+        color_scale=component("colorScale"),
+        data_bar=component("dataBar"),
+        icon_set=component("iconSet"),
+        extensions=extensions,
+    )
+
+
+def _worksheet_conditional_formatting_extensions(
+    sheet: str,
+    worksheet: ElementTree.Element,
+) -> tuple[ConditionalFormattingExtensionSnapshot, ...]:
+    """Keep worksheet-level x14 conditional-formatting extensions inspectable."""
+    extension_snapshots: list[ConditionalFormattingExtensionSnapshot] = []
+    extension_list_tag = f"{{{_SPREADSHEETML_NS}}}extLst"
+    for extension_list in worksheet.findall(extension_list_tag):
+        for extension in extension_list:
+            if not any(
+                _xml_local_name(element.tag)
+                in {"conditionalFormattings", "conditionalFormatting", "cfRule"}
+                for element in extension.iter()
+            ):
+                continue
+            extension_snapshots.append(
+                ConditionalFormattingExtensionSnapshot(
+                    sheet=sheet,
+                    fragment=_xml_fragment(
+                        extension,
+                        normalise_guids=True,
+                        normalise_formulas=True,
+                    ),
+                )
+            )
+    return tuple(
+        sorted(extension_snapshots, key=ConditionalFormattingExtensionSnapshot.sort_key)
+    )
+
+
+def _conditional_formatting_metadata(path: Path) -> _ConditionalFormattingMetadata:
+    """Read conditional formatting from OOXML before a library can discard extensions."""
+    rules_by_sheet: dict[str, list[tuple[int, int, ConditionalFormattingSnapshot]]] = (
+        defaultdict(list)
+    )
+    extensions: list[ConditionalFormattingExtensionSnapshot] = []
+    warnings: set[str] = set()
+    try:
+        with ZipFile(path) as archive:
+            differential_styles = _differential_style_fragments(archive)
+            conditional_formatting_tag = f"{{{_SPREADSHEETML_NS}}}conditionalFormatting"
+            rule_tag = f"{{{_SPREADSHEETML_NS}}}cfRule"
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                source_order = 0
+                for conditional_formatting in worksheet.findall(conditional_formatting_tag):
+                    ranges = _conditional_ranges(conditional_formatting.get("sqref"))
+                    if not ranges:
+                        warnings.add(
+                            "FormulaFence found conditional formatting without target ranges; "
+                            "the affected control has a coverage gap."
+                        )
+                        continue
+                    for rule in conditional_formatting.findall(rule_tag):
+                        snapshot = _conditional_rule_snapshot(
+                            sheet,
+                            ranges,
+                            rule,
+                            differential_styles,
+                            warnings,
+                        )
+                        rules_by_sheet[sheet].append(
+                            (snapshot.priority, source_order, snapshot)
+                        )
+                        source_order += 1
+                extensions.extend(
+                    _worksheet_conditional_formatting_extensions(sheet, worksheet)
+                )
+    except (BadZipFile, ElementTree.ParseError, KeyError, OSError, ValueError) as error:
+        return _ConditionalFormattingMetadata(
+            rules=(),
+            extensions=(),
+            warnings=(
+                "FormulaFence could not inspect conditional-formatting OOXML "
+                f"({type(error).__name__}); conditional-formatting controls were not compared.",
+            ),
+        )
+
+    rules: list[ConditionalFormattingSnapshot] = []
+    for _sheet, entries in rules_by_sheet.items():
+        priorities = [priority for priority, _, _ in entries]
+        if len(set(priorities)) != len(priorities):
+            warnings.add(
+                "FormulaFence found duplicate conditional-formatting priorities on a "
+                "worksheet; the affected controls have a coverage gap."
+            )
+        for normalized_priority, (_, _, snapshot) in enumerate(
+            sorted(entries, key=lambda item: item[:2]),
+            start=1,
+        ):
+            rules.append(replace(snapshot, priority=normalized_priority))
+    return _ConditionalFormattingMetadata(
+        rules=tuple(sorted(rules, key=ConditionalFormattingSnapshot.sort_key)),
+        extensions=tuple(
+            sorted(extensions, key=ConditionalFormattingExtensionSnapshot.sort_key)
+        ),
+        warnings=tuple(sorted(warnings)),
+    )
 
 
 def _dynamic_metadata_indexes(archive: ZipFile) -> set[int]:
@@ -1096,6 +1529,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             warnings=(),
         )
     parser_warnings.update(array_formula_classification.warnings)
+    conditional_formatting_metadata = _conditional_formatting_metadata(source)
+    parser_warnings.update(conditional_formatting_metadata.warnings)
 
     sheets: dict[str, SheetSnapshot] = {}
     cells: dict[CellKey, CellSnapshot] = {}
@@ -1263,6 +1698,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         tokenization_failure_cells=tokenization_failure_cells,
         tables=tables,
         data_validations=data_validations,
+        conditional_formatting=conditional_formatting_metadata.rules,
+        conditional_formatting_extensions=conditional_formatting_metadata.extensions,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),
@@ -1283,6 +1720,13 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         ],
         "data_validations": [
             validation.profile_dict() for validation in snapshot.data_validations
+        ],
+        "conditional_formatting": [
+            rule.profile_dict() for rule in snapshot.conditional_formatting
+        ],
+        "conditional_formatting_extensions": [
+            extension.profile_dict()
+            for extension in snapshot.conditional_formatting_extensions
         ],
         "defined_names": sorted(snapshot.defined_names),
         "calculation_settings": snapshot.calculation_settings,

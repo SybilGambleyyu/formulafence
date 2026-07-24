@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import warnings
 
 from openpyxl.workbook.defined_name import DefinedName
@@ -10,6 +11,8 @@ from formulafence.output import profile_to_markdown, report_to_markdown
 from formulafence.workbook import load_snapshot, profile_snapshot
 
 from .helpers import (
+    add_conditional_formatting_databar_extension,
+    make_conditional_formatting_model,
     make_current_row_table_model,
     make_data_validation_model,
     make_implicit_intersection_model,
@@ -24,6 +27,7 @@ from .helpers import (
     make_three_d_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
+    reorder_conditional_differential_styles,
     rewrite,
 )
 
@@ -981,6 +985,208 @@ def test_data_validation_target_ranges_stay_compact_at_sheet_scale(tmp_path) -> 
     assert any(
         validation.ranges == ("E1:E1048576",)
         for validation in snapshot.data_validations
+    )
+
+
+def test_conditional_formatting_controls_are_profiled_without_exposing_criteria(tmp_path) -> None:
+    workbook = make_conditional_formatting_model(tmp_path / "conditional-formatting.xlsx")
+
+    snapshot = load_snapshot(workbook)
+    profile = profile_snapshot(snapshot)
+    markdown = profile_to_markdown(profile)
+
+    assert snapshot.summary()["conditional_formatting_rules"] == 5
+    assert snapshot.summary()["conditional_formatting_target_ranges"] == 5
+    assert snapshot.summary()["conditional_formatting_extensions"] == 0
+    assert profile["conditional_formatting"][0] == {
+        "sheet": "Inputs",
+        "ranges": ["Inputs!A2:A100"],
+        "priority": 1,
+        "type": "expression",
+        "operator": None,
+        "formula_count": 1,
+        "has_text_criterion": False,
+        "stop_if_true": True,
+        "above_average": True,
+        "percent": False,
+        "bottom": False,
+        "rank": None,
+        "std_dev": None,
+        "equal_average": False,
+        "time_period": None,
+        "formatting": ["differential style"],
+        "extension_count": 0,
+    }
+    assert profile["conditional_formatting"][2]["formatting"] == ["color scale"]
+    assert profile["conditional_formatting"][3]["formatting"] == ["data bar"]
+    assert profile["conditional_formatting"][4]["formatting"] == ["icon set"]
+    assert "formulas" not in profile["conditional_formatting"][0]
+    assert "$A2<0" not in markdown
+    assert "FFFFC7CE" not in markdown
+    assert "## Conditional-formatting controls" in markdown
+
+
+def test_conditional_formatting_defaults_formula_spelling_and_dxf_order_are_canonical(
+    tmp_path,
+) -> None:
+    baseline = make_conditional_formatting_model(tmp_path / "baseline.xlsx")
+    candidate = make_conditional_formatting_model(tmp_path / "candidate.xlsx")
+
+    def use_equivalent_writer_spelling(workbook) -> None:
+        rules = [
+            rule
+            for rule_group in workbook["Inputs"].conditional_formatting._cf_rules.values()
+            for rule in rule_group
+        ]
+        for rule in rules:
+            rule.priority *= 10
+            rule.formula = [f"={formula}" for formula in rule.formula]
+            if rule.stopIfTrue is None:
+                rule.stopIfTrue = False
+            if rule.aboveAverage is None:
+                rule.aboveAverage = True
+            if rule.percent is None:
+                rule.percent = False
+            if rule.bottom is None:
+                rule.bottom = False
+            if rule.equalAverage is None:
+                rule.equalAverage = False
+
+    rewrite(candidate, use_equivalent_writer_spelling)
+    reorder_conditional_differential_styles(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert not {
+        change.kind for change in report.changes if change.kind == "conditional_formatting_changed"
+    }
+    assert not {finding.rule_id for finding in report.findings if finding.rule_id == "FF021"}
+
+
+def test_conditional_formatting_rule_change_and_precedence_change_are_high_risk(tmp_path) -> None:
+    baseline = make_conditional_formatting_model(tmp_path / "baseline.xlsx")
+    changed_rule = make_conditional_formatting_model(tmp_path / "changed-rule.xlsx")
+    changed_precedence = make_conditional_formatting_model(
+        tmp_path / "changed-precedence.xlsx"
+    )
+
+    def change_rule(workbook) -> None:
+        rules = [
+            rule
+            for rule_group in workbook["Inputs"].conditional_formatting._cf_rules.values()
+            for rule in rule_group
+        ]
+        rules[1].formula = ["90"]
+        rules[1].stopIfTrue = True
+
+    def swap_precedence(workbook) -> None:
+        rules = [
+            rule
+            for rule_group in workbook["Inputs"].conditional_formatting._cf_rules.values()
+            for rule in rule_group
+        ]
+        rules[0].priority, rules[1].priority = rules[1].priority, rules[0].priority
+
+    rewrite(changed_rule, change_rule)
+    rewrite(changed_precedence, swap_precedence)
+
+    rule_report = compare_snapshots(load_snapshot(baseline), load_snapshot(changed_rule))
+    precedence_report = compare_snapshots(
+        load_snapshot(baseline), load_snapshot(changed_precedence)
+    )
+    rule_change = next(
+        change for change in rule_report.changes if change.kind == "conditional_formatting_changed"
+    )
+    precedence_change = next(
+        change
+        for change in precedence_report.changes
+        if change.kind == "conditional_formatting_changed"
+    )
+
+    assert rule_change.severity == "high"
+    assert rule_change.details["before"]["rules"][1]["formulas"] == ["100"]
+    assert rule_change.details["after"]["rules"][1]["formulas"] == ["90"]
+    assert rule_change.details["after"]["rules"][1]["stop_if_true"] is True
+    assert precedence_change.severity == "high"
+    assert [item["type"] for item in precedence_change.details["after"]["rules"][:2]] == [
+        "cellIs",
+        "expression",
+    ]
+    assert {finding.rule_id for finding in rule_report.findings} >= {"FF021"}
+    assert {finding.rule_id for finding in precedence_report.findings} >= {"FF021"}
+
+
+def test_conditional_formatting_extensions_are_compared_without_guid_noise(tmp_path) -> None:
+    baseline = make_conditional_formatting_model(tmp_path / "baseline.xlsx")
+    equivalent = make_conditional_formatting_model(tmp_path / "equivalent.xlsx")
+    changed = make_conditional_formatting_model(tmp_path / "changed.xlsx")
+    changed_extension_type = make_conditional_formatting_model(
+        tmp_path / "changed-extension-type.xlsx"
+    )
+    add_conditional_formatting_databar_extension(
+        baseline,
+        guid="{11111111-2222-3333-4444-555555555555}",
+        axis_color="FF000000",
+    )
+    add_conditional_formatting_databar_extension(
+        equivalent,
+        guid="{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}",
+        axis_color="FF000000",
+    )
+    add_conditional_formatting_databar_extension(
+        changed,
+        guid="{99999999-8888-7777-6666-555555555555}",
+        axis_color="FFFF0000",
+    )
+    add_conditional_formatting_databar_extension(
+        changed_extension_type,
+        guid="{99999999-8888-7777-6666-555555555555}",
+        axis_color="FF000000",
+        worksheet_extension_uri="{11111111-2222-3333-4444-555555555555}",
+    )
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    equivalent_report = compare_snapshots(baseline_snapshot, load_snapshot(equivalent))
+    changed_report = compare_snapshots(baseline_snapshot, load_snapshot(changed))
+    extension_type_report = compare_snapshots(
+        baseline_snapshot, load_snapshot(changed_extension_type)
+    )
+
+    assert baseline_snapshot.summary()["conditional_formatting_extensions"] == 1
+    assert profile["conditional_formatting_extensions"] == [
+        {"sheet": "Inputs", "element": "ext"}
+    ]
+    assert "FF000000" not in json.dumps(profile)
+    markdown = profile_to_markdown(profile)
+    assert "## Conditional-formatting extension coverage" in markdown
+    assert "FF000000" not in markdown
+    assert not {
+        change.kind
+        for change in equivalent_report.changes
+        if change.kind == "conditional_formatting_changed"
+    }
+    changed_change = next(
+        change
+        for change in changed_report.changes
+        if change.kind == "conditional_formatting_changed"
+    )
+    assert changed_change.details["before"]["extensions"] != changed_change.details["after"][
+        "extensions"
+    ]
+    assert {finding.rule_id for finding in changed_report.findings} >= {"FF021"}
+    extension_type_change = next(
+        change
+        for change in extension_type_report.changes
+        if change.kind == "conditional_formatting_changed"
+    )
+    assert (
+        extension_type_change.details["before"]["extensions"][0]["extension"]["attributes"][
+            "uri"
+        ]
+        != extension_type_change.details["after"]["extensions"][0]["extension"]["attributes"][
+            "uri"
+        ]
     )
 
 

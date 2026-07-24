@@ -22,6 +22,7 @@ rules:
   no_new_tokenization_failures: true
   no_table_definition_changes: true
   no_data_validation_changes: true
+  no_conditional_formatting_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
   max_changed_formulas: 20
@@ -69,6 +70,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_tokenization_failures` | boolean | A formula is newly introduced that the underlying formula tokenizer cannot inspect. |
 | `no_table_definition_changes` | boolean | An Excel table is added, removed, moved, renamed, or has its columns/header/total-row configuration changed. |
 | `no_data_validation_changes` | boolean | A worksheet data-validation control changes, including its target ranges, criteria, blank/dropdown behavior, prompts, error alert, or global prompt-disable setting. |
+| `no_conditional_formatting_changes` | boolean | A worksheet conditional-formatting control changes, including its precedence, target ranges, criteria, flags, visual style, or retained OOXML extension fragment. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
@@ -150,6 +152,21 @@ message text; local reports retain the full before/after evidence. Any change
 emits `FF020`; enable `no_data_validation_changes` to make it `FFP020` in CI.
 FormulaFence does not evaluate a validation formula or infer whether a future
 entry will pass it.
+
+FormulaFence separately inventories worksheet conditional formatting from raw
+OOXML so a reader library cannot erase an extension before it is compared. It
+tracks each compact `sqref` target group, its worksheet-global precedence,
+rule type/operator/criteria, `Stop If True`, average/rank/time flags,
+differential style, color scale, data bar, icon set, and rule-level extension
+fragments. It resolves `dxfId` to the style's actual OOXML, normalizes schema
+boolean defaults, a leading `=` in criteria, non-semantic priority-number gaps,
+and GUIDs that only link extension fragments. Worksheet-level conditional
+formatting extensions remain opaque but are retained and diffed. Profiles omit
+criteria, text rules, and raw style/extension XML; local reports retain full
+evidence. Any change emits `FF021`; enable
+`no_conditional_formatting_changes` to make it `FFP021` in CI. FormulaFence
+does not calculate a rule, resolve its relative references for every target, or
+predict a cell's final rendered format.
 
 When a formula cannot be tokenized at all, FormulaFence records its location in
 the profile and emits `FF016` for a new instance. Enable

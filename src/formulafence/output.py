@@ -34,6 +34,18 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "- **Data-validation target ranges:** "
             f"{workbook['data_validation_target_ranges']}"
         ),
+        (
+            "- **Conditional-formatting rules:** "
+            f"{workbook['conditional_formatting_rules']}"
+        ),
+        (
+            "- **Conditional-formatting target ranges:** "
+            f"{workbook['conditional_formatting_target_ranges']}"
+        ),
+        (
+            "- **Conditional-formatting extension fragments:** "
+            f"{workbook['conditional_formatting_extensions']}"
+        ),
         f"- **3-D reference formulas:** {workbook['three_d_reference_cells']}",
         f"- **Spill-reference formulas:** {workbook['spill_reference_cells']}",
         (
@@ -139,6 +151,78 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Profiles omit validation formulas and prompt/error text; the full local "
             "before/after settings appear only in a change report."
+        )
+    if profile["conditional_formatting"]:
+        lines.extend(
+            [
+                "",
+                "## Conditional-formatting controls",
+                "",
+                "| Sheet | Applies to | Priority | Rule | Formula(s) | Behavior | Formatting |",
+                "| --- | --- | ---: | --- | ---: | --- | --- |",
+            ]
+        )
+        for rule in profile["conditional_formatting"]:
+            behavior: list[str] = []
+            if rule["stop_if_true"]:
+                behavior.append("stop if true")
+            if rule["type"] == "top10":
+                rank = rule["rank"] if rule["rank"] is not None else "unspecified"
+                direction = "bottom" if rule["bottom"] else "top"
+                qualifier = "%" if rule["percent"] else ""
+                behavior.append(f"{direction} {rank}{qualifier}")
+            if rule["type"] == "aboveAverage":
+                direction = "above" if rule["above_average"] else "below"
+                behavior.append(f"{direction} average")
+                if rule["equal_average"]:
+                    behavior.append("includes average")
+                if rule["std_dev"] is not None:
+                    behavior.append(f"{rule['std_dev']} standard deviations")
+            if rule["time_period"] is not None:
+                behavior.append(rule["time_period"])
+            if rule["has_text_criterion"]:
+                behavior.append("text criterion")
+            if rule["extension_count"]:
+                behavior.append(f"{rule['extension_count']} extension fragment(s)")
+            lines.append(
+                "| {sheet} | {ranges} | {priority} | {rule_type} | {formula_count} | "
+                "{behavior} | {formatting} |".format(
+                    sheet=_markdown_escape(rule["sheet"]),
+                    ranges=_markdown_escape(", ".join(rule["ranges"])),
+                    priority=rule["priority"],
+                    rule_type=_markdown_escape(rule["type"]),
+                    formula_count=rule["formula_count"],
+                    behavior=_markdown_escape(
+                        "; ".join(behavior) if behavior else "default behavior"
+                    ),
+                    formatting=_markdown_escape(
+                        ", ".join(rule["formatting"]) if rule["formatting"] else "none"
+                    ),
+                )
+            )
+        lines.append(
+            "Profiles omit conditional-format formulas, text criteria, and raw style "
+            "or extension XML; full local before/after evidence appears only in a change report."
+        )
+    if profile["conditional_formatting_extensions"]:
+        lines.extend(
+            [
+                "",
+                "## Conditional-formatting extension coverage",
+                "",
+                "| Sheet | OOXML extension |",
+                "| --- | --- |",
+            ]
+        )
+        for extension in profile["conditional_formatting_extensions"]:
+            lines.append(
+                "| {sheet} | {element} |".format(
+                    sheet=_markdown_escape(extension["sheet"]),
+                    element=_markdown_escape(extension["element"]),
+                )
+            )
+        lines.append(
+            "Extension structure is compared locally but intentionally omitted from the profile."
         )
     features = profile["features"]
     if features["external_reference_cells"] or features["broken_reference_cells"]:

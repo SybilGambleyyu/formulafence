@@ -81,6 +81,19 @@ review prompt, not proof of an error.
   A change emits `FF020` and can be blocked with
   `no_data_validation_changes`. FormulaFence does not evaluate a validation
   formula, infer list contents, or predict whether Excel will accept an entry.
+- Worksheet conditional-formatting controls are read directly from OOXML so
+  library support gaps cannot silently erase them before comparison. FormulaFence
+  inventories compact target ranges, globally ordered priority, rule criteria
+  and flags, differential styles, color scales, data bars, icon sets, and both
+  rule- and worksheet-level extension fragments. It resolves a `dxfId` to its
+  actual differential style and normalizes schema defaults, leading `=` formula
+  spelling, priority-number gaps, and extension GUID links. An extension that
+  cannot be interpreted remains opaque but is retained as full local diff
+  evidence; profiles redact criteria, text rules, and raw XML. Any change emits
+  `FF021` and can be blocked with `no_conditional_formatting_changes`.
+  FormulaFence does not calculate a condition, expand relative criteria across
+  every target, reconcile it with manual formatting, or predict the rendered
+  result when overlapping rules conflict.
 - Explicit implicit intersection is inventoried for literal `@` display syntax,
   `@` applied to a function, and persisted `SINGLE()` OOXML. When `SINGLE()`
   has one direct static A1 cell or range argument with an unambiguous
@@ -112,7 +125,7 @@ review prompt, not proof of an error.
   is deliberately omitted rather than partially guessed.
 - It inventories sheet visibility, defined names, calculation settings, and the
   VBA payload. It does not yet diff chart definitions, PivotTables, Power Query,
-  conditional formatting, styles, protection settings, or every OOXML part.
+  ordinary styles, protection settings, or every OOXML part.
 - The tool preserves Excel formula text and uses a limited A1-reference
   normalizer for peer-pattern detection; it is not an Excel-compatible parser
   or calculation engine.

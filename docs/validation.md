@@ -264,6 +264,43 @@ or accept a particular user entry. The scope follows Microsoft's
 [data-validation guidance](https://support.microsoft.com/en-US/Excel/get-started/apply-data-validation-to-cells)
 and [openpyxl's documented validation range model](https://openpyxl.readthedocs.io/en/stable/validation.html).
 
+## Conditional-formatting controls and precedence — 2026-07-24
+
+Microsoft documents that conditional-formatting rules are evaluated by
+precedence, that conflicts use the higher rule, and that `Stop If True` prevents
+lower-priority rules from taking effect. The OOXML model makes that priority
+global to the worksheet, not merely to one target range. FormulaFence therefore
+records a compact target group for each rule and its normalized precedence,
+rather than treating a color change as ordinary cell style noise.
+
+We profiled Microsoft's public [Conditional Formatting examples workbook](https://support.microsoft.com/en-us/excel/use-conditional-formatting-to-highlight-information-in-excel), downloaded locally for compatibility validation only and not bundled with FormulaFence. Its SHA-256 was
+`b73a6de84668d9f728967f31bd3240eba2d766b667021a0adb378a19df70f887`.
+The workbook had 16 sheets, 1,677 non-empty cells, 346 formula cells, **38**
+conditional-formatting rules, and 38 compact target ranges. The inventory found
+`aboveAverage`, `cellIs`, `colorScale`, `containsText`, `dataBar`,
+`duplicateValues`, `expression`, `iconSet`, `timePeriod`, and `top10` rules.
+It retained no raw criterion formula or text rule in the profile. Its one
+parser warning concerned an unrelated header/footer parse limitation, not
+conditional formatting.
+
+Two independently maintained XlsxWriter 3.2.9 fixtures exercised the harder
+extension boundary. The baseline SHA-256
+`98d1aba217995085824ccf91129bf729027c69732fffa3b84936c636a6e59942`
+used an Excel-2010 data bar with a black axis; the candidate SHA-256
+`a7f84aa204af9f9012b3cdfba91075e25499db8a078e32b3981766cb4f870d9d`
+changed only that axis to red. openpyxl issued the same unsupported-extension
+warnings for both files, but FormulaFence retained one worksheet extension
+fragment in each snapshot and emitted `FF021` for the axis-color change.
+Equivalent fixtures with a different extension GUID, explicit false boolean
+defaults, leading `=` criteria, non-contiguous raw priority numbers, and a
+reordered `dxfs` style table produced no conditional-formatting diff.
+
+This validates OOXML control and extension change detection, not Excel display
+calculation. FormulaFence does not decide whether a condition is true, map a
+relative formula over every target cell, or emulate the final interaction with
+manual formats and all overlapping rules. The policy control is
+`no_conditional_formatting_changes` (`FFP021`).
+
 ## Public structured-reference example — 2026-07-24
 
 FormulaFence 0.6.0 was also profiled against the public

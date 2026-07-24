@@ -8,6 +8,7 @@ from formulafence.policy import evaluate_policy, parse_policy
 from formulafence.workbook import load_snapshot
 
 from .helpers import (
+    make_data_validation_model,
     make_legacy_array_model,
     make_model,
     make_table_model,
@@ -164,6 +165,25 @@ def test_policy_can_block_table_definition_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP013"}
+
+
+def test_policy_can_block_data_validation_control_changes(tmp_path) -> None:
+    baseline = make_data_validation_model(tmp_path / "baseline.xlsx")
+    candidate = make_data_validation_model(tmp_path / "candidate.xlsx")
+    rewrite(
+        candidate,
+        lambda workbook: setattr(
+            workbook["Inputs"].data_validations.dataValidation[0],
+            "showErrorMessage",
+            False,
+        ),
+    )
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_data_validation_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP020"}
 
 
 def test_policy_can_block_three_d_reference_scope_changes(tmp_path) -> None:

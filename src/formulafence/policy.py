@@ -26,6 +26,7 @@ _RULE_FIELDS = {
     "no_array_formula_semantics_changes",
     "no_new_tokenization_failures",
     "no_table_definition_changes",
+    "no_data_validation_changes",
     "no_3d_reference_scope_changes",
     "no_sheet_visibility_changes",
     "max_changed_formulas",
@@ -69,6 +70,7 @@ class Policy:
     no_array_formula_semantics_changes: bool = False
     no_new_tokenization_failures: bool = False
     no_table_definition_changes: bool = False
+    no_data_validation_changes: bool = False
     no_3d_reference_scope_changes: bool = False
     no_sheet_visibility_changes: bool = False
     max_changed_formulas: int | None = None
@@ -94,6 +96,7 @@ rules:
   no_array_formula_semantics_changes: true
   no_new_tokenization_failures: true
   no_table_definition_changes: true
+  no_data_validation_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -195,6 +198,7 @@ def parse_policy(data: object) -> Policy:
             rules, "no_new_tokenization_failures"
         ),
         no_table_definition_changes=_boolean_rule(rules, "no_table_definition_changes"),
+        no_data_validation_changes=_boolean_rule(rules, "no_data_validation_changes"),
         no_3d_reference_scope_changes=_boolean_rule(
             rules, "no_3d_reference_scope_changes"
         ),
@@ -357,6 +361,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP013",
                     "high",
                     "Policy forbids changes to Excel-table definitions.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_data_validation_changes:
+        for finding in _rule_triggered(report, "FF020"):
+            violations.append(
+                Finding(
+                    "FFP020",
+                    "high",
+                    "Policy forbids changes to data-validation controls.",
                     details=finding.details,
                 )
             )

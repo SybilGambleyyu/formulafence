@@ -7,7 +7,7 @@ import posixpath
 import warnings
 from collections import defaultdict
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
@@ -30,6 +30,7 @@ from formulafence.models import (
     ArrayFormulaRange,
     CellKey,
     CellSnapshot,
+    DataValidationSnapshot,
     DynamicArrayOutputReference,
     RangeDependency,
     SheetSnapshot,
@@ -948,6 +949,93 @@ def _table_snapshots(workbook: object) -> dict[str, TableSnapshot]:
     return result
 
 
+def _validation_formula(value: object) -> str | None:
+    """Normalize the optional leading equals sign used by workbook writers."""
+    if not isinstance(value, str):
+        return None
+    return value[1:] if value.startswith("=") else value
+
+
+def _validation_ranges(validation: object) -> tuple[str, ...]:
+    """Return a compact, writer-order-independent validation target inventory."""
+    sqref = getattr(validation, "sqref", None)
+    try:
+        ranges = tuple(str(target_range) for target_range in sqref.ranges)
+    except (AttributeError, TypeError):
+        raw = str(sqref or "")
+        ranges = tuple(raw.split())
+    return tuple(sorted(set(ranges), key=str.casefold))
+
+
+def _validation_bool(validation: object, attribute: str, default: bool) -> bool:
+    """Read one OOXML boolean while applying its schema default."""
+    value = getattr(validation, attribute, None)
+    return default if value is None else bool(value)
+
+
+def _data_validation_snapshots(workbook: object) -> tuple[DataValidationSnapshot, ...]:
+    """Inventory data-entry controls without expanding their applied ranges.
+
+    OOXML defaults are normalized because writers commonly omit values such as
+    ``operator=between`` and ``errorStyle=stop`` while other writers serialize
+    them explicitly. The control's formulas and messages remain available in a
+    local diff but are omitted from profile output.
+    """
+    snapshots: list[DataValidationSnapshot] = []
+    for worksheet in getattr(workbook, "worksheets", ()):
+        validation_container = getattr(worksheet, "data_validations", None)
+        validation_list = getattr(validation_container, "dataValidation", ())
+        prompts_disabled = _validation_bool(validation_container, "disablePrompts", False)
+        for validation in validation_list or ():
+            ranges = _validation_ranges(validation)
+            if not ranges:
+                continue
+            snapshots.append(
+                DataValidationSnapshot(
+                    sheet=worksheet.title,
+                    ranges=ranges,
+                    validation_type=str(getattr(validation, "type", None) or "none"),
+                    operator=str(getattr(validation, "operator", None) or "between"),
+                    formula1=_validation_formula(getattr(validation, "formula1", None)),
+                    formula2=_validation_formula(getattr(validation, "formula2", None)),
+                    allow_blank=_validation_bool(validation, "allowBlank", False),
+                    dropdown_hidden=_validation_bool(validation, "showDropDown", False),
+                    prompts_disabled=prompts_disabled,
+                    show_input_message=_validation_bool(
+                        validation, "showInputMessage", False
+                    ),
+                    show_error_message=_validation_bool(
+                        validation, "showErrorMessage", False
+                    ),
+                    error_style=str(getattr(validation, "errorStyle", None) or "stop"),
+                    error_title=getattr(validation, "errorTitle", None),
+                    error=getattr(validation, "error", None),
+                    prompt_title=getattr(validation, "promptTitle", None),
+                    prompt=getattr(validation, "prompt", None),
+                    ime_mode=str(getattr(validation, "imeMode", None) or "noControl"),
+                )
+            )
+    # ``sqref`` is only a compact list of targets for a rule. Writers may keep
+    # identical rules together or split them into separate ``dataValidation``
+    # elements, with no change to what Excel applies to any target cell.
+    # Canonicalize that grouping before comparing workbooks.
+    grouped_ranges: dict[DataValidationSnapshot, set[str]] = defaultdict(set)
+    for snapshot in snapshots:
+        grouped_ranges[replace(snapshot, ranges=())].update(snapshot.ranges)
+    return tuple(
+        sorted(
+            (
+                replace(
+                    snapshot,
+                    ranges=tuple(sorted(ranges, key=str.casefold)),
+                )
+                for snapshot, ranges in grouped_ranges.items()
+            ),
+            key=DataValidationSnapshot.sort_key,
+        )
+    )
+
+
 def _structured_table_map(tables: dict[str, TableSnapshot]) -> dict[str, StructuredTable]:
     """Translate stable table inventory records into formula-resolution metadata."""
     return {
@@ -1022,6 +1110,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     implicit_intersection_tokens: dict[CellKey, tuple[str, ...]] = {}
     tokenization_failure_cells: set[CellKey] = set()
     tables = _table_snapshots(workbook)
+    data_validations = _data_validation_snapshots(workbook)
     structured_tables = _structured_table_map(tables)
     sheet_order = tuple(worksheet.title for worksheet in workbook.worksheets)
     (
@@ -1173,6 +1262,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         array_formula_output_dependents=array_formula_output_dependents,
         tokenization_failure_cells=tokenization_failure_cells,
         tables=tables,
+        data_validations=data_validations,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),
@@ -1190,6 +1280,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "tables": [
             snapshot.tables[name].to_dict()
             for name in sorted(snapshot.tables, key=str.casefold)
+        ],
+        "data_validations": [
+            validation.profile_dict() for validation in snapshot.data_validations
         ],
         "defined_names": sorted(snapshot.defined_names),
         "calculation_settings": snapshot.calculation_settings,

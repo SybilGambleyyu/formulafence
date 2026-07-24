@@ -6,6 +6,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import Workbook
 from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.formula import ArrayFormula
 from openpyxl.worksheet.table import Table
 
@@ -55,6 +56,65 @@ def make_table_model(path: Path) -> Path:
     report["B3"] = "=SUM(Sales[[#Data],[Amount]:[Rate]])"
     report["B4"] = "=ROWS(Sales[#All])"
     report["B5"] = "=COUNTA(Sales[[#Headers],[#Data],[Rate]])"
+    workbook.save(path)
+    return path
+
+
+def make_data_validation_model(path: Path, *, reverse_status_targets: bool = False) -> Path:
+    """Create an input workbook whose data-entry controls carry business rules."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Controlled entries"
+    inputs["B1"] = "Status"
+    inputs["B2"] = "Draft"
+    inputs["C1"] = "Approved amount"
+    inputs["C2"] = 25
+    inputs["D1"] = "Secondary status"
+    inputs["D2"] = "Review"
+
+    limits = workbook.create_sheet("Limits")
+    limits["A1"] = "Approved statuses"
+    limits["A2"] = "Draft"
+    limits["A3"] = "Review"
+    limits["A4"] = "Approved"
+    limits["B1"] = "Minimum"
+    limits["B2"] = 10
+    limits["B3"] = 100
+
+    status = DataValidation(
+        type="list",
+        formula1="=Limits!$A$2:$A$4",
+        allow_blank=True,
+        showInputMessage=True,
+        showErrorMessage=True,
+        errorStyle="stop",
+        errorTitle="Invalid status",
+        error="Choose an approved status.",
+        promptTitle="Approved status",
+        prompt="Choose a documented status.",
+    )
+    if reverse_status_targets:
+        status.add("D2")
+        status.add("B2:B100")
+    else:
+        status.add("B2:B100")
+        status.add("D2")
+    inputs.add_data_validation(status)
+
+    amount = DataValidation(
+        type="decimal",
+        operator="between",
+        formula1="=Limits!$B$2",
+        formula2="=Limits!$B$3",
+        allow_blank=False,
+        showErrorMessage=True,
+        errorStyle="warning",
+        errorTitle="Outside approved range",
+        error="Use an amount within the approved range.",
+    )
+    amount.add("C2:C100")
+    inputs.add_data_validation(amount)
     workbook.save(path)
     return path
 

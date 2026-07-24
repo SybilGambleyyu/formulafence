@@ -3,6 +3,7 @@ from __future__ import annotations
 import warnings
 
 from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.datavalidation import DataValidation
 
 from formulafence.diff import compare_snapshots
 from formulafence.output import profile_to_markdown, report_to_markdown
@@ -10,6 +11,7 @@ from formulafence.workbook import load_snapshot, profile_snapshot
 
 from .helpers import (
     make_current_row_table_model,
+    make_data_validation_model,
     make_implicit_intersection_model,
     make_legacy_array_model,
     make_let_model,
@@ -805,6 +807,181 @@ def test_table_definition_change_is_a_semantic_control_change(tmp_path) -> None:
 
     assert any(change.kind == "table_definition_changed" for change in report.changes)
     assert any(finding.rule_id == "FF013" for finding in report.findings)
+
+
+def test_data_validation_controls_are_profiled_without_exposing_criteria(tmp_path) -> None:
+    workbook = make_data_validation_model(tmp_path / "validation.xlsx")
+
+    snapshot = load_snapshot(workbook)
+    profile = profile_snapshot(snapshot)
+    markdown = profile_to_markdown(profile)
+
+    assert snapshot.summary()["data_validation_rules"] == 2
+    assert snapshot.summary()["data_validation_target_ranges"] == 3
+    assert profile["data_validations"] == [
+        {
+            "sheet": "Inputs",
+            "ranges": ["Inputs!B2:B100", "Inputs!D2"],
+            "type": "list",
+            "operator": "between",
+            "criteria_count": 1,
+            "allow_blank": True,
+            "dropdown_hidden": False,
+            "prompts_disabled": False,
+            "show_input_message": True,
+            "show_error_message": True,
+            "error_style": "stop",
+            "has_error_alert_text": True,
+            "has_input_prompt_text": True,
+            "ime_mode": "noControl",
+        },
+        {
+            "sheet": "Inputs",
+            "ranges": ["Inputs!C2:C100"],
+            "type": "decimal",
+            "operator": "between",
+            "criteria_count": 2,
+            "allow_blank": False,
+            "dropdown_hidden": False,
+            "prompts_disabled": False,
+            "show_input_message": False,
+            "show_error_message": True,
+            "error_style": "warning",
+            "has_error_alert_text": True,
+            "has_input_prompt_text": False,
+            "ime_mode": "noControl",
+        },
+    ]
+    assert "formula1" not in profile["data_validations"][0]
+    assert "## Data-validation controls" in markdown
+    assert "Limits!$A$2" not in markdown
+    assert "Choose an approved status." not in markdown
+
+
+def test_data_validation_writer_defaults_and_formula_spelling_are_canonical(tmp_path) -> None:
+    baseline = make_data_validation_model(tmp_path / "baseline.xlsx")
+    candidate = make_data_validation_model(tmp_path / "candidate.xlsx", reverse_status_targets=True)
+
+    def use_omitted_ooxml_defaults(workbook) -> None:
+        for validation in workbook["Inputs"].data_validations.dataValidation:
+            if validation.formula1:
+                validation.formula1 = validation.formula1.removeprefix("=")
+            if validation.formula2:
+                validation.formula2 = validation.formula2.removeprefix("=")
+            validation.operator = None
+            if validation.errorStyle == "stop":
+                validation.errorStyle = None
+
+    rewrite(candidate, use_omitted_ooxml_defaults)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert not {
+        change.kind for change in report.changes if change.kind == "data_validation_changed"
+    }
+    assert not {finding.rule_id for finding in report.findings if finding.rule_id == "FF020"}
+
+
+def test_data_validation_equivalent_target_grouping_is_canonical(tmp_path) -> None:
+    baseline = make_data_validation_model(tmp_path / "baseline.xlsx")
+    candidate = make_data_validation_model(tmp_path / "candidate.xlsx")
+
+    def split_identical_status_control(workbook) -> None:
+        inputs = workbook["Inputs"]
+        _, amount = inputs.data_validations.dataValidation
+        inputs.data_validations.dataValidation.clear()
+        for target in ("B2:B100", "D2"):
+            status = DataValidation(
+                type="list",
+                formula1="=Limits!$A$2:$A$4",
+                allow_blank=True,
+                showInputMessage=True,
+                showErrorMessage=True,
+                errorStyle="stop",
+                errorTitle="Invalid status",
+                error="Choose an approved status.",
+                promptTitle="Approved status",
+                prompt="Choose a documented status.",
+            )
+            status.add(target)
+            inputs.add_data_validation(status)
+        inputs.add_data_validation(amount)
+
+    rewrite(candidate, split_identical_status_control)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert not {
+        change.kind for change in report.changes if change.kind == "data_validation_changed"
+    }
+    assert not {finding.rule_id for finding in report.findings if finding.rule_id == "FF020"}
+
+
+def test_data_validation_change_is_a_high_risk_semantic_control_change(tmp_path) -> None:
+    baseline = make_data_validation_model(tmp_path / "baseline.xlsx")
+    candidate = make_data_validation_model(tmp_path / "candidate.xlsx")
+
+    def weaken_amount_control(workbook) -> None:
+        amount = workbook["Inputs"].data_validations.dataValidation[1]
+        amount.formula2 = "=Limits!$B$2"
+        amount.showErrorMessage = False
+
+    rewrite(candidate, weaken_amount_control)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    change = next(change for change in report.changes if change.kind == "data_validation_changed")
+    finding = next(finding for finding in report.findings if finding.rule_id == "FF020")
+
+    assert change.severity == "high"
+    assert change.details["sheet"] == "Inputs"
+    assert change.details["before"][1]["formula2"] == "Limits!$B$3"
+    assert change.details["after"][1]["formula2"] == "Limits!$B$2"
+    assert change.details["after"][1]["show_error_message"] is False
+    assert finding.location is None
+
+
+def test_data_validation_global_prompt_disable_is_a_control_change(tmp_path) -> None:
+    baseline = make_data_validation_model(tmp_path / "baseline.xlsx")
+    candidate = make_data_validation_model(tmp_path / "candidate.xlsx")
+    rewrite(
+        candidate,
+        lambda workbook: setattr(
+            workbook["Inputs"].data_validations, "disablePrompts", True
+        ),
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    change = next(change for change in report.changes if change.kind == "data_validation_changed")
+
+    assert all(item["prompts_disabled"] is True for item in change.details["after"])
+    assert "worksheet prompts disabled" in profile_to_markdown(
+        profile_snapshot(load_snapshot(candidate))
+    )
+
+
+def test_data_validation_target_ranges_stay_compact_at_sheet_scale(tmp_path) -> None:
+    workbook = make_data_validation_model(tmp_path / "large-validation.xlsx")
+
+    def add_full_column_control(current_workbook) -> None:
+        validation = DataValidation(
+            type="whole",
+            operator="greaterThan",
+            formula1="0",
+            showErrorMessage=True,
+        )
+        validation.add("E1:E1048576")
+        current_workbook["Inputs"].add_data_validation(validation)
+
+    rewrite(workbook, add_full_column_control)
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.cells) < 20
+    assert snapshot.summary()["data_validation_rules"] == 3
+    assert snapshot.summary()["data_validation_target_ranges"] == 4
+    assert any(
+        validation.ranges == ("E1:E1048576",)
+        for validation in snapshot.data_validations
+    )
 
 
 def test_current_row_table_references_trace_only_the_matching_row(tmp_path) -> None:

@@ -235,6 +235,35 @@ while linking known consumers, demonstrating that it does not materialize an
 output node for every result cell. This validates OOXML classification and
 static graph behavior, not Excel calculation results.
 
+## Data-validation controls — 2026-07-24
+
+Microsoft documents data validation as a worksheet control that can restrict
+entries, show input guidance, and show an error alert. An interoperability
+workbook generated locally with independently maintained XlsxWriter 3.2.9 had
+SHA-256 `1e0e94a26e521b8a4e80214e0ad03ea1bc8f9e5e34286ce494a54b35e5c33132`.
+It contained a list control targeting `Inputs!B2:B1048576` with
+`Limits!$A$2:$A$4` as its source and a decimal control targeting
+`Inputs!C2:C100` with lower and upper bounds from `Limits`.
+
+The serialized XlsxWriter rules omitted the schema-default `operator=between`
+and `errorStyle=stop` attributes, and stored criteria without a leading `=`.
+A matching locally generated openpyxl workbook used explicit defaults and
+leading-equals criterion text. FormulaFence produced equal data-validation
+snapshots for both workbooks and no `FF020`, demonstrating that these harmless
+writer representations do not create a control diff. The controlled suite also
+splits one identical rule into separate OOXML target groups without a diff.
+Changing the target range or disabling the error alert emitted `FF020`; the
+`no_data_validation_changes` policy emitted `FFP020`.
+
+The profile retained two compact rules and two target ranges rather than
+materializing the full-column target as cells. It deliberately redacted the
+criteria and prompt/error text from the profile, while the local JSON diff kept
+full before/after evidence. This validates OOXML representation and
+change-detection behavior, not whether Excel will evaluate a validation formula
+or accept a particular user entry. The scope follows Microsoft's
+[data-validation guidance](https://support.microsoft.com/en-US/Excel/get-started/apply-data-validation-to-cells)
+and [openpyxl's documented validation range model](https://openpyxl.readthedocs.io/en/stable/validation.html).
+
 ## Public structured-reference example — 2026-07-24
 
 FormulaFence 0.6.0 was also profiled against the public

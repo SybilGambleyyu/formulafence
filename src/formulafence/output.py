@@ -29,6 +29,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         f"- **Non-empty cells:** {workbook['nonempty_cells']}",
         f"- **Formula cells:** {workbook['formula_cells']}",
         f"- **Tables:** {workbook['table_count']}",
+        f"- **Data-validation rules:** {workbook['data_validation_rules']}",
+        (
+            "- **Data-validation target ranges:** "
+            f"{workbook['data_validation_target_ranges']}"
+        ),
         f"- **3-D reference formulas:** {workbook['three_d_reference_cells']}",
         f"- **Spill-reference formulas:** {workbook['spill_reference_cells']}",
         (
@@ -88,6 +93,53 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     columns=_markdown_escape(", ".join(table["columns"])),
                 )
             )
+    if profile["data_validations"]:
+        lines.extend(
+            [
+                "",
+                "## Data-validation controls",
+                "",
+                "| Sheet | Applies to | Rule | Criteria | Behavior |",
+                "| --- | --- | --- | ---: | --- |",
+            ]
+        )
+        for validation in profile["data_validations"]:
+            rule = validation["type"]
+            if validation["type"] not in {"list", "custom", "none"}:
+                rule = f"{validation['type']} / {validation['operator']}"
+            behavior: list[str] = []
+            if validation["allow_blank"]:
+                behavior.append("blanks allowed")
+            if validation["dropdown_hidden"]:
+                behavior.append("dropdown hidden")
+            if validation["prompts_disabled"]:
+                behavior.append("worksheet prompts disabled")
+            elif validation["show_input_message"]:
+                behavior.append("input prompt")
+            if validation["show_error_message"]:
+                behavior.append(f"{validation['error_style']} alert")
+            if validation["has_input_prompt_text"] and not validation["prompts_disabled"]:
+                behavior.append("prompt text")
+            if validation["has_error_alert_text"]:
+                behavior.append("alert text")
+            lines.append(
+                "| {sheet} | {ranges} | {rule} | "
+                "{criteria_count} | {behavior} |".format(
+                    sheet=_markdown_escape(validation["sheet"]),
+                    ranges=_markdown_escape(
+                        ", ".join(validation["ranges"])
+                    ),
+                    rule=_markdown_escape(rule),
+                    criteria_count=validation["criteria_count"],
+                    behavior=_markdown_escape(
+                        "; ".join(behavior) if behavior else "default behavior"
+                    ),
+                )
+            )
+        lines.append(
+            "Profiles omit validation formulas and prompt/error text; the full local "
+            "before/after settings appear only in a change report."
+        )
     features = profile["features"]
     if features["external_reference_cells"] or features["broken_reference_cells"]:
         lines.extend(["", "## Static hazards", ""])

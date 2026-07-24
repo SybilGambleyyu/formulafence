@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.14.0 — 2026-07-24
+
+- Inventory worksheet data-validation controls as compact target ranges and
+  compare their effective type, operator, criteria, blank/dropdown behavior,
+  prompts, error alert, IME mode, and worksheet-level prompt-disable setting.
+  This does not expand full-column validations into cells.
+- Normalize omitted OOXML defaults (`none`, `between`, `stop`, and `noControl`)
+  and an optional leading `=` in criteria, so equivalent Excel-compatible
+  writers do not create a control-only diff. Identical controls are also joined
+  when a writer splits their target groups. Profiles redact criteria and
+  prompt/error text; local reports retain full before/after evidence.
+- Emit `FF020` for changed validation controls and add the fail-closed
+  `no_data_validation_changes` policy rule (`FFP020`). Validation expressions
+  remain inspectable controls, not calculations FormulaFence evaluates.
+
 ## 0.13.0 — 2026-07-24
 
 - Trace formulas that read a non-anchor member of a dynamic array's current

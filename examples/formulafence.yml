@@ -13,6 +13,7 @@ rules:
   no_array_formula_semantics_changes: true
   no_new_tokenization_failures: true
   no_table_definition_changes: true
+  no_data_validation_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 5
   max_downstream_impact: 10

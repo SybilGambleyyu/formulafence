@@ -65,4 +65,5 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
     assert "no_new_dynamic_array_output_references: true" in content
     assert "no_new_implicit_intersections: true" in content
     assert "no_array_formula_semantics_changes: true" in content
+    assert "no_data_validation_changes: true" in content
     assert "no_new_tokenization_failures: true" in content

@@ -104,6 +104,109 @@ class TableSnapshot:
 
 
 @dataclass(frozen=True)
+class DataValidationSnapshot:
+    """One compact Excel data-validation control and its effective settings."""
+
+    sheet: str
+    ranges: tuple[str, ...]
+    validation_type: str
+    operator: str
+    formula1: str | None
+    formula2: str | None
+    allow_blank: bool
+    dropdown_hidden: bool
+    prompts_disabled: bool
+    show_input_message: bool
+    show_error_message: bool
+    error_style: str
+    error_title: str | None
+    error: str | None
+    prompt_title: str | None
+    prompt: str | None
+    ime_mode: str
+
+    @property
+    def target_range_count(self) -> int:
+        return len(self.ranges)
+
+    @property
+    def criteria_count(self) -> int:
+        return sum(value is not None for value in (self.formula1, self.formula2))
+
+    def sort_key(self) -> tuple[object, ...]:
+        """Return a writer-order-independent key for deterministic inventories."""
+        def optional(value: str | None) -> tuple[bool, str]:
+            return value is not None, value or ""
+
+        return (
+            self.sheet.casefold(),
+            self.ranges,
+            self.validation_type,
+            self.operator,
+            optional(self.formula1),
+            optional(self.formula2),
+            self.allow_blank,
+            self.dropdown_hidden,
+            self.prompts_disabled,
+            self.show_input_message,
+            self.show_error_message,
+            self.error_style,
+            optional(self.error_title),
+            optional(self.error),
+            optional(self.prompt_title),
+            optional(self.prompt),
+            self.ime_mode,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return full local review evidence, including criterion expressions."""
+        return {
+            "sheet": self.sheet,
+            "ranges": [
+                display_location((self.sheet, target_range))
+                for target_range in self.ranges
+            ],
+            "type": self.validation_type,
+            "operator": self.operator,
+            "formula1": self.formula1,
+            "formula2": self.formula2,
+            "allow_blank": self.allow_blank,
+            "dropdown_hidden": self.dropdown_hidden,
+            "prompts_disabled": self.prompts_disabled,
+            "show_input_message": self.show_input_message,
+            "show_error_message": self.show_error_message,
+            "error_style": self.error_style,
+            "error_title": self.error_title,
+            "error": self.error,
+            "prompt_title": self.prompt_title,
+            "prompt": self.prompt,
+            "ime_mode": self.ime_mode,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        """Return a data-minimising control inventory without messages or formulas."""
+        return {
+            "sheet": self.sheet,
+            "ranges": [
+                display_location((self.sheet, target_range))
+                for target_range in self.ranges
+            ],
+            "type": self.validation_type,
+            "operator": self.operator,
+            "criteria_count": self.criteria_count,
+            "allow_blank": self.allow_blank,
+            "dropdown_hidden": self.dropdown_hidden,
+            "prompts_disabled": self.prompts_disabled,
+            "show_input_message": self.show_input_message,
+            "show_error_message": self.show_error_message,
+            "error_style": self.error_style,
+            "has_error_alert_text": bool(self.error_title or self.error),
+            "has_input_prompt_text": bool(self.prompt_title or self.prompt),
+            "ime_mode": self.ime_mode,
+        }
+
+
+@dataclass(frozen=True)
 class RangeDependency:
     """A range used by a formula, stored without expanding large Excel ranges."""
 
@@ -285,6 +388,7 @@ class WorkbookSnapshot:
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     tables: dict[str, TableSnapshot] = field(default_factory=dict)
+    data_validations: tuple[DataValidationSnapshot, ...] = ()
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     spill_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -321,6 +425,10 @@ class WorkbookSnapshot:
             "formula_cells": sum(1 for cell in self.cells.values() if cell.is_formula),
             "defined_names": len(self.defined_names),
             "table_count": len(self.tables),
+            "data_validation_rules": len(self.data_validations),
+            "data_validation_target_ranges": sum(
+                validation.target_range_count for validation in self.data_validations
+            ),
             "has_vba": self.macro_hash is not None,
             "external_reference_cells": len(self.external_references),
             "broken_reference_cells": len(self.broken_references),

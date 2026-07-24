@@ -21,6 +21,7 @@ rules:
   no_array_formula_semantics_changes: true
   no_new_tokenization_failures: true
   no_table_definition_changes: true
+  no_data_validation_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
   max_changed_formulas: 20
@@ -67,6 +68,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_array_formula_semantics_changes` | boolean | A legacy-CSE or dynamic-array formula is added, removed, or changes mode, or a legacy CSE formula's fixed output range changes. |
 | `no_new_tokenization_failures` | boolean | A formula is newly introduced that the underlying formula tokenizer cannot inspect. |
 | `no_table_definition_changes` | boolean | An Excel table is added, removed, moved, renamed, or has its columns/header/total-row configuration changed. |
+| `no_data_validation_changes` | boolean | A worksheet data-validation control changes, including its target ranges, criteria, blank/dropdown behavior, prompts, error alert, or global prompt-disable setting. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
@@ -135,6 +137,19 @@ aliases. A change between ordinary, fixed CSE, and dynamic modes, or a fixed CSE
 output-range change, emits `FF018`; adding or removing a legacy-CSE or
 dynamic-array formula also emits `FF018`. Enable
 `no_array_formula_semantics_changes` to make it `FFP018` in CI.
+
+FormulaFence separately inventories worksheet data-validation controls. It
+tracks their compact target ranges, validation type and operator, the two
+criteria expressions, blank/dropdown behavior, input prompts, error alerts,
+IME mode, and the worksheet-level `disablePrompts` setting. It treats omitted
+OOXML defaults as their effective values (`none`, `between`, `stop`, and
+`noControl`), normalizes an optional leading `=` in criterion expressions, and
+joins identical rules whose target groups are serialized separately, avoiding a
+writer-formatting-only control diff. Profiles omit the criterion and
+message text; local reports retain the full before/after evidence. Any change
+emits `FF020`; enable `no_data_validation_changes` to make it `FFP020` in CI.
+FormulaFence does not evaluate a validation formula or infer whether a future
+entry will pass it.
 
 When a formula cannot be tokenized at all, FormulaFence records its location in
 the profile and emits `FF016` for a new instance. Enable

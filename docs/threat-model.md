@@ -70,6 +70,17 @@ review prompt, not proof of an error.
   reported as coverage notes and receive no aliases. FormulaFence reports
   adding, removing, or changing mode, plus a fixed CSE output-range change, as
   `FF018`; it does not calculate either array form.
+- Worksheet data-validation controls are inventoried and diffed as compact
+  ranges rather than by expanding their target cells. FormulaFence compares the
+  validation type, operator, two criteria expressions, blank/dropdown behavior,
+  input prompts, error alerts, IME mode, and worksheet-level `disablePrompts`.
+  It normalizes schema defaults (`none`, `between`, `stop`, and `noControl`) and
+  an optional leading `=` in a criterion, and writer grouping of identical
+  targets to avoid writer-only noise. Profiles omit criteria and prompt/error
+  text, while local diff evidence retains them.
+  A change emits `FF020` and can be blocked with
+  `no_data_validation_changes`. FormulaFence does not evaluate a validation
+  formula, infer list contents, or predict whether Excel will accept an entry.
 - Explicit implicit intersection is inventoried for literal `@` display syntax,
   `@` applied to a function, and persisted `SINGLE()` OOXML. When `SINGLE()`
   has one direct static A1 cell or range argument with an unambiguous
@@ -101,7 +112,7 @@ review prompt, not proof of an error.
   is deliberately omitted rather than partially guessed.
 - It inventories sheet visibility, defined names, calculation settings, and the
   VBA payload. It does not yet diff chart definitions, PivotTables, Power Query,
-  styles, data validations, protection settings, or every OOXML part.
+  conditional formatting, styles, protection settings, or every OOXML part.
 - The tool preserves Excel formula text and uses a limited A1-reference
   normalizer for peer-pattern detection; it is not an Excel-compatible parser
   or calculation engine.

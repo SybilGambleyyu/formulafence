@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import deque
+from collections import defaultdict, deque
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
@@ -13,6 +13,7 @@ from formulafence.models import (
     CellKey,
     CellSnapshot,
     Change,
+    DataValidationSnapshot,
     DiffReport,
     Finding,
     WorkbookSnapshot,
@@ -348,6 +349,39 @@ def _workbook_control_changes(
                 "FF013",
                 "high",
                 f"Excel table definition changed: {name}.",
+                details=details,
+            )
+        )
+
+    before_validations: dict[str, list[DataValidationSnapshot]] = defaultdict(list)
+    after_validations: dict[str, list[DataValidationSnapshot]] = defaultdict(list)
+    for validation in before.data_validations:
+        before_validations[validation.sheet].append(validation)
+    for validation in after.data_validations:
+        after_validations[validation.sheet].append(validation)
+    for sheet in sorted(set(before_validations) | set(after_validations), key=str.casefold):
+        old_validations = tuple(before_validations.get(sheet, ()))
+        new_validations = tuple(after_validations.get(sheet, ()))
+        if old_validations == new_validations:
+            continue
+        details = {
+            "sheet": sheet,
+            "before": [validation.to_dict() for validation in old_validations],
+            "after": [validation.to_dict() for validation in new_validations],
+        }
+        changes.append(
+            Change(
+                "data_validation_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF020",
+                "high",
+                f"Data-validation controls changed on worksheet: {sheet}.",
                 details=details,
             )
         )

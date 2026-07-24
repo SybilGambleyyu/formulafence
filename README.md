@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.13.0/formulafence-0.13.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.14.0/formulafence-0.14.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,6 +71,7 @@ rules:
   no_array_formula_semantics_changes: true
   no_new_tokenization_failures: true
   no_table_definition_changes: true
+  no_data_validation_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -92,7 +93,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation controls, array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -182,6 +183,21 @@ mode, or when a legacy CSE fixed output range changes; enable
 `no_array_formula_semantics_changes` for `FFP018`. This follows Microsoft's
 [dynamic-versus-legacy array guidance](https://support.microsoft.com/en-us/excel/dynamic-array-formulas-and-spilled-array-behavior)
 and [XlsxWriter's documented CSE/dynamic serialization behavior](https://xlsxwriter.readthedocs.io/working_with_formulas.html).
+
+FormulaFence inventories **data-validation controls** as reviewable workbook
+semantics. A validation can restrict a whole column, select a list from another
+sheet, enforce a custom formula, hide a list arrow, or change whether Excel
+shows a prompt or blocks an invalid entry. The profile records each target range
+and its effective control settings without exposing validation formulas or
+prompt/error text; a local change report includes the full before/after rule.
+It normalizes OOXML defaults such as `operator=between` and `errorStyle=stop`,
+the optional leading `=` in a criterion, and equivalent grouping of identical
+target rules, so equivalent writers do not create noise. Any changed validation
+control emits `FF020`; enable
+`no_data_validation_changes` for `FFP020`. FormulaFence does not evaluate a
+validation formula or predict whether a user entry will be accepted. The scope
+follows Microsoft's [data-validation guidance](https://support.microsoft.com/en-US/Excel/get-started/apply-data-validation-to-cells)
+and [openpyxl's documented range model](https://openpyxl.readthedocs.io/en/stable/validation.html).
 
 FormulaFence also follows a call to a workbook- or worksheet-local defined name
 when its complete definition is one statically resolvable `LAMBDA` expression.

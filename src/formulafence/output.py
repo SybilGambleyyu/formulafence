@@ -1237,6 +1237,54 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Filter criteria, selected values, table names, sort keys, custom lists, "
             "and row/range references are compared privately and intentionally omitted."
         )
+    ignored_error_controls = profile["ignored_error_controls"]
+    if ignored_error_controls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Ignored Excel error-checking controls",
+                "",
+                (
+                    "- **Worksheets / standard containers / Office 2010 extension containers:** "
+                    f"{ignored_error_controls['worksheet_count']} / "
+                    f"{ignored_error_controls['standard_container_count']} / "
+                    f"{ignored_error_controls['extension_container_count']}"
+                ),
+                (
+                    "- **Suppressed warning rules / target ranges:** "
+                    f"{ignored_error_controls['ignored_error_rule_count']} / "
+                    f"{ignored_error_controls['target_range_count']}"
+                ),
+                (
+                    "- **Evaluation / inconsistent-formula / omitted-range warnings:** "
+                    f"{ignored_error_controls['evaluation_error_count']} / "
+                    f"{ignored_error_controls['inconsistent_formula_count']} / "
+                    f"{ignored_error_controls['formula_range_omission_count']}"
+                ),
+                (
+                    "- **Unlocked-formula / empty-reference / list-validation / calculated-column "
+                    "warnings:** "
+                    f"{ignored_error_controls['unlocked_formula_count']} / "
+                    f"{ignored_error_controls['empty_cell_reference_count']} / "
+                    f"{ignored_error_controls['list_data_validation_count']} / "
+                    f"{ignored_error_controls['calculated_column_count']}"
+                ),
+                (
+                    "- **Numbers-stored-as-text / two-digit-text-year warnings:** "
+                    f"{ignored_error_controls['number_stored_as_text_count']} / "
+                    f"{ignored_error_controls['two_digit_text_year_count']}"
+                ),
+            ]
+        )
+        if ignored_error_controls["unrecognized_ignored_error_count"]:
+            lines.append(
+                "- **Unrecognized or malformed ignored-error controls:** "
+                f"{ignored_error_controls['unrecognized_ignored_error_count']}"
+            )
+        lines.append(
+            "Target ranges and individual warning suppressions are compared privately and "
+            "intentionally omitted."
+        )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:
         lines.extend(

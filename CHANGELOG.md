@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.33.0 — 2026-07-25
+
+- Inspect standard worksheet `ignoredErrors` declarations and Office 2010
+  `x14:ignoredErrors` extension declarations directly from raw OOXML. Private
+  signatures retain target ranges and enabled warning types without serializing
+  them into profiles, `FF037`, or SARIF.
+- Emit `FF037` when suppressed Excel evaluation, inconsistent-formula,
+  omitted-range, unlocked-formula, empty-reference, list-validation,
+  calculated-column, text-number, or two-digit-year warning controls change;
+  add the fail-closed `no_ignored_error_changes` policy rule (`FFP037`).
+  Equivalent local A1 case/absolute-reference, Boolean, and target-order
+  spellings are normalized.
+- Make malformed or unsupported containers, extension material, attributes,
+  flags, targets, and child markup visible parser-coverage warnings rather than
+  silently dropping them. FormulaFence does not determine whether Excel would
+  show a warning, calculate a formula, repair an error, or change application-
+  level error-checking options.
+
 ## 0.32.0 — 2026-07-25
 
 - Inspect worksheet and Table Definition-part AutoFilters directly from raw

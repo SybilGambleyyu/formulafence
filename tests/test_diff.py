@@ -23,6 +23,8 @@ from .helpers import (
     change_external_link_package_controls,
     change_filter_visibility_criterion,
     change_filter_visibility_hidden_row,
+    change_ignored_error_extension_target,
+    change_ignored_error_target,
     change_legacy_vml_control_controls,
     change_legacy_vml_note,
     change_office_web_addin_auto_show,
@@ -46,6 +48,7 @@ from .helpers import (
     change_xlm_macro_sheet_related_part_payload,
     corrupt_chart_definition_root,
     corrupt_filter_visibility_control,
+    corrupt_ignored_error_control,
     corrupt_legacy_vml_control_root,
     corrupt_office_web_addin_definition_root,
     corrupt_pivot_table_definition_root,
@@ -58,6 +61,7 @@ from .helpers import (
     delete_what_if_data_table_input,
     duplicate_external_link_definition,
     duplicate_external_link_sheet_names,
+    duplicate_ignored_error_container,
     externalize_chart_overlay_relationship,
     externalize_pivot_table_cache_record_relationship,
     externalize_power_pivot_data_model,
@@ -69,6 +73,7 @@ from .helpers import (
     make_external_data_refresh_model,
     make_external_link_package_model,
     make_filter_visibility_model,
+    make_ignored_error_model,
     make_implicit_intersection_model,
     make_legacy_array_model,
     make_legacy_vml_control_model,
@@ -95,6 +100,7 @@ from .helpers import (
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
     normalize_filter_visibility_control_spelling,
+    normalize_ignored_error_control_spelling,
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
     overlap_what_if_data_table_outputs,
@@ -4148,6 +4154,132 @@ def test_filter_visibility_free_workbook_has_no_inventory(tmp_path) -> None:
         "filter, sort, or row-visibility" in warning
         for warning in snapshot.parser_warnings
     )
+
+
+def test_ignored_error_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_ignored_error_model(tmp_path / "baseline.xlsx")
+    candidate = make_ignored_error_model(tmp_path / "candidate.xlsx")
+    extension_candidate = make_ignored_error_model(tmp_path / "extension-candidate.xlsx")
+    change_ignored_error_target(candidate)
+    change_ignored_error_extension_target(extension_candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    extension_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(extension_candidate),
+    )
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "ignored_error_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["ignored_error_rule_count"] == 11
+    assert baseline_snapshot.summary()["ignored_error_target_range_count"] == 5
+    assert baseline_snapshot.summary()["has_ignored_error_controls"] is True
+    assert profile["ignored_error_controls"] == {
+        "present": True,
+        "worksheet_count": 2,
+        "standard_container_count": 1,
+        "extension_container_count": 1,
+        "ignored_error_rule_count": 11,
+        "target_range_count": 5,
+        "evaluation_error_count": 2,
+        "inconsistent_formula_count": 2,
+        "formula_range_omission_count": 1,
+        "unlocked_formula_count": 1,
+        "empty_cell_reference_count": 1,
+        "list_data_validation_count": 1,
+        "calculated_column_count": 1,
+        "number_stored_as_text_count": 1,
+        "two_digit_text_year_count": 1,
+        "unrecognized_ignored_error_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Ignored Excel error-checking controls" in markdown
+    assert change.details["ignored_error_definition_material_changed"] is True
+    assert "FF037" in {finding.rule_id for finding in report.findings}
+    assert "FF037" in {finding.rule_id for finding in extension_report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in ("C2:C3", "C4:C5"):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_ignored_error_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_ignored_error_model(tmp_path / "baseline.xlsx")
+    equivalent = make_ignored_error_model(tmp_path / "equivalent.xlsx")
+    normalize_ignored_error_control_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert "ignored_error_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF037" not in {finding.rule_id for finding in report.findings}
+
+
+def test_ignored_error_malformed_control_fails_closed(tmp_path) -> None:
+    baseline = make_ignored_error_model(tmp_path / "baseline.xlsx")
+    malformed = make_ignored_error_model(tmp_path / "malformed.xlsx")
+    corrupt_ignored_error_control(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.ignored_error_controls.unrecognized_ignored_error_count == 1
+    assert any(
+        "malformed or unsupported ignored-error" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF037"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all(
+        "PrivateIgnoredErrorSheet!B2" not in artifact
+        for artifact in rendered_artifacts
+    )
+
+
+def test_ignored_error_duplicate_standard_container_fails_closed(tmp_path) -> None:
+    baseline = make_ignored_error_model(tmp_path / "baseline.xlsx")
+    malformed = make_ignored_error_model(tmp_path / "malformed.xlsx")
+    duplicate_ignored_error_container(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.ignored_error_controls.unrecognized_ignored_error_count == 1
+    assert any(
+        "malformed or unsupported ignored-error" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF037"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_ignored_error_free_workbook_has_no_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.ignored_error_controls.present is False
+    assert snapshot.ignored_error_controls.ignored_error_rule_count == 0
+    assert not any("ignored-error" in warning for warning in snapshot.parser_warnings)
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

@@ -6107,6 +6107,210 @@ def corrupt_filter_visibility_control(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".filter-visibility-corrupt.tmp.xlsx")
 
 
+def make_ignored_error_model(path: Path) -> Path:
+    """Create standard and Office 2010 ignored-error controls outside cells."""
+    workbook = Workbook()
+    model = workbook.active
+    model.title = "Error Review"
+    model["A1"] = "Review surface"
+    model["B2"] = "=1/0"
+    model["B3"] = "=NA()"
+    model["C2"] = "000123"
+    model["C3"] = "000456"
+    model["D2"] = "=SUM(B2:B3)"
+    checks = workbook.create_sheet("Extension Review")
+    checks["E2"] = "=1/0"
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        ignored_errors_tag = f"{{{_SPREADSHEETML_NS}}}ignoredErrors"
+        ignored_error_tag = f"{{{_SPREADSHEETML_NS}}}ignoredError"
+        sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+        ext_list_tag = f"{{{_SPREADSHEETML_NS}}}extLst"
+        extension_tag = f"{{{_SPREADSHEETML_NS}}}ext"
+        x14_ignored_errors_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}ignoredErrors"
+        x14_ignored_error_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}ignoredError"
+
+        standard_sheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        standard_controls = ElementTree.Element(ignored_errors_tag)
+        ElementTree.SubElement(
+            standard_controls,
+            ignored_error_tag,
+            {"sqref": "B2 B3", "evalError": "1", "formula": "true"},
+        )
+        ElementTree.SubElement(
+            standard_controls,
+            ignored_error_tag,
+            {"sqref": "C2:C3", "numberStoredAsText": "1"},
+        )
+        ElementTree.SubElement(
+            standard_controls,
+            ignored_error_tag,
+            {
+                "sqref": "D2",
+                "formulaRange": "1",
+                "emptyCellReference": "true",
+                "listDataValidation": "1",
+            },
+        )
+        sheet_data_index = next(
+            index
+            for index, child in enumerate(standard_sheet)
+            if child.tag == sheet_data_tag
+        )
+        standard_sheet.insert(sheet_data_index + 1, standard_controls)
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            standard_sheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        extension_sheet = ElementTree.fromstring(contents["xl/worksheets/sheet2.xml"])
+        extension_list = ElementTree.Element(ext_list_tag)
+        extension = ElementTree.SubElement(
+            extension_list,
+            extension_tag,
+            {"uri": "{01252117-D84E-4E92-8308-4BE1C098FCBB}"},
+        )
+        extension_controls = ElementTree.SubElement(extension, x14_ignored_errors_tag)
+        ElementTree.SubElement(
+            extension_controls,
+            x14_ignored_error_tag,
+            {
+                "sqref": "E2",
+                "unlockedFormula": "1",
+                "calculatedColumn": "true",
+                "twoDigitTextYear": "1",
+            },
+        )
+        extension_sheet.append(extension_list)
+        contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+            extension_sheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".ignored-error.tmp.xlsx")
+
+
+def change_ignored_error_target(path: Path) -> Path:
+    """Change a private standard ignored-error target without touching cells."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        ignored_error_tag = f"{{{_SPREADSHEETML_NS}}}ignoredError"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        rule = next(
+            element
+            for element in worksheet.iter(ignored_error_tag)
+            if element.get("numberStoredAsText") is not None
+        )
+        rule.set("sqref", "C4:C5")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".ignored-error-target.tmp.xlsx")
+
+
+def change_ignored_error_extension_target(path: Path) -> Path:
+    """Change a private Office 2010 ignored-error target without cell edits."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        ignored_error_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}ignoredError"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet2.xml"])
+        next(worksheet.iter(ignored_error_tag)).set("sqref", "E3")
+        contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".ignored-error-extension-target.tmp.xlsx")
+
+
+def normalize_ignored_error_control_spelling(path: Path) -> Path:
+    """Use equivalent A1, Boolean, and ordering spellings for ignored errors."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        ignored_error_tag = f"{{{_SPREADSHEETML_NS}}}ignoredError"
+        x14_ignored_error_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}ignoredError"
+        standard_sheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        rules = list(standard_sheet.iter(ignored_error_tag))
+        if len(rules) != 3:
+            raise ValueError("Could not find every standard ignored-error fixture rule")
+        rules[0].set("sqref", "$b$3 $B$2")
+        rules[0].set("evalError", "true")
+        rules[0].set("formula", "1")
+        rules[1].set("sqref", "$c$2:$C$3")
+        rules[1].set("numberStoredAsText", "true")
+        rules[2].set("sqref", "$d$2")
+        rules[2].set("formulaRange", "true")
+        rules[2].set("emptyCellReference", "1")
+        rules[2].set("listDataValidation", "true")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            standard_sheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        extension_sheet = ElementTree.fromstring(contents["xl/worksheets/sheet2.xml"])
+        extension_rule = next(extension_sheet.iter(x14_ignored_error_tag))
+        extension_rule.set("sqref", "$e$2")
+        extension_rule.set("unlockedFormula", "true")
+        extension_rule.set("calculatedColumn", "1")
+        extension_rule.set("twoDigitTextYear", "true")
+        contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+            extension_sheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".ignored-error-noise.tmp.xlsx")
+
+
+def corrupt_ignored_error_control(path: Path) -> Path:
+    """Inject an unsupported ignored-error target to exercise fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        ignored_error_tag = f"{{{_SPREADSHEETML_NS}}}ignoredError"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        next(worksheet.iter(ignored_error_tag)).set(
+            "sqref", "PrivateIgnoredErrorSheet!B2"
+        )
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".ignored-error-corrupt.tmp.xlsx")
+
+
+def duplicate_ignored_error_container(path: Path) -> Path:
+    """Duplicate a standard container to exercise malformed-container coverage."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        ignored_errors_tag = f"{{{_SPREADSHEETML_NS}}}ignoredErrors"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        controls = worksheet.find(ignored_errors_tag)
+        if controls is None:
+            raise ValueError("Could not find standard ignored-error fixture controls")
+        worksheet.append(
+            ElementTree.fromstring(
+                ElementTree.tostring(controls, encoding="utf-8"),
+            )
+        )
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".ignored-error-duplicate.tmp.xlsx")
+
+
 def change_what_if_data_table_input(path: Path) -> Path:
     """Change one private Data Table input reference without touching cells."""
 

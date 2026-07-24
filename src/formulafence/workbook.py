@@ -52,6 +52,7 @@ from formulafence.models import (
     ExternalDataRefreshSettingsSnapshot,
     ExternalLinkPackageSnapshot,
     FilterVisibilitySnapshot,
+    IgnoredErrorSnapshot,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
@@ -465,6 +466,14 @@ class _FilterVisibilityMetadata:
     """Raw filter, sort, and row-visibility evidence retained before reader loss."""
 
     controls: FilterVisibilitySnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _IgnoredErrorMetadata:
+    """Raw ignored-error evidence retained before reader loss."""
+
+    controls: IgnoredErrorSnapshot
     warnings: tuple[str, ...]
 
 
@@ -13144,6 +13153,254 @@ def _scenario_manager_metadata(path: Path) -> _ScenarioManagerMetadata:
     return _ScenarioManagerMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_IGNORED_ERROR_EXTENSION_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+)
+_IGNORED_ERROR_FLAG_ATTRIBUTES = (
+    "evalError",
+    "formula",
+    "formulaRange",
+    "unlockedFormula",
+    "emptyCellReference",
+    "listDataValidation",
+    "calculatedColumn",
+    "numberStoredAsText",
+    "twoDigitTextYear",
+)
+_IGNORED_ERROR_KNOWN_ATTRIBUTES = frozenset(
+    {"sqref", *_IGNORED_ERROR_FLAG_ATTRIBUTES}
+)
+
+
+def _ignored_error_ranges(value: str | None) -> tuple[str, ...] | None:
+    """Normalize private local ignored-error target ranges without emitting them."""
+    if value is None or not (candidate := value.strip()):
+        return None
+    ranges: set[str] = set()
+    for raw_range in candidate.split():
+        reference, bounds = _canonical_what_if_data_table_range(raw_range)
+        if reference is None or bounds is None:
+            return None
+        ranges.add(reference)
+    return tuple(sorted(ranges, key=str.casefold)) or None
+
+
+def _ignored_error_opaque_signature(element: ElementTree.Element) -> str:
+    """Fingerprint unsupported ignored-error XML without serializing it."""
+    return _private_payload_signature(ElementTree.tostring(element, encoding="utf-8"))
+
+
+def _ignored_error_metadata(path: Path) -> _IgnoredErrorMetadata:
+    """Inspect Excel error-warning suppressions before a reader can discard them.
+
+    Standard SpreadsheetML declarations and Office 2010's extension form both
+    hold private target ranges. Canonical comparison keeps those ranges inside a
+    digest; emitted profiles report only the kinds and counts of warnings that
+    have been suppressed.
+    """
+    warnings: set[str] = set()
+    default = IgnoredErrorSnapshot()
+    signature_entries: list[tuple[str, str]] = []
+    semantic_ranges: dict[tuple[str, str], set[str]] = defaultdict(set)
+    worksheets_with_controls: set[str] = set()
+    standard_container_count = 0
+    extension_container_count = 0
+    unrecognized_ignored_error_count = 0
+
+    def inspect_container(
+        container: ElementTree.Element,
+        *,
+        sheet: str,
+        kind: str,
+        container_index: int,
+        namespace: str,
+    ) -> None:
+        nonlocal unrecognized_ignored_error_count
+        container_issues: set[str] = set()
+        error_tag = f"{{{namespace}}}ignoredError"
+        extension_tag = f"{{{namespace}}}extLst"
+        unknown_attributes = tuple(
+            sorted(
+                (
+                    _xml_display_name(attribute),
+                    value,
+                )
+                for attribute, value in container.attrib.items()
+            )
+        )
+        if unknown_attributes:
+            container_issues.add("unknown-container-attributes")
+        if (container.text or "").strip():
+            container_issues.add("unexpected-container-text")
+
+        rules: list[ElementTree.Element] = []
+        for child in container:
+            if child.tag == error_tag:
+                rules.append(child)
+                continue
+            if child.tag == extension_tag:
+                if child.attrib or list(child) or (child.text or "").strip():
+                    container_issues.add("unsupported-container-extension")
+                continue
+            container_issues.add("unexpected-container-child")
+
+        for rule_index, rule in enumerate(rules):
+            rule_issues: set[str] = set()
+            ranges = _ignored_error_ranges(rule.get("sqref"))
+            if ranges is None:
+                rule_issues.add("invalid-target-ranges")
+
+            enabled_flags: list[str] = []
+            for flag in _IGNORED_ERROR_FLAG_ATTRIBUTES:
+                enabled, _ = _what_if_data_table_boolean(rule.get(flag))
+                if enabled is None:
+                    rule_issues.add(f"invalid-{flag}")
+                elif enabled:
+                    enabled_flags.append(flag)
+            if not enabled_flags:
+                rule_issues.add("no-enabled-error-types")
+
+            unknown_rule_attributes = tuple(
+                sorted(
+                    (
+                        _xml_display_name(attribute),
+                        value,
+                    )
+                    for attribute, value in rule.attrib.items()
+                    if attribute not in _IGNORED_ERROR_KNOWN_ATTRIBUTES
+                )
+            )
+            if unknown_rule_attributes:
+                rule_issues.add("unknown-rule-attributes")
+            if list(rule):
+                rule_issues.add("unexpected-rule-children")
+            if (rule.text or "").strip():
+                rule_issues.add("unexpected-rule-text")
+
+            if ranges is not None:
+                for flag in enabled_flags:
+                    semantic_ranges[(sheet.casefold(), flag)].update(ranges)
+            if rule_issues:
+                unrecognized_ignored_error_count += 1
+                signature_entries.append(
+                    (
+                        f"ignored-error-opaque:{sheet.casefold()}:{kind}:"
+                        f"{container_index}:{rule_index}",
+                        _ignored_error_opaque_signature(rule),
+                    )
+                )
+
+        if container_issues:
+            unrecognized_ignored_error_count += 1
+            signature_entries.append(
+                (
+                    f"ignored-errors-container-opaque:{sheet.casefold()}:{kind}:"
+                    f"{container_index}",
+                    _ignored_error_opaque_signature(container),
+                )
+            )
+
+    try:
+        with ZipFile(path) as archive:
+            standard_tag = f"{{{_SPREADSHEETML_NS}}}ignoredErrors"
+            extension_tag = f"{{{_IGNORED_ERROR_EXTENSION_NS}}}ignoredErrors"
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                standard_containers = list(worksheet.findall(standard_tag))
+                extension_containers = list(worksheet.iter(extension_tag))
+                if standard_containers or extension_containers:
+                    worksheets_with_controls.add(sheet.casefold())
+                standard_container_count += len(standard_containers)
+                extension_container_count += len(extension_containers)
+                if len(standard_containers) > 1:
+                    unrecognized_ignored_error_count += 1
+                    signature_entries.append(
+                        (
+                            f"multiple-standard-ignored-errors:{sheet.casefold()}",
+                            str(len(standard_containers)),
+                        )
+                    )
+                for container_index, container in enumerate(standard_containers):
+                    inspect_container(
+                        container,
+                        sheet=sheet,
+                        kind="standard",
+                        container_index=container_index,
+                        namespace=_SPREADSHEETML_NS,
+                    )
+                for container_index, container in enumerate(extension_containers):
+                    inspect_container(
+                        container,
+                        sheet=sheet,
+                        kind="extension",
+                        container_index=container_index,
+                        namespace=_IGNORED_ERROR_EXTENSION_NS,
+                    )
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _IgnoredErrorMetadata(
+            default,
+            (
+                "FormulaFence could not inspect ignored-error OOXML "
+                f"({type(error).__name__}); affected review warnings were not compared.",
+            ),
+        )
+
+    category_counts = {
+        flag: sum(
+            len(ranges)
+            for (_, current_flag), ranges in semantic_ranges.items()
+            if current_flag == flag
+        )
+        for flag in _IGNORED_ERROR_FLAG_ATTRIBUTES
+    }
+    for (sheet, flag), ranges in sorted(semantic_ranges.items()):
+        signature_entries.append(
+            (
+                f"ignored-error:{sheet}:{flag}",
+                repr(tuple(sorted(ranges, key=str.casefold))),
+            )
+        )
+    if unrecognized_ignored_error_count:
+        warnings.add(
+            "FormulaFence found malformed or unsupported ignored-error metadata; "
+            "the affected Excel review warnings have a coverage gap."
+        )
+
+    target_ranges = {
+        (sheet, reference)
+        for (sheet, _), ranges in semantic_ranges.items()
+        for reference in ranges
+    }
+    snapshot = IgnoredErrorSnapshot(
+        worksheet_count=len(worksheets_with_controls),
+        standard_container_count=standard_container_count,
+        extension_container_count=extension_container_count,
+        ignored_error_rule_count=sum(category_counts.values()),
+        target_range_count=len(target_ranges),
+        evaluation_error_count=category_counts.get("evalError", 0),
+        inconsistent_formula_count=category_counts.get("formula", 0),
+        formula_range_omission_count=category_counts.get("formulaRange", 0),
+        unlocked_formula_count=category_counts.get("unlockedFormula", 0),
+        empty_cell_reference_count=category_counts.get("emptyCellReference", 0),
+        list_data_validation_count=category_counts.get("listDataValidation", 0),
+        calculated_column_count=category_counts.get("calculatedColumn", 0),
+        number_stored_as_text_count=category_counts.get("numberStoredAsText", 0),
+        two_digit_text_year_count=category_counts.get("twoDigitTextYear", 0),
+        unrecognized_ignored_error_count=unrecognized_ignored_error_count,
+        definition_signature=_private_external_data_signature(
+            tuple(sorted(signature_entries))
+        ),
+    )
+    return _IgnoredErrorMetadata(snapshot, tuple(sorted(warnings)))
+
+
 _FILTER_VISIBILITY_UNSIGNED_INT_MAXIMUM = 4_294_967_295
 _FILTER_VISIBILITY_OUTLINE_LEVEL_MAXIMUM = 255
 _FILTER_VISIBILITY_FILTER_CRITERIA_CHILDREN = frozenset(
@@ -14846,6 +15103,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     what_if_data_table_metadata = _what_if_data_table_metadata(source)
     scenario_manager_metadata = _scenario_manager_metadata(source)
     filter_visibility_metadata = _filter_visibility_metadata(source)
+    ignored_error_metadata = _ignored_error_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -14881,6 +15139,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(what_if_data_table_metadata.warnings)
     parser_warnings.update(scenario_manager_metadata.warnings)
     parser_warnings.update(filter_visibility_metadata.warnings)
+    parser_warnings.update(ignored_error_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -15100,6 +15359,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         what_if_data_tables=what_if_data_table_metadata.data_tables,
         scenario_manager=scenario_manager_metadata.scenario_manager,
         filter_visibility_controls=filter_visibility_metadata.controls,
+        ignored_error_controls=ignored_error_metadata.controls,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -15172,6 +15432,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "what_if_data_tables": snapshot.what_if_data_tables.profile_dict(),
         "scenario_manager": snapshot.scenario_manager.profile_dict(),
         "filter_visibility_controls": snapshot.filter_visibility_controls.profile_dict(),
+        "ignored_error_controls": snapshot.ignored_error_controls.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -15196,6 +15457,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_what_if_data_tables": snapshot.what_if_data_tables.present,
             "has_scenario_manager": snapshot.scenario_manager.present,
             "has_filter_visibility_controls": snapshot.filter_visibility_controls.present,
+            "has_ignored_error_controls": snapshot.ignored_error_controls.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

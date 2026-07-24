@@ -14,6 +14,7 @@ rules:
   no_what_if_data_table_changes: true
   no_scenario_manager_changes: true
   no_filter_visibility_changes: true
+  no_ignored_error_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true

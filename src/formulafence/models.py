@@ -1491,6 +1491,67 @@ class FilterVisibilitySnapshot:
 
 
 @dataclass(frozen=True)
+class IgnoredErrorSnapshot:
+    """Safe aggregate of Excel's per-range ignored error-checking controls.
+
+    Ignored-error ranges may identify sensitive model locations, while their
+    declarations can suppress formula, evaluation, and validation warnings a
+    reviewer would otherwise see. The private signature retains canonical
+    ranges and flags; the public profile deliberately exposes only counts.
+    """
+
+    worksheet_count: int = 0
+    standard_container_count: int = 0
+    extension_container_count: int = 0
+    ignored_error_rule_count: int = 0
+    target_range_count: int = 0
+    evaluation_error_count: int = 0
+    inconsistent_formula_count: int = 0
+    formula_range_omission_count: int = 0
+    unlocked_formula_count: int = 0
+    empty_cell_reference_count: int = 0
+    list_data_validation_count: int = 0
+    calculated_column_count: int = 0
+    number_stored_as_text_count: int = 0
+    two_digit_text_year_count: int = 0
+    unrecognized_ignored_error_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.standard_container_count
+            or self.extension_container_count
+            or self.ignored_error_rule_count
+            or self.unrecognized_ignored_error_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural evidence without ranges or error-control details."""
+        return {
+            "present": self.present,
+            "worksheet_count": self.worksheet_count,
+            "standard_container_count": self.standard_container_count,
+            "extension_container_count": self.extension_container_count,
+            "ignored_error_rule_count": self.ignored_error_rule_count,
+            "target_range_count": self.target_range_count,
+            "evaluation_error_count": self.evaluation_error_count,
+            "inconsistent_formula_count": self.inconsistent_formula_count,
+            "formula_range_omission_count": self.formula_range_omission_count,
+            "unlocked_formula_count": self.unlocked_formula_count,
+            "empty_cell_reference_count": self.empty_cell_reference_count,
+            "list_data_validation_count": self.list_data_validation_count,
+            "calculated_column_count": self.calculated_column_count,
+            "number_stored_as_text_count": self.number_stored_as_text_count,
+            "two_digit_text_year_count": self.two_digit_text_year_count,
+            "unrecognized_ignored_error_count": self.unrecognized_ignored_error_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -1886,6 +1947,9 @@ class WorkbookSnapshot:
     filter_visibility_controls: FilterVisibilitySnapshot = field(
         default_factory=FilterVisibilitySnapshot
     )
+    ignored_error_controls: IgnoredErrorSnapshot = field(
+        default_factory=IgnoredErrorSnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -1944,6 +2008,9 @@ class WorkbookSnapshot:
                 self.filter_visibility_controls.hidden_row_count
             ),
             "has_filter_visibility_controls": self.filter_visibility_controls.present,
+            "ignored_error_rule_count": self.ignored_error_controls.ignored_error_rule_count,
+            "ignored_error_target_range_count": self.ignored_error_controls.target_range_count,
+            "has_ignored_error_controls": self.ignored_error_controls.present,
             "defined_names": len(self.defined_names),
             "table_count": len(self.tables),
             "data_validation_rules": len(self.data_validations),

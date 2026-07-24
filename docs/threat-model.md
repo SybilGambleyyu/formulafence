@@ -27,6 +27,8 @@ financial correctness or replace model review.
   boundary.
 - Filter criteria, selected values, custom sort lists, table names, sort keys,
   and row/range references are compared through a private signature only.
+- Ignored-error target ranges and exact per-range warning suppressions are
+  compared through a private signature only.
 - Protection credential material is never emitted: legacy verifiers, modern
   hashes/salts, protected-range names, and security descriptors are compared
   through private fingerprints and reported only as safe presence/change metadata.
@@ -136,6 +138,20 @@ review prompt, not proof of an error.
   change as `FFP036`. FormulaFence does not apply filters, calculate
   `SUBTOTAL`/`AGGREGATE`, infer formula sensitivity, render views, or track
   hidden columns.
+- Excel ignored-error declarations can suppress evaluation, inconsistent-formula,
+  omitted-range, unlocked-formula, empty-reference, list-validation,
+  calculated-column, text-number, and two-digit-year warnings without changing
+  a cell or formula. FormulaFence reads standard `<ignoredErrors>` and Office
+  2010 `x14:ignoredErrors` declarations, privately compares local target ranges
+  and enabled warning flags, and emits `FF037`; `no_ignored_error_changes` can
+  block the change as `FFP037`. Profiles and `FF037` details expose only
+  structural counts, never target ranges or individual suppressions. Equivalent
+  local A1 case/absolute-reference, Boolean, and target-order spellings are
+  normalized. Malformed or unsupported containers, extension material,
+  attributes, flags, targets, and child markup remain visible coverage warnings.
+  FormulaFence does not decide whether Excel would display a warning, calculate
+  a formula, repair an error, alter application-level error checking, or infer
+  a suppressed warning's downstream impact.
 - Worksheet data-validation controls are inventoried and diffed as compact
   ranges rather than by expanding their target cells. FormulaFence compares the
   validation type, operator, two criteria expressions, blank/dropdown behavior,
@@ -370,12 +386,12 @@ review prompt, not proof of an error.
   record chains, Slicer and Timeline cache filter-definition chains, embedded
   Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and
   Scenario Manager declarations, worksheet/Table AutoFilter and row-visibility
-  controls, DrawingML chart
+  controls, ignored-error warning suppressions, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link
   packages, and private Power Query definition material. It does not yet
-  interpret PivotTable OLAP or extension-list semantics; deserialize or execute
+  interpret PivotTable OLAP or other extension-list semantics; deserialize or execute
   Power Pivot/Data Model content; apply Slicer/Timeline filters or model their
   worksheet/drawing view geometry/styles; modern
   `chartEx` or nested-chart semantics; general drawing layout/objects or

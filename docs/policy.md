@@ -22,6 +22,7 @@ rules:
   no_what_if_data_table_changes: true
   no_scenario_manager_changes: true
   no_filter_visibility_changes: true
+  no_ignored_error_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -85,6 +86,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_what_if_data_table_changes` | boolean | An Excel What-If Data Table master changes its output range, one-/two-variable mode, orientation, input references, deleted-input state, recalculation request, or supported raw formula metadata. This is unrelated to an Excel table definition. |
 | `no_scenario_manager_changes` | boolean | An Excel Scenario Manager worksheet changes its selected/shown scenario state, result-summary references, scenario definition, protection flags, comments/users, stored input values/references, deleted/undone state, or input display number formats. Scenario names, comments, users, values, and references are compared privately. |
 | `no_filter_visibility_changes` | boolean | A worksheet/Table AutoFilter, stored filter criterion, filter sort state, explicitly hidden/outlined/collapsed row, or hidden-by-default sheet setting changes. Criteria, selected values, sort keys/lists, table names, and references are compared privately. |
+| `no_ignored_error_changes` | boolean | A standard or Office 2010 extension ignored-error declaration changes a per-range suppression of Excel evaluation, formula-consistency, range-omission, unlocked-formula, empty-reference, list-validation, calculated-column, text-number, or two-digit-year warnings. Targets and exact suppressions are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -420,6 +422,25 @@ and unsafe or missing table relationships are explicit coverage warnings.
 FormulaFence does not apply a filter, evaluate `SUBTOTAL`/`AGGREGATE`, infer
 which formulas are visibility-sensitive, render a report, or track hidden
 columns.
+
+Excel's per-range ignored-error declarations can suppress warnings a reviewer
+would otherwise see without changing a formula or ordinary cell. FormulaFence
+reads standard `<ignoredErrors>` and Office 2010 `x14:ignoredErrors` declarations
+from raw worksheet OOXML, including `evalError`, inconsistent `formula`,
+`formulaRange`, `unlockedFormula`, `emptyCellReference`, `listDataValidation`,
+`calculatedColumn`, `numberStoredAsText`, and `twoDigitTextYear` flags. A
+material change emits `FF037`; enable `no_ignored_error_changes` to make it
+`FFP037` in CI.
+
+Profiles and `FF037` details contain only structural counts: worksheets,
+standard/extension containers, suppressed-warning rules, target ranges, and
+warning kinds. Target ranges and individual suppressions remain private. Local
+A1 case/absolute-reference spelling, Boolean spelling, and target ordering are
+normalized. Malformed or unsupported containers, extension material,
+attributes, flags, targets, or child markup are explicit coverage warnings.
+FormulaFence does not decide whether Excel would display a warning, calculate a
+formula, repair an error, change application-level error checking, or infer
+downstream impact.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

@@ -22,6 +22,7 @@ from formulafence.models import (
     ExternalLinkPackageSnapshot,
     FilterVisibilitySnapshot,
     Finding,
+    IgnoredErrorSnapshot,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
@@ -1375,6 +1376,32 @@ def _workbook_control_changes(
                 "FF036",
                 "high",
                 "Worksheet/table filter, sort, or row-visibility control changed.",
+                details=details,
+            )
+        )
+    if before.ignored_error_controls != after.ignored_error_controls:
+        old_controls: IgnoredErrorSnapshot = before.ignored_error_controls
+        new_controls: IgnoredErrorSnapshot = after.ignored_error_controls
+        details: dict[str, object] = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.definition_signature != new_controls.definition_signature:
+            details["ignored_error_definition_material_changed"] = True
+        changes.append(
+            Change(
+                "ignored_error_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF037",
+                "high",
+                "Excel ignored-error controls changed; review warnings may be suppressed "
+                "or restored.",
                 details=details,
             )
         )

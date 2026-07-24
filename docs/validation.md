@@ -5,6 +5,40 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel ignored-error controls — 2026-07-25
+
+FormulaFence 0.33.0 was validated with controlled raw-OOXML `.xlsx` packages
+containing three standard `ignoredError` declarations and one Office 2010
+`x14:ignoredError` declaration. Together they suppress private evaluation,
+inconsistent-formula, omitted-range, unlocked-formula, empty-reference,
+list-validation, calculated-column, text-number, and two-digit-year warnings
+across five private target ranges. The suite verifies safe profile counts, a
+zero-change self-diff, `FF037` for a target-only standard or Office 2010
+extension change, and `FFP037` under `no_ignored_error_changes`.
+
+Equivalent local A1 case/absolute-reference, Boolean, and target-order spellings
+are exercised without a finding. A nonlocal target produces an explicit parser
+coverage warning, `FF010`, and `FF037` rather than a silent omission. Target
+ranges and individual suppressions are verified absent from JSON, Markdown,
+ordinary reports, and SARIF. The controlled target-only mutation has no ordinary
+cell or formula change and is invisible to the published 0.32.0 wheel, while
+0.33.0 emits only `ignored_error_controls_changed` / `FF037`.
+
+As an independent package-compatibility check, FormulaFence profiled the public
+XlsxWriter [`ignore_errors.py`](https://github.com/jmcnamara/XlsxWriter/blob/main/examples/ignore_errors.py)
+example, generated locally with XlsxWriter 3.2.9 and not bundled with this
+repository. The resulting `ignore_errors.xlsx` SHA-256 was
+`57d059a43c6d01602199e0dbac5030fa38489936df7bfd6392474a01122a0eca`.
+FormulaFence found one standard container, two suppressed-warning rules, two
+target ranges, one evaluation-error suppression, one number-stored-as-text
+suppression, and no ignored-error coverage warning. This validates static
+declaration comparison and data minimisation—not whether Excel would show a
+warning, formula evaluation, error repair, application-level error-checking
+configuration, or downstream-impact inference. The boundary follows the OOXML
+[`ignoredError`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_ignoredError_topic_ID0EVK24.html)
+definition and Microsoft's Office 2010 [`ignoredErrors`](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/0d164d85-23bf-4d43-87c5-9fcde148aabe)
+documentation.
+
 ## Excel filters and row visibility — 2026-07-25
 
 FormulaFence 0.32.0 was validated with controlled raw-OOXML `.xlsx` packages

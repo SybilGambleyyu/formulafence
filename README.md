@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.3.0/formulafence-0.3.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.4.0/formulafence-0.4.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -65,6 +65,7 @@ rules:
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
+  no_table_definition_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
 
@@ -83,11 +84,11 @@ allowed_changes:
 | Capability | What it catches |
 | --- | --- |
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
-| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet and static named-range references |
+| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named-range, and basic Excel-table references |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
-| Coverage changes | New parser warnings, unresolved formula references, and dynamic-reference functions (`INDIRECT`/`OFFSET`) |
+| Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), and dynamic-reference functions (`INDIRECT`/`OFFSET`) |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
 | CI output | Deterministic JSON, reviewer-friendly Markdown, and SARIF |
 
@@ -95,6 +96,12 @@ See [the policy reference](docs/policy.md) for the configuration contract and
 [the threat model](docs/threat-model.md) for important limits. The
 [external validation notes](docs/validation.md) record an independently
 maintained financial-model compatibility check.
+
+For Excel tables, FormulaFence statically resolves a table name, a single
+column or contiguous column range, and the `#All`, `#Data`, `#Headers`, and
+`#Totals` regions. This-row (`@`) references and complex bracket escapes remain
+explicit coverage notes. The supported subset follows Excel's documented
+[structured-reference semantics](https://support.microsoft.com/en-us/excel/using-structured-references-with-excel-tables).
 
 ## Development
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — 2026-07-24
+
+- Resolve the conservative, fully qualified Excel-table subset: table names,
+  single or contiguous column ranges, and `#All`/`#Data`/`#Headers`/`#Totals`
+  regions.
+- Inventory table metadata in profiles and flag table additions, removals, and
+  definition changes as `FF013`; add the `no_table_definition_changes` policy
+  control (`FFP013`).
+- Keep this-row (`@`) and complex table syntax as explicit unresolved coverage
+  rather than inferring a dependency that static inspection cannot justify.
+
 ## 0.3.0 — 2026-07-24
 
 - Resolve ordinary workbook and sheet-local defined names with static A1

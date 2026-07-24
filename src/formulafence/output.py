@@ -28,6 +28,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         f"- **Sheets:** {workbook['sheet_count']}",
         f"- **Non-empty cells:** {workbook['nonempty_cells']}",
         f"- **Formula cells:** {workbook['formula_cells']}",
+        f"- **Tables:** {workbook['table_count']}",
         f"- **VBA payload:** {'present' if workbook['has_vba'] else 'absent'}",
         "",
         "## Sheets",
@@ -43,6 +44,25 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 "{max_column} × {max_row} |"
             ).format(**safe_sheet)
         )
+    if profile["tables"]:
+        lines.extend(
+            [
+                "",
+                "## Excel tables",
+                "",
+                "| Table | Sheet | Range | Columns |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for table in profile["tables"]:
+            lines.append(
+                "| {name} | {sheet} | {ref} | {columns} |".format(
+                    name=_markdown_escape(table["name"]),
+                    sheet=_markdown_escape(table["sheet"]),
+                    ref=_markdown_escape(table["ref"]),
+                    columns=_markdown_escape(", ".join(table["columns"])),
+                )
+            )
     features = profile["features"]
     if features["external_reference_cells"] or features["broken_reference_cells"]:
         lines.extend(["", "## Static hazards", ""])

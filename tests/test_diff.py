@@ -5,10 +5,10 @@ import warnings
 from openpyxl.workbook.defined_name import DefinedName
 
 from formulafence.diff import compare_snapshots
-from formulafence.output import report_to_markdown
+from formulafence.output import profile_to_markdown, report_to_markdown
 from formulafence.workbook import load_snapshot, profile_snapshot
 
-from .helpers import make_model, rewrite
+from .helpers import make_model, make_table_model, rewrite
 
 
 def test_formula_to_value_traces_cross_sheet_downstream_impact(tmp_path) -> None:
@@ -139,6 +139,43 @@ def test_external_defined_name_is_tracked_as_an_external_reference(tmp_path) -> 
 
     assert snapshot.external_references == {("Model", "D2")}
     assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_static_table_references_feed_dependency_paths_and_profiles(tmp_path) -> None:
+    workbook_path = make_table_model(tmp_path / "table.xlsx")
+    snapshot = load_snapshot(workbook_path)
+    profile = profile_snapshot(snapshot)
+
+    assert snapshot.summary()["table_count"] == 1
+    assert snapshot.tables["Sales"].columns == ("Amount", "Rate", "Value")
+    assert snapshot.unresolved_reference_tokens == {}
+    assert ("Report", "B2") in snapshot.direct_dependents(("Data", "A2"))
+    assert ("Report", "B3") in snapshot.direct_dependents(("Data", "B2"))
+    assert ("Report", "B4") in snapshot.direct_dependents(("Data", "A1"))
+    assert ("Report", "B5") in snapshot.direct_dependents(("Data", "B1"))
+    assert profile["tables"] == [
+        {
+            "name": "Sales",
+            "sheet": "Data",
+            "ref": "A1:C4",
+            "columns": ["Amount", "Rate", "Value"],
+            "header_row_count": 1,
+            "totals_row_count": 0,
+        }
+    ]
+    assert "## Excel tables" in profile_to_markdown(profile)
+    assert "| Sales | Data | A1:C4 | Amount, Rate, Value |" in profile_to_markdown(profile)
+
+
+def test_table_definition_change_is_a_semantic_control_change(tmp_path) -> None:
+    baseline = make_table_model(tmp_path / "baseline.xlsx")
+    candidate = make_table_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Data"].tables["Sales"], "ref", "A1:C3"))
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert any(change.kind == "table_definition_changed" for change in report.changes)
+    assert any(finding.rule_id == "FF013" for finding in report.findings)
 
 
 def test_snapshot_captures_parser_coverage_warnings(tmp_path, monkeypatch) -> None:

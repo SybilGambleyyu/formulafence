@@ -53,6 +53,18 @@ class FormulaInspection:
     dynamic_reference_functions: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class StructuredTable:
+    """Static metadata needed to resolve conservative Excel-table references."""
+
+    name: str
+    sheet: str
+    ref: str
+    columns: tuple[str, ...]
+    header_row_count: int
+    totals_row_count: int
+
+
 def _last_unquoted_bang(value: str) -> int:
     """Find the separator in `'A sheet'!A1` while respecting Excel quote escapes."""
     quoted = False
@@ -193,21 +205,179 @@ def reference_lookup_key(value: str) -> str:
     return f"{normalized_sheet.casefold()}!{address.strip().casefold()}"
 
 
+def _structured_reference_parts(
+    value: str,
+) -> tuple[str, tuple[str, ...], tuple[str, ...]] | None:
+    """Parse a conservative subset of the bracket syntax after a table name."""
+    token = value.strip()
+    opening = token.find("[")
+    if opening < 0:
+        return (token, (), ()) if token else None
+    if opening == 0:
+        return None  # Unqualified table references need formula-table context.
+    table_name = token[:opening].strip()
+    selector = token[opening:].strip()
+    if not table_name or not (selector.startswith("[") and selector.endswith("]")):
+        return None
+    inner = selector[1:-1].strip()
+    if not inner:
+        return None
+    if not inner.startswith("["):
+        return table_name, (inner,), ()
+
+    groups: list[str] = []
+    separators: list[str] = []
+    position = 0
+    while position < len(inner):
+        while position < len(inner) and inner[position].isspace():
+            position += 1
+        if position >= len(inner) or inner[position] != "[":
+            return None
+        closing = inner.find("]", position + 1)
+        if closing < 0:
+            return None
+        group = inner[position + 1 : closing].strip()
+        if not group:
+            return None
+        groups.append(group)
+        position = closing + 1
+        while position < len(inner) and inner[position].isspace():
+            position += 1
+        if position == len(inner):
+            break
+        if inner[position] not in {",", ":"}:
+            return None
+        separators.append(inner[position])
+        position += 1
+    return table_name, tuple(groups), tuple(separators)
+
+
+def _unescape_structured_column_name(value: str) -> str:
+    """Undo Excel's bracket/header escape prefix for the supported subset."""
+    result = value.strip()
+    for character in "[#'@":
+        result = result.replace(f"'{character}", character)
+    return result
+
+
+def _structured_table_regions(
+    table: StructuredTable, items: set[str]
+) -> tuple[tuple[int, int], ...] | None:
+    try:
+        _, min_row, _, max_row = range_boundaries(table.ref)
+    except ValueError:  # pragma: no cover - invalid table refs come from malformed OOXML
+        return None
+    height = max_row - min_row + 1
+    header_rows = min(max(table.header_row_count, 0), height)
+    totals_rows = min(max(table.totals_row_count, 0), height - header_rows)
+    data_start = min_row + header_rows
+    data_end = max_row - totals_rows
+
+    if "#all" in items:
+        if len(items) != 1:
+            return None
+        return ((min_row, max_row),)
+    selected = items or {"#data"}
+    regions: list[tuple[int, int]] = []
+    if "#headers" in selected and header_rows:
+        regions.append((min_row, data_start - 1))
+    if "#data" in selected and data_start <= data_end:
+        regions.append((data_start, data_end))
+    if "#totals" in selected and totals_rows:
+        regions.append((data_end + 1, max_row))
+    return tuple(regions)
+
+
+def resolve_structured_reference(
+    value: str, tables: Mapping[str, StructuredTable]
+) -> tuple[ParsedReference, ...] | None:
+    """Resolve static, fully qualified Excel-table references without evaluation.
+
+    Supported forms include a table name, a single column, contiguous column
+    ranges, and the ``#All``, ``#Data``, ``#Headers``, and ``#Totals`` item
+    specifiers. This-row (``@``), nested selectors, and exotic bracket escaping
+    deliberately remain unresolved because they require formula-table context or
+    fuller Excel parsing.
+    """
+    parsed = _structured_reference_parts(value)
+    if parsed is None:
+        return None
+    table_name, groups, separators = parsed
+    table = tables.get(table_name.casefold())
+    if table is None:
+        return None
+    item_tokens = {"#all", "#data", "#headers", "#totals", "#this row"}
+    items: set[str] = set()
+    columns: list[int] = []
+    column_lookup = {
+        _unescape_structured_column_name(column).casefold(): index
+        for index, column in enumerate(table.columns)
+    }
+    for group in groups:
+        normalized = group.strip().casefold()
+        if normalized in item_tokens:
+            if normalized == "#this row":
+                return None
+            items.add(normalized)
+            continue
+        if normalized.startswith("#") or normalized.startswith("@"):
+            return None
+        column_index = column_lookup.get(_unescape_structured_column_name(group).casefold())
+        if column_index is None:
+            return None
+        columns.append(column_index)
+
+    try:
+        min_column, _, max_column, _ = range_boundaries(table.ref)
+    except ValueError:  # pragma: no cover - invalid table refs come from malformed OOXML
+        return None
+    table_width = max_column - min_column + 1
+    if len(columns) > 2 and ":" in separators:
+        return None
+    if ":" in separators:
+        if len(columns) != 2:
+            return None
+        column_spans = [(min(columns), max(columns))]
+    elif columns:
+        column_spans = [(column, column) for column in columns]
+    else:
+        column_spans = [(0, table_width - 1)]
+    regions = _structured_table_regions(table, items)
+    if regions is None:
+        return None
+    references = [
+        ParsedReference(
+            sheet=table.sheet,
+            min_column=min_column + start_column,
+            min_row=min_row,
+            max_column=min_column + end_column,
+            max_row=max_row,
+            raw=value,
+        )
+        for start_column, end_column in column_spans
+        for min_row, max_row in regions
+    ]
+    return tuple(dict.fromkeys(references))
+
+
 def inspect_formula(
     formula: str,
     named_references: Mapping[str, Sequence[ParsedReference]] | None = None,
+    structured_tables: Mapping[str, StructuredTable] | None = None,
 ) -> FormulaInspection:
     """Inspect static reference coverage while resolving known named ranges.
 
     A caller provides a case-folded name-to-range map assembled from the
-    workbook. Table references and other non-A1 tokens that cannot be resolved
-    are returned explicitly instead of being silently omitted from the graph.
+    workbook. Supported fully qualified table references are resolved from table
+    metadata. Other non-A1 tokens are returned explicitly instead of being
+    silently omitted from the graph.
     """
     try:
         tokens = Tokenizer(formula).items
     except Exception:
         return FormulaInspection((), (), ())
     resolved_names = named_references or {}
+    resolved_tables = structured_tables or {}
     references: list[ParsedReference] = []
     unresolved_range_tokens: list[str] = []
     dynamic_reference_functions: list[str] = []
@@ -220,6 +390,10 @@ def inspect_formula(
             named_range = resolved_names.get(reference_lookup_key(token.value))
             if named_range:
                 references.extend(named_range)
+                continue
+            table_reference = resolve_structured_reference(token.value, resolved_tables)
+            if table_reference is not None:
+                references.extend(table_reference)
                 continue
             unresolved_range_tokens.append(token.value)
         elif token.type == "FUNC" and token.subtype == "OPEN":
@@ -234,10 +408,12 @@ def inspect_formula(
 
 
 def extract_references(
-    formula: str, named_references: Mapping[str, Sequence[ParsedReference]] | None = None
+    formula: str,
+    named_references: Mapping[str, Sequence[ParsedReference]] | None = None,
+    structured_tables: Mapping[str, StructuredTable] | None = None,
 ) -> list[ParsedReference]:
-    """Return A1-style and supplied named-range references from a formula."""
-    return list(inspect_formula(formula, named_references).references)
+    """Return A1-style, supplied named-range, and static table references."""
+    return list(inspect_formula(formula, named_references, structured_tables).references)
 
 
 def has_broken_reference(formula: str) -> bool:

@@ -7,7 +7,7 @@ from formulafence.models import PolicyError
 from formulafence.policy import evaluate_policy, parse_policy
 from formulafence.workbook import load_snapshot
 
-from .helpers import make_model, rewrite
+from .helpers import make_model, make_table_model, rewrite
 
 
 def test_policy_fails_formula_override_and_protected_output(tmp_path) -> None:
@@ -64,3 +64,15 @@ def test_policy_can_block_new_formula_coverage_gaps(tmp_path) -> None:
 
     rule_ids = {finding.rule_id for finding in evaluate_policy(report, policy)}
     assert {"FFP011", "FFP012"} <= rule_ids
+
+
+def test_policy_can_block_table_definition_changes(tmp_path) -> None:
+    baseline = make_table_model(tmp_path / "baseline.xlsx")
+    candidate = make_table_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Data"].tables["Sales"], "ref", "A1:C3"))
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_table_definition_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP013"}

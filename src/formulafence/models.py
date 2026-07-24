@@ -78,6 +78,28 @@ class SheetSnapshot:
 
 
 @dataclass(frozen=True)
+class TableSnapshot:
+    """Inspectable Excel-table metadata that can change formula semantics."""
+
+    name: str
+    sheet: str
+    ref: str
+    columns: tuple[str, ...]
+    header_row_count: int
+    totals_row_count: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "sheet": self.sheet,
+            "ref": self.ref,
+            "columns": list(self.columns),
+            "header_row_count": self.header_row_count,
+            "totals_row_count": self.totals_row_count,
+        }
+
+
+@dataclass(frozen=True)
 class RangeDependency:
     """A range used by a formula, stored without expanding large Excel ranges."""
 
@@ -166,6 +188,7 @@ class WorkbookSnapshot:
     parser_warnings: tuple[str, ...]
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
+    tables: dict[str, TableSnapshot] = field(default_factory=dict)
 
     def direct_dependents(self, location: CellKey) -> set[CellKey]:
         dependents = set(self.reverse_dependencies.get(location, set()))
@@ -183,6 +206,7 @@ class WorkbookSnapshot:
             "nonempty_cells": len(self.cells),
             "formula_cells": sum(1 for cell in self.cells.values() if cell.is_formula),
             "defined_names": len(self.defined_names),
+            "table_count": len(self.tables),
             "has_vba": self.macro_hash is not None,
             "external_reference_cells": len(self.external_references),
             "broken_reference_cells": len(self.broken_references),

@@ -15,6 +15,7 @@ rules:
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
+  no_table_definition_changes: true
   no_sheet_visibility_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -54,6 +55,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, table reference, or other range token that cannot be resolved statically. |
 | `no_new_dynamic_references` | boolean | A formula adds a dynamic reference function such as `INDIRECT` or `OFFSET`. |
+| `no_table_definition_changes` | boolean | An Excel table is added, removed, moved, renamed, or has its columns/header/total-row configuration changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
 | `max_downstream_impact` | non-negative integer | A changed cell reaches more downstream formula cells than allowed. |
@@ -63,9 +65,12 @@ single material workbook, then expand policy only after reviewing the model's
 actual change patterns.
 
 Ordinary workbook and sheet-local names with static A1 destinations are resolved
-into the dependency graph. The two coverage controls are for the remaining
-cases—such as named formulas, structured table references, and dynamic address
-construction—where FormulaFence intentionally does not guess at dependencies.
+into the dependency graph. FormulaFence also resolves the conservative,
+fully-qualified Excel-table subset: a table name, a column or contiguous column
+range, and `#All`/`#Data`/`#Headers`/`#Totals` regions. The coverage controls
+are for remaining cases—such as named formulas, this-row (`@`) table syntax,
+exotic bracket escapes, and dynamic address construction—where FormulaFence
+intentionally does not guess at dependencies.
 
 ## Exit status
 

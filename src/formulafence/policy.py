@@ -20,6 +20,7 @@ _RULE_FIELDS = {
     "no_new_parser_warnings",
     "no_new_unresolved_references",
     "no_new_dynamic_references",
+    "no_table_definition_changes",
     "no_sheet_visibility_changes",
     "max_changed_formulas",
     "max_downstream_impact",
@@ -56,6 +57,7 @@ class Policy:
     no_new_parser_warnings: bool = False
     no_new_unresolved_references: bool = False
     no_new_dynamic_references: bool = False
+    no_table_definition_changes: bool = False
     no_sheet_visibility_changes: bool = False
     max_changed_formulas: int | None = None
     max_downstream_impact: int | None = None
@@ -74,6 +76,7 @@ rules:
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
+  no_table_definition_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
 
@@ -160,6 +163,7 @@ def parse_policy(data: object) -> Policy:
         no_new_parser_warnings=_boolean_rule(rules, "no_new_parser_warnings"),
         no_new_unresolved_references=_boolean_rule(rules, "no_new_unresolved_references"),
         no_new_dynamic_references=_boolean_rule(rules, "no_new_dynamic_references"),
+        no_table_definition_changes=_boolean_rule(rules, "no_table_definition_changes"),
         no_sheet_visibility_changes=_boolean_rule(rules, "no_sheet_visibility_changes"),
         max_changed_formulas=_integer_rule(rules, "max_changed_formulas"),
         max_downstream_impact=_integer_rule(rules, "max_downstream_impact"),
@@ -251,6 +255,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "high",
                     "Policy forbids new dynamic reference functions.",
                     finding.location,
+                    details=finding.details,
+                )
+            )
+    if policy.no_table_definition_changes:
+        for finding in _rule_triggered(report, "FF013"):
+            violations.append(
+                Finding(
+                    "FFP013",
+                    "high",
+                    "Policy forbids changes to Excel-table definitions.",
                     details=finding.details,
                 )
             )

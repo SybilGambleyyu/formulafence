@@ -40,6 +40,21 @@ notes rather than silent holes in an impact trace. The result does not judge the
 model's use of `INDIRECT`; it gives a reviewer or policy author a concrete,
 machine-readable scope for the limitation.
 
+## Public structured-reference example — 2026-07-24
+
+FormulaFence 0.4.0 was also profiled against the public
+[Excel Easy structured-reference example](https://www.excel-easy.com/examples/structured-references.html).
+The downloaded workbook was used locally for compatibility validation only and
+is not bundled with FormulaFence. Its profile reported one Excel table, 79
+non-empty cells, 17 formula cells (15 with structured references), and no
+unresolved formula-reference tokens.
+
+On a local, non-distributed copy, changing one table data cell traced **16
+downstream formula cells**, including the table's total and an output formula
+outside the table. This validates that FormulaFence turns the supported table
+forms into real dependency edges while still reporting unsupported forms as
+coverage notes.
+
 ## Controlled local change
 
 On a local, non-distributed copy, we replaced the formula in

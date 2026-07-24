@@ -10,8 +10,9 @@
     "nonempty_cells": 6,
     "parser_warning_count": 0,
     "path": "examples/candidate-risky.xlsx",
-    "sha256": "0b13e5b87d5f0fd7991c7831807589fcd6c5844f2c03ab498712af1a60c28516",
+    "sha256": "106ef0ee7ddb7f10966d1b90dacf8880e4eb39215e83f115b53f244b5d2762e2",
     "sheet_count": 3,
+    "table_count": 0,
     "unresolved_reference_cells": 0
   },
   "before": {
@@ -25,8 +26,9 @@
     "nonempty_cells": 6,
     "parser_warning_count": 0,
     "path": "examples/baseline.xlsx",
-    "sha256": "94fa64078e3521fb58408a0e411b2e676fab2cc5ef6ee26ab530c6bf0ec3992e",
+    "sha256": "099ee0a6500e5689a00fb2689a8324330248d518b4d7449a204ee17a2889c420",
     "sheet_count": 3,
+    "table_count": 0,
     "unresolved_reference_cells": 0
   },
   "changes": [

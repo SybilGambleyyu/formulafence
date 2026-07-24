@@ -9,11 +9,12 @@ from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
 from openpyxl import load_workbook
-from openpyxl.utils.cell import get_column_letter
+from openpyxl.utils.cell import get_column_letter, range_boundaries
 from openpyxl.utils.exceptions import InvalidFileException
 
 from formulafence.formulas import (
     ParsedReference,
+    StructuredTable,
     formula_fingerprint,
     has_broken_reference,
     inspect_formula,
@@ -25,6 +26,7 @@ from formulafence.models import (
     CellSnapshot,
     RangeDependency,
     SheetSnapshot,
+    TableSnapshot,
     WorkbookLoadError,
     WorkbookSnapshot,
     display_location,
@@ -212,6 +214,88 @@ def _named_reference_maps(
     return global_references, local_references
 
 
+def _table_columns(
+    worksheet: object,
+    table: object,
+    min_column: int,
+    min_row: int,
+    max_column: int,
+    header_row_count: int,
+) -> tuple[str, ...]:
+    """Read table column labels, falling back to the inspectable header cells."""
+    table_columns = tuple(getattr(table, "tableColumns", ()) or ())
+    names = tuple(str(getattr(column, "name", "")) for column in table_columns)
+    width = max_column - min_column + 1
+    if len(names) == width and all(names):
+        return names
+    if header_row_count:
+        return tuple(
+            str(value) if (value := worksheet.cell(min_row, column).value) is not None else ""
+            for column in range(min_column, max_column + 1)
+        )
+    return ()
+
+
+def _table_snapshots(workbook: object) -> dict[str, TableSnapshot]:
+    """Inventory Excel-table definitions that affect structured references."""
+    result: dict[str, TableSnapshot] = {}
+    for worksheet in getattr(workbook, "worksheets", ()):
+        table_list = getattr(worksheet, "tables", {})
+        try:
+            table_values = table_list.values()
+        except AttributeError:
+            continue
+        for table in table_values:
+            name = str(
+                getattr(table, "displayName", None)
+                or getattr(table, "name", None)
+                or ""
+            )
+            ref = getattr(table, "ref", None)
+            if not name or not isinstance(ref, str):
+                continue
+            try:
+                min_column, min_row, max_column, max_row = range_boundaries(ref)
+            except ValueError:
+                continue
+            height = max_row - min_row + 1
+            header_rows = min(max(int(getattr(table, "headerRowCount", 1) or 0), 0), height)
+            totals_rows = min(
+                max(int(getattr(table, "totalsRowCount", 0) or 0), 0), height - header_rows
+            )
+            result[name] = TableSnapshot(
+                name=name,
+                sheet=worksheet.title,
+                ref=ref,
+                columns=_table_columns(
+                    worksheet,
+                    table,
+                    min_column,
+                    min_row,
+                    max_column,
+                    header_rows,
+                ),
+                header_row_count=header_rows,
+                totals_row_count=totals_rows,
+            )
+    return result
+
+
+def _structured_table_map(tables: dict[str, TableSnapshot]) -> dict[str, StructuredTable]:
+    """Translate stable table inventory records into formula-resolution metadata."""
+    return {
+        name.casefold(): StructuredTable(
+            name=table.name,
+            sheet=table.sheet,
+            ref=table.ref,
+            columns=table.columns,
+            header_row_count=table.header_row_count,
+            totals_row_count=table.totals_row_count,
+        )
+        for name, table in tables.items()
+    }
+
+
 def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     """Load a workbook as a semantic snapshot without evaluating its contents."""
     source = Path(path)
@@ -247,6 +331,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = {}
     global_named_references, local_named_references = _named_reference_maps(workbook)
+    tables = _table_snapshots(workbook)
+    structured_tables = _structured_table_map(tables)
 
     for worksheet in workbook.worksheets:
         named_references = {
@@ -273,7 +359,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             formula_cells += 1
             if has_broken_reference(snapshot.formula):
                 broken_references.add(snapshot.location)
-            inspection = inspect_formula(snapshot.formula, named_references)
+            inspection = inspect_formula(snapshot.formula, named_references, structured_tables)
             if inspection.unresolved_range_tokens:
                 unresolved_reference_tokens[snapshot.location] = inspection.unresolved_range_tokens
             if inspection.dynamic_reference_functions:
@@ -330,6 +416,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         broken_references=broken_references,
         unresolved_reference_tokens=unresolved_reference_tokens,
         dynamic_reference_functions=dynamic_reference_functions,
+        tables=tables,
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),
         calculation_settings=_calculation_settings(workbook),
@@ -343,6 +430,10 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "schema_version": "1.0",
         "workbook": snapshot.summary(),
         "sheets": [sheet.to_dict() for sheet in snapshot.sheets.values()],
+        "tables": [
+            snapshot.tables[name].to_dict()
+            for name in sorted(snapshot.tables, key=str.casefold)
+        ],
         "defined_names": sorted(snapshot.defined_names),
         "calculation_settings": snapshot.calculation_settings,
         "features": {

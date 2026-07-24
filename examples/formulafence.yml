@@ -7,6 +7,7 @@ rules:
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
+  no_table_definition_changes: true
   max_changed_formulas: 5
   max_downstream_impact: 10
 

@@ -263,6 +263,33 @@ def _workbook_control_changes(
             )
         )
 
+    for name in sorted(set(before.tables) | set(after.tables), key=str.casefold):
+        old_table = before.tables.get(name)
+        new_table = after.tables.get(name)
+        if old_table == new_table:
+            continue
+        details = {
+            "name": name,
+            "before": old_table.to_dict() if old_table else None,
+            "after": new_table.to_dict() if new_table else None,
+        }
+        changes.append(
+            Change(
+                "table_definition_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF013",
+                "high",
+                f"Excel table definition changed: {name}.",
+                details=details,
+            )
+        )
+
     if before.calculation_settings != after.calculation_settings:
         changes.append(
             Change(

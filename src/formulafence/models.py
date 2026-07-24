@@ -794,6 +794,72 @@ class PivotCacheRefreshSnapshot:
 
 
 @dataclass(frozen=True)
+class ExternalLinkPackageSnapshot:
+    """Safe aggregate of raw OOXML external-workbook, DDE, and OLE links."""
+
+    external_link_count: int = 0
+    external_workbook_count: int = 0
+    dde_link_count: int = 0
+    ole_link_count: int = 0
+    unrecognized_link_count: int = 0
+    external_workbook_sheet_count: int = 0
+    external_defined_name_count: int = 0
+    external_workbook_cached_sheet_count: int = 0
+    external_workbook_cached_cell_count: int = 0
+    external_workbook_cached_refresh_error_count: int = 0
+    dde_item_count: int = 0
+    dde_advise_item_count: int = 0
+    dde_ole_item_count: int = 0
+    dde_prefer_picture_item_count: int = 0
+    dde_cached_value_count: int = 0
+    ole_item_count: int = 0
+    ole_advise_item_count: int = 0
+    ole_icon_item_count: int = 0
+    ole_prefer_picture_item_count: int = 0
+    source_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    cached_material_signature: str | None = field(default=None, repr=False)
+    opaque_metadata: ExternalDataOpaqueMetadataSnapshot = field(
+        default_factory=ExternalDataOpaqueMetadataSnapshot
+    )
+
+    @property
+    def present(self) -> bool:
+        return self.external_link_count > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural link evidence without targets, names, or cached values."""
+        return {
+            "present": self.present,
+            "external_link_count": self.external_link_count,
+            "external_workbook_count": self.external_workbook_count,
+            "dde_link_count": self.dde_link_count,
+            "ole_link_count": self.ole_link_count,
+            "unrecognized_link_count": self.unrecognized_link_count,
+            "external_workbook_sheet_count": self.external_workbook_sheet_count,
+            "external_defined_name_count": self.external_defined_name_count,
+            "external_workbook_cached_sheet_count": self.external_workbook_cached_sheet_count,
+            "external_workbook_cached_cell_count": self.external_workbook_cached_cell_count,
+            "external_workbook_cached_refresh_error_count": (
+                self.external_workbook_cached_refresh_error_count
+            ),
+            "dde_item_count": self.dde_item_count,
+            "dde_advise_item_count": self.dde_advise_item_count,
+            "dde_ole_item_count": self.dde_ole_item_count,
+            "dde_prefer_picture_item_count": self.dde_prefer_picture_item_count,
+            "dde_cached_value_count": self.dde_cached_value_count,
+            "ole_item_count": self.ole_item_count,
+            "ole_advise_item_count": self.ole_advise_item_count,
+            "ole_icon_item_count": self.ole_icon_item_count,
+            "ole_prefer_picture_item_count": self.ole_prefer_picture_item_count,
+            "opaque_metadata": self.opaque_metadata.to_dict(),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class PowerQueryPermissionControlsSnapshot:
     """Safe aggregate controls from Data Mashup permission documents."""
 
@@ -1062,6 +1128,9 @@ class WorkbookSnapshot:
     external_data_connections: tuple[ExternalDataConnectionSnapshot, ...] = ()
     query_table_refresh_controls: tuple[QueryTableRefreshSnapshot, ...] = ()
     pivot_cache_refresh_controls: tuple[PivotCacheRefreshSnapshot, ...] = ()
+    external_link_packages: ExternalLinkPackageSnapshot = field(
+        default_factory=ExternalLinkPackageSnapshot
+    )
     power_query: PowerQuerySnapshot = field(default_factory=PowerQuerySnapshot)
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -1144,6 +1213,10 @@ class WorkbookSnapshot:
                 control.refresh_on_load
                 for control in self.pivot_cache_refresh_controls
             ),
+            "external_link_package_count": self.external_link_packages.external_link_count,
+            "external_workbook_link_count": self.external_link_packages.external_workbook_count,
+            "dde_link_count": self.external_link_packages.dde_link_count,
+            "ole_link_count": self.external_link_packages.ole_link_count,
             "power_query_mashup_count": self.power_query.mashup_count,
             "power_query_formula_document_count": self.power_query.formula_document_count,
             "power_query_metadata_item_count": self.power_query.metadata_item_count,

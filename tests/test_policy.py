@@ -9,10 +9,12 @@ from formulafence.workbook import load_snapshot
 
 from .helpers import (
     change_external_data_refresh_controls,
+    change_external_link_package_controls,
     change_power_query_controls,
     make_conditional_formatting_model,
     make_data_validation_model,
     make_external_data_refresh_model,
+    make_external_link_package_model,
     make_legacy_array_model,
     make_model,
     make_power_query_model,
@@ -238,6 +240,19 @@ def test_policy_can_block_external_data_connection_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP023"}
+
+
+def test_policy_can_block_external_link_package_changes(tmp_path) -> None:
+    baseline = make_external_link_package_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    change_external_link_package_controls(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_external_link_package_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP025"}
 
 
 def test_policy_can_block_power_query_changes(tmp_path) -> None:

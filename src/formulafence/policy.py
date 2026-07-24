@@ -30,6 +30,7 @@ _RULE_FIELDS = {
     "no_conditional_formatting_changes",
     "no_protection_changes",
     "no_external_data_connection_changes",
+    "no_external_link_package_changes",
     "no_power_query_changes",
     "no_3d_reference_scope_changes",
     "no_sheet_visibility_changes",
@@ -78,6 +79,7 @@ class Policy:
     no_conditional_formatting_changes: bool = False
     no_protection_changes: bool = False
     no_external_data_connection_changes: bool = False
+    no_external_link_package_changes: bool = False
     no_power_query_changes: bool = False
     no_3d_reference_scope_changes: bool = False
     no_sheet_visibility_changes: bool = False
@@ -108,6 +110,7 @@ rules:
   no_conditional_formatting_changes: true
   no_protection_changes: true
   no_external_data_connection_changes: true
+  no_external_link_package_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -217,6 +220,9 @@ def parse_policy(data: object) -> Policy:
         no_protection_changes=_boolean_rule(rules, "no_protection_changes"),
         no_external_data_connection_changes=_boolean_rule(
             rules, "no_external_data_connection_changes"
+        ),
+        no_external_link_package_changes=_boolean_rule(
+            rules, "no_external_link_package_changes"
         ),
         no_power_query_changes=_boolean_rule(rules, "no_power_query_changes"),
         no_3d_reference_scope_changes=_boolean_rule(
@@ -421,6 +427,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP023",
                     "high",
                     "Policy forbids changes to external-data connections and refresh controls.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_external_link_package_changes:
+        for finding in _rule_triggered(report, "FF025"):
+            violations.append(
+                Finding(
+                    "FFP025",
+                    "high",
+                    "Policy forbids changes to external-workbook, DDE, or OLE link packages.",
                     details=finding.details,
                 )
             )

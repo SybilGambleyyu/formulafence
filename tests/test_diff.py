@@ -15,13 +15,17 @@ from .helpers import (
     add_conditional_formatting_databar_extension,
     add_protected_range,
     change_external_data_refresh_controls,
+    change_external_link_package_controls,
     change_power_query_controls,
     change_power_query_refresh_noise,
     change_protected_range,
+    duplicate_external_link_definition,
+    duplicate_external_link_sheet_names,
     make_conditional_formatting_model,
     make_current_row_table_model,
     make_data_validation_model,
     make_external_data_refresh_model,
+    make_external_link_package_model,
     make_implicit_intersection_model,
     make_legacy_array_model,
     make_let_model,
@@ -36,6 +40,8 @@ from .helpers import (
     make_three_d_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
+    rebind_external_link_declaration,
+    renumber_external_link_declaration_relationships,
     reorder_conditional_differential_styles,
     rewrite,
     set_external_data_connection_defaults,
@@ -1549,6 +1555,160 @@ def test_external_data_connection_defaults_are_canonical(tmp_path) -> None:
         if change.kind == "external_data_connections_changed"
     }
     assert "FF023" not in {finding.rule_id for finding in report.findings}
+
+
+def test_external_link_packages_are_profiled_and_diffed_privately(tmp_path) -> None:
+    baseline = make_external_link_package_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    change_external_link_package_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    assert baseline_snapshot.summary()["external_link_package_count"] == 3
+    assert baseline_snapshot.summary()["external_workbook_link_count"] == 1
+    assert baseline_snapshot.summary()["dde_link_count"] == 1
+    assert baseline_snapshot.summary()["ole_link_count"] == 1
+    assert profile["external_link_packages"] == {
+        "present": True,
+        "external_link_count": 3,
+        "external_workbook_count": 1,
+        "dde_link_count": 1,
+        "ole_link_count": 1,
+        "unrecognized_link_count": 0,
+        "external_workbook_sheet_count": 2,
+        "external_defined_name_count": 1,
+        "external_workbook_cached_sheet_count": 1,
+        "external_workbook_cached_cell_count": 2,
+        "external_workbook_cached_refresh_error_count": 1,
+        "dde_item_count": 2,
+        "dde_advise_item_count": 1,
+        "dde_ole_item_count": 1,
+        "dde_prefer_picture_item_count": 1,
+        "dde_cached_value_count": 2,
+        "ole_item_count": 2,
+        "ole_advise_item_count": 1,
+        "ole_icon_item_count": 1,
+        "ole_prefer_picture_item_count": 1,
+        "opaque_metadata": {"present": True, "count": 1},
+    }
+    assert "## External-link packages" in markdown
+    assert "**Package parts:** 3 (1 workbook, 1 DDE, 1 OLE)" in markdown
+
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    external_link_change = next(
+        change
+        for change in report.changes
+        if change.kind == "external_link_packages_changed"
+    )
+
+    assert external_link_change.details["source_material_changed"] is True
+    assert external_link_change.details["definition_material_changed"] is True
+    assert external_link_change.details["cached_material_changed"] is True
+    assert external_link_change.details["opaque_metadata_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF025"}
+
+    sensitive_values = (
+        "file:///private/baseline/external-workbook.xlsx",
+        "file:///private/candidate/external-workbook.xlsx",
+        "private external baseline sheet",
+        "private external scenario",
+        "private external baseline defined name",
+        "private external baseline cached value",
+        "private external candidate cached value",
+        "private-baseline-dde-service",
+        "private-baseline-dde-topic",
+        "private-candidate-dde-topic",
+        "private-baseline-dde-item",
+        "private-candidate-dde-item",
+        "private-baseline-dde-value",
+        "private-candidate-dde-value",
+        "private.baseline.ole.program",
+        "private.candidate.ole.program",
+        "private-baseline-ole-item",
+        "private-candidate-ole-item",
+        "private baseline external-link extension payload",
+        "private candidate external-link extension payload",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_external_link_declaration_rebinding_is_a_source_change(tmp_path) -> None:
+    baseline = make_external_link_package_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    rebind_external_link_declaration(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    external_link_change = next(
+        change
+        for change in report.changes
+        if change.kind == "external_link_packages_changed"
+    )
+
+    assert external_link_change.details["source_material_changed"] is True
+    assert "definition_material_changed" not in external_link_change.details
+    assert "cached_material_changed" not in external_link_change.details
+    assert {finding.rule_id for finding in report.findings} >= {"FF025"}
+
+
+def test_external_link_relationship_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_external_link_package_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    renumber_external_link_declaration_relationships(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "external_link_packages_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF025" not in {finding.rule_id for finding in report.findings}
+
+
+def test_ambiguous_external_link_definitions_fail_closed(tmp_path) -> None:
+    baseline = make_external_link_package_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    duplicate_external_link_definition(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.external_link_packages.unrecognized_link_count == 1
+    assert any(
+        "without exactly one supported link definition" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "external_link_packages_changed" in {change.kind for change in report.changes}
+    assert "FF025" in {finding.rule_id for finding in report.findings}
+
+
+def test_repeated_external_link_children_are_retained_as_opaque_material(tmp_path) -> None:
+    baseline = make_external_link_package_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    duplicate_external_link_sheet_names(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    external_link_change = next(
+        change
+        for change in report.changes
+        if change.kind == "external_link_packages_changed"
+    )
+
+    assert any(
+        "repeated sheetNames containers" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert external_link_change.details["opaque_metadata_changed"] is True
+    assert "FF025" in {finding.rule_id for finding in report.findings}
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

@@ -879,6 +879,447 @@ def set_external_data_connection_defaults(path: Path, *, explicit: bool) -> Path
     return _rewrite_archive(path, mutate, ".external-data-defaults.tmp.xlsx")
 
 
+def make_external_link_package_model(path: Path) -> Path:
+    """Create external-workbook, DDE, and OLE packages with private payloads."""
+    make_model(path)
+    spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    document_relationships = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    )
+    content_types_namespace = (
+        "http://schemas.openxmlformats.org/package/2006/content-types"
+    )
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_override(
+        root: ElementTree.Element,
+        part_name: str,
+        content_type: str,
+    ) -> None:
+        override_tag = f"{{{content_types_namespace}}}Override"
+        if any(item.get("PartName") == part_name for item in root.findall(override_tag)):
+            return
+        ElementTree.SubElement(
+            root,
+            override_tag,
+            {"PartName": part_name, "ContentType": content_type},
+        )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        external_references = ElementTree.Element(f"{{{spreadsheet}}}externalReferences")
+        for relationship_id in (
+            "rIdFenceExternalWorkbook",
+            "rIdFenceDde",
+            "rIdFenceOle",
+        ):
+            ElementTree.SubElement(
+                external_references,
+                f"{{{spreadsheet}}}externalReference",
+                {f"{{{document_relationships}}}id": relationship_id},
+            )
+        calc_properties = workbook.find(f"{{{spreadsheet}}}calcPr")
+        insertion_index = (
+            list(workbook).index(calc_properties)
+            if calc_properties is not None
+            else len(workbook)
+        )
+        workbook.insert(insertion_index, external_references)
+        contents["xl/workbook.xml"] = serialize(workbook)
+
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        for relationship_id, target in (
+            ("rIdFenceExternalWorkbook", "externalLinks/externalLink1.xml"),
+            ("rIdFenceDde", "externalLinks/externalLink2.xml"),
+            ("rIdFenceOle", "externalLinks/externalLink3.xml"),
+        ):
+            ElementTree.SubElement(
+                workbook_relationships,
+                relationship_tag,
+                {
+                    "Id": relationship_id,
+                    "Type": f"{document_relationships}/externalLink",
+                    "Target": target,
+                },
+            )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        for number in (1, 2, 3):
+            add_override(
+                content_types,
+                f"/xl/externalLinks/externalLink{number}.xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml",
+            )
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+        external_book_root = ElementTree.Element(f"{{{spreadsheet}}}externalLink")
+        external_book = ElementTree.SubElement(
+            external_book_root,
+            f"{{{spreadsheet}}}externalBook",
+            {f"{{{document_relationships}}}id": "rIdFenceExternalTarget"},
+        )
+        sheet_names = ElementTree.SubElement(external_book, f"{{{spreadsheet}}}sheetNames")
+        for sheet_name in ("private external baseline sheet", "private external scenario"):
+            ElementTree.SubElement(
+                sheet_names,
+                f"{{{spreadsheet}}}sheetName",
+                {"val": sheet_name},
+            )
+        defined_names = ElementTree.SubElement(
+            external_book, f"{{{spreadsheet}}}definedNames"
+        )
+        ElementTree.SubElement(
+            defined_names,
+            f"{{{spreadsheet}}}definedName",
+            {
+                "name": "private external baseline defined name",
+                "refersTo": "'private external baseline sheet'!$A$1:$A$2",
+                "sheetId": "0",
+            },
+        )
+        sheet_data_set = ElementTree.SubElement(
+            external_book, f"{{{spreadsheet}}}sheetDataSet"
+        )
+        sheet_data = ElementTree.SubElement(
+            sheet_data_set,
+            f"{{{spreadsheet}}}sheetData",
+            {"sheetId": "0", "refreshError": "1"},
+        )
+        row = ElementTree.SubElement(sheet_data, f"{{{spreadsheet}}}row", {"r": "1"})
+        for coordinate, value in (
+            ("A1", "private external baseline cached value"),
+            ("B1", "private external baseline cached amount"),
+        ):
+            cell = ElementTree.SubElement(
+                row,
+                f"{{{spreadsheet}}}cell",
+                {"r": coordinate, "t": "str"},
+            )
+            ElementTree.SubElement(cell, f"{{{spreadsheet}}}v").text = value
+        contents["xl/externalLinks/externalLink1.xml"] = serialize(external_book_root)
+
+        external_book_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            external_book_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceExternalTarget",
+                "Type": f"{document_relationships}/externalLinkPath",
+                "Target": "file:///private/baseline/external-workbook.xlsx",
+                "TargetMode": "External",
+            },
+        )
+        contents["xl/externalLinks/_rels/externalLink1.xml.rels"] = serialize(
+            external_book_relationships
+        )
+
+        dde_root = ElementTree.Element(
+            f"{{{spreadsheet}}}externalLink",
+        )
+        dde_link = ElementTree.SubElement(
+            dde_root,
+            f"{{{spreadsheet}}}ddeLink",
+            {
+                "ddeService": "private-baseline-dde-service",
+                "ddeTopic": "private-baseline-dde-topic",
+            },
+        )
+        dde_items = ElementTree.SubElement(dde_link, f"{{{spreadsheet}}}ddeItems")
+        first_dde_item = ElementTree.SubElement(
+            dde_items,
+            f"{{{spreadsheet}}}ddeItem",
+            {
+                "name": "private-baseline-dde-item",
+                "ole": "1",
+                "advise": "1",
+                "preferPic": "0",
+            },
+        )
+        dde_values = ElementTree.SubElement(
+            first_dde_item,
+            f"{{{spreadsheet}}}values",
+            {"rows": "1", "cols": "2"},
+        )
+        for value in ("private-baseline-dde-value", "private-baseline-dde-second-value"):
+            dde_value = ElementTree.SubElement(dde_values, f"{{{spreadsheet}}}value")
+            ElementTree.SubElement(dde_value, f"{{{spreadsheet}}}val").text = value
+        ElementTree.SubElement(
+            dde_items,
+            f"{{{spreadsheet}}}ddeItem",
+            {
+                "name": "private-baseline-dde-picture-item",
+                "preferPic": "1",
+            },
+        )
+        contents["xl/externalLinks/externalLink2.xml"] = serialize(dde_root)
+
+        ole_root = ElementTree.Element(f"{{{spreadsheet}}}externalLink")
+        ole_link = ElementTree.SubElement(
+            ole_root,
+            f"{{{spreadsheet}}}oleLink",
+            {
+                f"{{{document_relationships}}}id": "rIdFenceOleTarget",
+                "progId": "private.baseline.ole.program",
+            },
+        )
+        ole_items = ElementTree.SubElement(ole_link, f"{{{spreadsheet}}}oleItems")
+        ElementTree.SubElement(
+            ole_items,
+            f"{{{spreadsheet}}}oleItem",
+            {
+                "name": "private-baseline-ole-item",
+                "icon": "1",
+                "advise": "1",
+                "preferPic": "0",
+            },
+        )
+        ElementTree.SubElement(
+            ole_items,
+            f"{{{spreadsheet}}}oleItem",
+            {
+                "name": "private-baseline-ole-picture-item",
+                "preferPic": "1",
+            },
+        )
+        extensions = ElementTree.SubElement(ole_root, f"{{{spreadsheet}}}extLst")
+        ElementTree.SubElement(
+            extensions,
+            f"{{{spreadsheet}}}ext",
+            {"uri": "urn:private:baseline:external-link-extension"},
+        ).text = "private baseline external-link extension payload"
+        contents["xl/externalLinks/externalLink3.xml"] = serialize(ole_root)
+
+        ole_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            ole_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceOleTarget",
+                "Type": f"{document_relationships}/oleObject",
+                "Target": "file:///private/baseline/external-object.bin",
+                "TargetMode": "External",
+            },
+        )
+        contents["xl/externalLinks/_rels/externalLink3.xml.rels"] = serialize(
+            ole_relationships
+        )
+
+    return _rewrite_archive(path, mutate, ".external-link.tmp.xlsx")
+
+
+def change_external_link_package_controls(path: Path) -> Path:
+    """Change external source, definition, cache, and opaque package material."""
+    spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        external_book_relationships = ElementTree.fromstring(
+            contents["xl/externalLinks/_rels/externalLink1.xml.rels"]
+        )
+        relationship = external_book_relationships.find(
+            f"{{{package_relationships}}}Relationship"
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain an external-workbook target")
+        relationship.set("Target", "file:///private/candidate/external-workbook.xlsx")
+        contents["xl/externalLinks/_rels/externalLink1.xml.rels"] = serialize(
+            external_book_relationships
+        )
+
+        external_book_root = ElementTree.fromstring(
+            contents["xl/externalLinks/externalLink1.xml"]
+        )
+        defined_name = external_book_root.find(
+            f"./{{{spreadsheet}}}externalBook/{{{spreadsheet}}}definedNames/"
+            f"{{{spreadsheet}}}definedName"
+        )
+        cached_value = external_book_root.find(
+            f"./{{{spreadsheet}}}externalBook/{{{spreadsheet}}}sheetDataSet/"
+            f"{{{spreadsheet}}}sheetData/{{{spreadsheet}}}row/"
+            f"{{{spreadsheet}}}cell/{{{spreadsheet}}}v"
+        )
+        if defined_name is None or cached_value is None:
+            raise ValueError("Fixture does not contain external-workbook definition data")
+        defined_name.set("refersTo", "'private external scenario'!$B$5")
+        cached_value.text = "private external candidate cached value"
+        contents["xl/externalLinks/externalLink1.xml"] = serialize(external_book_root)
+
+        dde_root = ElementTree.fromstring(contents["xl/externalLinks/externalLink2.xml"])
+        dde_link = dde_root.find(f"{{{spreadsheet}}}ddeLink")
+        first_dde_item = dde_root.find(
+            f"./{{{spreadsheet}}}ddeLink/{{{spreadsheet}}}ddeItems/"
+            f"{{{spreadsheet}}}ddeItem"
+        )
+        dde_value = dde_root.find(
+            f"./{{{spreadsheet}}}ddeLink/{{{spreadsheet}}}ddeItems/"
+            f"{{{spreadsheet}}}ddeItem/{{{spreadsheet}}}values/"
+            f"{{{spreadsheet}}}value/{{{spreadsheet}}}val"
+        )
+        if dde_link is None or first_dde_item is None or dde_value is None:
+            raise ValueError("Fixture does not contain DDE controls")
+        dde_link.set("ddeTopic", "private-candidate-dde-topic")
+        first_dde_item.set("name", "private-candidate-dde-item")
+        first_dde_item.set("advise", "0")
+        dde_value.text = "private-candidate-dde-value"
+        contents["xl/externalLinks/externalLink2.xml"] = serialize(dde_root)
+
+        ole_root = ElementTree.fromstring(contents["xl/externalLinks/externalLink3.xml"])
+        ole_link = ole_root.find(f"{{{spreadsheet}}}oleLink")
+        first_ole_item = ole_root.find(
+            f"./{{{spreadsheet}}}oleLink/{{{spreadsheet}}}oleItems/"
+            f"{{{spreadsheet}}}oleItem"
+        )
+        extension = ole_root.find(f"./{{{spreadsheet}}}extLst/{{{spreadsheet}}}ext")
+        if ole_link is None or first_ole_item is None or extension is None:
+            raise ValueError("Fixture does not contain OLE controls")
+        ole_link.set("progId", "private.candidate.ole.program")
+        first_ole_item.set("name", "private-candidate-ole-item")
+        first_ole_item.set("icon", "0")
+        extension.set("uri", "urn:private:candidate:external-link-extension")
+        extension.text = "private candidate external-link extension payload"
+        contents["xl/externalLinks/externalLink3.xml"] = serialize(ole_root)
+
+    return _rewrite_archive(path, mutate, ".external-link-change.tmp.xlsx")
+
+
+def rebind_external_link_declaration(path: Path) -> Path:
+    """Point one workbook declaration at a different existing externalLink part."""
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        external_workbook = next(
+            (
+                relationship
+                for relationship in relationships.findall(relationship_tag)
+                if relationship.get("Id") == "rIdFenceExternalWorkbook"
+            ),
+            None,
+        )
+        if external_workbook is None:
+            raise ValueError("Fixture does not contain the external-workbook declaration")
+        external_workbook.set("Target", "externalLinks/externalLink2.xml")
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".external-link-rebind.tmp.xlsx")
+
+
+def renumber_external_link_declaration_relationships(path: Path) -> Path:
+    """Rewrite only arbitrary workbook external-link relationship identifiers."""
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    document_relationships = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    )
+    replacements = {
+        "rIdFenceExternalWorkbook": "rIdFenceRenumberedWorkbook",
+        "rIdFenceDde": "rIdFenceRenumberedDde",
+        "rIdFenceOle": "rIdFenceRenumberedOle",
+    }
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        for relationship in relationships.findall(relationship_tag):
+            if replacement := replacements.get(relationship.get("Id")):
+                relationship.set("Id", replacement)
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        reference_tag = (
+            "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+            "externalReference"
+        )
+        relationship_id_attribute = f"{{{document_relationships}}}id"
+        for reference in workbook.findall(f".//{reference_tag}"):
+            if replacement := replacements.get(reference.get(relationship_id_attribute)):
+                reference.set(relationship_id_attribute, replacement)
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".external-link-renumber.tmp.xlsx")
+
+
+def duplicate_external_link_definition(path: Path) -> Path:
+    """Add a second supported definition to exercise the fail-closed parser path."""
+    spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = ElementTree.fromstring(contents["xl/externalLinks/externalLink1.xml"])
+        external_book = root.find(f"{{{spreadsheet}}}externalBook")
+        if external_book is None:
+            raise ValueError("Fixture does not contain an external-workbook definition")
+        root.append(
+            ElementTree.fromstring(
+                ElementTree.tostring(external_book, encoding="utf-8")
+            )
+        )
+        contents["xl/externalLinks/externalLink1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".external-link-duplicate.tmp.xlsx")
+
+
+def duplicate_external_link_sheet_names(path: Path) -> Path:
+    """Repeat a schema-singleton workbook child to test coverage reporting."""
+    spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = ElementTree.fromstring(contents["xl/externalLinks/externalLink1.xml"])
+        external_book = root.find(f"{{{spreadsheet}}}externalBook")
+        if external_book is None:
+            raise ValueError("Fixture does not contain an external-workbook definition")
+        sheet_names = external_book.find(f"{{{spreadsheet}}}sheetNames")
+        if sheet_names is None:
+            raise ValueError("Fixture does not contain external-workbook sheet names")
+        external_book.append(
+            ElementTree.fromstring(ElementTree.tostring(sheet_names, encoding="utf-8"))
+        )
+        contents["xl/externalLinks/externalLink1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".external-link-repeated-child.tmp.xlsx")
+
+
 def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Path:
     """Create a workbook with operational protection and sparse style controls."""
     workbook = Workbook()

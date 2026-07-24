@@ -362,6 +362,32 @@ that none entered JSON, Markdown, or SARIF. This validates static comparison
 and redaction—not M execution, connection refresh, source trust, or returned
 data correctness.
 
+## External-link package controls and redaction — 2026-07-24
+
+FormulaFence 0.19.0 was profiled against Apache POI's public
+[`ref2-56737.xlsx` fixture](https://github.com/apache/poi/blob/0d6d4872c491b1f230f51c6878e57407c60ae697/test-data/spreadsheet/ref2-56737.xlsx),
+downloaded only for local compatibility validation and not bundled with the
+project. The downloaded file had SHA-256
+`7ee59e3710f1aa75cbc6585ac6548f8ce3b3bca04a4cbebb079c455773bce344`.
+
+The workbook has two external-workbook package parts. FormulaFence reported
+two package parts, five external sheet names, four external defined names,
+five cached sheets, seven cached cells, and one cached refresh error, with no
+parser warnings. Its profile did not print either workbook target, sheet or
+defined name, or cached value.
+
+On a local, non-distributed copy, changing only an `externalLink` relationship
+target emitted `FF025` with a private source-material flag; the inserted target
+marker did not appear in JSON, Markdown, or SARIF. Controlled raw-OOXML
+fixtures additionally covered external-workbook, DDE, and OLE definitions,
+workbook-declaration rebinding, cached material, item flags, and opaque
+extension data. They produced `FF025` and `FFP025` under
+`no_external_link_package_changes` while verifying that synthetic targets,
+names, services, program IDs, cached values, and extension payloads were never
+serialized. This validates static package comparison and redaction—not opening
+or executing external-workbook, DDE, or OLE links, source trust, or returned
+data correctness.
+
 ## External-data refresh controls and redaction — 2026-07-24
 
 FormulaFence 0.17.0 was profiled against Mullins Lab's public

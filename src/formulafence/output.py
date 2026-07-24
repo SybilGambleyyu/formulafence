@@ -77,6 +77,9 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['cell_protection_assignment_count']}"
         ),
         f"- **External-data connections:** {workbook['external_data_connection_count']}",
+        f"- **External-link package parts:** {workbook['external_link_package_count']}",
+        f"- **DDE links:** {workbook['dde_link_count']}",
+        f"- **OLE links:** {workbook['ole_link_count']}",
         (
             "- **Connections refreshing on open:** "
             f"{workbook['external_data_connections_refresh_on_load']}"
@@ -427,6 +430,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     external_connections = profile["external_data_connections"]
     query_tables = profile["query_table_refresh_controls"]
     pivot_caches = profile["pivot_cache_refresh_controls"]
+    external_link_packages = profile["external_link_packages"]
     has_nondefault_external_settings = external_settings != {
         "update_links": "user_set",
         "allow_refresh_query": False,
@@ -638,6 +642,64 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Pivot-cache source details, cached records, and raw extension XML "
             "are intentionally omitted."
+        )
+    if external_link_packages["present"]:
+        lines.extend(
+            [
+                "",
+                "## External-link packages",
+                "",
+                (
+                    "- **Package parts:** "
+                    f"{external_link_packages['external_link_count']} "
+                    f"({external_link_packages['external_workbook_count']} workbook, "
+                    f"{external_link_packages['dde_link_count']} DDE, "
+                    f"{external_link_packages['ole_link_count']} OLE)"
+                ),
+                (
+                    "- **External workbook references:** "
+                    f"{external_link_packages['external_workbook_sheet_count']} sheet name(s), "
+                    f"{external_link_packages['external_defined_name_count']} defined name(s)"
+                ),
+                (
+                    "- **Cached external-workbook data:** "
+                    f"{external_link_packages['external_workbook_cached_cell_count']} cell(s) "
+                    f"across {external_link_packages['external_workbook_cached_sheet_count']} "
+                    "sheet cache(s)"
+                ),
+                (
+                    "- **Cached external-workbook refresh errors:** "
+                    f"{external_link_packages['external_workbook_cached_refresh_error_count']}"
+                ),
+                (
+                    "- **DDE items:** "
+                    f"{external_link_packages['dde_item_count']} "
+                    f"({external_link_packages['dde_advise_item_count']} advise, "
+                    f"{external_link_packages['dde_ole_item_count']} OLE, "
+                    f"{external_link_packages['dde_prefer_picture_item_count']} picture)"
+                ),
+                (
+                    "- **OLE items:** "
+                    f"{external_link_packages['ole_item_count']} "
+                    f"({external_link_packages['ole_advise_item_count']} advise, "
+                    f"{external_link_packages['ole_icon_item_count']} icon, "
+                    f"{external_link_packages['ole_prefer_picture_item_count']} picture)"
+                ),
+            ]
+        )
+        if external_link_packages["unrecognized_link_count"]:
+            lines.append(
+                "- **Unrecognized package definitions:** "
+                f"{external_link_packages['unrecognized_link_count']}"
+            )
+        if external_link_packages["opaque_metadata"]["present"]:
+            lines.append(
+                "- **Unmodelled package metadata:** "
+                f"{external_link_packages['opaque_metadata']['count']} item(s)"
+            )
+        lines.append(
+            "External workbook targets, sheet and defined names, DDE services/topics/items, "
+            "OLE program and item names, and cached values are intentionally omitted."
         )
     power_query = profile["power_query"]
     if power_query["present"]:

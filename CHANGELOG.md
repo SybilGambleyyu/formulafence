@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.0 — 2026-07-24
+
+- Inspect raw `xl/externalLinks/externalLink*.xml` parts for external-workbook,
+  DDE, and OLE link definitions. Private fingerprints retain declaration-to-part
+  bindings, endpoint relationships, definition material, cached values,
+  item behavior, and unmodelled XML without serializing targets, names, source
+  data, or extension payloads.
+- Emit `FF025` for external-link package changes and add the fail-closed
+  `no_external_link_package_changes` policy rule (`FFP025`). FormulaFence does
+  not follow or execute external-workbook, DDE, or OLE links, establish source
+  trust, or infer returned data.
+
 ## 0.18.0 — 2026-07-24
 
 - Inspect Power Query Data Mashup custom XML parts directly: private fingerprints

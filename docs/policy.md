@@ -25,6 +25,7 @@ rules:
   no_conditional_formatting_changes: true
   no_protection_changes: true
   no_external_data_connection_changes: true
+  no_external_link_package_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
@@ -76,6 +77,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_conditional_formatting_changes` | boolean | A worksheet conditional-formatting control changes, including its precedence, target ranges, criteria, flags, visual style, or retained OOXML extension fragment. |
 | `no_protection_changes` | boolean | A workbook, worksheet, dialog-sheet, chart-sheet, protected-range, or direct cell/row/column protection control changes. |
 | `no_external_data_connection_changes` | boolean | A workbook-wide external-data refresh flag, connection, linked query-table refresh control, or pivot-cache source/refresh control changes. |
+| `no_external_link_package_changes` | boolean | An external-workbook, DDE, or OLE `externalLink` package definition, source binding, cached material, item behavior, or retained extension fragment changes. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
@@ -208,7 +210,18 @@ never appear in profiles or reports; private fingerprints still expose material
 source or identity changes. Any such control change emits `FF023`; enable
 `no_external_data_connection_changes` to make it `FFP023` in CI. FormulaFence
 does not execute a connection, refresh workbook data, determine source trust,
-or inspect DDE/OLE links or PivotTable layout semantics.
+or model PivotTable layout semantics.
+
+FormulaFence separately inventories raw `xl/externalLinks/externalLink*.xml`
+packages. It recognizes external-workbook, DDE, and OLE definitions; privately
+binds each workbook declaration to its package part; and compares link targets,
+workbook definitions, caches, DDE/OLE item behavior, and opaque extension
+material. The profile exposes only safe counts: workbook targets, sheet and
+defined names, DDE services/topics/items, OLE program and item names, and
+cached values never enter a profile or diff. Any material package change emits
+`FF025`; enable `no_external_link_package_changes` to make it `FFP025` in CI.
+FormulaFence does not follow or execute these links, determine source trust, or
+infer returned data.
 
 Power Query stores query definitions in a `DataMashup` Custom XML part. FormulaFence
 parses the documented length-prefixed container and privately compares its

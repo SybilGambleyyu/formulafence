@@ -121,8 +121,17 @@ review prompt, not proof of an error.
   parameter values, SSO IDs, cached records, and opaque extension XML remain
   private fingerprints; a material change emits `FF023` and can be blocked with
   `no_external_data_connection_changes`. FormulaFence does **not** connect,
-  refresh data, establish source trust, inspect DDE/OLE links, or model
-  PivotTable layout semantics.
+  refresh data, establish source trust, or model PivotTable layout semantics.
+- Raw `xl/externalLinks/externalLink*.xml` packages are separately inspected
+  for external-workbook, DDE, and OLE definitions. FormulaFence privately binds
+  workbook declarations to package parts and fingerprints endpoint
+  relationships, names, definitions, caches, item behavior, and opaque
+  extensions. Reports expose only structural counts: targets, sheet and defined
+  names, DDE services/topics/items, OLE program/item names, cached values, and
+  extension payloads remain private. A material package change emits `FF025`
+  and can be blocked with `no_external_link_package_changes`. FormulaFence does
+  **not** follow or execute these links, establish source trust, or infer
+  returned data.
 - Power Query Data Mashup custom XML is inspected without serializing its M
   formulas or data/source material. FormulaFence privately compares the
   `Section1.m` formula document, logical package content, stable query metadata,
@@ -163,9 +172,10 @@ review prompt, not proof of an error.
   location in the profile, and a newly introduced one emits `FF016`; its graph
   is deliberately omitted rather than partially guessed.
 - It inventories sheet visibility, defined names, calculation settings, the VBA
-  payload, the protection controls above, and limited pivot-cache refresh
-  controls. It does not yet diff chart definitions, PivotTable layout or cached
-  data, Power Query scripts, ordinary styles beyond direct protection
+  payload, the protection controls above, external-data refresh controls,
+  external-link packages, and private Power Query definition material. It does
+  not yet diff chart definitions, PivotTable layout or cached data, Power Query
+  runtime behavior or returned data, ordinary styles beyond direct protection
   assignments, complete Excel style-cascade results, or every OOXML part.
 - The tool preserves Excel formula text and uses a limited A1-reference
   normalizer for peer-pattern detection; it is not an Excel-compatible parser

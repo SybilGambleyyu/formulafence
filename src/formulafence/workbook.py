@@ -44,6 +44,7 @@ from formulafence.models import (
     ExternalDataConnectionSnapshot,
     ExternalDataOpaqueMetadataSnapshot,
     ExternalDataRefreshSettingsSnapshot,
+    ExternalLinkPackageSnapshot,
     PivotCacheRefreshSnapshot,
     PowerQueryPermissionControlsSnapshot,
     PowerQuerySnapshot,
@@ -87,6 +88,7 @@ _DYNAMIC_ARRAY_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/dyna
 _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
 _EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
 _DATA_MASHUP_NS = "http://schemas.microsoft.com/DataMashup"
+_MARKUP_COMPATIBILITY_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 _XML_NAMESPACE_PREFIXES = {
     _SPREADSHEETML_NS: "",
     _OFFICE_2010_SPREADSHEET_NS: "x14:",
@@ -97,6 +99,10 @@ _GUID_PATTERN = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}"
 )
 _CUSTOM_XML_ITEM_PATTERN = re.compile(r"^customXml/item(?:\d+)?\.xml$", re.IGNORECASE)
+_EXTERNAL_LINK_PART_PATTERN = re.compile(
+    r"^xl/externalLinks/externalLink(?:\d+)?\.xml$", re.IGNORECASE
+)
+_EXTERNAL_LINK_MAX_PART_BYTES = 16 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -152,8 +158,35 @@ class _ExternalDataMetadata:
     connections: tuple[ExternalDataConnectionSnapshot, ...]
     query_tables: tuple[QueryTableRefreshSnapshot, ...]
     pivot_caches: tuple[PivotCacheRefreshSnapshot, ...]
+    external_link_packages: ExternalLinkPackageSnapshot
     power_query: PowerQuerySnapshot
     warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ExternalLinkPartInspection:
+    """Private parsed state for one externalLink OOXML part."""
+
+    member: str = ""
+    kind: str = "unrecognized"
+    external_workbook_sheet_count: int = 0
+    external_defined_name_count: int = 0
+    external_workbook_cached_sheet_count: int = 0
+    external_workbook_cached_cell_count: int = 0
+    external_workbook_cached_refresh_error_count: int = 0
+    dde_item_count: int = 0
+    dde_advise_item_count: int = 0
+    dde_ole_item_count: int = 0
+    dde_prefer_picture_item_count: int = 0
+    dde_cached_value_count: int = 0
+    ole_item_count: int = 0
+    ole_advise_item_count: int = 0
+    ole_icon_item_count: int = 0
+    ole_prefer_picture_item_count: int = 0
+    source_signature: str | None = None
+    definition_signature: str | None = None
+    cached_material_signature: str | None = None
+    opaque_entries: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2412,6 +2445,783 @@ def _power_query_snapshot(
     )
 
 
+def _external_link_part_root(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> ElementTree.Element | None:
+    """Read one bounded external-link XML part without exposing its content."""
+    try:
+        if archive.getinfo(member).file_size > _EXTERNAL_LINK_MAX_PART_BYTES:
+            warnings.add(
+                "FormulaFence did not fully read an oversized external-link package part; "
+                "the affected external-link controls have a coverage gap."
+            )
+            return None
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate an external-link package part; "
+            "the affected external-link controls were not compared."
+        )
+        return None
+    return _external_data_part_root(archive, member, warnings, context=context)
+
+
+def _external_link_opaque_entries(
+    element: ElementTree.Element,
+    *,
+    context: str,
+    known_attributes: frozenset[str] = frozenset(),
+    known_children: frozenset[str] = frozenset(),
+    known_namespaces: frozenset[str] = frozenset({_SPREADSHEETML_NS}),
+) -> list[tuple[str, str]]:
+    """Privately retain unsupported external-link XML without serializing it."""
+    entries: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if attribute == f"{{{_MARKUP_COMPATIBILITY_NS}}}Ignorable":
+            continue
+        if _xml_local_name(attribute) in known_attributes:
+            continue
+        entries.append(
+            (
+                f"{context}:attribute:{_xml_display_name(attribute)}",
+                value,
+            )
+        )
+    for child in element:
+        if (
+            _xml_local_name(child.tag) in known_children
+            and _xml_namespace(child.tag) in known_namespaces
+        ):
+            continue
+        entries.append(
+            (
+                f"{context}:child:{_xml_display_name(child.tag)}",
+                repr(_xml_fragment(child).sort_key()),
+            )
+        )
+    return entries
+
+
+def _external_link_relationship_signature(
+    archive: ZipFile,
+    member: str,
+    relationship_id: str | None,
+    warnings: set[str],
+    opaque_entries: list[tuple[str, str]],
+) -> str | None:
+    """Fingerprint one link's package target without retaining its location."""
+    if not relationship_id:
+        warnings.add(
+            "FormulaFence found an external-link definition without its required "
+            "relationship id; the affected external-link control has a coverage gap."
+        )
+        return None
+    relationships = _external_link_part_root(
+        archive,
+        _relationship_part_path(member),
+        warnings,
+        context="external-link relationship",
+    )
+    if relationships is None:
+        return None
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    matches = [
+        relationship
+        for relationship in relationships.findall(relationship_tag)
+        if relationship.get("Id") == relationship_id
+    ]
+    if not matches:
+        warnings.add(
+            "FormulaFence could not locate an external-link target relationship; "
+            "the affected external-link control has a coverage gap."
+        )
+        return None
+    if len(matches) > 1:
+        warnings.add(
+            "FormulaFence found repeated external-link target relationships; "
+            "the affected external-link control has a coverage gap."
+        )
+    material: list[tuple[str, str]] = []
+    for relationship in matches:
+        target = relationship.get("Target")
+        if target is None:
+            warnings.add(
+                "FormulaFence found an external-link target relationship without a target; "
+                "the affected external-link control has a coverage gap."
+            )
+            target = ""
+        material.extend(
+            [
+                ("type", relationship.get("Type", "")),
+                ("target_mode", relationship.get("TargetMode", "Internal").casefold()),
+                ("target", target),
+            ]
+        )
+        opaque_entries.extend(
+            _external_link_opaque_entries(
+                relationship,
+                context="relationship",
+                known_attributes=frozenset({"Id", "Type", "Target", "TargetMode"}),
+                known_children=frozenset(),
+                known_namespaces=frozenset(),
+            )
+        )
+    material.sort()
+    return _private_external_data_signature(tuple(material))
+
+
+def _external_link_item_flags(
+    item: ElementTree.Element,
+    warnings: set[str],
+    *,
+    context: str,
+) -> tuple[bool, bool, bool]:
+    """Read safe DDE/OLE item behavior flags with their schema defaults."""
+    return (
+        _external_data_bool(
+            item.get("advise"), False, "advise", warnings, context=context
+        ),
+        _external_data_bool(item.get("ole"), False, "ole", warnings, context=context),
+        _external_data_bool(
+            item.get("preferPic"), False, "preferPic", warnings, context=context
+        ),
+    )
+
+
+def _external_link_optional_child(
+    element: ElementTree.Element,
+    name: str,
+    warnings: set[str],
+    opaque_entries: list[tuple[str, str]],
+    *,
+    context: str,
+) -> ElementTree.Element | None:
+    """Return one schema-singleton child while retaining repeated XML privately."""
+    matches = [
+        child
+        for child in element
+        if _xml_namespace(child.tag) == _SPREADSHEETML_NS
+        and _xml_local_name(child.tag) == name
+    ]
+    if len(matches) > 1:
+        warnings.add(
+            "FormulaFence found repeated "
+            f"{name} containers in an external-link {context}; "
+            "the affected controls have a coverage gap."
+        )
+        opaque_entries.extend(
+            (
+                f"{context}:repeated-{name}:{index}",
+                repr(_xml_fragment(child).sort_key()),
+            )
+            for index, child in enumerate(matches[1:], start=1)
+        )
+    return matches[0] if matches else None
+
+
+def _external_link_part_inspection(
+    archive: ZipFile,
+    member: str,
+    root: ElementTree.Element,
+    warnings: set[str],
+) -> _ExternalLinkPartInspection:
+    """Read one external-link definition while keeping all endpoint material private."""
+    opaque_entries = _external_link_opaque_entries(
+        root,
+        context="external-link",
+        known_children=frozenset({"externalBook", "ddeLink", "oleLink"}),
+    )
+    recognised_children = [
+        child
+        for child in root
+        if _xml_namespace(child.tag) == _SPREADSHEETML_NS
+        and _xml_local_name(child.tag) in {"externalBook", "ddeLink", "oleLink"}
+    ]
+    if len(recognised_children) != 1:
+        warnings.add(
+            "FormulaFence found an external-link part without exactly one supported link "
+            "definition; the affected external-link controls have a coverage gap."
+        )
+        opaque_entries.append(
+            ("external-link:ambiguous-definition", repr(_xml_fragment(root).sort_key()))
+        )
+        return _ExternalLinkPartInspection(
+            member=member,
+            opaque_entries=tuple(opaque_entries),
+        )
+
+    element = recognised_children[0]
+    kind = _xml_local_name(element.tag)
+    source_entries: list[tuple[str, str]] = [("kind", kind)]
+    definition_entries: list[tuple[str, str]] = []
+    cached_entries: list[tuple[str, str]] = []
+    standard = _SPREADSHEETML_NS
+    relationship_id_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+
+    if kind == "externalBook":
+        relationship_signature = _external_link_relationship_signature(
+            archive,
+            member,
+            element.get(relationship_id_attribute),
+            warnings,
+            opaque_entries,
+        )
+        if relationship_signature is not None:
+            source_entries.append(("target", relationship_signature))
+        opaque_entries.extend(
+            _external_link_opaque_entries(
+                element,
+                context="external-workbook",
+                known_attributes=frozenset({"id"}),
+                known_children=frozenset({"sheetNames", "definedNames", "sheetDataSet"}),
+            )
+        )
+        sheet_names = _external_link_optional_child(
+            element,
+            "sheetNames",
+            warnings,
+            opaque_entries,
+            context="external-workbook definition",
+        )
+        sheet_name_count = 0
+        if sheet_names is not None:
+            opaque_entries.extend(
+                _external_link_opaque_entries(
+                    sheet_names,
+                    context="external-workbook-sheet-names",
+                    known_children=frozenset({"sheetName"}),
+                )
+            )
+            for index, sheet_name in enumerate(
+                sheet_names.findall(f"{{{standard}}}sheetName")
+            ):
+                value = sheet_name.get("val")
+                if value is None:
+                    warnings.add(
+                        "FormulaFence found an external-workbook sheet name without a value; "
+                        "the affected external-link control has a coverage gap."
+                    )
+                    value = ""
+                definition_entries.append((f"sheet-name:{index}", value))
+                opaque_entries.extend(
+                    _external_link_opaque_entries(
+                        sheet_name,
+                        context="external-workbook-sheet-name",
+                        known_attributes=frozenset({"val"}),
+                    )
+                )
+                sheet_name_count += 1
+        defined_names = _external_link_optional_child(
+            element,
+            "definedNames",
+            warnings,
+            opaque_entries,
+            context="external-workbook definition",
+        )
+        defined_name_count = 0
+        if defined_names is not None:
+            opaque_entries.extend(
+                _external_link_opaque_entries(
+                    defined_names,
+                    context="external-workbook-defined-names",
+                    known_children=frozenset({"definedName"}),
+                )
+            )
+            for index, defined_name in enumerate(
+                defined_names.findall(f"{{{standard}}}definedName")
+            ):
+                if defined_name.get("name") is None:
+                    warnings.add(
+                        "FormulaFence found an external defined name without a name; "
+                        "the affected external-link control has a coverage gap."
+                    )
+                definition_entries.append(
+                    (
+                        f"defined-name:{index}",
+                        repr(_xml_fragment(defined_name).sort_key()),
+                    )
+                )
+                opaque_entries.extend(
+                    _external_link_opaque_entries(
+                        defined_name,
+                        context="external-workbook-defined-name",
+                        known_attributes=frozenset({"name", "refersTo", "sheetId"}),
+                    )
+                )
+                defined_name_count += 1
+        sheet_data_set = _external_link_optional_child(
+            element,
+            "sheetDataSet",
+            warnings,
+            opaque_entries,
+            context="external-workbook definition",
+        )
+        cached_sheet_count = 0
+        cached_cell_count = 0
+        cached_refresh_error_count = 0
+        if sheet_data_set is not None:
+            opaque_entries.extend(
+                _external_link_opaque_entries(
+                    sheet_data_set,
+                    context="external-workbook-cache",
+                    known_children=frozenset({"sheetData"}),
+                )
+            )
+            for index, sheet_data in enumerate(
+                sheet_data_set.findall(f"{{{standard}}}sheetData")
+            ):
+                if sheet_data.get("sheetId") is None:
+                    warnings.add(
+                        "FormulaFence found cached external-workbook data without a sheet id; "
+                        "the affected external-link control has a coverage gap."
+                    )
+                refresh_error = _external_data_bool(
+                    sheet_data.get("refreshError"),
+                    False,
+                    "refreshError",
+                    warnings,
+                    context="external-workbook cache",
+                )
+                cached_refresh_error_count += int(refresh_error)
+                cells = tuple(sheet_data.iter(f"{{{standard}}}cell"))
+                cached_cell_count += len(cells)
+                cached_entries.append(
+                    (f"external-workbook-cache:{index}", repr(_xml_fragment(sheet_data).sort_key()))
+                )
+                opaque_entries.extend(
+                    _external_link_opaque_entries(
+                        sheet_data,
+                        context="external-workbook-cache-sheet",
+                        known_attributes=frozenset({"sheetId", "refreshError"}),
+                        known_children=frozenset({"row"}),
+                    )
+                )
+                cached_sheet_count += 1
+        return _ExternalLinkPartInspection(
+            member=member,
+            kind="external_workbook",
+            external_workbook_sheet_count=sheet_name_count,
+            external_defined_name_count=defined_name_count,
+            external_workbook_cached_sheet_count=cached_sheet_count,
+            external_workbook_cached_cell_count=cached_cell_count,
+            external_workbook_cached_refresh_error_count=cached_refresh_error_count,
+            source_signature=_private_external_data_signature(tuple(sorted(source_entries))),
+            definition_signature=_private_external_data_signature(
+                tuple(sorted(definition_entries))
+            ),
+            cached_material_signature=_private_external_data_signature(
+                tuple(sorted(cached_entries))
+            ),
+            opaque_entries=tuple(opaque_entries),
+        )
+
+    if kind == "ddeLink":
+        service = element.get("ddeService")
+        topic = element.get("ddeTopic")
+        if service is None or topic is None:
+            warnings.add(
+                "FormulaFence found a DDE link without its required service or topic; "
+                "the affected external-link control has a coverage gap."
+            )
+        source_entries.extend(
+            [("service", service or ""), ("topic", topic or "")]
+        )
+        opaque_entries.extend(
+            _external_link_opaque_entries(
+                element,
+                context="dde-link",
+                known_attributes=frozenset({"ddeService", "ddeTopic"}),
+                known_children=frozenset({"ddeItems"}),
+            )
+        )
+        items = _external_link_optional_child(
+            element,
+            "ddeItems",
+            warnings,
+            opaque_entries,
+            context="DDE definition",
+        )
+        item_count = advise_count = ole_count = prefer_picture_count = cached_value_count = 0
+        if items is not None:
+            opaque_entries.extend(
+                _external_link_opaque_entries(
+                    items,
+                    context="dde-items",
+                    known_children=frozenset({"ddeItem"}),
+                )
+            )
+            for index, item in enumerate(items.findall(f"{{{standard}}}ddeItem")):
+                advise, ole, prefer_picture = _external_link_item_flags(
+                    item, warnings, context="DDE item"
+                )
+                advise_count += int(advise)
+                ole_count += int(ole)
+                prefer_picture_count += int(prefer_picture)
+                definition_entries.append((f"dde-item:{index}", item.get("name", "0")))
+                values = _external_link_optional_child(
+                    item,
+                    "values",
+                    warnings,
+                    opaque_entries,
+                    context="DDE item",
+                )
+                if values is not None:
+                    cached_value_count += len(values.findall(f"{{{standard}}}value"))
+                    cached_entries.append(
+                        (f"dde-values:{index}", repr(_xml_fragment(values).sort_key()))
+                    )
+                opaque_entries.extend(
+                    _external_link_opaque_entries(
+                        item,
+                        context="dde-item",
+                        known_attributes=frozenset({"name", "ole", "advise", "preferPic"}),
+                        known_children=frozenset({"values"}),
+                    )
+                )
+                item_count += 1
+        return _ExternalLinkPartInspection(
+            member=member,
+            kind="dde",
+            dde_item_count=item_count,
+            dde_advise_item_count=advise_count,
+            dde_ole_item_count=ole_count,
+            dde_prefer_picture_item_count=prefer_picture_count,
+            dde_cached_value_count=cached_value_count,
+            source_signature=_private_external_data_signature(tuple(sorted(source_entries))),
+            definition_signature=_private_external_data_signature(
+                tuple(sorted(definition_entries))
+            ),
+            cached_material_signature=_private_external_data_signature(
+                tuple(sorted(cached_entries))
+            ),
+            opaque_entries=tuple(opaque_entries),
+        )
+
+    relationship_signature = _external_link_relationship_signature(
+        archive,
+        member,
+        element.get(relationship_id_attribute),
+        warnings,
+        opaque_entries,
+    )
+    if relationship_signature is not None:
+        source_entries.append(("target", relationship_signature))
+    program_id = element.get("progId")
+    if program_id is None:
+        warnings.add(
+            "FormulaFence found an OLE link without its required program id; "
+            "the affected external-link control has a coverage gap."
+        )
+    source_entries.append(("program-id", program_id or ""))
+    opaque_entries.extend(
+        _external_link_opaque_entries(
+            element,
+            context="ole-link",
+            known_attributes=frozenset({"id", "progId"}),
+            known_children=frozenset({"oleItems"}),
+        )
+    )
+    items = _external_link_optional_child(
+        element,
+        "oleItems",
+        warnings,
+        opaque_entries,
+        context="OLE definition",
+    )
+    item_count = advise_count = icon_count = prefer_picture_count = 0
+    if items is not None:
+        opaque_entries.extend(
+            _external_link_opaque_entries(
+                items,
+                context="ole-items",
+                known_children=frozenset({"oleItem"}),
+            )
+        )
+        for index, item in enumerate(items.findall(f"{{{standard}}}oleItem")):
+            advise, _ole, prefer_picture = _external_link_item_flags(
+                item, warnings, context="OLE item"
+            )
+            icon = _external_data_bool(
+                item.get("icon"), False, "icon", warnings, context="OLE item"
+            )
+            advise_count += int(advise)
+            icon_count += int(icon)
+            prefer_picture_count += int(prefer_picture)
+            definition_entries.append((f"ole-item:{index}", item.get("name", "")))
+            opaque_entries.extend(
+                _external_link_opaque_entries(
+                    item,
+                    context="ole-item",
+                    known_attributes=frozenset({"name", "icon", "advise", "preferPic"}),
+                )
+            )
+            item_count += 1
+    return _ExternalLinkPartInspection(
+        member=member,
+        kind="ole",
+        ole_item_count=item_count,
+        ole_advise_item_count=advise_count,
+        ole_icon_item_count=icon_count,
+        ole_prefer_picture_item_count=prefer_picture_count,
+        source_signature=_private_external_data_signature(tuple(sorted(source_entries))),
+        definition_signature=_private_external_data_signature(tuple(sorted(definition_entries))),
+        cached_material_signature=_private_external_data_signature(tuple(sorted(cached_entries))),
+        opaque_entries=tuple(opaque_entries),
+    )
+
+
+def _external_link_packages_snapshot(
+    archive: ZipFile,
+    workbook: ElementTree.Element,
+    relationships: tuple[_PackageRelationship, ...],
+    warnings: set[str],
+) -> ExternalLinkPackageSnapshot:
+    """Inventory externalLink OOXML parts without following their endpoints."""
+    external_relationships = [
+        relationship
+        for relationship in relationships
+        if relationship.relationship_type.rsplit("/", maxsplit=1)[-1] == "externalLink"
+    ]
+    relationships_by_id = {
+        relationship.relationship_id: relationship
+        for relationship in external_relationships
+        if relationship.relationship_id
+    }
+    external_references = workbook.find(f"{{{_SPREADSHEETML_NS}}}externalReferences")
+    reference_ids: list[str] = []
+    declaration_opaque_entries: list[tuple[str, str]] = []
+    if external_references is not None:
+        declaration_opaque_entries.extend(
+            _external_link_opaque_entries(
+                external_references,
+                context="external-link-declarations",
+                known_children=frozenset({"externalReference"}),
+            )
+        )
+        identifier_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+        for reference in external_references.findall(
+            f"{{{_SPREADSHEETML_NS}}}externalReference"
+        ):
+            declaration_opaque_entries.extend(
+                _external_link_opaque_entries(
+                    reference,
+                    context="external-link-declaration",
+                    known_attributes=frozenset({"id"}),
+                )
+            )
+            if (relationship_id := reference.get(identifier_attribute)) is None:
+                warnings.add(
+                    "FormulaFence found an external-link declaration without a relationship id; "
+                    "the affected external-link controls have a coverage gap."
+                )
+                continue
+            reference_ids.append(relationship_id)
+            if relationship_id not in relationships_by_id:
+                warnings.add(
+                    "FormulaFence could not locate an external-link declaration relationship; "
+                    "the affected external-link controls were not compared."
+                )
+    if len(reference_ids) != len(set(reference_ids)):
+        warnings.add(
+            "FormulaFence found repeated external-link declaration relationships; "
+            "the affected external-link controls have a coverage gap."
+        )
+    relationship_ids = [
+        relationship.relationship_id
+        for relationship in external_relationships
+        if relationship.relationship_id is not None
+    ]
+    if len(relationship_ids) != len(set(relationship_ids)):
+        warnings.add(
+            "FormulaFence found duplicate external-link package relationship ids; "
+            "the affected external-link controls have a coverage gap."
+        )
+    declaration_entries: list[tuple[str, str]] = []
+    for index, relationship_id in enumerate(reference_ids):
+        relationship = relationships_by_id.get(relationship_id)
+        if relationship is None:
+            declaration_entries.append((f"external-reference:{index}", "missing"))
+            continue
+        declaration_entries.append(
+            (
+                f"external-reference:{index}",
+                repr(
+                    (
+                        relationship.relationship_type,
+                        relationship.target_mode,
+                        relationship.target,
+                    )
+                ),
+            )
+        )
+    referenced_relationship_ids = set(reference_ids)
+    unreferenced_relationships = sorted(
+        (
+            (
+                relationship.relationship_type,
+                relationship.target_mode,
+                relationship.target,
+            )
+            for relationship in external_relationships
+            if relationship.relationship_id not in referenced_relationship_ids
+        ),
+        key=repr,
+    )
+    for index, relationship in enumerate(unreferenced_relationships):
+        declaration_entries.append(
+            (f"unreferenced-workbook-relationship:{index}", repr(relationship))
+        )
+    declaration_signature = _private_external_data_signature(
+        tuple(declaration_entries)
+    )
+
+    members: set[str] = set()
+    declared_targets: list[str] = []
+    for relationship in external_relationships:
+        if relationship.target is None:
+            warnings.add(
+                "FormulaFence found an external-link declaration without a safe internal part "
+                "target; the affected external-link controls were not compared."
+            )
+            continue
+        members.add(relationship.target)
+        declared_targets.append(relationship.target)
+        if relationship.relationship_id not in reference_ids:
+            warnings.add(
+                "FormulaFence found an external-link package relationship not declared by the "
+                "workbook; the affected external-link controls have a coverage gap."
+            )
+    if len(declared_targets) != len(set(declared_targets)):
+        warnings.add(
+            "FormulaFence found multiple external-link relationships targeting one package "
+            "part; the affected external-link controls have a coverage gap."
+        )
+    discovered_members = {
+        member for member in archive.namelist() if _EXTERNAL_LINK_PART_PATTERN.fullmatch(member)
+    }
+    for _member in discovered_members - members:
+        warnings.add(
+            "FormulaFence found an external-link package part not declared by the workbook; "
+            "the affected external-link controls have a coverage gap."
+        )
+    members.update(discovered_members)
+
+    inspections: list[_ExternalLinkPartInspection] = []
+    for member in sorted(members, key=str.casefold):
+        root = _external_link_part_root(
+            archive,
+            member,
+            warnings,
+            context="external-link package",
+        )
+        if root is None:
+            continue
+        if (
+            _xml_local_name(root.tag) != "externalLink"
+            or _xml_namespace(root.tag) != _SPREADSHEETML_NS
+        ):
+            warnings.add(
+                "FormulaFence found an external-link package part with an unexpected root; "
+                "the affected external-link controls were not compared."
+            )
+            continue
+        inspections.append(_external_link_part_inspection(archive, member, root, warnings))
+    if not members:
+        return ExternalLinkPackageSnapshot()
+    inspected_members = {inspection.member for inspection in inspections}
+    uninspected_member_count = len(members - inspected_members)
+
+    def aggregate_signature(attribute: str) -> str | None:
+        material = sorted(
+            (inspection.member, value)
+            for inspection in inspections
+            if (value := getattr(inspection, attribute)) is not None
+        )
+        return _private_external_data_signature(tuple(material))
+
+    opaque_entries = [
+        (f"workbook:{entry[0]}", entry[1])
+        for entry in declaration_opaque_entries
+    ] + [
+        (f"{inspection.member}:{entry[0]}", entry[1])
+        for inspection in inspections
+        for entry in inspection.opaque_entries
+    ]
+    opaque_entries.sort()
+    part_source_signature = aggregate_signature("source_signature")
+    source_signature = _private_external_data_signature(
+        tuple(
+            entry
+            for entry in (
+                ("declarations", declaration_signature),
+                ("parts", part_source_signature),
+            )
+            if entry[1] is not None
+        )
+    )
+    return ExternalLinkPackageSnapshot(
+        external_link_count=len(members),
+        external_workbook_count=sum(
+            inspection.kind == "external_workbook" for inspection in inspections
+        ),
+        dde_link_count=sum(inspection.kind == "dde" for inspection in inspections),
+        ole_link_count=sum(inspection.kind == "ole" for inspection in inspections),
+        unrecognized_link_count=sum(
+            inspection.kind == "unrecognized" for inspection in inspections
+        )
+        + uninspected_member_count,
+        external_workbook_sheet_count=sum(
+            inspection.external_workbook_sheet_count for inspection in inspections
+        ),
+        external_defined_name_count=sum(
+            inspection.external_defined_name_count for inspection in inspections
+        ),
+        external_workbook_cached_sheet_count=sum(
+            inspection.external_workbook_cached_sheet_count for inspection in inspections
+        ),
+        external_workbook_cached_cell_count=sum(
+            inspection.external_workbook_cached_cell_count for inspection in inspections
+        ),
+        external_workbook_cached_refresh_error_count=sum(
+            inspection.external_workbook_cached_refresh_error_count
+            for inspection in inspections
+        ),
+        dde_item_count=sum(inspection.dde_item_count for inspection in inspections),
+        dde_advise_item_count=sum(
+            inspection.dde_advise_item_count for inspection in inspections
+        ),
+        dde_ole_item_count=sum(
+            inspection.dde_ole_item_count for inspection in inspections
+        ),
+        dde_prefer_picture_item_count=sum(
+            inspection.dde_prefer_picture_item_count for inspection in inspections
+        ),
+        dde_cached_value_count=sum(
+            inspection.dde_cached_value_count for inspection in inspections
+        ),
+        ole_item_count=sum(inspection.ole_item_count for inspection in inspections),
+        ole_advise_item_count=sum(
+            inspection.ole_advise_item_count for inspection in inspections
+        ),
+        ole_icon_item_count=sum(
+            inspection.ole_icon_item_count for inspection in inspections
+        ),
+        ole_prefer_picture_item_count=sum(
+            inspection.ole_prefer_picture_item_count for inspection in inspections
+        ),
+        source_signature=source_signature,
+        definition_signature=aggregate_signature("definition_signature"),
+        cached_material_signature=aggregate_signature("cached_material_signature"),
+        opaque_metadata=ExternalDataOpaqueMetadataSnapshot(
+            count=len(opaque_entries),
+            signature=_private_external_data_signature(tuple(opaque_entries)),
+        ),
+    )
+
+
 def _external_data_workbook_settings(
     workbook: ElementTree.Element,
     warnings: set[str],
@@ -3264,6 +4074,7 @@ def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
     """Read external-data refresh controls before the workbook reader drops them."""
     warnings: set[str] = set()
     default_settings = ExternalDataRefreshSettingsSnapshot()
+    default_external_link_packages = ExternalLinkPackageSnapshot()
     default_power_query = PowerQuerySnapshot()
     try:
         with ZipFile(path) as archive:
@@ -3279,6 +4090,7 @@ def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
                     connections=(),
                     query_tables=(),
                     pivot_caches=(),
+                    external_link_packages=default_external_link_packages,
                     power_query=default_power_query,
                     warnings=tuple(sorted(warnings)),
                 )
@@ -3313,6 +4125,12 @@ def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
                 workbook_relationships,
                 warnings,
             )
+            external_link_packages = _external_link_packages_snapshot(
+                archive,
+                workbook,
+                workbook_relationships,
+                warnings,
+            )
             power_query = _power_query_snapshot(archive, warnings)
     except (BadZipFile, OSError, ValueError) as error:
         return _ExternalDataMetadata(
@@ -3320,6 +4138,7 @@ def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
             connections=(),
             query_tables=(),
             pivot_caches=(),
+            external_link_packages=default_external_link_packages,
             power_query=default_power_query,
             warnings=(
                 "FormulaFence could not inspect external-data OOXML "
@@ -3331,6 +4150,7 @@ def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
         connections=connections,
         query_tables=query_tables,
         pivot_caches=pivot_caches,
+        external_link_packages=external_link_packages,
         power_query=power_query,
         warnings=tuple(sorted(warnings)),
     )
@@ -4458,6 +5278,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         external_data_connections=external_data_metadata.connections,
         query_table_refresh_controls=external_data_metadata.query_tables,
         pivot_cache_refresh_controls=external_data_metadata.pivot_caches,
+        external_link_packages=external_data_metadata.external_link_packages,
         power_query=external_data_metadata.power_query,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
@@ -4518,6 +5339,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "pivot_cache_refresh_controls": [
             control.profile_dict() for control in snapshot.pivot_cache_refresh_controls
         ],
+        "external_link_packages": snapshot.external_link_packages.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
         "defined_names": sorted(snapshot.defined_names),
         "calculation_settings": snapshot.calculation_settings,

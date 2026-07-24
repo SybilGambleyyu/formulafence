@@ -18,6 +18,7 @@ from formulafence.models import (
     DataValidationSnapshot,
     DiffReport,
     ExternalDataConnectionSnapshot,
+    ExternalLinkPackageSnapshot,
     Finding,
     PivotCacheRefreshSnapshot,
     PowerQuerySnapshot,
@@ -848,6 +849,44 @@ def _workbook_control_changes(
                 "FF023",
                 "high",
                 "Pivot-cache refresh controls changed.",
+                details=details,
+            )
+        )
+
+    if before.external_link_packages != after.external_link_packages:
+        old_external_links: ExternalLinkPackageSnapshot = before.external_link_packages
+        new_external_links: ExternalLinkPackageSnapshot = after.external_link_packages
+        details: dict[str, object] = {
+            "before": old_external_links.to_dict(),
+            "after": new_external_links.to_dict(),
+        }
+        if old_external_links.source_signature != new_external_links.source_signature:
+            details["source_material_changed"] = True
+        if old_external_links.definition_signature != new_external_links.definition_signature:
+            details["definition_material_changed"] = True
+        if (
+            old_external_links.cached_material_signature
+            != new_external_links.cached_material_signature
+        ):
+            details["cached_material_changed"] = True
+        if (
+            old_external_links.opaque_metadata.signature
+            != new_external_links.opaque_metadata.signature
+        ):
+            details["opaque_metadata_changed"] = True
+        changes.append(
+            Change(
+                "external_link_packages_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF025",
+                "high",
+                "External-workbook, DDE, or OLE link package controls changed.",
                 details=details,
             )
         )

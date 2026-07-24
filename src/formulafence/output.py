@@ -90,6 +90,14 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['xlm_related_part_payload_count']}"
         ),
         (
+            "- **RibbonX customization parts:** "
+            f"{workbook['ribbon_customization_part_count']}"
+        ),
+        (
+            "- **RibbonX callback attributes:** "
+            f"{workbook['ribbon_callback_attribute_count']}"
+        ),
+        (
             "- **Connections refreshing on open:** "
             f"{workbook['external_data_connections_refresh_on_load']}"
         ),
@@ -763,6 +771,47 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "XLM commands, cell values, relationship targets, and direct internal "
             "related-part contents are compared privately and intentionally omitted."
+        )
+    ribbon_customization = profile["ribbon_customization"]
+    if ribbon_customization["present"]:
+        lines.extend(
+            [
+                "",
+                "## Office RibbonX customization",
+                "",
+                (
+                    "- **Package declarations:** "
+                    f"{ribbon_customization['declared_ribbon_part_count']}"
+                ),
+                (
+                    "- **Customization parts:** "
+                    f"{ribbon_customization['ribbon_part_count']} "
+                    f"({ribbon_customization['office_2010_ribbon_part_count']} Office 2010)"
+                ),
+                f"- **Controls:** {ribbon_customization['control_count']}",
+                (
+                    "- **Callback attributes:** "
+                    f"{ribbon_customization['callback_attribute_count']} "
+                    f"({ribbon_customization['action_callback_count']} onAction)"
+                ),
+                (
+                    "- **Image relationships:** "
+                    f"{ribbon_customization['image_relationship_count']}"
+                ),
+                (
+                    "- **External Ribbon relationships:** "
+                    f"{ribbon_customization['external_relationship_count']}"
+                ),
+            ]
+        )
+        if ribbon_customization["unrecognized_ribbon_part_count"]:
+            lines.append(
+                "- **Unrecognized or uninspected customization parts:** "
+                f"{ribbon_customization['unrecognized_ribbon_part_count']}"
+            )
+        lines.append(
+            "Ribbon XML, control names and labels, callback names, and image targets are "
+            "compared privately and intentionally omitted."
         )
     power_query = profile["power_query"]
     if power_query["present"]:

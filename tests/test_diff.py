@@ -20,8 +20,11 @@ from .helpers import (
     change_power_query_controls,
     change_power_query_refresh_noise,
     change_protected_range,
+    change_ribbon_customization_callback,
+    change_ribbon_customization_controls,
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
+    corrupt_ribbon_customization_root,
     corrupt_xlm_macro_sheet_root,
     duplicate_external_link_definition,
     duplicate_external_link_sheet_names,
@@ -38,6 +41,7 @@ from .helpers import (
     make_named_lambda_model,
     make_power_query_model,
     make_protection_model,
+    make_ribbon_customization_model,
     make_scoped_named_lambda_model,
     make_spill_model,
     make_table_model,
@@ -48,9 +52,11 @@ from .helpers import (
     rebind_external_link_declaration,
     remove_xlm_macro_sheet_related_part_payload,
     renumber_external_link_declaration_relationships,
+    renumber_ribbon_customization_relationships,
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
     rewrite,
+    rewrite_ribbon_customization_internal_target_spelling,
     rewrite_xlm_macro_sheet_internal_target_spelling,
     set_external_data_connection_defaults,
     set_sheet_protection_defaults,
@@ -1957,6 +1963,198 @@ def test_malformed_xlm_macro_sheet_parts_fail_closed(tmp_path) -> None:
     )
     assert "xlm_macro_sheets_changed" in {change.kind for change in report.changes}
     assert "FF026" in {finding.rule_id for finding in report.findings}
+
+
+def test_ribbon_callback_changes_are_profiled_and_diffed_privately(tmp_path) -> None:
+    baseline = make_ribbon_customization_model(tmp_path / "baseline.xlsx")
+    candidate = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    change_ribbon_customization_callback(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    ribbon_change = next(
+        change for change in report.changes if change.kind == "ribbon_customization_changed"
+    )
+
+    assert baseline_snapshot.summary()["has_ribbon_customization"] is True
+    assert baseline_snapshot.summary()["ribbon_customization_part_count"] == 1
+    assert baseline_snapshot.summary()["ribbon_callback_attribute_count"] == 2
+    assert profile["ribbon_customization"] == {
+        "present": True,
+        "declared_ribbon_part_count": 1,
+        "ribbon_part_count": 1,
+        "office_2010_ribbon_part_count": 0,
+        "unrecognized_ribbon_part_count": 0,
+        "control_count": 3,
+        "callback_attribute_count": 2,
+        "action_callback_count": 1,
+        "image_relationship_count": 1,
+        "external_relationship_count": 0,
+    }
+    assert "## Office RibbonX customization" in markdown
+    assert "**Callback attributes:** 2 (1 onAction)" in markdown
+    assert ribbon_change.details["ribbon_definition_material_changed"] is True
+    assert "package_binding_changed" not in ribbon_change.details
+    assert "image_relationships_changed" not in ribbon_change.details
+    assert {finding.rule_id for finding in report.findings} >= {"FF027"}
+
+    sensitive_values = (
+        "PrivateBaselineRibbonAction",
+        "PrivateCandidateRibbonAction",
+        "PrivateBaselineRibbonLoad",
+        "private baseline ribbon action",
+        "private-baseline-ribbon.png",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_ribbon_customization_relationships_are_guarded_privately(tmp_path) -> None:
+    baseline = make_ribbon_customization_model(tmp_path / "baseline.xlsx")
+    candidate = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    change_ribbon_customization_controls(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    ribbon_change = next(
+        change for change in report.changes if change.kind == "ribbon_customization_changed"
+    )
+
+    assert ribbon_change.details["ribbon_definition_material_changed"] is True
+    assert ribbon_change.details["image_relationships_changed"] is True
+    assert "package_binding_changed" not in ribbon_change.details
+    assert {finding.rule_id for finding in report.findings} >= {"FF027"}
+
+
+def test_office_2010_ribbon_customization_parts_are_detected(tmp_path) -> None:
+    workbook = make_ribbon_customization_model(
+        tmp_path / "office-2010-ribbon.xlsx", office_2010=True
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.ribbon_customization.office_2010_ribbon_part_count == 1
+    assert snapshot.ribbon_customization.callback_attribute_count == 2
+    assert snapshot.parser_warnings == ()
+
+
+def test_office_2010_compatibility_ribbon_namespace_is_detected(tmp_path) -> None:
+    workbook = make_ribbon_customization_model(
+        tmp_path / "office-2010-compatibility-ribbon.xlsx",
+        office_2010=True,
+        compatibility_namespace=True,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.ribbon_customization.office_2010_ribbon_part_count == 1
+    assert snapshot.ribbon_customization.unrecognized_ribbon_part_count == 0
+    assert snapshot.parser_warnings == ()
+
+
+def test_ribbon_customization_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_ribbon_customization_model(tmp_path / "baseline.xlsx")
+    candidate = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    renumber_ribbon_customization_relationships(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "ribbon_customization_changed" not in {change.kind for change in report.changes}
+    assert "FF027" not in {finding.rule_id for finding in report.findings}
+
+
+def test_ribbon_customization_equivalent_target_spellings_are_ignored(tmp_path) -> None:
+    baseline = make_ribbon_customization_model(tmp_path / "baseline.xlsx")
+    candidate = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    rewrite_ribbon_customization_internal_target_spelling(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "ribbon_customization_changed" not in {change.kind for change in report.changes}
+    assert "FF027" not in {finding.rule_id for finding in report.findings}
+
+
+def test_oversized_ribbon_customization_parts_remain_covered(
+    tmp_path, monkeypatch
+) -> None:
+    baseline = make_ribbon_customization_model(tmp_path / "baseline.xlsx")
+    candidate = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    change_ribbon_customization_callback(candidate)
+    monkeypatch.setattr("formulafence.workbook._RIBBON_CUSTOM_UI_MAX_PART_BYTES", 1)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+
+    assert baseline_snapshot.ribbon_customization.unrecognized_ribbon_part_count == 1
+    assert any(
+        "oversized RibbonX customization part" in warning
+        for warning in baseline_snapshot.parser_warnings
+    )
+    assert "FF027" in {finding.rule_id for finding in report.findings}
+
+
+def test_ribbon_customization_part_count_budget_remains_covered(
+    tmp_path, monkeypatch
+) -> None:
+    workbook = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._RibbonCustomizationBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_RibbonCustomizationBudget",
+        lambda: budget_type(remaining_parts=0),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.ribbon_customization.unrecognized_ribbon_part_count == 1
+    assert any(
+        "RibbonX customization part count budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_ribbon_customization_byte_budget_remains_covered(tmp_path, monkeypatch) -> None:
+    workbook = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._RibbonCustomizationBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_RibbonCustomizationBudget",
+        lambda: budget_type(remaining_bytes=1),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.ribbon_customization.unrecognized_ribbon_part_count == 1
+    assert any(
+        "RibbonX customization part read budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_malformed_ribbon_customization_parts_fail_closed(tmp_path) -> None:
+    baseline = make_ribbon_customization_model(tmp_path / "baseline.xlsx")
+    candidate = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    corrupt_ribbon_customization_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.ribbon_customization.unrecognized_ribbon_part_count == 1
+    assert any(
+        "RibbonX customization part with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "ribbon_customization_changed" in {change.kind for change in report.changes}
+    assert "FF027" in {finding.rule_id for finding in report.findings}
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

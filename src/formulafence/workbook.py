@@ -53,6 +53,7 @@ from formulafence.models import (
     ProtectionOpaqueMetadataSnapshot,
     QueryTableRefreshSnapshot,
     RangeDependency,
+    RibbonCustomizationSnapshot,
     SheetProtectionSnapshot,
     SheetSnapshot,
     TableSnapshot,
@@ -119,6 +120,21 @@ _XLM_MACRO_SHEET_RELATIONSHIPS = {
 _XLM_MACRO_SHEET_CONTENT_TYPES = {
     "application/vnd.ms-excel.macrosheet+xml": "macro",
     "application/vnd.ms-excel.intlmacrosheet+xml": "international",
+}
+_RIBBON_CUSTOM_UI_PART_PATTERN = re.compile(
+    r"^customUI/[^/]+\.xml$", re.IGNORECASE
+)
+_RIBBON_CUSTOM_UI_MAX_PART_BYTES = 16 * 1024 * 1024
+_RIBBON_CUSTOM_UI_TOTAL_MAX_BYTES = 32 * 1024 * 1024
+_RIBBON_CUSTOM_UI_TOTAL_MAX_COUNT = 8
+_RIBBON_CUSTOM_UI_NAMESPACES = {
+    "http://schemas.microsoft.com/office/2006/01/customui": "2007",
+    "http://schemas.microsoft.com/office/2007/10/customui": "2010",
+    "http://schemas.microsoft.com/office/2009/07/customui": "2010",
+}
+_RIBBON_CUSTOM_UI_RELATIONSHIPS = {
+    "http://schemas.microsoft.com/office/2006/relationships/ui/extensibility": "2007",
+    "http://schemas.microsoft.com/office/2007/relationships/ui/extensibility": "2010",
 }
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 
@@ -190,6 +206,14 @@ class _XlmMacroMetadata:
 
 
 @dataclass(frozen=True)
+class _RibbonCustomizationMetadata:
+    """Raw Office RibbonX evidence retained outside the workbook reader."""
+
+    customization: RibbonCustomizationSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _XlmRawRelationship:
     """One private package relationship, including the original target material."""
 
@@ -209,6 +233,36 @@ class _XlmRawRelationship:
             self.target_mode.casefold(),
             target,
         )
+
+
+@dataclass(frozen=True)
+class _RibbonRawRelationship:
+    """One private RibbonX package relationship and its canonical target."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return relationship semantics while ignoring arbitrary identifiers."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        return (
+            self.relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
+@dataclass
+class _RibbonCustomizationBudget:
+    """Bound total custom-UI bytes read across one RibbonX package scan."""
+
+    remaining_bytes: int = _RIBBON_CUSTOM_UI_TOTAL_MAX_BYTES
+    remaining_parts: int = _RIBBON_CUSTOM_UI_TOTAL_MAX_COUNT
 
 
 @dataclass
@@ -246,6 +300,22 @@ class _XlmMacroSheetInspection:
     program_signature: str | None = None
     relationship_signature: str | None = None
     related_part_payload_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _RibbonPartInspection:
+    """Private parsed state for one RibbonX customization part."""
+
+    member: str
+    office_2010: bool = False
+    control_count: int = 0
+    callback_attribute_count: int = 0
+    action_callback_count: int = 0
+    image_relationship_count: int = 0
+    external_relationship_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
+    relationship_signature: str | None = None
 
 
 @dataclass(frozen=True)
@@ -4943,6 +5013,472 @@ def _xlm_macro_metadata(path: Path) -> _XlmMacroMetadata:
     return _XlmMacroMetadata(snapshot, tuple(sorted(warnings)))
 
 
+def _ribbon_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+    missing_is_warning: bool = False,
+) -> tuple[_RibbonRawRelationship, ...]:
+    """Read RibbonX relationships without following any package target."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        if missing_is_warning:
+            warnings.add(
+                "FormulaFence could not locate "
+                f"{context} relationships while inspecting RibbonX customization; "
+                "affected controls may be incomplete."
+            )
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for RibbonX customization ({type(error).__name__}); "
+            "affected controls were not compared."
+        )
+        return ()
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting RibbonX customization; "
+            "affected controls were not compared."
+        )
+        return ()
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_RibbonRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _RibbonRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting RibbonX "
+            "customization; affected controls may be incomplete."
+        )
+    return tuple(relationships)
+
+
+def _ribbon_relationship_signature(
+    relationships: tuple[_RibbonRawRelationship, ...],
+) -> str | None:
+    """Fingerprint RibbonX relationship semantics without identifier churn."""
+    material = sorted(relationship.semantic_key() for relationship in relationships)
+    return _private_external_data_signature(
+        tuple(
+            (f"relationship:{index}", repr(relationship))
+            for index, relationship in enumerate(material)
+        )
+    )
+
+
+def _ribbon_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+) -> tuple[object, ...]:
+    """Canonicalize RibbonX XML while resolving private relationship identifiers.
+
+    A custom UI part can point to embedded images using a writer-chosen
+    relationship id. Resolving an ``r:id`` or an ``image`` value only when it
+    matches a known relationship keeps ID-only package rewrites out of diffs,
+    without hiding a changed relationship endpoint.
+    """
+    relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        is_relationship_reference = attribute == relationship_attribute or (
+            _xml_local_name(attribute) == "image" and value in relationship_semantics
+        )
+        if is_relationship_reference:
+            relationship = relationship_semantics.get(value)
+            resolved = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+        else:
+            attributes.append((_xml_display_name(attribute), value))
+    children = tuple(_ribbon_fragment(child, relationship_semantics) for child in element)
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+    )
+
+
+def _ribbon_control_counts(root: ElementTree.Element) -> tuple[int, int, int]:
+    """Count RibbonX controls and callback attributes without retaining names."""
+    control_count = 0
+    callback_attribute_count = 0
+    action_callback_count = 0
+    control_id_attributes = {"id", "idMso", "idQ"}
+    for element in root.iter():
+        if element is not root and any(
+            _xml_local_name(attribute) in control_id_attributes
+            for attribute in element.attrib
+        ):
+            control_count += 1
+        for attribute in element.attrib:
+            name = _xml_local_name(attribute)
+            if name.startswith(("on", "get")) or name == "loadImage":
+                callback_attribute_count += 1
+            if name == "onAction":
+                action_callback_count += 1
+    return control_count, callback_attribute_count, action_callback_count
+
+
+def _ribbon_part_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _RibbonCustomizationBudget,
+) -> _RibbonPartInspection:
+    """Fingerprint one bounded RibbonX part and its image relationships privately."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded RibbonX customization part count budget; "
+            "the affected controls have a coverage gap."
+        )
+        return _RibbonPartInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (("part-count-budget-exhausted", member),)
+            ),
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a RibbonX customization package part; "
+            "the affected controls were not compared."
+        )
+        return _RibbonPartInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (("missing-member", member),)
+            ),
+        )
+    if info.file_size > _RIBBON_CUSTOM_UI_MAX_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized RibbonX customization part; "
+            "the affected controls have a coverage gap."
+        )
+        return _RibbonPartInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            ),
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded RibbonX customization part read budget; "
+            "the affected controls have a coverage gap."
+        )
+        return _RibbonPartInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (
+                    ("read-budget-exhausted", member),
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            ),
+        )
+    budget.remaining_bytes -= info.file_size
+    payload: bytes | None = None
+    try:
+        payload = archive.read(member)
+        root = _xml_root_from_payload(payload)
+    except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a RibbonX customization XML part "
+            f"({type(error).__name__}); the affected controls were not compared."
+        )
+        signature = (
+            _private_payload_signature(payload)
+            if payload is not None
+            else _private_external_data_signature(
+                (
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            )
+        )
+        return _RibbonPartInspection(member=member, definition_signature=signature)
+
+    namespace = _xml_namespace(root.tag)
+    if (
+        _xml_local_name(root.tag) != "customUI"
+        or namespace not in _RIBBON_CUSTOM_UI_NAMESPACES
+    ):
+        warnings.add(
+            "FormulaFence found a RibbonX customization part with an unexpected root; "
+            "the affected controls were not compared."
+        )
+        return _RibbonPartInspection(
+            member=member,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    relationships = _ribbon_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="RibbonX customization",
+    )
+    relationships_by_id: dict[str, list[_RibbonRawRelationship]] = defaultdict(list)
+    for relationship in relationships:
+        if relationship.relationship_id:
+            relationships_by_id[relationship.relationship_id].append(relationship)
+        else:
+            warnings.add(
+                "FormulaFence found a RibbonX customization relationship without an id; "
+                "the affected controls have a coverage gap."
+            )
+    relationship_semantics: dict[str, tuple[str, str, str]] = {}
+    for relationship_id, matches in relationships_by_id.items():
+        semantics = sorted(match.semantic_key() for match in matches)
+        if len(semantics) > 1:
+            warnings.add(
+                "FormulaFence found duplicate RibbonX customization relationship ids; "
+                "the affected controls have a coverage gap."
+            )
+        relationship_semantics[relationship_id] = semantics[0]
+
+    referenced_relationship_ids = {
+        value
+        for element in root.iter()
+        if (value := element.get(f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id")) is not None
+    }
+    if referenced_relationship_ids - set(relationship_semantics):
+        warnings.add(
+            "FormulaFence found a RibbonX customization relationship reference without a "
+            "matching relationship; the affected controls have a coverage gap."
+        )
+    control_count, callback_attribute_count, action_callback_count = _ribbon_control_counts(
+        root
+    )
+    try:
+        definition_signature = _private_external_data_signature(
+            (("ribbon", repr(_ribbon_fragment(root, relationship_semantics))),)
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested RibbonX "
+            "customization part; the affected controls were not compared."
+        )
+        definition_signature = _private_payload_signature(payload)
+        inspected = False
+    else:
+        inspected = True
+    return _RibbonPartInspection(
+        member=member,
+        office_2010=_RIBBON_CUSTOM_UI_NAMESPACES[namespace] == "2010",
+        control_count=control_count,
+        callback_attribute_count=callback_attribute_count,
+        action_callback_count=action_callback_count,
+        image_relationship_count=sum(
+            relationship.relationship_type.rsplit("/", maxsplit=1)[-1].casefold()
+            == "image"
+            for relationship in relationships
+        ),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in relationships
+        ),
+        inspected=inspected,
+        definition_signature=definition_signature,
+        relationship_signature=_ribbon_relationship_signature(relationships),
+    )
+
+
+def _ribbon_customization_metadata(path: Path) -> _RibbonCustomizationMetadata:
+    """Inspect Office RibbonX callbacks before the workbook reader omits the parts."""
+    warnings: set[str] = set()
+    default = RibbonCustomizationSnapshot()
+    try:
+        with ZipFile(path) as archive:
+            package_relationships = _ribbon_raw_relationships(
+                archive,
+                "",
+                warnings,
+                context="package",
+                missing_is_warning=True,
+            )
+            ribbon_relationships = tuple(
+                relationship
+                for relationship in package_relationships
+                if relationship.relationship_type in _RIBBON_CUSTOM_UI_RELATIONSHIPS
+            )
+            candidate_kinds: dict[str, set[str]] = defaultdict(set)
+            declaration_entries: list[tuple[str, str]] = []
+            declared_targets: set[str] = set()
+            unresolved_declaration_count = 0
+            relationships_by_id: dict[str, list[_RibbonRawRelationship]] = defaultdict(list)
+            for relationship in ribbon_relationships:
+                kind = _RIBBON_CUSTOM_UI_RELATIONSHIPS[relationship.relationship_type]
+                declaration_entries.append(
+                    ("package-relationship", repr((kind, relationship.semantic_key())))
+                )
+                if relationship.relationship_id:
+                    relationships_by_id[relationship.relationship_id].append(relationship)
+                else:
+                    warnings.add(
+                        "FormulaFence found a RibbonX package relationship without an id; "
+                        "the affected controls have a coverage gap."
+                    )
+                if relationship.safe_target is None:
+                    warnings.add(
+                        "FormulaFence found a RibbonX package relationship without a safe "
+                        "internal customization target; the affected controls were not compared."
+                    )
+                    unresolved_declaration_count += 1
+                    continue
+                candidate_kinds[relationship.safe_target].add(kind)
+                declared_targets.add(relationship.safe_target)
+
+            if any(len(matches) > 1 for matches in relationships_by_id.values()):
+                warnings.add(
+                    "FormulaFence found duplicate RibbonX package relationship ids; "
+                    "the affected controls have a coverage gap."
+                )
+
+            declared_version_counts: dict[str, int] = defaultdict(int)
+            for relationship in ribbon_relationships:
+                declared_version_counts[
+                    _RIBBON_CUSTOM_UI_RELATIONSHIPS[relationship.relationship_type]
+                ] += 1
+            if any(count > 1 for count in declared_version_counts.values()):
+                warnings.add(
+                    "FormulaFence found repeated RibbonX package declarations for one "
+                    "customization version; the affected controls have a coverage gap."
+                )
+
+            discovered_members = {
+                entry.filename
+                for entry in archive.infolist()
+                if _RIBBON_CUSTOM_UI_PART_PATTERN.fullmatch(entry.filename)
+            }
+            for member in discovered_members:
+                candidate_kinds.setdefault(member, set())
+                if member not in declared_targets:
+                    warnings.add(
+                        "FormulaFence found a RibbonX customization package part not declared "
+                        "by the package; the affected controls have a coverage gap."
+                    )
+
+            inspections: list[_RibbonPartInspection] = []
+            unrecognized_members: set[str] = set()
+            customization_budget = _RibbonCustomizationBudget()
+            for member in sorted(candidate_kinds, key=str.casefold):
+                kinds = candidate_kinds[member]
+                declaration_entries.append(
+                    ("package-part", repr((member, tuple(sorted(kinds)))))
+                )
+                if len(kinds) != 1:
+                    warnings.add(
+                        "FormulaFence could not identify one RibbonX customization part's "
+                        "declared version; the affected controls have a coverage gap."
+                    )
+                    unrecognized_members.add(member)
+                inspection = _ribbon_part_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    customization_budget,
+                )
+                inspections.append(inspection)
+                if not inspection.inspected:
+                    unrecognized_members.add(member)
+                    continue
+                declared_kind = next(iter(kinds), None)
+                inspected_kind = "2010" if inspection.office_2010 else "2007"
+                if declared_kind is not None and declared_kind != inspected_kind:
+                    warnings.add(
+                        "FormulaFence found a RibbonX customization declaration whose version "
+                        "does not match its XML root; the affected controls have a coverage gap."
+                    )
+                    unrecognized_members.add(member)
+
+            def aggregate_signature(attribute: str) -> str | None:
+                material = sorted(
+                    (inspection.member, value)
+                    for inspection in inspections
+                    if (value := getattr(inspection, attribute)) is not None
+                )
+                return _private_external_data_signature(tuple(material))
+
+            declaration_entries.sort()
+            snapshot = RibbonCustomizationSnapshot(
+                declared_ribbon_part_count=len(ribbon_relationships),
+                ribbon_part_count=len(candidate_kinds),
+                office_2010_ribbon_part_count=sum(
+                    inspection.office_2010 for inspection in inspections
+                ),
+                unrecognized_ribbon_part_count=(
+                    len(unrecognized_members) + unresolved_declaration_count
+                ),
+                control_count=sum(inspection.control_count for inspection in inspections),
+                callback_attribute_count=sum(
+                    inspection.callback_attribute_count for inspection in inspections
+                ),
+                action_callback_count=sum(
+                    inspection.action_callback_count for inspection in inspections
+                ),
+                image_relationship_count=sum(
+                    inspection.image_relationship_count for inspection in inspections
+                ),
+                external_relationship_count=sum(
+                    inspection.external_relationship_count for inspection in inspections
+                ),
+                declaration_signature=_private_external_data_signature(
+                    tuple(declaration_entries)
+                ),
+                definition_signature=aggregate_signature("definition_signature"),
+                relationship_signature=aggregate_signature("relationship_signature"),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _RibbonCustomizationMetadata(
+            default,
+            (
+                "FormulaFence could not inspect RibbonX customization OOXML "
+                f"({type(error).__name__}); affected controls were not compared.",
+            ),
+        )
+    return _RibbonCustomizationMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _dynamic_metadata_indexes(archive: ZipFile) -> set[int]:
     """Return the one-based cell-metadata indexes marked as dynamic arrays."""
     try:
@@ -5848,6 +6384,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         )
 
     xlm_macro_metadata = _xlm_macro_metadata(source)
+    ribbon_customization_metadata = _ribbon_customization_metadata(source)
     try:
         with warnings.catch_warnings(record=True) as caught_warnings:
             warnings.simplefilter("always")
@@ -5863,6 +6400,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         raise WorkbookLoadError(f"Could not read workbook {source}: {error}") from error
     parser_warnings = {str(warning.message) for warning in caught_warnings}
     parser_warnings.update(xlm_macro_metadata.warnings)
+    parser_warnings.update(ribbon_customization_metadata.warnings)
     has_array_formulas = any(
         _is_array_formula(cell)
         for worksheet in workbook.worksheets
@@ -6069,6 +6607,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         pivot_cache_refresh_controls=external_data_metadata.pivot_caches,
         external_link_packages=external_data_metadata.external_link_packages,
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
+        ribbon_customization=ribbon_customization_metadata.customization,
         power_query=external_data_metadata.power_query,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
@@ -6131,6 +6670,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         ],
         "external_link_packages": snapshot.external_link_packages.profile_dict(),
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
+        "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
         "defined_names": sorted(snapshot.defined_names),
         "calculation_settings": snapshot.calculation_settings,
@@ -6145,6 +6685,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             ],
             "has_vba": snapshot.macro_hash is not None,
             "has_xlm_macro_sheets": snapshot.xlm_macro_sheets.present,
+            "has_ribbon_customization": snapshot.ribbon_customization.present,
             "parser_warnings": list(snapshot.parser_warnings),
             "unresolved_reference_cells": [
                 {

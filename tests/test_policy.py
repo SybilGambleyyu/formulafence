@@ -11,6 +11,7 @@ from .helpers import (
     change_external_data_refresh_controls,
     change_external_link_package_controls,
     change_power_query_controls,
+    change_ribbon_customization_callback,
     change_xlm_macro_sheet_controls,
     make_conditional_formatting_model,
     make_data_validation_model,
@@ -20,6 +21,7 @@ from .helpers import (
     make_model,
     make_power_query_model,
     make_protection_model,
+    make_ribbon_customization_model,
     make_table_model,
     make_three_d_model,
     make_xlm_macro_sheet_model,
@@ -268,6 +270,19 @@ def test_policy_can_block_xlm_macro_sheet_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP026"}
+
+
+def test_policy_can_block_ribbon_customization_changes(tmp_path) -> None:
+    baseline = make_ribbon_customization_model(tmp_path / "baseline.xlsx")
+    candidate = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    change_ribbon_customization_callback(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_ribbon_customization_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP027"}
 
 
 def test_policy_can_block_power_query_changes(tmp_path) -> None:

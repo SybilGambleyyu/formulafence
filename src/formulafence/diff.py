@@ -25,6 +25,7 @@ from formulafence.models import (
     ProtectionCredentialSnapshot,
     ProtectionOpaqueMetadataSnapshot,
     QueryTableRefreshSnapshot,
+    RibbonCustomizationSnapshot,
     WorkbookSnapshot,
     XlmMacroSheetSnapshot,
 )
@@ -1025,6 +1026,35 @@ def _workbook_control_changes(
                 "FF026",
                 "critical",
                 "Excel 4.0 / XLM macro-sheet controls changed.",
+                details=details,
+            )
+        )
+    if before.ribbon_customization != after.ribbon_customization:
+        old_ribbon: RibbonCustomizationSnapshot = before.ribbon_customization
+        new_ribbon: RibbonCustomizationSnapshot = after.ribbon_customization
+        details = {
+            "before": old_ribbon.to_dict(),
+            "after": new_ribbon.to_dict(),
+        }
+        if old_ribbon.declaration_signature != new_ribbon.declaration_signature:
+            details["package_binding_changed"] = True
+        if old_ribbon.definition_signature != new_ribbon.definition_signature:
+            details["ribbon_definition_material_changed"] = True
+        if old_ribbon.relationship_signature != new_ribbon.relationship_signature:
+            details["image_relationships_changed"] = True
+        changes.append(
+            Change(
+                "ribbon_customization_changed",
+                None,
+                "critical",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF027",
+                "critical",
+                "Office RibbonX customization controls changed.",
                 details=details,
             )
         )

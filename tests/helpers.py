@@ -1697,6 +1697,324 @@ def corrupt_xlm_macro_sheet_root(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".xlm-macro-sheet-corrupt.tmp.xlsx")
 
 
+def make_ribbon_customization_model(
+    path: Path,
+    *,
+    office_2010: bool = False,
+    compatibility_namespace: bool = False,
+) -> Path:
+    """Create a harmless raw RibbonX fixture outside ordinary workbook XML.
+
+    The callback names and labels are synthetic private material. The fixture
+    is never opened by Office; FormulaFence only reads its bounded package
+    parts before the workbook reader can omit them.
+    """
+    make_model(path)
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    document_relationships = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    )
+    if compatibility_namespace and not office_2010:
+        raise ValueError("RibbonX compatibility namespace requires office_2010=True")
+    custom_ui_namespace = (
+        "http://schemas.microsoft.com/office/2007/10/customui"
+        if compatibility_namespace
+        else (
+            "http://schemas.microsoft.com/office/2009/07/customui"
+            if office_2010
+            else "http://schemas.microsoft.com/office/2006/01/customui"
+        )
+    )
+    custom_ui_member = (
+        "customUI/customUI14.xml" if office_2010 else "customUI/customUI.xml"
+    )
+    customization_relationship = (
+        "http://schemas.microsoft.com/office/2007/relationships/ui/extensibility"
+        if office_2010
+        else "http://schemas.microsoft.com/office/2006/relationships/ui/extensibility"
+    )
+    image_relationship = f"{document_relationships}/image"
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        namespace = root.tag[1:].split("}", maxsplit=1)[0]
+        if namespace in {package_relationships, custom_ui_namespace}:
+            ElementTree.register_namespace("", namespace)
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root_relationships = ElementTree.fromstring(contents["_rels/.rels"])
+        ElementTree.SubElement(
+            root_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceRibbonCustomization",
+                "Type": customization_relationship,
+                "Target": f"/{custom_ui_member}",
+            },
+        )
+        contents["_rels/.rels"] = serialize(root_relationships)
+
+        custom_ui = ElementTree.Element(
+            f"{{{custom_ui_namespace}}}customUI",
+            {"onLoad": "PrivateBaselineRibbonLoad"},
+        )
+        ribbon = ElementTree.SubElement(custom_ui, f"{{{custom_ui_namespace}}}ribbon")
+        tabs = ElementTree.SubElement(ribbon, f"{{{custom_ui_namespace}}}tabs")
+        tab = ElementTree.SubElement(
+            tabs,
+            f"{{{custom_ui_namespace}}}tab",
+            {"id": "FenceTab", "label": "private baseline ribbon tab"},
+        )
+        group = ElementTree.SubElement(
+            tab,
+            f"{{{custom_ui_namespace}}}group",
+            {"id": "FenceGroup", "label": "private baseline ribbon group"},
+        )
+        ElementTree.SubElement(
+            group,
+            f"{{{custom_ui_namespace}}}button",
+            {
+                "id": "FenceAction",
+                "label": "private baseline ribbon action",
+                "onAction": "PrivateBaselineRibbonAction",
+                "image": "rIdFenceRibbonImage",
+            },
+        )
+        contents[custom_ui_member] = serialize(custom_ui)
+
+        image_member = "customUI/images/private-baseline-ribbon.png"
+        part_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            part_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceRibbonImage",
+                "Type": image_relationship,
+                "Target": "images/private-baseline-ribbon.png",
+            },
+        )
+        relationship_member = (
+            "customUI/_rels/"
+            f"{custom_ui_member.rsplit('/', maxsplit=1)[-1]}.rels"
+        )
+        contents[relationship_member] = serialize(part_relationships)
+        contents[image_member] = b"private baseline RibbonX image payload"
+
+    return _rewrite_archive(path, mutate, ".ribbon-customization.tmp.xlsx")
+
+
+def change_ribbon_customization_callback(path: Path) -> Path:
+    """Change only a private RibbonX callback name."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        custom_ui_member = next(
+            name
+            for name in contents
+            if name.startswith("customUI/")
+            and name.endswith(".xml")
+            and "/_rels/" not in name
+        )
+        custom_ui = ElementTree.fromstring(contents[custom_ui_member])
+        button = next(
+            (
+                element
+                for element in custom_ui.iter()
+                if element.tag.rsplit("}", maxsplit=1)[-1] == "button"
+            ),
+            None,
+        )
+        if button is None:
+            raise ValueError("Fixture does not contain a RibbonX button")
+        button.set("onAction", "PrivateCandidateRibbonAction")
+        contents[custom_ui_member] = ElementTree.tostring(
+            custom_ui,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".ribbon-callback-change.tmp.xlsx")
+
+
+def change_ribbon_customization_controls(path: Path) -> Path:
+    """Change private RibbonX callbacks, labels, and image relationship material."""
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        custom_ui_member = next(
+            name
+            for name in contents
+            if name.startswith("customUI/")
+            and name.endswith(".xml")
+            and "/_rels/" not in name
+        )
+        custom_ui = ElementTree.fromstring(contents[custom_ui_member])
+        button = next(
+            (
+                element
+                for element in custom_ui.iter()
+                if element.tag.rsplit("}", maxsplit=1)[-1] == "button"
+            ),
+            None,
+        )
+        if button is None:
+            raise ValueError("Fixture does not contain a RibbonX button")
+        custom_ui.set("onLoad", "PrivateCandidateRibbonLoad")
+        button.set("label", "private candidate ribbon action")
+        button.set("onAction", "PrivateCandidateRibbonAction")
+        contents[custom_ui_member] = ElementTree.tostring(
+            custom_ui,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationship_member = (
+            "customUI/_rels/"
+            f"{custom_ui_member.rsplit('/', maxsplit=1)[-1]}.rels"
+        )
+        relationships = ElementTree.fromstring(contents[relationship_member])
+        relationship = next(
+            (
+                item
+                for item in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if item.get("Id") == "rIdFenceRibbonImage"
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain a RibbonX image relationship")
+        relationship.set("Target", "images/private-candidate-ribbon.png")
+        contents[relationship_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["customUI/images/private-candidate-ribbon.png"] = (
+            b"private candidate RibbonX image payload"
+        )
+
+    return _rewrite_archive(path, mutate, ".ribbon-customization-change.tmp.xlsx")
+
+
+def renumber_ribbon_customization_relationships(path: Path) -> Path:
+    """Rewrite RibbonX package IDs while retaining their semantic bindings."""
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    replacements = {
+        "rIdFenceRibbonCustomization": "rIdFenceRenumberedRibbonCustomization",
+        "rIdFenceRibbonImage": "rIdFenceRenumberedRibbonImage",
+    }
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root_relationships = ElementTree.fromstring(contents["_rels/.rels"])
+        for relationship in root_relationships.findall(
+            f"{{{package_relationships}}}Relationship"
+        ):
+            if replacement := replacements.get(relationship.get("Id")):
+                relationship.set("Id", replacement)
+        contents["_rels/.rels"] = ElementTree.tostring(
+            root_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        custom_ui_member = next(
+            name
+            for name in contents
+            if name.startswith("customUI/")
+            and name.endswith(".xml")
+            and "/_rels/" not in name
+        )
+        custom_ui = ElementTree.fromstring(contents[custom_ui_member])
+        for element in custom_ui.iter():
+            if element.get("image") == "rIdFenceRibbonImage":
+                element.set("image", "rIdFenceRenumberedRibbonImage")
+        contents[custom_ui_member] = ElementTree.tostring(
+            custom_ui,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationship_member = (
+            "customUI/_rels/"
+            f"{custom_ui_member.rsplit('/', maxsplit=1)[-1]}.rels"
+        )
+        relationships = ElementTree.fromstring(contents[relationship_member])
+        for relationship in relationships.findall(
+            f"{{{package_relationships}}}Relationship"
+        ):
+            if replacement := replacements.get(relationship.get("Id")):
+                relationship.set("Id", replacement)
+        contents[relationship_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".ribbon-customization-renumber.tmp.xlsx")
+
+
+def rewrite_ribbon_customization_internal_target_spelling(path: Path) -> Path:
+    """Rewrite a RibbonX package target using an equivalent relative path."""
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["_rels/.rels"])
+        customization = next(
+            (
+                relationship
+                for relationship in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if relationship.get("Type", "").endswith("/ui/extensibility")
+            ),
+            None,
+        )
+        if customization is None:
+            raise ValueError("Fixture does not contain a RibbonX package declaration")
+        customization.set("Target", "./customUI/../customUI/customUI.xml")
+        contents["_rels/.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".ribbon-customization-target.tmp.xlsx")
+
+
+def corrupt_ribbon_customization_root(path: Path) -> Path:
+    """Replace the RibbonX root with an unexpected element for coverage tests."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        custom_ui_member = next(
+            name
+            for name in contents
+            if name.startswith("customUI/")
+            and name.endswith(".xml")
+            and "/_rels/" not in name
+        )
+        custom_ui = ElementTree.fromstring(contents[custom_ui_member])
+        namespace = custom_ui.tag[1:].split("}", maxsplit=1)[0]
+        custom_ui.tag = f"{{{namespace}}}notCustomUI"
+        contents[custom_ui_member] = ElementTree.tostring(
+            custom_ui,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".ribbon-customization-corrupt.tmp.xlsx")
+
+
 def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Path:
     """Create a workbook with operational protection and sparse style controls."""
     workbook = Workbook()

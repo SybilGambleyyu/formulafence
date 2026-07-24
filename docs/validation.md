@@ -362,6 +362,39 @@ that none entered JSON, Markdown, or SARIF. This validates static comparison
 and redaction—not M execution, connection refresh, source trust, or returned
 data correctness.
 
+## Office RibbonX custom UI controls and redaction — 2026-07-24
+
+FormulaFence 0.22.0 was validated with controlled raw-OOXML `.xlsx` packages
+using the documented root-package Ribbon Extensibility relationship to a
+`customUI` part. Each fixture had a custom tab, group, and button; an `onLoad`
+callback; an `onAction` callback; and one explicit image relationship. The
+fixture was never opened in Office, and FormulaFence only read its bounded
+package parts before the ordinary workbook reader loaded the workbook.
+
+A change to **only** the button's private `onAction` callback emitted `FF027`
+with a private `ribbon_definition_material_changed` flag even though every
+public control and callback count stayed the same. This is the exact blind
+spot the guard is intended to close: a workbook UI callback can change without
+a worksheet-cell or VBA-payload diff. Synthetic callback names, labels, XML,
+image target, and image payload markers were verified absent from JSON,
+Markdown, and SARIF output. `no_ribbon_customization_changes` added `FFP027`.
+
+The controlled suite also covered the 2006 schema plus the 2009/07 and
+2007/10 Office 2010-era roots, an image-target change, relationship-ID-only
+rewrites, and equivalent internal target spellings. Identifier and spelling
+rewrites produced no RibbonX finding; a changed image relationship produced
+`FF027`. An unexpected root or a deliberately lowered part-size limit produced
+an explicit coverage warning and remained diff-visible. Separate lowered
+aggregate byte and part-count budgets also left an explicit coverage warning.
+Production reads are bounded to 16 MiB per part, 32 MiB per workbook, and
+eight parts. This validates static
+comparison and redaction—not callback execution, Office UI rendering, image
+decoding, source trust, or runtime macro behavior. The fixture shape follows
+Microsoft's [Ribbon Extensibility Part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-customui/52faf7b6-fecc-48d9-96db-ee80a631a5ac)
+and [Ribbon and Backstage Customizations
+part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-customui2/452a58ae-cb0a-4926-83f8-fb1cbaa6114c)
+specifications.
+
 ## Excel 4.0 / XLM macro-sheet controls and redaction — 2026-07-24
 
 FormulaFence 0.21.0 was validated with a controlled, macro-enabled OOXML

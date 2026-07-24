@@ -921,6 +921,52 @@ class XlmMacroSheetSnapshot:
 
 
 @dataclass(frozen=True)
+class RibbonCustomizationSnapshot:
+    """Safe aggregate of workbook-scoped Office RibbonX customization parts.
+
+    Ribbon XML can bind controls to workbook callbacks while remaining outside
+    the VBA project. Private signatures retain complete package and callback
+    material for comparison, while ``to_dict`` intentionally exposes only
+    structural counts.
+    """
+
+    declared_ribbon_part_count: int = 0
+    ribbon_part_count: int = 0
+    office_2010_ribbon_part_count: int = 0
+    unrecognized_ribbon_part_count: int = 0
+    control_count: int = 0
+    callback_attribute_count: int = 0
+    action_callback_count: int = 0
+    image_relationship_count: int = 0
+    external_relationship_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(self.declared_ribbon_part_count or self.ribbon_part_count)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe RibbonX inventory without names, labels, or callbacks."""
+        return {
+            "present": self.present,
+            "declared_ribbon_part_count": self.declared_ribbon_part_count,
+            "ribbon_part_count": self.ribbon_part_count,
+            "office_2010_ribbon_part_count": self.office_2010_ribbon_part_count,
+            "unrecognized_ribbon_part_count": self.unrecognized_ribbon_part_count,
+            "control_count": self.control_count,
+            "callback_attribute_count": self.callback_attribute_count,
+            "action_callback_count": self.action_callback_count,
+            "image_relationship_count": self.image_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class PowerQueryPermissionControlsSnapshot:
     """Safe aggregate controls from Data Mashup permission documents."""
 
@@ -1195,6 +1241,9 @@ class WorkbookSnapshot:
     xlm_macro_sheets: XlmMacroSheetSnapshot = field(
         default_factory=XlmMacroSheetSnapshot
     )
+    ribbon_customization: RibbonCustomizationSnapshot = field(
+        default_factory=RibbonCustomizationSnapshot
+    )
     power_query: PowerQuerySnapshot = field(default_factory=PowerQuerySnapshot)
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -1287,6 +1336,11 @@ class WorkbookSnapshot:
                 self.xlm_macro_sheets.fingerprinted_related_part_count
             ),
             "has_xlm_macro_sheets": self.xlm_macro_sheets.present,
+            "ribbon_customization_part_count": self.ribbon_customization.ribbon_part_count,
+            "ribbon_callback_attribute_count": (
+                self.ribbon_customization.callback_attribute_count
+            ),
+            "has_ribbon_customization": self.ribbon_customization.present,
             "power_query_mashup_count": self.power_query.mashup_count,
             "power_query_formula_document_count": self.power_query.formula_document_count,
             "power_query_metadata_item_count": self.power_query.metadata_item_count,

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.0 — 2026-07-24
+
+- Inspect Office RibbonX custom-UI package parts directly from their root
+  declarations, including the documented 2006 and Office 2010-era package
+  forms. Private fingerprints retain complete custom-UI XML and direct
+  relationship material without serializing control IDs, labels, callback
+  names, image targets, or XML content.
+- Emit `FF027` for RibbonX package, callback/control, or relationship changes
+  and add the fail-closed `no_ribbon_customization_changes` policy rule
+  (`FFP027`). Writer-chosen relationship IDs and equivalent internal target
+  spellings are normalized away, while malformed, oversized, unbound,
+  version-mismatched, or otherwise unrecognized parts remain visible coverage
+  warnings. Reads are bounded to 16 MiB per part, 32 MiB per workbook, and
+  eight parts. FormulaFence never invokes RibbonX callbacks, follows external
+  targets, or parses image payloads.
+
 ## 0.21.0 — 2026-07-24
 
 - Extend the XLM macro-sheet control boundary to direct internal related parts,

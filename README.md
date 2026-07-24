@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.21.0/formulafence-0.21.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.22.0/formulafence-0.22.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -63,6 +63,7 @@ rules:
   no_new_broken_references: true
   no_macro_changes: true
   no_xlm_macro_sheet_changes: true
+  no_ribbon_customization_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
@@ -99,7 +100,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -288,6 +289,25 @@ coverage warning remains visible. The package shape follows Microsoft's [Macro S
 part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-offmacro/b8bee527-ef5a-4734-bb8c-6eae4166b6c9)
 and [International Macro Sheet
 part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-offmacro/450634cb-ca5a-4350-9edb-940a90707f49).
+
+FormulaFence separately inventories **Office RibbonX custom UI** package parts.
+RibbonX can bind controls to workbook callback names even when no ordinary cell
+or `vbaProject.bin` payload changes. FormulaFence reads the documented root
+package relationships and `customUI` XML for the 2006 and Office 2010-era
+schemas, privately fingerprints full control XML plus direct image
+relationships, and reports only safe part, control, callback-attribute, and
+relationship counts. A material change emits `FF027`; enable
+`no_ribbon_customization_changes` for `FFP027`. Control IDs, labels, callback
+names, XML, and image targets never enter profiles or reports. FormulaFence
+does not execute callbacks, follow external relationships, or parse image
+payloads. Custom-UI XML reads are bounded to 16 MiB per part, 32 MiB per
+workbook, and eight parts; a bound or malformed part becomes a coverage
+warning. The package forms follow Microsoft's [Ribbon Extensibility
+Part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-customui/52faf7b6-fecc-48d9-96db-ee80a631a5ac)
+and [Ribbon and Backstage Customizations
+part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-customui2/452a58ae-cb0a-4926-83f8-fb1cbaa6114c)
+specifications; its `onLoad`, `loadImage`, and `onAction` callback surface is
+documented in the [Custom UI schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-customui2/a232628d-f6fb-4630-a463-459989a68e7a).
 
 FormulaFence also inventories **Power Query Data Mashup** custom XML parts.
 It reads the documented length-prefixed container, fingerprints the embedded

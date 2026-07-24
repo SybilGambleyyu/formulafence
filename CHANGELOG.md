@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.35.0 — 2026-07-25
+
+- Inspect raw worksheet `<cols>/<col>` visibility declarations for hidden,
+  outlined, and collapsed columns without relying on a workbook reader that can
+  flatten or lose compressed column ranges. Retain column positions and effective
+  state only in private signatures; profiles, `FF036`, and SARIF expose safe
+  counts only.
+- Normalize Boolean/default and unsigned-integer spellings, equivalent range
+  segmentation, and layered column declarations by applying later *present*
+  visibility attributes in OOXML file order. A later width/style-only record
+  does not erase an existing visibility state.
+- Extend `FF036` / `no_filter_visibility_changes` (`FFP036`) to block effective
+  hidden, outlined, or collapsed column changes alongside existing filter, sort,
+  and row-visibility controls. Make malformed column bounds, attributes, child
+  markup, and bounded-update exhaustion visible coverage warnings rather than
+  silently omitting the affected controls. FormulaFence does not render
+  outlines, apply filters, calculate results, track widths/styles, or interpret
+  outline-display settings.
+
 ## 0.34.0 — 2026-07-25
 
 - Inspect modern Excel Named Sheet Views from the documented relationship-backed

@@ -22,6 +22,7 @@ from .helpers import (
     change_external_data_refresh_controls,
     change_external_link_package_controls,
     change_filter_visibility_criterion,
+    change_filter_visibility_hidden_column,
     change_filter_visibility_hidden_row,
     change_ignored_error_extension_target,
     change_ignored_error_target,
@@ -48,6 +49,7 @@ from .helpers import (
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
     corrupt_chart_definition_root,
+    corrupt_filter_visibility_column_control,
     corrupt_filter_visibility_control,
     corrupt_ignored_error_control,
     corrupt_legacy_vml_control_root,
@@ -4051,9 +4053,11 @@ def test_filter_visibility_controls_are_profiled_diffed_and_redacted(tmp_path) -
     candidate = make_filter_visibility_model(tmp_path / "candidate.xlsx")
     table_candidate = make_filter_visibility_model(tmp_path / "table-candidate.xlsx")
     row_candidate = make_filter_visibility_model(tmp_path / "row-candidate.xlsx")
+    column_candidate = make_filter_visibility_model(tmp_path / "column-candidate.xlsx")
     change_filter_visibility_criterion(candidate)
     change_table_filter_visibility_criterion(table_candidate)
     change_filter_visibility_hidden_row(row_candidate)
+    change_filter_visibility_hidden_column(column_candidate)
 
     baseline_snapshot = load_snapshot(baseline)
     profile = profile_snapshot(baseline_snapshot)
@@ -4062,6 +4066,10 @@ def test_filter_visibility_controls_are_profiled_diffed_and_redacted(tmp_path) -
     report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
     table_report = compare_snapshots(baseline_snapshot, load_snapshot(table_candidate))
     row_report = compare_snapshots(baseline_snapshot, load_snapshot(row_candidate))
+    column_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(column_candidate),
+    )
     change = next(
         change
         for change in report.changes
@@ -4070,6 +4078,7 @@ def test_filter_visibility_controls_are_profiled_diffed_and_redacted(tmp_path) -
 
     assert baseline_snapshot.summary()["filter_visibility_auto_filter_count"] == 2
     assert baseline_snapshot.summary()["filter_visibility_hidden_row_count"] == 2
+    assert baseline_snapshot.summary()["filter_visibility_hidden_column_count"] == 3
     assert baseline_snapshot.summary()["has_filter_visibility_controls"] is True
     assert profile["filter_visibility_controls"] == {
         "present": True,
@@ -4084,15 +4093,19 @@ def test_filter_visibility_controls_are_profiled_diffed_and_redacted(tmp_path) -
         "outlined_row_count": 2,
         "collapsed_row_count": 1,
         "visible_row_override_count": 1,
+        "hidden_column_count": 3,
+        "outlined_column_count": 4,
+        "collapsed_column_count": 1,
         "unrecognized_control_count": 0,
     }
     assert self_report.changes == []
     assert self_report.findings == []
-    assert "## Filter, sort, and row-visibility controls" in markdown
+    assert "## Filter, sort, and visibility controls" in markdown
     assert change.details["filter_visibility_definition_material_changed"] is True
     assert "FF036" in {finding.rule_id for finding in report.findings}
     assert "FF036" in {finding.rule_id for finding in table_report.findings}
     assert "FF036" in {finding.rule_id for finding in row_report.findings}
+    assert "FF036" in {finding.rule_id for finding in column_report.findings}
 
     rendered_artifacts = (
         json.dumps(profile),
@@ -4107,6 +4120,8 @@ def test_filter_visibility_controls_are_profiled_diffed_and_redacted(tmp_path) -
         "PRIVATE-TABLE-SEGMENT",
         "PRIVATE-SORT-LIST",
         "C2:C5",
+        "outlineLevel",
+        "<col",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
 
@@ -4135,7 +4150,7 @@ def test_filter_visibility_malformed_control_fails_closed(tmp_path) -> None:
 
     assert malformed_snapshot.filter_visibility_controls.unrecognized_control_count == 1
     assert any(
-        "malformed or unsupported filter, sort, or row-visibility" in warning
+        "malformed or unsupported filter, sort, or visibility" in warning
         for warning in malformed_snapshot.parser_warnings
     )
     assert {"FF010", "FF036"} <= {finding.rule_id for finding in report.findings}
@@ -4149,13 +4164,38 @@ def test_filter_visibility_malformed_control_fails_closed(tmp_path) -> None:
     assert all("4294967296" not in artifact for artifact in rendered_artifacts)
 
 
+def test_filter_visibility_malformed_column_control_fails_closed(tmp_path) -> None:
+    baseline = make_filter_visibility_model(tmp_path / "baseline.xlsx")
+    malformed = make_filter_visibility_model(tmp_path / "malformed.xlsx")
+    corrupt_filter_visibility_column_control(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.filter_visibility_controls.unrecognized_control_count == 1
+    assert any(
+        "malformed or unsupported filter, sort, or visibility" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF036"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("16385" not in artifact for artifact in rendered_artifacts)
+
+
 def test_filter_visibility_free_workbook_has_no_inventory(tmp_path) -> None:
     snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
 
     assert snapshot.filter_visibility_controls.present is False
     assert snapshot.filter_visibility_controls.worksheet_auto_filter_count == 0
     assert not any(
-        "filter, sort, or row-visibility" in warning
+        "filter, sort, or visibility" in warning
         for warning in snapshot.parser_warnings
     )
 

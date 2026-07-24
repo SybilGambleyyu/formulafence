@@ -5,6 +5,44 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel column visibility — 2026-07-25
+
+FormulaFence 0.35.0 was validated with controlled raw-OOXML `.xlsx` packages
+containing a hidden/outlined column range, a width-only range layered over it,
+a later explicit visible/outlined override, and one collapsed-outline marker.
+The effective safe profile records three hidden columns, four outlined columns,
+and one collapsed column. The suite verifies a zero-change self-diff, `FF036`
+and `FFP036` when only the base hidden-column declaration changes, and no
+ordinary cell or formula change.
+
+Equivalent Boolean/default and unsigned-integer spellings, plus semantically
+equivalent split column ranges, are exercised without a finding. An out-of-bounds
+column maximum produces an explicit parser-coverage warning, `FF010`, and
+`FF036` rather than a silent omission. Column ranges, raw XML, filter criteria,
+selected values, custom sort lists, and row/range references are verified absent
+from JSON, Markdown, ordinary reports, and SARIF. The controlled column-only
+mutation is invisible to the published 0.34.0 wheel (`0` changes, no findings;
+wheel SHA-256
+`f5c19456e577f66ae45720b9ee3c43d1cd9a446ed298257437433bb602cf412b`),
+whereas a freshly installed 0.35.0 wheel emits exactly one
+`filter_visibility_controls_changed` change and `FF036`.
+
+As an independent package-compatibility check, FormulaFence profiled
+XlsxWriter 3.2.9's public
+[`outline_collapsed.py`](https://github.com/jmcnamara/XlsxWriter/blob/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011/examples/outline_collapsed.py)
+example at commit `cf3fe78d3eab5e4c7d825d4451af3a60e2a04011`, generated locally
+and not bundled with this repository. The resulting `outline_collapsed.xlsx`
+SHA-256 was
+`c60737867155dc18d46dc5e960ab8b6129acd511eadd81eb1d1d53a93e378fac`.
+FormulaFence found six hidden columns, twelve outlined columns, one collapsed
+column, and no visibility-control coverage warning. This validates static
+declaration comparison, layered-column normalization, and data minimisation—not
+whether Excel renders an outline, recalculates formulas, applies a filter, or
+models column width/style or outline-display settings. The boundary follows the
+Open XML [`cols`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_cols_topic_ID0E5XR4.html)
+and [`col`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_col_topic_ID0ELFQ4.html)
+definitions.
+
 ## Excel Named Sheet Views — 2026-07-25
 
 FormulaFence 0.34.0 was validated with controlled raw-OOXML `.xlsx` packages

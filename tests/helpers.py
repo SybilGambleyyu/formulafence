@@ -5813,7 +5813,7 @@ def corrupt_scenario_manager_input(path: Path) -> Path:
 
 
 def make_filter_visibility_model(path: Path) -> Path:
-    """Create raw OOXML filter and row-visibility controls with private criteria."""
+    """Create raw OOXML filter and visibility controls with private criteria."""
     workbook = Workbook()
     report = workbook.active
     report.title = "Report"
@@ -5844,6 +5844,8 @@ def make_filter_visibility_model(path: Path) -> Path:
         custom_filter_tag = f"{{{_SPREADSHEETML_NS}}}customFilter"
         sort_state_tag = f"{{{_SPREADSHEETML_NS}}}sortState"
         sort_condition_tag = f"{{{_SPREADSHEETML_NS}}}sortCondition"
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
         sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
         sheet_format_tag = f"{{{_SPREADSHEETML_NS}}}sheetFormatPr"
         row_tag = f"{{{_SPREADSHEETML_NS}}}row"
@@ -5881,6 +5883,28 @@ def make_filter_visibility_model(path: Path) -> Path:
             if child.tag == sheet_data_tag
         )
         report_xml.insert(sheet_data_index + 1, auto_filter)
+        columns = ElementTree.Element(cols_tag)
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "2", "max": "5", "hidden": "1", "outlineLevel": "1"},
+        )
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "2", "max": "5", "width": "11", "customWidth": "1"},
+        )
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "3", "max": "3", "hidden": "false", "outlineLevel": "2"},
+        )
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "6", "max": "6", "collapsed": "true"},
+        )
+        report_xml.insert(sheet_data_index, columns)
         rows = {row.get("r"): row for row in report_xml.iter(row_tag)}
         rows["3"].set("hidden", "1")
         rows["3"].set("outlineLevel", "1")
@@ -5981,6 +6005,31 @@ def change_filter_visibility_hidden_row(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".filter-visibility-row.tmp.xlsx")
 
 
+def change_filter_visibility_hidden_column(path: Path) -> Path:
+    """Reveal an effective hidden column range without changing cell content."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        columns = report_xml.find(cols_tag)
+        if columns is None:
+            raise ValueError("Could not find column-control fixture")
+        hidden_range = next(
+            column
+            for column in columns.findall(col_tag)
+            if column.get("min") == "2" and column.get("max") == "5"
+        )
+        hidden_range.set("hidden", "false")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".filter-visibility-column.tmp.xlsx")
+
+
 def change_table_filter_visibility_criterion(path: Path) -> Path:
     """Change a table-part filter member without changing table cells."""
 
@@ -6006,6 +6055,8 @@ def normalize_filter_visibility_control_spelling(path: Path) -> Path:
         filters_tag = f"{{{_SPREADSHEETML_NS}}}filters"
         sort_state_tag = f"{{{_SPREADSHEETML_NS}}}sortState"
         sort_condition_tag = f"{{{_SPREADSHEETML_NS}}}sortCondition"
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
         row_tag = f"{{{_SPREADSHEETML_NS}}}row"
         sheet_format_tag = f"{{{_SPREADSHEETML_NS}}}sheetFormatPr"
 
@@ -6040,6 +6091,36 @@ def normalize_filter_visibility_control_spelling(path: Path) -> Path:
         rows["4"].set("hidden", "1")
         rows["4"].set("outlineLevel", "002")
         rows["4"].set("collapsed", "true")
+        columns = report_xml.find(cols_tag)
+        if columns is None:
+            raise ValueError("Could not find column-control fixture")
+        for column in list(columns):
+            columns.remove(column)
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "02", "max": "02", "hidden": "true", "outlineLevel": "01"},
+        )
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "003", "max": "003", "hidden": "1", "outlineLevel": "1"},
+        )
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "04", "max": "05", "hidden": "true", "outlineLevel": "01"},
+        )
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "3", "max": "3", "hidden": "0", "outlineLevel": "02"},
+        )
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "006", "max": "006", "collapsed": "1"},
+        )
         contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
             report_xml,
             encoding="utf-8",
@@ -6107,6 +6188,31 @@ def corrupt_filter_visibility_control(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".filter-visibility-corrupt.tmp.xlsx")
+
+
+def corrupt_filter_visibility_column_control(path: Path) -> Path:
+    """Inject an out-of-bounds column range to exercise fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        columns = report_xml.find(cols_tag)
+        if columns is None:
+            raise ValueError("Could not find column-control fixture")
+        hidden_range = next(
+            column
+            for column in columns.findall(col_tag)
+            if column.get("min") == "2" and column.get("max") == "5"
+        )
+        hidden_range.set("max", "16385")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".filter-visibility-column-corrupt.tmp.xlsx")
 
 
 def make_named_sheet_view_model(path: Path, *, table_owned: bool = False) -> Path:

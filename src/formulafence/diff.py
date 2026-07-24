@@ -1376,7 +1376,7 @@ def _workbook_control_changes(
             Finding(
                 "FF036",
                 "high",
-                "Worksheet/table filter, sort, or row-visibility control changed.",
+                "Worksheet/table filter, sort, or row/column-visibility control changed.",
                 details=details,
             )
         )

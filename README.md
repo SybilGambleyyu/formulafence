@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.34.0/formulafence-0.34.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.35.0/formulafence-0.35.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -111,7 +111,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-visibility, ignored-error, and Named Sheet View controls, Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column-visibility, ignored-error, and Named Sheet View controls, Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -501,30 +501,39 @@ cell-diff boundary. The declaration boundary follows Open XML
 and [`inputCells`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_inputCells_topic_ID0EE624.html)
 definitions, plus Excel's [Scenario Manager guidance](https://support.microsoft.com/en-us/excel/switch-between-various-sets-of-values-by-using-scenarios).
 
-FormulaFence also inventories **filter, sort, and row-visibility controls**.
+FormulaFence also inventories **filter, sort, and row/column-visibility controls**.
 An Excel AutoFilter can hide rows by private criteria without changing a formula
 or a cell value, and `SUBTOTAL` always excludes filtered-out rows; its 101–111
-forms also exclude manually hidden rows. FormulaFence reads worksheet
+forms also exclude manually hidden rows. A hidden or collapsed column can also
+remove a report field from a reviewer’s view without changing any cell.
+FormulaFence reads worksheet
 `<autoFilter>` and `<sortState>` declarations, Table Definition-part filters,
 explicit row `hidden`/`outlineLevel`/`collapsed` state, and the worksheet-level
-`sheetFormatPr@zeroHeight` hidden-by-default optimization. A material change
-emits `FF036`; enable `no_filter_visibility_changes` for `FFP036`.
+`sheetFormatPr@zeroHeight` hidden-by-default optimization. It also reads raw
+worksheet `<cols>/<col>` declarations for `hidden`, `outlineLevel`, and
+`collapsed`, applying overlapping records in file order so a later *present*
+attribute overrides only that control. A material change emits `FF036`; enable
+`no_filter_visibility_changes` for `FFP036`.
 
 Profiles expose only counts for worksheet/table filters, filter columns and
 criterion groups, sort states/conditions, default-hidden sheets, explicitly
-hidden/outlined/collapsed rows, visible overrides, and malformed controls.
-Filter criteria, selected values, table names, custom sort lists, sort keys,
-and row/range references never enter profiles, Markdown control sections,
-`FF036` details, or SARIF. Equivalent local A1 case/absolute-reference,
-Boolean/default, and unsigned-integer spellings are normalized. Unsupported
-extensions, malformed declarations, or unsafe/missing table relationships are
-visible coverage warnings rather than silent omissions. FormulaFence does not
-apply a filter, calculate a result, infer which formulas are visibility
-sensitive, render a report, or track hidden columns. The boundary follows
+hidden/outlined/collapsed rows, visible-row overrides, hidden/outlined/collapsed
+columns, and malformed controls. Filter criteria, selected values, table names,
+custom sort lists, sort keys, and row/column ranges never enter profiles,
+Markdown control sections, `FF036` details, or SARIF. Equivalent local A1
+case/absolute-reference, Boolean/default, unsigned-integer, and equivalent
+column-range segmentation spellings are normalized. Unsupported extensions,
+malformed declarations, exhausted control-update limits, or unsafe/missing
+table relationships are visible coverage warnings rather than silent omissions.
+FormulaFence does not apply a filter, calculate a result, infer which formulas
+are visibility sensitive, render a report, track column widths/styles, or model
+outline-display settings. The boundary follows
 Microsoft's [SUBTOTAL documentation](https://support.microsoft.com/en-us/excel/functions/subtotal-function),
 the Open XML [`autoFilter`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_autoFilter_topic_ID0EIDM4.html),
 [`filterColumn`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_filterColumn_topic_ID0ELVP5.html),
-and [`sheetFormatPr`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_sheetFormatPr_topic_ID0EVAG5.html)
+[`sheetFormatPr`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_sheetFormatPr_topic_ID0EVAG5.html),
+[`cols`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_cols_topic_ID0E5XR4.html),
+and [`col`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_col_topic_ID0ELFQ4.html)
 definitions.
 
 FormulaFence also inventories **ignored Excel error-checking controls**. Excel

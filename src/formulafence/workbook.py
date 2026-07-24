@@ -470,7 +470,7 @@ class _ScenarioManagerMetadata:
 
 @dataclass(frozen=True)
 class _FilterVisibilityMetadata:
-    """Raw filter, sort, and row-visibility evidence retained before reader loss."""
+    """Raw filter, sort, and visibility evidence retained before reader loss."""
 
     controls: FilterVisibilitySnapshot
     warnings: tuple[str, ...]
@@ -13439,6 +13439,22 @@ def _ignored_error_metadata(path: Path) -> _IgnoredErrorMetadata:
 
 _FILTER_VISIBILITY_UNSIGNED_INT_MAXIMUM = 4_294_967_295
 _FILTER_VISIBILITY_OUTLINE_LEVEL_MAXIMUM = 255
+_FILTER_VISIBILITY_COLUMN_OUTLINE_LEVEL_MAXIMUM = 7
+_FILTER_VISIBILITY_COLUMN_UPDATE_BUDGET = 16_777_216
+_FILTER_VISIBILITY_COLUMN_KNOWN_ATTRIBUTES = frozenset(
+    {
+        "min",
+        "max",
+        "width",
+        "style",
+        "hidden",
+        "bestFit",
+        "customWidth",
+        "phonetic",
+        "outlineLevel",
+        "collapsed",
+    }
+)
 _FILTER_VISIBILITY_FILTER_CRITERIA_CHILDREN = frozenset(
     {
         "filters",
@@ -13986,8 +14002,108 @@ def _filter_visibility_row_signature(
     )
 
 
+def _filter_visibility_column_control(
+    column: ElementTree.Element,
+    *,
+    issues: set[str],
+) -> tuple[int, int, bool | None, int | None, bool | None] | None:
+    """Parse one layered column-visibility declaration from raw SpreadsheetML.
+
+    SpreadsheetML ``<col>`` declarations can overlap. Writers such as Apache
+    POI merge a later record's *present* attributes into the earlier record, so
+    an omitted ``hidden``/``outlineLevel``/``collapsed`` flag must not erase an
+    existing visibility setting. Callers therefore apply only the non-``None``
+    attributes from this return value in XML order.
+    """
+    visibility_attributes = {"hidden", "outlineLevel", "collapsed"}
+    has_visibility_attribute = any(
+        attribute in column.attrib for attribute in visibility_attributes
+    )
+    if list(column):
+        issues.add("unexpected-column-children")
+    if (column.text or "").strip():
+        issues.add("unexpected-column-text")
+    for attribute in column.attrib:
+        local_name = _xml_local_name(attribute)
+        if (
+            _xml_namespace(attribute) is not None
+            or local_name not in _FILTER_VISIBILITY_COLUMN_KNOWN_ATTRIBUTES
+        ):
+            issues.add("unsupported-column-attribute")
+    if not has_visibility_attribute:
+        return None
+
+    minimum, _ = _filter_visibility_unsigned_int(
+        column.get("min"),
+        maximum=MAX_EXCEL_COLUMN,
+    )
+    maximum, _ = _filter_visibility_unsigned_int(
+        column.get("max"),
+        maximum=MAX_EXCEL_COLUMN,
+    )
+    if minimum is None or maximum is None or minimum < 1 or maximum < minimum:
+        issues.add("invalid-column-bounds")
+        return None
+
+    hidden: bool | None = None
+    if "hidden" in column.attrib:
+        hidden, _ = _filter_visibility_boolean(column.get("hidden"), False)
+        if hidden is None:
+            issues.add("invalid-column-hidden")
+
+    outline_level: int | None = None
+    if "outlineLevel" in column.attrib:
+        outline_level, _ = _filter_visibility_unsigned_int(
+            column.get("outlineLevel"),
+            maximum=_FILTER_VISIBILITY_COLUMN_OUTLINE_LEVEL_MAXIMUM,
+        )
+        if outline_level is None:
+            issues.add("invalid-column-outline-level")
+
+    collapsed: bool | None = None
+    if "collapsed" in column.attrib:
+        collapsed, _ = _filter_visibility_boolean(column.get("collapsed"), False)
+        if collapsed is None:
+            issues.add("invalid-column-collapsed")
+    return minimum, maximum, hidden, outline_level, collapsed
+
+
+def _filter_visibility_column_state_signature(
+    hidden_columns: bytearray,
+    outline_levels: bytearray,
+    collapsed_columns: bytearray,
+) -> tuple[tuple[int, int, bool, int, bool], ...]:
+    """Compress effective column controls into a private canonical signature."""
+    segments: list[tuple[int, int, bool, int, bool]] = []
+    start: int | None = None
+    previous_state: tuple[bool, int, bool] | None = None
+    for index in range(1, MAX_EXCEL_COLUMN + 1):
+        state = (
+            bool(hidden_columns[index]),
+            int(outline_levels[index]),
+            bool(collapsed_columns[index]),
+        )
+        if state == (False, 0, False):
+            if start is not None and previous_state is not None:
+                segments.append((start, index - 1, *previous_state))
+            start = None
+            previous_state = None
+            continue
+        if start is None:
+            start = index
+            previous_state = state
+            continue
+        if state != previous_state:
+            segments.append((start, index - 1, *previous_state))
+            start = index
+            previous_state = state
+    if start is not None and previous_state is not None:
+        segments.append((start, MAX_EXCEL_COLUMN, *previous_state))
+    return tuple(segments)
+
+
 def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
-    """Inspect filter, sort, and row visibility controls from raw SpreadsheetML.
+    """Inspect filter, sort, and visibility controls from raw SpreadsheetML.
 
     Filter member values, custom sort lists, and report ranges can be sensitive.
     They are canonicalized only inside a private signature. The public snapshot
@@ -14007,6 +14123,10 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
     outlined_row_count = 0
     collapsed_row_count = 0
     visible_row_override_count = 0
+    hidden_column_count = 0
+    outlined_column_count = 0
+    collapsed_column_count = 0
+    column_update_count = 0
     unrecognized_control_count = 0
 
     def add_auto_filter(
@@ -14057,6 +14177,8 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
             auto_filter_tag = f"{{{_SPREADSHEETML_NS}}}autoFilter"
             sort_state_tag = f"{{{_SPREADSHEETML_NS}}}sortState"
             sheet_format_tag = f"{{{_SPREADSHEETML_NS}}}sheetFormatPr"
+            cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+            col_tag = f"{{{_SPREADSHEETML_NS}}}col"
             sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
             row_tag = f"{{{_SPREADSHEETML_NS}}}row"
             table_parts_tag = f"{{{_SPREADSHEETML_NS}}}tableParts"
@@ -14092,6 +14214,91 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
                         )
                     default_hidden_sheet_count += default_hidden
                     unrecognized_control_count += bool(sheet_format_issues)
+
+                column_issues: set[str] = set()
+                column_sets = worksheet.findall(cols_tag)
+                hidden_columns = bytearray(MAX_EXCEL_COLUMN + 1)
+                outline_levels = bytearray(MAX_EXCEL_COLUMN + 1)
+                collapsed_columns = bytearray(MAX_EXCEL_COLUMN + 1)
+                for columns in column_sets:
+                    if not list(columns):
+                        column_issues.add("empty-column-information")
+                    if (columns.text or "").strip():
+                        column_issues.add("unexpected-column-information-text")
+                    for column in columns:
+                        if column.tag != col_tag:
+                            column_issues.add("unsupported-column-information-child")
+                            continue
+                        captured_column = _filter_visibility_column_control(
+                            column,
+                            issues=column_issues,
+                        )
+                        if captured_column is None:
+                            continue
+                        (
+                            minimum,
+                            maximum,
+                            hidden,
+                            outline_level,
+                            collapsed,
+                        ) = captured_column
+                        attribute_count = sum(
+                            value is not None
+                            for value in (hidden, outline_level, collapsed)
+                        )
+                        if not attribute_count:
+                            continue
+                        span = maximum - minimum + 1
+                        if (
+                            column_update_count + span * attribute_count
+                            > _FILTER_VISIBILITY_COLUMN_UPDATE_BUDGET
+                        ):
+                            column_issues.add("column-visibility-update-budget")
+                            continue
+                        if hidden is not None:
+                            hidden_columns[minimum : maximum + 1] = (
+                                bytes([int(hidden)]) * span
+                            )
+                        if outline_level is not None:
+                            outline_levels[minimum : maximum + 1] = (
+                                bytes([outline_level]) * span
+                            )
+                        if collapsed is not None:
+                            collapsed_columns[minimum : maximum + 1] = (
+                                bytes([int(collapsed)]) * span
+                            )
+                        column_update_count += span * attribute_count
+                column_signature = _filter_visibility_column_state_signature(
+                    hidden_columns,
+                    outline_levels,
+                    collapsed_columns,
+                )
+                if column_signature:
+                    entries.append(
+                        (
+                            f"column-visibility:{sheet.casefold()}",
+                            repr(column_signature),
+                        )
+                    )
+                hidden_column_count += sum(hidden_columns)
+                outlined_column_count += sum(level > 0 for level in outline_levels)
+                collapsed_column_count += sum(collapsed_columns)
+                if column_issues:
+                    entries.append(
+                        (
+                            f"column-visibility-issues:{sheet.casefold()}",
+                            _private_payload_signature(
+                                b"".join(
+                                    ElementTree.tostring(
+                                        columns,
+                                        encoding="utf-8",
+                                    )
+                                    for columns in column_sets
+                                )
+                            ),
+                        )
+                    )
+                    unrecognized_control_count += 1
 
                 auto_filters = worksheet.findall(auto_filter_tag)
                 for auto_filter in auto_filters:
@@ -14262,14 +14469,14 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
         return _FilterVisibilityMetadata(
             default,
             (
-                "FormulaFence could not inspect filter and row-visibility OOXML "
+                "FormulaFence could not inspect filter and visibility OOXML "
                 f"({type(error).__name__}); affected report controls were not compared.",
             ),
         )
 
     if unrecognized_control_count:
         warnings.add(
-            "FormulaFence found malformed or unsupported filter, sort, or row-visibility "
+            "FormulaFence found malformed or unsupported filter, sort, or visibility "
             "metadata; the affected report controls have a coverage gap."
         )
     snapshot = FilterVisibilitySnapshot(
@@ -14284,6 +14491,9 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
         outlined_row_count=outlined_row_count,
         collapsed_row_count=collapsed_row_count,
         visible_row_override_count=visible_row_override_count,
+        hidden_column_count=hidden_column_count,
+        outlined_column_count=outlined_column_count,
+        collapsed_column_count=collapsed_column_count,
         unrecognized_control_count=unrecognized_control_count,
         definition_signature=_private_external_data_signature(tuple(sorted(entries))),
     )

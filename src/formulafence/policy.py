@@ -626,7 +626,7 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                 Finding(
                     "FFP036",
                     "high",
-                    "Policy forbids filter, sort, and row-visibility control changes.",
+                    "Policy forbids filter, sort, and row/column-visibility control changes.",
                     details=finding.details,
                 )
             )

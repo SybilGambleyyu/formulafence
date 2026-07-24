@@ -1433,10 +1433,10 @@ class ScenarioManagerSnapshot:
 
 @dataclass(frozen=True)
 class FilterVisibilitySnapshot:
-    """Safe aggregate of Excel filter, sort, and row-visibility controls.
+    """Safe aggregate of Excel filter, sort, and visibility controls.
 
     AutoFilter criteria can contain sensitive customer, product, or financial
-    values, while row identifiers and sort ranges can reveal report structure.
+    values, while row/column identifiers and sort ranges can reveal report structure.
     The private signature retains canonical declarations for comparison; the
     public profile deliberately exposes counts only.
     """
@@ -1452,6 +1452,9 @@ class FilterVisibilitySnapshot:
     outlined_row_count: int = 0
     collapsed_row_count: int = 0
     visible_row_override_count: int = 0
+    hidden_column_count: int = 0
+    outlined_column_count: int = 0
+    collapsed_column_count: int = 0
     unrecognized_control_count: int = 0
     definition_signature: str | None = field(default=None, repr=False)
 
@@ -1465,6 +1468,9 @@ class FilterVisibilitySnapshot:
             or self.outlined_row_count
             or self.collapsed_row_count
             or self.visible_row_override_count
+            or self.hidden_column_count
+            or self.outlined_column_count
+            or self.collapsed_column_count
             or self.unrecognized_control_count
         )
 
@@ -1483,6 +1489,9 @@ class FilterVisibilitySnapshot:
             "outlined_row_count": self.outlined_row_count,
             "collapsed_row_count": self.collapsed_row_count,
             "visible_row_override_count": self.visible_row_override_count,
+            "hidden_column_count": self.hidden_column_count,
+            "outlined_column_count": self.outlined_column_count,
+            "collapsed_column_count": self.collapsed_column_count,
             "unrecognized_control_count": self.unrecognized_control_count,
         }
 
@@ -2058,6 +2067,9 @@ class WorkbookSnapshot:
             ),
             "filter_visibility_hidden_row_count": (
                 self.filter_visibility_controls.hidden_row_count
+            ),
+            "filter_visibility_hidden_column_count": (
+                self.filter_visibility_controls.hidden_column_count
             ),
             "has_filter_visibility_controls": self.filter_visibility_controls.present,
             "ignored_error_rule_count": self.ignored_error_controls.ignored_error_rule_count,

@@ -87,9 +87,10 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['scenario_manager_input_cell_count']}"
         ),
         (
-            "- **Filter declarations / explicitly hidden rows:** "
+            "- **Filter declarations / hidden rows / hidden columns:** "
             f"{workbook['filter_visibility_auto_filter_count']} / "
-            f"{workbook['filter_visibility_hidden_row_count']}"
+            f"{workbook['filter_visibility_hidden_row_count']} / "
+            f"{workbook['filter_visibility_hidden_column_count']}"
         ),
         f"- **XLM macro-sheet parts:** {workbook['xlm_macro_sheet_count']}",
         (
@@ -1198,7 +1199,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "## Filter, sort, and row-visibility controls",
+                "## Filter, sort, and visibility controls",
                 "",
                 (
                     "- **Worksheet / table AutoFilters:** "
@@ -1216,14 +1217,20 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     f"{filter_visibility_controls['sort_condition_count']}"
                 ),
                 (
-                    "- **Default-hidden sheets / explicitly hidden rows:** "
+                    "- **Default-hidden sheets / hidden rows / hidden columns:** "
                     f"{filter_visibility_controls['default_hidden_sheet_count']} / "
-                    f"{filter_visibility_controls['hidden_row_count']}"
+                    f"{filter_visibility_controls['hidden_row_count']} / "
+                    f"{filter_visibility_controls['hidden_column_count']}"
                 ),
                 (
-                    "- **Outlined / collapsed rows / visible overrides:** "
+                    "- **Outlined rows / columns:** "
                     f"{filter_visibility_controls['outlined_row_count']} / "
+                    f"{filter_visibility_controls['outlined_column_count']}"
+                ),
+                (
+                    "- **Collapsed rows / columns / visible-row overrides:** "
                     f"{filter_visibility_controls['collapsed_row_count']} / "
+                    f"{filter_visibility_controls['collapsed_column_count']} / "
                     f"{filter_visibility_controls['visible_row_override_count']}"
                 ),
             ]
@@ -1235,7 +1242,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             )
         lines.append(
             "Filter criteria, selected values, table names, sort keys, custom lists, "
-            "and row/range references are compared privately and intentionally omitted."
+            "and row/column ranges are compared privately and intentionally omitted."
         )
     ignored_error_controls = profile["ignored_error_controls"]
     if ignored_error_controls["present"]:

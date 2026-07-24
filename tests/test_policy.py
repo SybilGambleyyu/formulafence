@@ -12,6 +12,7 @@ from .helpers import (
     change_external_data_refresh_controls,
     change_external_link_package_controls,
     change_filter_visibility_criterion,
+    change_filter_visibility_hidden_column,
     change_ignored_error_target,
     change_legacy_vml_control_controls,
     change_named_sheet_view_criterion,
@@ -403,14 +404,23 @@ def test_policy_can_block_scenario_manager_changes(tmp_path) -> None:
 def test_policy_can_block_filter_visibility_changes(tmp_path) -> None:
     baseline = make_filter_visibility_model(tmp_path / "baseline.xlsx")
     candidate = make_filter_visibility_model(tmp_path / "candidate.xlsx")
+    column_candidate = make_filter_visibility_model(tmp_path / "column-candidate.xlsx")
     change_filter_visibility_criterion(candidate)
+    change_filter_visibility_hidden_column(column_candidate)
 
     report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    column_report = compare_snapshots(
+        load_snapshot(baseline),
+        load_snapshot(column_candidate),
+    )
     policy = parse_policy(
         {"version": 1, "rules": {"no_filter_visibility_changes": True}}
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP036"}
+    assert {finding.rule_id for finding in evaluate_policy(column_report, policy)} >= {
+        "FFP036"
+    }
 
 
 def test_policy_can_block_ignored_error_changes(tmp_path) -> None:

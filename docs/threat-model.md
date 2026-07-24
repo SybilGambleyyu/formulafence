@@ -124,20 +124,25 @@ review prompt, not proof of an error.
   result, infer a scenario-to-formula dependency, or fetch an external target;
   cached worksheet cells remain ordinary cell values under the normal diff
   boundary.
-- Excel AutoFilters and row visibility can change which records are shown and
-  which values vertical `SUBTOTAL` formulas include without changing a formula
-  or ordinary cell value. FormulaFence reads worksheet `<autoFilter>` and
-  `<sortState>` elements, the same controls in relationship-backed Table
-  Definition parts, explicit row `hidden`, `outlineLevel`, and `collapsed`
-  attributes, and `sheetFormatPr@zeroHeight`. It privately compares criteria,
-  selected values, custom sort lists, sort keys, and local references; profiles
-  and `FF036` expose only structural counts. Local A1 case/absolute-reference,
-  Boolean/default, and unsigned-integer spellings are normalized. Unsupported
-  extensions, malformed controls, and unsafe/missing table relationships remain
-  visible coverage warnings, and `no_filter_visibility_changes` can block the
-  change as `FFP036`. FormulaFence does not apply filters, calculate
-  `SUBTOTAL`/`AGGREGATE`, infer formula sensitivity, render views, or track
-  hidden columns.
+- Excel AutoFilters and row/column visibility can change which records or
+  fields are shown, and which values vertical `SUBTOTAL` formulas include,
+  without changing a formula or ordinary cell value. FormulaFence reads
+  worksheet `<autoFilter>` and `<sortState>` elements, the same controls in
+  relationship-backed Table Definition parts, explicit row `hidden`,
+  `outlineLevel`, and `collapsed` attributes, `sheetFormatPr@zeroHeight`, and
+  raw `<cols>/<col>` `hidden`, `outlineLevel`, and `collapsed` declarations.
+  Column declarations are applied in file order and only attributes present in a
+  later declaration override earlier effective state, normalizing equivalent
+  range splitting. Criteria, selected values, custom sort lists, sort keys, and
+  row/column ranges remain private; profiles and `FF036` expose structural
+  counts only. Local A1 case/absolute-reference, Boolean/default,
+  unsigned-integer, and equivalent column-range spellings are normalized.
+  Unsupported extensions, malformed controls, exhausted column-update limits,
+  and unsafe/missing table relationships remain visible coverage warnings, and
+  `no_filter_visibility_changes` can block the change as `FFP036`.
+  FormulaFence does not apply filters, calculate `SUBTOTAL`/`AGGREGATE`, infer
+  formula sensitivity, render views, track widths/styles, or model
+  outline-display settings.
 - Excel ignored-error declarations can suppress evaluation, inconsistent-formula,
   omitted-range, unlocked-formula, empty-reference, list-validation,
   calculated-column, text-number, and two-digit-year warnings without changing
@@ -401,8 +406,8 @@ review prompt, not proof of an error.
   Add-in task-pane packages, PivotTable view/cache-schema/shared-item/cached-
   record chains, Slicer and Timeline cache filter-definition chains, embedded
   Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and
-  Scenario Manager declarations, worksheet/Table AutoFilter and row-visibility
-  controls, ignored-error warning suppressions, relationship-backed Named Sheet
+  Scenario Manager declarations, worksheet/Table AutoFilter and row/column-
+  visibility controls, ignored-error warning suppressions, relationship-backed Named Sheet
   View controls, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the

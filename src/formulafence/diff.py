@@ -416,6 +416,115 @@ def _workbook_control_changes(
     return changes, findings
 
 
+def _array_formula_semantics_changes(
+    before: WorkbookSnapshot, after: WorkbookSnapshot
+) -> tuple[list[Change], list[Finding]]:
+    """Report changes Excel would otherwise hide behind identical formula text.
+
+    The same formula text can run as an ordinary scalar formula, a legacy CSE
+    array formula with a fixed output range, or a dynamic array. Dynamic result
+    extents are intentionally excluded because they can change at recalc time.
+    """
+    changes: list[Change] = []
+    findings: list[Finding] = []
+    known_modes = {"absent", "value", "ordinary", "legacy_cse", "dynamic"}
+
+    def formula_mode(cell: CellSnapshot | None) -> str:
+        if cell is None:
+            return "absent"
+        if not cell.is_formula:
+            return "value"
+        return cell.array_formula_kind or "ordinary"
+
+    def details_with_impact(location: CellKey, details: dict[str, object]) -> tuple[
+        dict[str, object], int, tuple[CellKey, ...]
+    ]:
+        impact_analysis = analyze_downstream_impact(location, before, after)
+        sampled_impacts = tuple(
+            sorted(impact_analysis.impacted, key=_location_sort_key)[:_IMPACT_SAMPLE_SIZE]
+        )
+        if sampled_impacts:
+            details["impact_paths"] = _serialise_impact_paths(
+                sampled_impacts, impact_analysis.paths
+            )
+        if impact_analysis.truncated:
+            details["impact_truncated_at"] = _IMPACT_NODE_LIMIT
+        return details, len(impact_analysis.impacted), sampled_impacts
+
+    locations = sorted(set(before.cells) | set(after.cells), key=_location_sort_key)
+    for location in locations:
+        old_cell = before.cells.get(location)
+        new_cell = after.cells.get(location)
+        old_mode = formula_mode(old_cell)
+        new_mode = formula_mode(new_cell)
+        if old_mode not in known_modes or new_mode not in known_modes:
+            continue
+        if old_mode != new_mode and {old_mode, new_mode} & {"legacy_cse", "dynamic"}:
+            details, impact_count, impacted_cells = details_with_impact(location, {
+                "before": {
+                    "mode": old_mode,
+                    "output_range": old_cell.array_formula_ref if old_cell else None,
+                },
+                "after": {
+                    "mode": new_mode,
+                    "output_range": new_cell.array_formula_ref if new_cell else None,
+                },
+            })
+            changes.append(
+                Change(
+                    "array_formula_mode_changed",
+                    location,
+                    "high",
+                    impact_count=impact_count,
+                    impacted_cells=impacted_cells,
+                    details=details,
+                )
+            )
+            findings.append(
+                Finding(
+                    "FF018",
+                    "high",
+                    (
+                        "Formula changed to or from legacy CSE or dynamic array semantics."
+                    ),
+                    location,
+                    details=details,
+                )
+            )
+            continue
+        if (
+            old_mode == "legacy_cse"
+            and new_mode == "legacy_cse"
+            and old_cell is not None
+            and new_cell is not None
+            and old_cell.array_formula_ref != new_cell.array_formula_ref
+        ):
+            details, impact_count, impacted_cells = details_with_impact(location, {
+                "before_output_range": old_cell.array_formula_ref,
+                "after_output_range": new_cell.array_formula_ref,
+            })
+            changes.append(
+                Change(
+                    "legacy_array_output_range_changed",
+                    location,
+                    "high",
+                    impact_count=impact_count,
+                    impacted_cells=impacted_cells,
+                    details=details,
+                )
+            )
+            findings.append(
+                Finding(
+                    "FF018",
+                    "high",
+                    "Legacy CSE array formula fixed output range changed.",
+                    location,
+                    details=details,
+                )
+            )
+    return changes, findings
+
+
 def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> DiffReport:
     """Compare workbook semantics and attach local dependency impact to each edit."""
     changes: list[Change] = []
@@ -616,6 +725,11 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
             )
         )
 
+    array_formula_changes, array_formula_findings = _array_formula_semantics_changes(
+        before, after
+    )
+    changes.extend(array_formula_changes)
+    findings.extend(array_formula_findings)
     control_changes, control_findings = _workbook_control_changes(before, after)
     changes.extend(control_changes)
     findings.extend(control_findings)

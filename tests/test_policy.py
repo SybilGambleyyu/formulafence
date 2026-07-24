@@ -7,7 +7,13 @@ from formulafence.models import PolicyError
 from formulafence.policy import evaluate_policy, parse_policy
 from formulafence.workbook import load_snapshot
 
-from .helpers import make_model, make_table_model, make_three_d_model, rewrite
+from .helpers import (
+    make_legacy_array_model,
+    make_model,
+    make_table_model,
+    make_three_d_model,
+    rewrite,
+)
 
 
 def test_policy_fails_formula_override_and_protected_output(tmp_path) -> None:
@@ -109,6 +115,20 @@ def test_policy_can_block_implicit_intersection(tmp_path) -> None:
 
     rule_ids = {finding.rule_id for finding in evaluate_policy(report, policy)}
     assert "FFP017" in rule_ids
+
+
+def test_policy_can_block_array_formula_semantics_changes(tmp_path) -> None:
+    baseline = make_legacy_array_model(tmp_path / "baseline.xlsx", "B1:B3")
+    candidate = make_legacy_array_model(tmp_path / "candidate.xlsx", "B1:B4")
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_array_formula_semantics_changes": True},
+        }
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP018"}
 
 
 def test_policy_can_block_table_definition_changes(tmp_path) -> None:

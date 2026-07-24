@@ -35,6 +35,16 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "- **Implicit-intersection formulas:** "
             f"{workbook['implicit_intersection_cells']}"
         ),
+        f"- **Legacy CSE array formulas:** {workbook['legacy_array_formula_cells']}",
+        (
+            "- **Fixed CSE output ranges:** "
+            f"{workbook['legacy_array_formula_output_ranges']}"
+        ),
+        f"- **Dynamic array formulas:** {workbook['dynamic_array_formula_cells']}",
+        (
+            "- **Unclassified array formulas:** "
+            f"{workbook['unclassified_array_formula_cells']}"
+        ),
         f"- **Formula tokenizer failures:** {workbook['tokenization_failure_cells']}",
         f"- **VBA payload:** {'present' if workbook['has_vba'] else 'absent'}",
         "",
@@ -99,10 +109,40 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 "(direct static A1 ranges resolve to their selected cell; other "
                 "expressions retain conservative input edges)"
             )
+    if features["legacy_array_formula_ranges"]:
+        lines.extend(
+            [
+                "",
+                "## Legacy CSE array formulas",
+                "",
+                "| Anchor | Fixed output range | Output cells |",
+                "| --- | --- | ---: |",
+            ]
+        )
+        for array_range in features["legacy_array_formula_ranges"]:
+            lines.append(
+                "| {anchor} | {ref} | {output_cell_count} |".format(
+                    anchor=_markdown_escape(array_range["anchor"]),
+                    ref=_markdown_escape(array_range["ref"]),
+                    output_cell_count=array_range["output_cell_count"],
+                )
+            )
+        lines.append(
+            "Fixed result members are linked back to their anchor when a static "
+            "formula reads them; the range is not expanded into virtual cells."
+        )
+    if features["dynamic_array_formula_cells"]:
+        lines.extend(["", "## Dynamic-array formula anchors", ""])
+        for location in features["dynamic_array_formula_cells"]:
+            lines.append(
+                f"- Dynamic-array anchor at `{location}` "
+                "(current spill extent is not used as a fixed dependency alias)"
+            )
     if (
         features["parser_warnings"]
         or features["unresolved_reference_cells"]
         or features["dynamic_reference_cells"]
+        or features["unclassified_array_formula_cells"]
         or features["tokenization_failure_cells"]
     ):
         lines.extend(["", "## Inspection coverage notes", ""])
@@ -117,6 +157,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             functions = ", ".join(f"`{function}`" for function in issue["functions"])
             lines.append(
                 f"- Dynamic reference function at `{issue['location']}`: {functions}"
+            )
+        for location in features["unclassified_array_formula_cells"]:
+            lines.append(
+                f"- Array formula at `{location}` could not be classified as fixed CSE "
+                "or dynamic; fixed-output aliases were not added"
             )
         for location in features["tokenization_failure_cells"]:
             lines.append(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import Workbook
 from openpyxl.workbook.defined_name import DefinedName
@@ -140,6 +141,119 @@ def make_implicit_intersection_model(path: Path) -> Path:
     dashboard["A1"] = "Implicit-intersection output"
     dashboard["B2"] = "=Model!B2"
     workbook.save(path)
+    return path
+
+
+def make_legacy_array_model(path: Path, array_ref: str = "B1:B3") -> Path:
+    """Create a fixed CSE array whose result members feed ordinary formulas."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "a"
+    inputs["A2"] = "bb"
+    inputs["A3"] = "ccc"
+
+    model = workbook.create_sheet("Model")
+    model["A1"] = "Legacy CSE array result"
+    model["B1"].value = ArrayFormula(ref=array_ref, text="=LEN(Inputs!A1:A3)")
+    model["C2"] = "=B2*10"
+
+    dashboard = workbook.create_sheet("Dashboard")
+    dashboard["A1"] = "Array output consumers"
+    dashboard["B2"] = "=SUM(Model!B2:B3)"
+    workbook.save(path)
+    return path
+
+
+def mark_array_formula_dynamic(path: Path, anchor: str = "B1") -> Path:
+    """Add the OOXML dynamic-array metadata that openpyxl does not write.
+
+    The small fixture mirrors the publicly documented XlsxWriter serialization:
+    an array formula anchor has ``cm=1`` and cell metadata resolves that index
+    to an ``XLDAPR`` record with ``fDynamic=1``.
+    """
+    anchor_bytes = anchor.encode("ascii")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry.filename) for entry in archive.infolist()
+        }
+
+    worksheet_name: str | None = None
+    needle = b'<c r="' + anchor_bytes + b'"><f t="array"'
+    replacement = b'<c r="' + anchor_bytes + b'" cm="1"><f t="array"'
+    for name, content in contents.items():
+        if not name.startswith("xl/worksheets/") or needle not in content:
+            continue
+        if worksheet_name is not None:
+            raise ValueError(f"More than one array formula anchor found for {anchor}")
+        contents[name] = content.replace(needle, replacement, 1)
+        worksheet_name = name
+    if worksheet_name is None:
+        raise ValueError(f"Could not find array formula anchor {anchor}")
+
+    metadata = (
+        b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        b'<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        b'xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray">'
+        b'<metadataTypes count="1"><metadataType name="XLDAPR" '
+        b'minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" '
+        b'merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" '
+        b'assign="1" coerce="1" cellMeta="1"/></metadataTypes>'
+        b'<futureMetadata name="XLDAPR" count="1"><bk><extLst>'
+        b'<ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}">'
+        b'<xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/>'
+        b'</ext></extLst></bk></futureMetadata><cellMetadata count="1"><bk>'
+        b'<rc t="1" v="0"/></bk></cellMetadata></metadata>'
+    )
+    content_types = contents["[Content_Types].xml"]
+    contents["[Content_Types].xml"] = content_types.replace(
+        b"</Types>",
+        b'<Override PartName="/xl/metadata.xml" '
+        b'ContentType="application/vnd.openxmlformats-officedocument.'
+        b'spreadsheetml.sheetMetadata+xml"/></Types>',
+        1,
+    )
+    relationships_name = "xl/_rels/workbook.xml.rels"
+    relationships = contents[relationships_name]
+    contents[relationships_name] = relationships.replace(
+        b"</Relationships>",
+        b'<Relationship Id="rIdFormulaFenceDynamicArrayMetadata" '
+        b'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/'
+        b'sheetMetadata" Target="metadata.xml"/></Relationships>',
+        1,
+    )
+    contents["xl/metadata.xml"] = metadata
+
+    staging = path.with_suffix(".dynamic.tmp.xlsx")
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+    staging.replace(path)
+    return path
+
+
+def mark_array_formula_unclassified(path: Path, anchor: str = "B1") -> Path:
+    """Give an array formula an unresolvable OOXML cell-metadata marker."""
+    anchor_bytes = anchor.encode("ascii")
+    needle = b'<c r="' + anchor_bytes + b'"><f t="array"'
+    replacement = b'<c r="' + anchor_bytes + b'" cm="1"><f t="array"'
+    staging = path.with_suffix(".array-metadata.tmp.xlsx")
+    with ZipFile(path) as source, ZipFile(staging, "w", compression=ZIP_DEFLATED) as target:
+        replaced = False
+        for entry in source.infolist():
+            content = source.read(entry.filename)
+            if (
+                not replaced
+                and entry.filename.startswith("xl/worksheets/")
+                and needle in content
+            ):
+                content = content.replace(needle, replacement, 1)
+                replaced = True
+            target.writestr(entry.filename, content)
+    if not replaced:
+        staging.unlink()
+        raise ValueError(f"Could not find array formula anchor {anchor}")
+    staging.replace(path)
     return path
 
 

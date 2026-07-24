@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.11.0/formulafence-0.11.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.12.0/formulafence-0.12.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -67,6 +67,7 @@ rules:
   no_new_dynamic_references: true
   no_new_spill_references: true
   no_new_implicit_intersections: true
+  no_array_formula_semantics_changes: true
   no_new_tokenization_failures: true
   no_table_definition_changes: true
   no_3d_reference_scope_changes: true
@@ -88,9 +89,9 @@ allowed_changes:
 | Capability | What it catches |
 | --- | --- |
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
-| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, and 3-D worksheet references |
+| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, and fixed legacy CSE-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -158,6 +159,23 @@ position. The scope follows Microsoft's
 [implicit-intersection guidance](https://support.microsoft.com/en-us/excel/implicit-intersection-operator)
 and [XlsxWriter's documentation](https://xlsxwriter.readthedocs.io/working_with_formulas.html)
 that persisted `@` behavior uses `SINGLE()`.
+
+FormulaFence also recognizes a multi-cell **legacy CSE** array formula as a
+fixed output range when its OOXML array anchor has no dynamic-array cell
+metadata. It does not inflate that range into virtual cells. Instead, if an
+ordinary formula reads a member such as `Model!B2`, FormulaFence adds a compact
+alias from the CSE anchor (for example `Model!B1`) to that consumer. Thus a
+change to an input of `{=LEN(Inputs!A1:A3)}` can reach a downstream `=B2*10`
+calculation even though Excel stores the formula only at `B1`. The profile
+lists each declared fixed range. An OOXML dynamic-array marker (`cm` resolving
+to `XLDAPR`/`fDynamic`) is inventoried as a dynamic anchor instead; its current
+or future spill extent is never treated as fixed. Unknown array metadata stays
+visible as a parser coverage warning with no aliases. FormulaFence emits
+`FF018` when a legacy-CSE or dynamic-array formula is added, removed, or changes
+mode, or when a legacy CSE fixed output range changes; enable
+`no_array_formula_semantics_changes` for `FFP018`. This follows Microsoft's
+[dynamic-versus-legacy array guidance](https://support.microsoft.com/en-us/excel/dynamic-array-formulas-and-spilled-array-behavior)
+and [XlsxWriter's documented CSE/dynamic serialization behavior](https://xlsxwriter.readthedocs.io/working_with_formulas.html).
 
 FormulaFence also follows a call to a workbook- or worksheet-local defined name
 when its complete definition is one statically resolvable `LAMBDA` expression.

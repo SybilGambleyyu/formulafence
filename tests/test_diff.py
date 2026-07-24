@@ -11,6 +11,7 @@ from formulafence.workbook import load_snapshot, profile_snapshot
 from .helpers import (
     make_current_row_table_model,
     make_implicit_intersection_model,
+    make_legacy_array_model,
     make_let_model,
     make_model,
     make_named_formula_model,
@@ -19,6 +20,8 @@ from .helpers import (
     make_spill_model,
     make_table_model,
     make_three_d_model,
+    mark_array_formula_dynamic,
+    mark_array_formula_unclassified,
     rewrite,
 )
 
@@ -398,6 +401,166 @@ def test_implicit_intersection_traces_the_selected_static_input_and_profiles_it(
         {"location": "Model!B3", "tokens": ["@Inputs!B2:B4"]},
     ]
     assert "## Explicit implicit intersection" in profile_to_markdown(profile)
+
+
+def test_legacy_cse_array_outputs_connect_input_changes_to_result_consumers(tmp_path) -> None:
+    baseline = make_legacy_array_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_array_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Inputs"]["A2"], "value", "BBBB"))
+
+    snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(snapshot)
+
+    assert snapshot.direct_dependents(("Model", "B1")) == {
+        ("Dashboard", "B2"),
+        ("Model", "C2"),
+    }
+    assert snapshot.summary()["legacy_array_formula_cells"] == 1
+    assert snapshot.summary()["legacy_array_formula_output_ranges"] == 1
+    assert profile["features"]["legacy_array_formula_ranges"] == [
+        {
+            "anchor": "Model!B1",
+            "ref": "Model!B1:B3",
+            "output_cell_count": 3,
+        }
+    ]
+    assert "## Legacy CSE array formulas" in profile_to_markdown(profile)
+
+    report = compare_snapshots(snapshot, load_snapshot(candidate))
+    change = next(change for change in report.changes if change.location == ("Inputs", "A2"))
+
+    assert change.impacted_cells == (
+        ("Dashboard", "B2"),
+        ("Model", "B1"),
+        ("Model", "C2"),
+    )
+    assert change.details["impact_paths"] == [
+        {
+            "target": "Dashboard!B2",
+            "path": ["Inputs!A2", "Model!B1", "Dashboard!B2"],
+        },
+        {"target": "Model!B1", "path": ["Inputs!A2", "Model!B1"]},
+        {
+            "target": "Model!C2",
+            "path": ["Inputs!A2", "Model!B1", "Model!C2"],
+        },
+    ]
+
+
+def test_legacy_cse_output_aliases_do_not_expand_a_declared_huge_range(tmp_path) -> None:
+    workbook = make_legacy_array_model(tmp_path / "large-cse.xlsx", "B1:XFD1048576")
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.cells) == 8
+    assert snapshot.summary()["legacy_array_formula_output_cells"] > 1_000_000
+    assert snapshot.direct_dependents(("Model", "B1")) == {
+        ("Dashboard", "B2"),
+        ("Model", "C2"),
+    }
+
+
+def test_dynamic_array_metadata_stays_visible_without_fixed_output_aliases(tmp_path) -> None:
+    workbook = make_legacy_array_model(tmp_path / "dynamic.xlsx")
+    mark_array_formula_dynamic(workbook)
+
+    snapshot = load_snapshot(workbook)
+    profile = profile_snapshot(snapshot)
+
+    assert snapshot.legacy_array_formula_ranges == ()
+    assert snapshot.dynamic_array_formula_cells == {("Model", "B1")}
+    assert snapshot.unclassified_array_formula_cells == set()
+    assert snapshot.direct_dependents(("Model", "B1")) == set()
+    assert profile["features"]["dynamic_array_formula_cells"] == ["Model!B1"]
+    assert "## Dynamic-array formula anchors" in profile_to_markdown(profile)
+
+
+def test_unclassified_array_metadata_is_a_visible_coverage_limit(tmp_path) -> None:
+    baseline = make_legacy_array_model(tmp_path / "baseline.xlsx")
+    workbook = make_legacy_array_model(tmp_path / "unclassified.xlsx")
+    mark_array_formula_unclassified(workbook)
+
+    snapshot = load_snapshot(workbook)
+    profile = profile_snapshot(snapshot)
+
+    assert snapshot.legacy_array_formula_ranges == ()
+    assert snapshot.dynamic_array_formula_cells == set()
+    assert snapshot.unclassified_array_formula_cells == {("Model", "B1")}
+    assert snapshot.direct_dependents(("Model", "B1")) == set()
+    assert snapshot.parser_warnings
+    assert profile["features"]["unclassified_array_formula_cells"] == ["Model!B1"]
+    assert "fixed-output aliases were not added" in profile_to_markdown(profile)
+    report = compare_snapshots(load_snapshot(baseline), snapshot)
+    assert any(finding.rule_id == "FF010" for finding in report.findings)
+
+
+def test_array_formula_mode_and_legacy_output_range_changes_are_semantic(tmp_path) -> None:
+    ordinary = make_legacy_array_model(tmp_path / "ordinary.xlsx")
+    rewrite(
+        ordinary,
+        lambda workbook: setattr(
+            workbook["Model"]["B1"], "value", "=LEN(Inputs!A1:A3)"
+        ),
+    )
+    cse = make_legacy_array_model(tmp_path / "cse.xlsx")
+
+    mode_report = compare_snapshots(load_snapshot(ordinary), load_snapshot(cse))
+    mode_change = next(
+        change for change in mode_report.changes if change.kind == "array_formula_mode_changed"
+    )
+    assert mode_change.location == ("Model", "B1")
+    assert mode_change.details["before"] == {"mode": "ordinary", "output_range": None}
+    assert mode_change.details["after"] == {
+        "mode": "legacy_cse",
+        "output_range": "B1:B3",
+    }
+    assert mode_change.impacted_cells == (("Dashboard", "B2"), ("Model", "C2"))
+    assert any(finding.rule_id == "FF018" for finding in mode_report.findings)
+
+    blank = make_legacy_array_model(tmp_path / "blank.xlsx")
+    rewrite(blank, lambda workbook: setattr(workbook["Model"]["B1"], "value", None))
+    dynamic = make_legacy_array_model(tmp_path / "dynamic.xlsx")
+    mark_array_formula_dynamic(dynamic)
+    new_dynamic_report = compare_snapshots(load_snapshot(blank), load_snapshot(dynamic))
+    new_dynamic_change = next(
+        change
+        for change in new_dynamic_report.changes
+        if change.kind == "array_formula_mode_changed"
+    )
+    assert new_dynamic_change.details["before"]["mode"] == "absent"
+    assert new_dynamic_change.details["after"]["mode"] == "dynamic"
+    assert any(finding.rule_id == "FF018" for finding in new_dynamic_report.findings)
+
+    baseline = make_legacy_array_model(tmp_path / "baseline.xlsx", "B1:B3")
+    candidate = make_legacy_array_model(tmp_path / "candidate.xlsx", "B1:B4")
+    range_report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    range_change = next(
+        change
+        for change in range_report.changes
+        if change.kind == "legacy_array_output_range_changed"
+    )
+    assert range_change.location == ("Model", "B1")
+    assert range_change.details["before_output_range"] == "B1:B3"
+    assert range_change.details["after_output_range"] == "B1:B4"
+    assert range_change.impacted_cells == (("Dashboard", "B2"), ("Model", "C2"))
+    assert any(finding.rule_id == "FF018" for finding in range_report.findings)
+
+
+def test_dynamic_array_cached_extent_change_is_not_a_fixed_range_change(tmp_path) -> None:
+    baseline = make_legacy_array_model(tmp_path / "baseline.xlsx", "B1:B3")
+    candidate = make_legacy_array_model(tmp_path / "candidate.xlsx", "B1:B4")
+    mark_array_formula_dynamic(baseline)
+    mark_array_formula_dynamic(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert not {
+        change.kind
+        for change in report.changes
+        if change.kind
+        in {"array_formula_mode_changed", "legacy_array_output_range_changed"}
+    }
+    assert not {finding.rule_id for finding in report.findings if finding.rule_id == "FF018"}
 
 
 def test_diff_surfaces_new_spill_and_tokenization_coverage_limits(tmp_path) -> None:

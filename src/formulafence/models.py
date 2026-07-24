@@ -44,6 +44,8 @@ class CellSnapshot:
     value_type: str
     formula: str | None = None
     formula_fingerprint: str | None = None
+    array_formula_kind: str | None = None
+    array_formula_ref: str | None = None
 
     @property
     def location(self) -> CellKey:
@@ -61,6 +63,8 @@ class CellSnapshot:
             "value_type": self.value_type,
             "formula": self.formula,
             "formula_fingerprint": self.formula_fingerprint,
+            "array_formula_kind": self.array_formula_kind,
+            "array_formula_ref": self.array_formula_ref,
         }
 
 
@@ -123,6 +127,69 @@ class RangeDependency:
             self.min_column <= column <= self.max_column
             and self.min_row <= row <= self.max_row
         )
+
+    def intersects(self, other: ArrayFormulaRange) -> bool:
+        """Return whether this dependency reads any cell in an array output range."""
+        return (
+            self.source_sheet == other.sheet
+            and self.min_column <= other.max_column
+            and other.min_column <= self.max_column
+            and self.min_row <= other.max_row
+            and other.min_row <= self.max_row
+        )
+
+
+@dataclass(frozen=True)
+class ArrayFormulaRange:
+    """The fixed result range declared by one legacy CSE array formula.
+
+    Excel stores the formula only at ``anchor``. The remaining cells in ``ref``
+    are result members, not independent formulas, so FormulaFence preserves the
+    range compactly and creates no per-cell aliases.
+    """
+
+    sheet: str
+    anchor: str
+    ref: str
+    min_column: int
+    min_row: int
+    max_column: int
+    max_row: int
+
+    @property
+    def location(self) -> CellKey:
+        return (self.sheet, self.anchor)
+
+    @property
+    def output_cell_count(self) -> int:
+        return (self.max_column - self.min_column + 1) * (
+            self.max_row - self.min_row + 1
+        )
+
+    @property
+    def has_multiple_outputs(self) -> bool:
+        return self.output_cell_count > 1
+
+    def contains(self, location: CellKey) -> bool:
+        sheet, coordinate = location
+        if sheet != self.sheet:
+            return False
+        from openpyxl.utils.cell import column_index_from_string, coordinate_to_tuple
+
+        row, column = coordinate_to_tuple(coordinate)
+        if isinstance(column, str):  # defensive for older openpyxl versions
+            column = column_index_from_string(column)
+        return (
+            self.min_column <= column <= self.max_column
+            and self.min_row <= row <= self.max_row
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "anchor": display_location(self.location),
+            "ref": display_location((self.sheet, self.ref)),
+            "output_cell_count": self.output_cell_count,
+        }
 
 
 @dataclass(frozen=True)
@@ -195,10 +262,17 @@ class WorkbookSnapshot:
     implicit_intersection_tokens: dict[CellKey, tuple[str, ...]] = field(
         default_factory=dict
     )
+    legacy_array_formula_ranges: tuple[ArrayFormulaRange, ...] = ()
+    dynamic_array_formula_cells: set[CellKey] = field(default_factory=set)
+    unclassified_array_formula_cells: set[CellKey] = field(default_factory=set)
+    array_formula_output_dependents: dict[CellKey, set[CellKey]] = field(
+        default_factory=dict
+    )
     tokenization_failure_cells: set[CellKey] = field(default_factory=set)
 
     def direct_dependents(self, location: CellKey) -> set[CellKey]:
         dependents = set(self.reverse_dependencies.get(location, set()))
+        dependents.update(self.array_formula_output_dependents.get(location, set()))
         for dependency in self.range_dependencies:
             if dependency.contains(location):
                 dependents.add(dependency.dependent)
@@ -222,6 +296,19 @@ class WorkbookSnapshot:
             "three_d_reference_cells": len(self.three_d_reference_tokens),
             "spill_reference_cells": len(self.spill_reference_tokens),
             "implicit_intersection_cells": len(self.implicit_intersection_tokens),
+            "legacy_array_formula_cells": len(self.legacy_array_formula_ranges),
+            "legacy_array_formula_output_ranges": sum(
+                array_range.has_multiple_outputs
+                for array_range in self.legacy_array_formula_ranges
+            ),
+            "legacy_array_formula_output_cells": sum(
+                array_range.output_cell_count
+                for array_range in self.legacy_array_formula_ranges
+            ),
+            "dynamic_array_formula_cells": len(self.dynamic_array_formula_cells),
+            "unclassified_array_formula_cells": len(
+                self.unclassified_array_formula_cells
+            ),
             "tokenization_failure_cells": len(self.tokenization_failure_cells),
             "parser_warning_count": len(self.parser_warnings),
         }

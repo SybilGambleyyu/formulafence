@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import warnings
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
 from openpyxl import load_workbook
@@ -25,6 +27,7 @@ from formulafence.formulas import (
     reference_lookup_key,
 )
 from formulafence.models import (
+    ArrayFormulaRange,
     CellKey,
     CellSnapshot,
     RangeDependency,
@@ -51,6 +54,35 @@ _CALCULATION_FIELDS = (
     "concurrentManualCount",
     "forceFullCalc",
 )
+_SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_PACKAGE_RELATIONSHIP_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+_DOCUMENT_RELATIONSHIP_NS = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+)
+_DYNAMIC_ARRAY_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"
+
+
+@dataclass(frozen=True)
+class _ArrayFormulaMetadata:
+    """Raw OOXML metadata needed to distinguish CSE from dynamic arrays."""
+
+    dynamic_cells: set[CellKey]
+    unclassified_cells: set[CellKey]
+    scanned_sheets: set[str]
+    complete: bool
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ArrayFormulaClassification:
+    """The conservative array-formula classifications for one loaded workbook."""
+
+    kinds: dict[CellKey, str]
+    refs: dict[CellKey, str]
+    legacy_ranges: tuple[ArrayFormulaRange, ...]
+    dynamic_cells: set[CellKey]
+    unclassified_cells: set[CellKey]
+    warnings: tuple[str, ...]
 
 
 def sha256_file(path: Path) -> str:
@@ -74,6 +106,274 @@ def _vba_hash(path: Path) -> str | None:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _xml_root(archive: ZipFile, member: str) -> ElementTree.Element:
+    """Read one OOXML part without accepting document type declarations."""
+    payload = archive.read(member)
+    if b"<!DOCTYPE" in payload or b"<!ENTITY" in payload:
+        raise ValueError("OOXML metadata contains a document type declaration")
+    return ElementTree.fromstring(payload)
+
+
+def _normalise_package_target(target: str) -> str | None:
+    """Turn a workbook relationship target into a safe ZIP member name."""
+    candidate = target.lstrip("/") if target.startswith("/") else posixpath.join("xl", target)
+    normalised = posixpath.normpath(candidate)
+    if normalised == ".." or normalised.startswith("../"):
+        return None
+    return normalised
+
+
+def _worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
+    """Map visible worksheet titles to their OOXML worksheet parts."""
+    workbook = _xml_root(archive, "xl/workbook.xml")
+    relationships = _xml_root(archive, "xl/_rels/workbook.xml.rels")
+    relationship_targets: dict[str, str] = {}
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    for relationship in relationships.findall(relationship_tag):
+        relationship_type = relationship.get("Type", "")
+        relationship_id = relationship.get("Id")
+        target = relationship.get("Target")
+        if (
+            not relationship_type.endswith("/worksheet")
+            or not relationship_id
+            or not target
+            or (normalised := _normalise_package_target(target)) is None
+        ):
+            continue
+        relationship_targets[relationship_id] = normalised
+
+    worksheet_paths: dict[str, str] = {}
+    sheet_tag = f"{{{_SPREADSHEETML_NS}}}sheet"
+    relationship_id_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    for sheet in workbook.iter(sheet_tag):
+        title = sheet.get("name")
+        relationship_id = sheet.get(relationship_id_attribute)
+        if not title or not relationship_id:
+            continue
+        if target := relationship_targets.get(relationship_id):
+            worksheet_paths[title] = target
+    return worksheet_paths
+
+
+def _dynamic_metadata_indexes(archive: ZipFile) -> set[int]:
+    """Return the one-based cell-metadata indexes marked as dynamic arrays."""
+    try:
+        metadata = _xml_root(archive, "xl/metadata.xml")
+    except KeyError:
+        return set()
+
+    def tag(name: str) -> str:
+        return f"{{{_SPREADSHEETML_NS}}}{name}"
+
+    metadata_types = [
+        metadata_type.get("name", "")
+        for metadata_type in metadata.findall(f"./{tag('metadataTypes')}/{tag('metadataType')}")
+    ]
+    dynamic_future_indexes: dict[str, set[int]] = {}
+    dynamic_properties_tag = f"{{{_DYNAMIC_ARRAY_NS}}}dynamicArrayProperties"
+    for future_metadata in metadata.findall(tag("futureMetadata")):
+        name = future_metadata.get("name")
+        if not name:
+            continue
+        dynamic_indexes: set[int] = set()
+        for index, metadata_block in enumerate(future_metadata.findall(tag("bk"))):
+            if any(
+                element.tag == dynamic_properties_tag
+                and element.get("fDynamic", "").casefold() in {"1", "true"}
+                for element in metadata_block.iter()
+            ):
+                dynamic_indexes.add(index)
+        if dynamic_indexes:
+            dynamic_future_indexes[name] = dynamic_indexes
+
+    cell_metadata = metadata.find(tag("cellMetadata"))
+    if cell_metadata is None:
+        return set()
+    dynamic_cell_indexes: set[int] = set()
+    for cell_index, metadata_block in enumerate(cell_metadata.findall(tag("bk")), start=1):
+        for record in metadata_block.findall(tag("rc")):
+            try:
+                type_index = int(record.get("t", ""))
+                value_index = int(record.get("v", ""))
+            except ValueError:
+                continue
+            if not 1 <= type_index <= len(metadata_types):
+                continue
+            type_name = metadata_types[type_index - 1]
+            if value_index in dynamic_future_indexes.get(type_name, set()):
+                dynamic_cell_indexes.add(cell_index)
+                break
+    return dynamic_cell_indexes
+
+
+def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
+    """Inspect raw markers that openpyxl intentionally does not expose."""
+    dynamic_cells: set[CellKey] = set()
+    unclassified_cells: set[CellKey] = set()
+    scanned_sheets: set[str] = set()
+    try:
+        with ZipFile(path) as archive:
+            dynamic_indexes = _dynamic_metadata_indexes(archive)
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                scanned_sheets.add(sheet)
+                for cell in worksheet.iter(f"{{{_SPREADSHEETML_NS}}}c"):
+                    formula = cell.find(f"{{{_SPREADSHEETML_NS}}}f")
+                    coordinate = cell.get("r")
+                    if (
+                        formula is None
+                        or formula.get("t") != "array"
+                        or not coordinate
+                    ):
+                        continue
+                    try:
+                        metadata_index = int(cell.get("cm", "0"))
+                    except ValueError:
+                        unclassified_cells.add((sheet, coordinate))
+                        continue
+                    if metadata_index <= 0:
+                        continue
+                    if metadata_index in dynamic_indexes:
+                        dynamic_cells.add((sheet, coordinate))
+                    else:
+                        unclassified_cells.add((sheet, coordinate))
+    except (BadZipFile, ElementTree.ParseError, OSError, ValueError) as error:
+        return _ArrayFormulaMetadata(
+            dynamic_cells=set(),
+            unclassified_cells=set(),
+            scanned_sheets=set(),
+            complete=False,
+            warnings=(
+                "FormulaFence could not inspect array-formula OOXML metadata "
+                f"({type(error).__name__}); fixed CSE output aliases were not traced.",
+            ),
+        )
+    return _ArrayFormulaMetadata(
+        dynamic_cells=dynamic_cells,
+        unclassified_cells=unclassified_cells,
+        scanned_sheets=scanned_sheets,
+        complete=True,
+        warnings=(),
+    )
+
+
+def _array_formula_range(sheet: str, cell: object) -> ArrayFormulaRange | None:
+    """Return one canonical local output range when an array anchor is valid."""
+    value = getattr(cell, "value", None)
+    ref = getattr(value, "ref", None)
+    if not isinstance(ref, str) or not ref.strip():
+        return None
+    try:
+        min_column, min_row, max_column, max_row = range_boundaries(ref)
+    except ValueError:
+        return None
+    if None in {min_column, min_row, max_column, max_row}:
+        return None
+    anchor = f"{get_column_letter(min_column)}{min_row}"
+    if getattr(cell, "coordinate", "").upper() != anchor:
+        return None
+    endpoint = f"{get_column_letter(max_column)}{max_row}"
+    canonical_ref = anchor if anchor == endpoint else f"{anchor}:{endpoint}"
+    return ArrayFormulaRange(
+        sheet=sheet,
+        anchor=anchor,
+        ref=canonical_ref,
+        min_column=min_column,
+        min_row=min_row,
+        max_column=max_column,
+        max_row=max_row,
+    )
+
+
+def _is_array_formula(cell: object) -> bool:
+    """Return whether openpyxl exposed the cell as an OOXML array formula."""
+    value = getattr(cell, "value", None)
+    return (
+        getattr(cell, "data_type", None) == "f"
+        and isinstance(getattr(value, "ref", None), str)
+        and _formula_text(value) is not None
+    )
+
+
+def _classify_array_formulas(
+    workbook: object, metadata: _ArrayFormulaMetadata
+) -> _ArrayFormulaClassification:
+    """Classify legacy fixed CSE outputs without guessing dynamic spill extent."""
+    kinds: dict[CellKey, str] = {}
+    refs: dict[CellKey, str] = {}
+    legacy_ranges: list[ArrayFormulaRange] = []
+    dynamic_cells: set[CellKey] = set()
+    unclassified_cells: set[CellKey] = set()
+    for worksheet in getattr(workbook, "worksheets", ()):
+        for cell in worksheet._cells.values():  # noqa: SLF001 - sparse workbook safety
+            if not _is_array_formula(cell):
+                continue
+            location = (worksheet.title, cell.coordinate)
+            if not metadata.complete or worksheet.title not in metadata.scanned_sheets:
+                kinds[location] = "unclassified"
+                unclassified_cells.add(location)
+                continue
+            if location in metadata.dynamic_cells:
+                kinds[location] = "dynamic"
+                dynamic_cells.add(location)
+                continue
+            if location in metadata.unclassified_cells:
+                kinds[location] = "unclassified"
+                unclassified_cells.add(location)
+                continue
+            array_range = _array_formula_range(worksheet.title, cell)
+            if array_range is None:
+                kinds[location] = "unclassified"
+                unclassified_cells.add(location)
+                continue
+            kinds[location] = "legacy_cse"
+            refs[location] = array_range.ref
+            legacy_ranges.append(array_range)
+
+    warnings = set(metadata.warnings)
+    if unclassified_cells:
+        warnings.add(
+            "FormulaFence could not classify one or more OOXML array formulas; "
+            "fixed CSE output aliases were not traced for those cells."
+        )
+    return _ArrayFormulaClassification(
+        kinds=kinds,
+        refs=refs,
+        legacy_ranges=tuple(legacy_ranges),
+        dynamic_cells=dynamic_cells,
+        unclassified_cells=unclassified_cells,
+        warnings=tuple(sorted(warnings)),
+    )
+
+
+def _array_formula_output_dependents(
+    legacy_ranges: tuple[ArrayFormulaRange, ...],
+    reverse_dependencies: Mapping[CellKey, set[CellKey]],
+    range_dependencies: list[RangeDependency],
+) -> dict[CellKey, set[CellKey]]:
+    """Link a CSE anchor to formulas that read any fixed result member.
+
+    The output range is never expanded into millions of virtual cells. Instead
+    each anchor receives direct aliases only to the already-known formula cells
+    whose static references intersect that compact range.
+    """
+    ranges_by_sheet: dict[str, list[ArrayFormulaRange]] = defaultdict(list)
+    for array_range in legacy_ranges:
+        if array_range.has_multiple_outputs:
+            ranges_by_sheet[array_range.sheet].append(array_range)
+
+    dependents: dict[CellKey, set[CellKey]] = defaultdict(set)
+    for source, formula_cells in reverse_dependencies.items():
+        for array_range in ranges_by_sheet.get(source[0], ()):
+            if array_range.contains(source):
+                dependents[array_range.location].update(formula_cells)
+    for dependency in range_dependencies:
+        for array_range in ranges_by_sheet.get(dependency.source_sheet, ()):
+            if dependency.intersects(array_range):
+                dependents[array_range.location].add(dependency.dependent)
+    return {anchor: cells for anchor, cells in dependents.items() if cells}
+
+
 def _formula_text(value: object) -> str | None:
     if isinstance(value, str):
         return value
@@ -82,7 +382,13 @@ def _formula_text(value: object) -> str | None:
     return text if isinstance(text, str) else None
 
 
-def _cell_snapshot(sheet: str, cell: object) -> CellSnapshot:
+def _cell_snapshot(
+    sheet: str,
+    cell: object,
+    *,
+    array_formula_kind: str | None = None,
+    array_formula_ref: str | None = None,
+) -> CellSnapshot:
     coordinate = cell.coordinate
     value = cell.value
     data_type = cell.data_type
@@ -96,6 +402,8 @@ def _cell_snapshot(sheet: str, cell: object) -> CellSnapshot:
             value_type="formula",
             formula=formula,
             formula_fingerprint=formula_fingerprint(formula, coordinate),
+            array_formula_kind=array_formula_kind,
+            array_formula_ref=array_formula_ref,
         )
     cell_type = "error" if data_type == "e" else "value"
     return CellSnapshot(
@@ -603,7 +911,26 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             )
     except (BadZipFile, InvalidFileException, OSError, ValueError) as error:
         raise WorkbookLoadError(f"Could not read workbook {source}: {error}") from error
-    parser_warnings = tuple(sorted({str(warning.message) for warning in caught_warnings}))
+    parser_warnings = {str(warning.message) for warning in caught_warnings}
+    has_array_formulas = any(
+        _is_array_formula(cell)
+        for worksheet in workbook.worksheets
+        for cell in worksheet._cells.values()  # noqa: SLF001 - sparse workbook safety
+    )
+    if has_array_formulas:
+        array_formula_classification = _classify_array_formulas(
+            workbook, _array_formula_metadata(source)
+        )
+    else:
+        array_formula_classification = _ArrayFormulaClassification(
+            kinds={},
+            refs={},
+            legacy_ranges=(),
+            dynamic_cells=set(),
+            unclassified_cells=set(),
+            warnings=(),
+        )
+    parser_warnings.update(array_formula_classification.warnings)
 
     sheets: dict[str, SheetSnapshot] = {}
     cells: dict[CellKey, CellSnapshot] = {}
@@ -647,7 +974,13 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         for cell in worksheet_cells:
             if cell.value is None:
                 continue
-            snapshot = _cell_snapshot(worksheet.title, cell)
+            location = (worksheet.title, cell.coordinate)
+            snapshot = _cell_snapshot(
+                worksheet.title,
+                cell,
+                array_formula_kind=array_formula_classification.kinds.get(location),
+                array_formula_ref=array_formula_classification.refs.get(location),
+            )
             cells[snapshot.location] = snapshot
             nonempty_cells += 1
             if not snapshot.is_formula or snapshot.formula is None:
@@ -718,6 +1051,12 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             max_column=worksheet.max_column,
         )
 
+    array_formula_output_dependents = _array_formula_output_dependents(
+        array_formula_classification.legacy_ranges,
+        reverse_dependencies,
+        range_dependencies,
+    )
+
     return WorkbookSnapshot(
         path=source,
         sha256=sha256_file(source),
@@ -733,13 +1072,17 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         three_d_reference_tokens=three_d_reference_tokens,
         spill_reference_tokens=spill_reference_tokens,
         implicit_intersection_tokens=implicit_intersection_tokens,
+        legacy_array_formula_ranges=array_formula_classification.legacy_ranges,
+        dynamic_array_formula_cells=array_formula_classification.dynamic_cells,
+        unclassified_array_formula_cells=array_formula_classification.unclassified_cells,
+        array_formula_output_dependents=array_formula_output_dependents,
         tokenization_failure_cells=tokenization_failure_cells,
         tables=tables,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),
         calculation_settings=_calculation_settings(workbook),
-        parser_warnings=parser_warnings,
+        parser_warnings=tuple(sorted(parser_warnings)),
     )
 
 
@@ -802,6 +1145,21 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
                 for location, tokens in sorted(
                     snapshot.implicit_intersection_tokens.items()
                 )
+            ],
+            "legacy_array_formula_ranges": [
+                array_range.to_dict()
+                for array_range in sorted(
+                    snapshot.legacy_array_formula_ranges,
+                    key=lambda array_range: (array_range.sheet.casefold(), array_range.anchor),
+                )
+            ],
+            "dynamic_array_formula_cells": [
+                display_location(location)
+                for location in sorted(snapshot.dynamic_array_formula_cells)
+            ],
+            "unclassified_array_formula_cells": [
+                display_location(location)
+                for location in sorted(snapshot.unclassified_array_formula_cells)
             ],
             "tokenization_failure_cells": [
                 display_location(location)

@@ -17,6 +17,7 @@ rules:
   no_new_dynamic_references: true
   no_new_spill_references: true
   no_new_implicit_intersections: true
+  no_array_formula_semantics_changes: true
   no_new_tokenization_failures: true
   no_table_definition_changes: true
   no_3d_reference_scope_changes: true
@@ -61,6 +62,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_dynamic_references` | boolean | A formula adds a dynamic reference function such as `INDIRECT` or `OFFSET`. |
 | `no_new_spill_references` | boolean | A formula adds a dynamic-array spill reference; FormulaFence traces its anchor but not its variable extent or blockers. |
 | `no_new_implicit_intersections` | boolean | A formula adds explicit `@` / `SINGLE()` implicit intersection, which can change which value a range or array contributes. |
+| `no_array_formula_semantics_changes` | boolean | A legacy-CSE or dynamic-array formula is added, removed, or changes mode, or a legacy CSE formula's fixed output range changes. |
 | `no_new_tokenization_failures` | boolean | A formula is newly introduced that the underlying formula tokenizer cannot inspect. |
 | `no_table_definition_changes` | boolean | An Excel table is added, removed, moved, renamed, or has its columns/header/total-row configuration changed. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
@@ -113,6 +115,20 @@ New instances emit `FF017`; enable `no_new_implicit_intersections` for
 `FFP017`. This does not change the table-specific `[@Column]` / `#This Row`
 resolver. Formula-defined names containing explicit implicit intersection stay
 unresolved at a caller because that caller position is part of the semantics.
+
+For an OOXML array formula with a fixed legacy CSE output range, FormulaFence
+keeps the range compact and links its anchor to any statically known formula
+that reads a member of that range. For example, a formula stored at `Model!B1`
+with fixed `B1:B3` output makes both `=Model!B2*10` and
+`=SUM(Model!B2:B3)` downstream consumers of the anchor. It does not expand the
+range into one graph node per result cell. Dynamic arrays are identified through
+their OOXML cell metadata and are listed in profiles, but their current spill
+extent is not treated as a fixed alias because it can resize at calculation
+time. An array formula with unrecognized cell metadata remains an explicit
+coverage warning without aliases. A change between ordinary, fixed CSE, and
+dynamic modes, or a fixed CSE output-range change, emits `FF018`; adding or
+removing a legacy-CSE or dynamic-array formula also emits `FF018`. Enable
+`no_array_formula_semantics_changes` to make it `FFP018` in CI.
 
 When a formula cannot be tokenized at all, FormulaFence records its location in
 the profile and emits `FF016` for a new instance. Enable

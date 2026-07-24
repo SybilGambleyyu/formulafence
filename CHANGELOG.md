@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.0 — 2026-07-24
+
+- Trace fixed legacy CSE array output members without expanding their declared
+  ranges: an input of an array anchor now reaches ordinary formulas that read
+  non-anchor result cells, including cross-sheet and range consumers.
+- Inspect raw OOXML dynamic-array metadata to keep the boundary safe. Dynamic
+  anchors are inventoried but never receive aliases for a current spill extent;
+  unrecognized array metadata becomes a visible coverage warning instead of a
+  guessed fixed CSE graph.
+- Compare array-formula execution mode independently of formula text and emit
+  `FF018` when a legacy-CSE or dynamic formula is added, removed, or changes
+  mode, or when a legacy CSE fixed output range changes. Add the fail-closed
+  `no_array_formula_semantics_changes` policy rule (`FFP018`).
+
 ## 0.11.0 — 2026-07-24
 
 - Trace the exact selected cell for direct static A1 implicit intersection,

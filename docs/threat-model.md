@@ -54,6 +54,17 @@ review prompt, not proof of an error.
   named, implicit-intersection, and malformed spill forms stay outside this
   subset. A formula-defined name containing a spill reference is not expanded,
   so callers retain a visible coverage gap.
+- A multi-cell legacy CSE array formula has a fixed OOXML output range. When
+  FormulaFence can verify that the array anchor has no dynamic-array cell
+  metadata, it links the anchor to statically known formulas that read any
+  result member of that range. The range remains compact rather than becoming
+  one graph node per output cell. Dynamic-array anchors identified by OOXML
+  `XLDAPR`/`fDynamic` metadata are inventoried but never receive fixed-output
+  aliases: their spill extent can change at recalculation time. Array formulas
+  with absent, malformed, or unrecognized metadata mappings are reported as
+  coverage notes and receive no aliases. FormulaFence reports adding, removing,
+  or changing mode, plus a fixed CSE output-range change, as `FF018`; it does
+  not calculate either array form or predict dynamic spill dimensions.
 - Explicit implicit intersection is inventoried for literal `@` display syntax,
   `@` applied to a function, and persisted `SINGLE()` OOXML. When `SINGLE()`
   has one direct static A1 cell or range argument with an unambiguous

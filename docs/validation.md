@@ -201,6 +201,36 @@ serialized `SINGLE`, horizontal and rectangular direct ranges, string safety,
 unsupported `@A1#`, dynamic `@OFFSET`, table `[@Column]` separation, and
 formula-defined-name containment.
 
+## Legacy CSE output aliases versus dynamic arrays — 2026-07-24
+
+Microsoft distinguishes a legacy Ctrl+Shift+Enter array's fixed output range
+from a dynamic array whose spill can resize. [XlsxWriter documents the same
+distinction](https://xlsxwriter.readthedocs.io/working_with_formulas.html):
+`write_array_formula()` writes a static CSE range, while
+`write_dynamic_array_formula()` writes a dynamic array.
+
+Two otherwise identical workbooks were generated locally with independently
+maintained XlsxWriter 3.2.9. Each had `Inputs!A1:A3`, an array formula at
+`Model!B1`, an ordinary `=B2*10` consumer at `Model!C2`, and a cross-sheet
+`=SUM(Model!B2:B3)` consumer at `Dashboard!B2`. The fixtures are not bundled.
+
+| Form | Baseline SHA-256 | Stored anchor | FormulaFence result |
+| --- | --- | --- | --- |
+| CSE | `fdf2dba62f5390cfc88137470b22709415651d88b9ced9a116fe5ba8e601ca42` | `<f t="array" ref="B1:B3">LEN(Inputs!A1:A3)</f>` | Fixed legacy range `B1:B3`; anchor reaches `Model!C2` and `Dashboard!B2`. |
+| Dynamic | `cf0b83ba83d4ef85bc767e67e45764691cff6735016fea8d3890e11ba7173b7a` | `<c r="B1" cm="1"><f t="array" ref="B1:B3">…` plus `XLDAPR` `fDynamic="1"` metadata | Dynamic anchor recorded; no fixed-output aliases. |
+
+Changing `Inputs!A2` in the CSE candidate produced the exact paths
+`Inputs!A2 → Model!B1 → Model!C2` and
+`Inputs!A2 → Model!B1 → Dashboard!B2`. The equivalent dynamic candidate only
+reached `Model!B1`, which is intentional: a current spill ref is not proof of
+a stable future extent. A separate compact-range fixture declared
+`B1:XFD1048576`; FormulaFence retained eight stored cells while linking the
+known consumers, demonstrating that it does not materialize an output node for
+every declared CSE result cell. A same-text ordinary-to-CSE transition and a
+`B1:B3`-to-`B1:B4` fixed-range transition each emitted `FF018`; changing only a
+dynamic cached ref did not. This validates storage classification and graph
+behavior, not Excel calculation results.
+
 ## Public structured-reference example — 2026-07-24
 
 FormulaFence 0.6.0 was also profiled against the public

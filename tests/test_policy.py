@@ -12,6 +12,7 @@ from .helpers import (
     make_data_validation_model,
     make_legacy_array_model,
     make_model,
+    make_protection_model,
     make_table_model,
     make_three_d_model,
     mark_array_formula_dynamic,
@@ -206,6 +207,20 @@ def test_policy_can_block_conditional_formatting_control_changes(tmp_path) -> No
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP021"}
+
+
+def test_policy_can_block_protection_control_changes(tmp_path) -> None:
+    baseline = make_protection_model(tmp_path / "baseline.xlsx")
+    candidate = make_protection_model(tmp_path / "candidate.xlsx")
+
+    def remove_structure_lock(workbook) -> None:
+        workbook.security.lockStructure = False
+
+    rewrite(candidate, remove_structure_lock)
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy({"version": 1, "rules": {"no_protection_changes": True}})
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP022"}
 
 
 def test_policy_can_block_three_d_reference_scope_changes(tmp_path) -> None:

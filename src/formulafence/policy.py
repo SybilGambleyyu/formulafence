@@ -28,6 +28,7 @@ _RULE_FIELDS = {
     "no_table_definition_changes",
     "no_data_validation_changes",
     "no_conditional_formatting_changes",
+    "no_protection_changes",
     "no_3d_reference_scope_changes",
     "no_sheet_visibility_changes",
     "max_changed_formulas",
@@ -73,6 +74,7 @@ class Policy:
     no_table_definition_changes: bool = False
     no_data_validation_changes: bool = False
     no_conditional_formatting_changes: bool = False
+    no_protection_changes: bool = False
     no_3d_reference_scope_changes: bool = False
     no_sheet_visibility_changes: bool = False
     max_changed_formulas: int | None = None
@@ -100,6 +102,7 @@ rules:
   no_table_definition_changes: true
   no_data_validation_changes: true
   no_conditional_formatting_changes: true
+  no_protection_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -205,6 +208,7 @@ def parse_policy(data: object) -> Policy:
         no_conditional_formatting_changes=_boolean_rule(
             rules, "no_conditional_formatting_changes"
         ),
+        no_protection_changes=_boolean_rule(rules, "no_protection_changes"),
         no_3d_reference_scope_changes=_boolean_rule(
             rules, "no_3d_reference_scope_changes"
         ),
@@ -387,6 +391,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP021",
                     "high",
                     "Policy forbids changes to conditional-formatting controls.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_protection_changes:
+        for finding in _rule_triggered(report, "FF022"):
+            violations.append(
+                Finding(
+                    "FFP022",
+                    "high",
+                    "Policy forbids changes to workbook, sheet, or cell protection controls.",
                     details=finding.details,
                 )
             )

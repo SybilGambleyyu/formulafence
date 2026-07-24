@@ -388,6 +388,211 @@ class ConditionalFormattingExtensionSnapshot:
 
 
 @dataclass(frozen=True)
+class ProtectionCredentialSnapshot:
+    """Non-secret evidence that a protection credential is configured.
+
+    OOXML stores legacy password verifiers and, in newer workbooks, password
+    hashes and salts alongside the protection settings.  FormulaFence uses a
+    private signature to compare that material but never serialises it into a
+    profile, change report, or finding.
+    """
+
+    has_legacy_verifier: bool = False
+    has_modern_verifier: bool = False
+    algorithm: str | None = None
+    spin_count: int | None = None
+    signature: str | None = field(default=None, repr=False)
+
+    @property
+    def configured(self) -> bool:
+        """Return whether any verifier material was present."""
+        return self.has_legacy_verifier or self.has_modern_verifier
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe verifier metadata without password material."""
+        return {
+            "configured": self.configured,
+            "has_legacy_verifier": self.has_legacy_verifier,
+            "has_modern_verifier": self.has_modern_verifier,
+            "algorithm": self.algorithm,
+            "spin_count": self.spin_count,
+        }
+
+
+@dataclass(frozen=True)
+class ProtectionOpaqueMetadataSnapshot:
+    """Private comparison evidence for unmodelled protection metadata."""
+
+    count: int = 0
+    signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return self.count > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return only the existence and amount of opaque metadata."""
+        return {
+            "present": self.present,
+            "count": self.count,
+        }
+
+
+@dataclass(frozen=True)
+class WorkbookProtectionSnapshot:
+    """Workbook-structure and revision protection controls."""
+
+    lock_structure: bool
+    lock_windows: bool
+    lock_revision: bool
+    workbook_credential: ProtectionCredentialSnapshot = field(
+        default_factory=ProtectionCredentialSnapshot
+    )
+    revisions_credential: ProtectionCredentialSnapshot = field(
+        default_factory=ProtectionCredentialSnapshot
+    )
+    opaque_metadata: ProtectionOpaqueMetadataSnapshot = field(
+        default_factory=ProtectionOpaqueMetadataSnapshot
+    )
+
+    @property
+    def enabled(self) -> bool:
+        """Return whether any workbook-level operation is locked."""
+        return self.lock_structure or self.lock_windows or self.lock_revision
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe, reviewable control settings."""
+        return {
+            "enabled": self.enabled,
+            "lock_structure": self.lock_structure,
+            "lock_windows": self.lock_windows,
+            "lock_revision": self.lock_revision,
+            "workbook_credential": self.workbook_credential.to_dict(),
+            "revisions_credential": self.revisions_credential.to_dict(),
+            "opaque_metadata": self.opaque_metadata.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class SheetProtectionSnapshot:
+    """One worksheet, dialog-sheet, or chart-sheet protection declaration."""
+
+    sheet: str
+    sheet_type: str
+    enabled: bool
+    locked_actions: tuple[str, ...]
+    credential: ProtectionCredentialSnapshot = field(
+        default_factory=ProtectionCredentialSnapshot
+    )
+    opaque_metadata: ProtectionOpaqueMetadataSnapshot = field(
+        default_factory=ProtectionOpaqueMetadataSnapshot
+    )
+
+    def sort_key(self) -> tuple[object, ...]:
+        return self.sheet.casefold(), self.sheet_type, self.locked_actions
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe, reviewable sheet-protection settings."""
+        return {
+            "sheet": self.sheet,
+            "sheet_type": self.sheet_type,
+            "enabled": self.enabled,
+            "locked_actions": list(self.locked_actions),
+            "credential": self.credential.to_dict(),
+            "opaque_metadata": self.opaque_metadata.to_dict(),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
+class ProtectedRangeSnapshot:
+    """A protected worksheet range without its password or identity material."""
+
+    sheet: str
+    ranges: tuple[str, ...]
+    has_name: bool
+    name_signature: str | None = field(default=None, repr=False)
+    credential: ProtectionCredentialSnapshot = field(
+        default_factory=ProtectionCredentialSnapshot
+    )
+    has_security_descriptor: bool = False
+    security_descriptor_signature: str | None = field(default=None, repr=False)
+    opaque_metadata: ProtectionOpaqueMetadataSnapshot = field(
+        default_factory=ProtectionOpaqueMetadataSnapshot
+    )
+
+    @property
+    def target_range_count(self) -> int:
+        return len(self.ranges)
+
+    def sort_key(self) -> tuple[object, ...]:
+        return (
+            self.sheet.casefold(),
+            self.ranges,
+            self.has_name,
+            self.name_signature or "",
+            self.credential.configured,
+            self.has_security_descriptor,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe range permissions without names or credential material."""
+        return {
+            "sheet": self.sheet,
+            "ranges": [
+                display_location((self.sheet, target_range))
+                for target_range in self.ranges
+            ],
+            "has_name": self.has_name,
+            "credential": self.credential.to_dict(),
+            "has_security_descriptor": self.has_security_descriptor,
+            "opaque_metadata": self.opaque_metadata.to_dict(),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
+class CellProtectionDefaultSnapshot:
+    """Effective locked/hidden defaults from the workbook's base cell style."""
+
+    locked: bool
+    hidden: bool
+
+    def to_dict(self) -> dict[str, bool]:
+        return {"locked": self.locked, "hidden": self.hidden}
+
+
+@dataclass(frozen=True)
+class CellProtectionAssignmentSnapshot:
+    """One direct cell, row, or column protection-style assignment."""
+
+    sheet: str
+    scope: str
+    target: str
+    locked: bool
+    hidden: bool
+
+    def sort_key(self) -> tuple[object, ...]:
+        return self.sheet.casefold(), self.scope, self.target.casefold()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sheet": self.sheet,
+            "scope": self.scope,
+            "target": self.target,
+            "locked": self.locked,
+            "hidden": self.hidden,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class RangeDependency:
     """A range used by a formula, stored without expanding large Excel ranges."""
 
@@ -572,6 +777,11 @@ class WorkbookSnapshot:
     data_validations: tuple[DataValidationSnapshot, ...] = ()
     conditional_formatting: tuple[ConditionalFormattingSnapshot, ...] = ()
     conditional_formatting_extensions: tuple[ConditionalFormattingExtensionSnapshot, ...] = ()
+    workbook_protection: WorkbookProtectionSnapshot | None = None
+    sheet_protections: tuple[SheetProtectionSnapshot, ...] = ()
+    protected_ranges: tuple[ProtectedRangeSnapshot, ...] = ()
+    cell_protection_default: CellProtectionDefaultSnapshot | None = None
+    cell_protection_assignments: tuple[CellProtectionAssignmentSnapshot, ...] = ()
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     spill_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -618,6 +828,21 @@ class WorkbookSnapshot:
             ),
             "conditional_formatting_extensions": len(
                 self.conditional_formatting_extensions
+            ),
+            "workbook_protection_enabled": bool(
+                self.workbook_protection and self.workbook_protection.enabled
+            ),
+            "sheet_protection_controls": len(self.sheet_protections),
+            "protected_sheet_count": sum(
+                protection.enabled for protection in self.sheet_protections
+            ),
+            "protected_range_count": len(self.protected_ranges),
+            "protected_range_target_ranges": sum(
+                protected_range.target_range_count
+                for protected_range in self.protected_ranges
+            ),
+            "cell_protection_assignment_count": len(
+                self.cell_protection_assignments
             ),
             "has_vba": self.macro_hash is not None,
             "external_reference_cells": len(self.external_references),

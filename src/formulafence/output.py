@@ -18,6 +18,21 @@ def _markdown_escape(value: object) -> str:
     return str(value).replace("|", "\\|").replace("\n", "<br>")
 
 
+def _credential_summary(credential: dict[str, Any]) -> str:
+    """Render safe protection-verifier metadata without credential material."""
+    if not credential["configured"]:
+        return "none"
+    kinds: list[str] = []
+    if credential["has_legacy_verifier"]:
+        kinds.append("legacy verifier")
+    if credential["has_modern_verifier"]:
+        algorithm = credential["algorithm"] or "modern"
+        kinds.append(f"{algorithm} verifier")
+    if credential["spin_count"] is not None:
+        kinds.append(f"{credential['spin_count']} iterations")
+    return "; ".join(kinds)
+
+
 def profile_to_markdown(profile: dict[str, Any]) -> str:
     workbook = profile["workbook"]
     lines = [
@@ -45,6 +60,21 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         (
             "- **Conditional-formatting extension fragments:** "
             f"{workbook['conditional_formatting_extensions']}"
+        ),
+        (
+            "- **Workbook protection active:** "
+            f"{'yes' if workbook['workbook_protection_enabled'] else 'no'}"
+        ),
+        f"- **Sheet-protection declarations:** {workbook['sheet_protection_controls']}",
+        f"- **Protected sheets:** {workbook['protected_sheet_count']}",
+        f"- **Protected ranges:** {workbook['protected_range_count']}",
+        (
+            "- **Protected-range target references:** "
+            f"{workbook['protected_range_target_ranges']}"
+        ),
+        (
+            "- **Direct cell-protection assignments:** "
+            f"{workbook['cell_protection_assignment_count']}"
         ),
         f"- **3-D reference formulas:** {workbook['three_d_reference_cells']}",
         f"- **Spill-reference formulas:** {workbook['spill_reference_cells']}",
@@ -223,6 +253,145 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             )
         lines.append(
             "Extension structure is compared locally but intentionally omitted from the profile."
+        )
+    if profile["workbook_protection"] is not None:
+        protection = profile["workbook_protection"]
+        locked_operations = [
+            label
+            for key, label in (
+                ("lock_structure", "workbook structure"),
+                ("lock_windows", "workbook windows"),
+                ("lock_revision", "revisions"),
+            )
+            if protection[key]
+        ]
+        lines.extend(
+            [
+                "",
+                "## Workbook protection",
+                "",
+                f"- **Active:** {'yes' if protection['enabled'] else 'no'}",
+                (
+                    "- **Locked operations:** "
+                    + (", ".join(locked_operations) if locked_operations else "none")
+                ),
+                (
+                    "- **Workbook verifier:** "
+                    + _credential_summary(protection["workbook_credential"])
+                ),
+                (
+                    "- **Revision verifier:** "
+                    + _credential_summary(protection["revisions_credential"])
+                ),
+            ]
+        )
+        if protection["opaque_metadata"]["present"]:
+            lines.append(
+                "- **Unmodelled protection metadata:** "
+                f"{protection['opaque_metadata']['count']} item(s)"
+            )
+    if profile["sheet_protections"]:
+        lines.extend(
+            [
+                "",
+                "## Sheet protection controls",
+                "",
+                "| Sheet | Type | Active | Locked actions | Verifier |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for protection in profile["sheet_protections"]:
+            lines.append(
+                "| {sheet} | {sheet_type} | {enabled} | {actions} | {credential} |".format(
+                    sheet=_markdown_escape(protection["sheet"]),
+                    sheet_type=_markdown_escape(protection["sheet_type"]),
+                    enabled="yes" if protection["enabled"] else "no",
+                    actions=_markdown_escape(
+                        ", ".join(protection["locked_actions"])
+                        if protection["locked_actions"]
+                        else "none"
+                    ),
+                    credential=_markdown_escape(
+                        _credential_summary(protection["credential"])
+                    ),
+                )
+            )
+        lines.append(
+            "Password verifier values, hashes, salts, and opaque protection XML are not included."
+        )
+    if profile["protected_ranges"]:
+        lines.extend(
+            [
+                "",
+                "## Protected ranges",
+                "",
+                "| Sheet | Applies to | Named | Verifier | Identity restriction |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for protected_range in profile["protected_ranges"]:
+            lines.append(
+                "| {sheet} | {ranges} | {has_name} | {credential} | {descriptor} |".format(
+                    sheet=_markdown_escape(protected_range["sheet"]),
+                    ranges=_markdown_escape(
+                        ", ".join(protected_range["ranges"])
+                        if protected_range["ranges"]
+                        else "missing target"
+                    ),
+                    has_name="yes" if protected_range["has_name"] else "no",
+                    credential=_markdown_escape(
+                        _credential_summary(protected_range["credential"])
+                    ),
+                    descriptor=(
+                        "present"
+                        if protected_range["has_security_descriptor"]
+                        else "none"
+                    ),
+                )
+            )
+        lines.append(
+            "Range names and security-descriptor contents are intentionally omitted from profiles."
+        )
+    if profile["cell_protection_default"] is not None:
+        default = profile["cell_protection_default"]
+        lines.extend(
+            [
+                "",
+                "## Cell protection defaults",
+                "",
+                (
+                    "- **Locked by default:** "
+                    + ("yes" if default["locked"] else "no")
+                ),
+                (
+                    "- **Formulas hidden by default:** "
+                    + ("yes" if default["hidden"] else "no")
+                ),
+            ]
+        )
+    if profile["cell_protection_assignments"]:
+        lines.extend(
+            [
+                "",
+                "## Direct cell-protection assignments",
+                "",
+                "| Sheet | Scope | Target | Locked | Formulas hidden |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for assignment in profile["cell_protection_assignments"]:
+            lines.append(
+                "| {sheet} | {scope} | {target} | {locked} | {hidden} |".format(
+                    sheet=_markdown_escape(assignment["sheet"]),
+                    scope=_markdown_escape(assignment["scope"]),
+                    target=_markdown_escape(assignment["target"]),
+                    locked="yes" if assignment["locked"] else "no",
+                    hidden="yes" if assignment["hidden"] else "no",
+                )
+        )
+        lines.append(
+            "Assignments retain their serialized cell, row, or column scope; "
+            "they are not expanded into cells."
         )
     features = profile["features"]
     if features["external_reference_cells"] or features["broken_reference_cells"]:

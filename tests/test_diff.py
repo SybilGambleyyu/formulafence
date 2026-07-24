@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import warnings
 
+from openpyxl.styles import Protection
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -12,6 +13,8 @@ from formulafence.workbook import load_snapshot, profile_snapshot
 
 from .helpers import (
     add_conditional_formatting_databar_extension,
+    add_protected_range,
+    change_protected_range,
     make_conditional_formatting_model,
     make_current_row_table_model,
     make_data_validation_model,
@@ -21,6 +24,7 @@ from .helpers import (
     make_model,
     make_named_formula_model,
     make_named_lambda_model,
+    make_protection_model,
     make_scoped_named_lambda_model,
     make_spill_model,
     make_table_model,
@@ -29,6 +33,8 @@ from .helpers import (
     mark_array_formula_unclassified,
     reorder_conditional_differential_styles,
     rewrite,
+    set_sheet_protection_defaults,
+    set_sheet_protection_modern_verifier,
 )
 
 
@@ -1188,6 +1194,206 @@ def test_conditional_formatting_extensions_are_compared_without_guid_noise(tmp_p
             "uri"
         ]
     )
+
+
+def test_protection_controls_are_profiled_without_verifier_or_identity_material(
+    tmp_path,
+) -> None:
+    workbook = make_protection_model(
+        tmp_path / "protected.xlsx", include_chartsheet=True
+    )
+    synthetic_hash = "c3ludGhldGljLWhhc2gtaGFzaA=="
+    set_sheet_protection_modern_verifier(workbook, synthetic_hash)
+
+    snapshot = load_snapshot(workbook)
+    profile = profile_snapshot(snapshot)
+    markdown = profile_to_markdown(profile)
+    profile_text = json.dumps(profile)
+
+    assert snapshot.summary()["workbook_protection_enabled"] is True
+    assert snapshot.summary()["protected_sheet_count"] == 2
+    assert snapshot.summary()["protected_range_count"] == 1
+    assert snapshot.summary()["cell_protection_assignment_count"] == 4
+    assert profile["sheet_protections"] == [
+        {
+            "sheet": "Dashboard",
+            "sheet_type": "chartsheet",
+            "enabled": True,
+            "locked_actions": ["content", "objects"],
+            "credential": {
+                "configured": True,
+                "has_legacy_verifier": True,
+                "has_modern_verifier": False,
+                "algorithm": None,
+                "spin_count": None,
+            },
+            "opaque_metadata": {"present": False, "count": 0},
+        },
+        {
+            "sheet": "Inputs",
+            "sheet_type": "worksheet",
+            "enabled": True,
+            "locked_actions": [
+                "format_columns",
+                "format_rows",
+                "insert_columns",
+                "insert_rows",
+                "insert_hyperlinks",
+                "delete_columns",
+                "delete_rows",
+                "select_locked_cells",
+                "pivot_tables",
+            ],
+            "credential": {
+                "configured": True,
+                "has_legacy_verifier": False,
+                "has_modern_verifier": True,
+                "algorithm": "SHA-512",
+                "spin_count": 100000,
+            },
+            "opaque_metadata": {"present": False, "count": 0},
+        },
+    ]
+    assert profile["protected_ranges"] == [
+        {
+            "sheet": "Inputs",
+            "ranges": ["Inputs!B2:B5"],
+            "has_name": True,
+            "credential": {
+                "configured": True,
+                "has_legacy_verifier": True,
+                "has_modern_verifier": False,
+                "algorithm": None,
+                "spin_count": None,
+            },
+            "has_security_descriptor": True,
+            "opaque_metadata": {"present": False, "count": 0},
+        }
+    ]
+    assert profile["cell_protection_default"] == {"locked": True, "hidden": False}
+    assert profile["cell_protection_assignments"] == [
+        {
+            "sheet": "Inputs",
+            "scope": "cell",
+            "target": "B2",
+            "locked": False,
+            "hidden": False,
+        },
+        {
+            "sheet": "Inputs",
+            "scope": "cell",
+            "target": "C2",
+            "locked": True,
+            "hidden": True,
+        },
+        {
+            "sheet": "Inputs",
+            "scope": "column",
+            "target": "D:D",
+            "locked": False,
+            "hidden": False,
+        },
+        {
+            "sheet": "Inputs",
+            "scope": "row",
+            "target": "5",
+            "locked": True,
+            "hidden": True,
+        },
+    ]
+    for sensitive_value in (
+        synthetic_hash,
+        "c3ludGhldGljLXNhbHQ=",
+        "Synthetic approved inputs",
+        "synthetic-security-descriptor",
+    ):
+        assert sensitive_value not in profile_text
+        assert sensitive_value not in markdown
+    assert "## Workbook protection" in markdown
+    assert "## Sheet protection controls" in markdown
+    assert "## Protected ranges" in markdown
+    assert "## Direct cell-protection assignments" in markdown
+
+
+def test_sheet_protection_defaults_are_canonical_and_verifiers_diff_privately(tmp_path) -> None:
+    baseline = make_protection_model(tmp_path / "baseline.xlsx")
+    candidate = make_protection_model(tmp_path / "candidate.xlsx")
+    set_sheet_protection_defaults(baseline, explicit=False)
+    set_sheet_protection_defaults(candidate, explicit=True)
+
+    equivalent_report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert not {
+        change.kind
+        for change in equivalent_report.changes
+        if change.kind == "sheet_protection_changed"
+    }
+    assert "FF022" not in {finding.rule_id for finding in equivalent_report.findings}
+
+    baseline_hash = "c3ludGhldGljLWhhc2gtYQ=="
+    candidate_hash = "c3ludGhldGljLWhhc2gtYg=="
+    set_sheet_protection_modern_verifier(baseline, baseline_hash)
+    set_sheet_protection_modern_verifier(candidate, candidate_hash)
+    verifier_report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    change = next(
+        change
+        for change in verifier_report.changes
+        if change.kind == "sheet_protection_changed"
+    )
+
+    assert change.details["credential_material_changed"] is True
+    assert {finding.rule_id for finding in verifier_report.findings} >= {"FF022"}
+    report_text = json.dumps(verifier_report.to_dict())
+    assert baseline_hash not in report_text
+    assert candidate_hash not in report_text
+    assert "c3ludGhldGljLXNhbHQ=" not in report_text
+
+
+def test_protection_control_changes_cover_workbook_ranges_and_cell_assignments(tmp_path) -> None:
+    baseline = make_protection_model(tmp_path / "baseline.xlsx")
+    candidate = make_protection_model(tmp_path / "candidate.xlsx")
+
+    def weaken_protection(workbook) -> None:
+        workbook.security.lockStructure = False
+        inputs = workbook["Inputs"]
+        inputs.protection.formatCells = True
+        inputs["B2"].protection = Protection(locked=True)
+
+    rewrite(candidate, weaken_protection)
+    # openpyxl does not preserve protected ranges, so restore the test fixture's
+    # raw range and then make every sensitive field change independently.
+    add_protected_range(candidate)
+    change_protected_range(
+        candidate,
+        sqref="B2:B6",
+        name="Changed synthetic range name",
+        password="C3D4",
+        security_descriptor="changed-synthetic-security-descriptor",
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    change_kinds = {change.kind for change in report.changes}
+    protected_range_change = next(
+        change
+        for change in report.changes
+        if change.kind == "protected_range_permissions_changed"
+    )
+
+    assert {
+        "workbook_protection_changed",
+        "sheet_protection_changed",
+        "protected_range_permissions_changed",
+        "cell_protection_assignments_changed",
+    } <= change_kinds
+    assert protected_range_change.details["range_name_material_changed"] is True
+    assert protected_range_change.details["security_descriptor_material_changed"] is True
+    assert protected_range_change.details["credential_material_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF022"}
+    report_text = json.dumps(report.to_dict())
+    assert "Synthetic approved inputs" not in report_text
+    assert "Changed synthetic range name" not in report_text
+    assert "synthetic-security-descriptor" not in report_text
+    assert "changed-synthetic-security-descriptor" not in report_text
 
 
 def test_current_row_table_references_trace_only_the_matching_row(tmp_path) -> None:

@@ -11,6 +11,9 @@ financial correctness or replace model review.
 - It loads formulas as text with `data_only=False`; it does not calculate them.
 - It never executes VBA, DDE, external links, Power Query, or add-in code.
 - Macro payloads are reported by cryptographic hash only.
+- Protection credential material is never emitted: legacy verifiers, modern
+  hashes/salts, protected-range names, and security descriptors are compared
+  through private fingerprints and reported only as safe presence/change metadata.
 - It uses sparse cell storage rather than walking every coordinate in a workbook's
   declared used rectangle.
 - Parser warnings from unsupported OOXML extensions are captured in the profile
@@ -29,8 +32,10 @@ review prompt, not proof of an error.
 
 ## Deliberate limits
 
-- Supported files are `.xlsx` and `.xlsm`; legacy `.xls` and password-protected
-  workbooks are outside scope.
+- Supported files are `.xlsx` and `.xlsm`; legacy `.xls` and file-encrypted or
+  password-to-open workbooks are outside scope. Workbook and worksheet
+  protection flags inside an otherwise readable OOXML workbook are inspected as
+  operational controls, not treated as encryption.
 - Ordinary workbook and sheet-local names with static A1 destinations are
   resolved into the dependency graph. It also expands formula-defined names
   whose whole definition is statically visible and internal, including nested
@@ -94,6 +99,16 @@ review prompt, not proof of an error.
   FormulaFence does not calculate a condition, expand relative criteria across
   every target, reconcile it with manual formatting, or predict the rendered
   result when overlapping rules conflict.
+- Operational protection controls are read directly from OOXML: workbook
+  structure/windows/revision locks; worksheet and dialog-sheet action locks;
+  chart-sheet content/object locks; protected ranges; and direct cell, row, and
+  column `locked`/`hidden` assignments on active protected sheets. It normalizes
+  sheet-action defaults and keeps target spans compact. Raw credential and
+  identity material is never serialized; private fingerprints expose a material
+  change without exposing its values. A change emits `FF022` and can be blocked
+  with `no_protection_changes`. This does **not** establish confidentiality,
+  authentication, authorization, file encryption, rights-management behavior,
+  or whether Excel's full style cascade makes an individual cell editable.
 - Explicit implicit intersection is inventoried for literal `@` display syntax,
   `@` applied to a function, and persisted `SINGLE()` OOXML. When `SINGLE()`
   has one direct static A1 cell or range argument with an unambiguous
@@ -123,9 +138,11 @@ review prompt, not proof of an error.
 - A formula that the underlying tokenizer cannot inspect is recorded by cell
   location in the profile, and a newly introduced one emits `FF016`; its graph
   is deliberately omitted rather than partially guessed.
-- It inventories sheet visibility, defined names, calculation settings, and the
-  VBA payload. It does not yet diff chart definitions, PivotTables, Power Query,
-  ordinary styles, protection settings, or every OOXML part.
+- It inventories sheet visibility, defined names, calculation settings, the VBA
+  payload, and the protection controls above. It does not yet diff chart
+  definitions, PivotTables, Power Query, ordinary styles beyond direct
+  protection assignments, complete Excel style-cascade results, or every OOXML
+  part.
 - The tool preserves Excel formula text and uses a limited A1-reference
   normalizer for peer-pattern detection; it is not an Excel-compatible parser
   or calculation engine.

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.16.0 — 2026-07-24
+
+- Inventory operational protection controls directly from OOXML: workbook
+  structure/windows/revision locks; worksheet, dialog-sheet, and chart-sheet
+  permissions; protected range targets; and compact direct cell/row/column
+  locked/hidden assignments on active protected sheets.
+- Normalize worksheet action defaults so omitted and explicit OOXML spellings
+  compare equal. Preserve unmodelled protection metadata through private
+  fingerprints, and compare legacy/modern verifier material, protected-range
+  names, and security descriptors without serializing any of their values.
+- Emit `FF022` for changed protection controls and add the fail-closed
+  `no_protection_changes` policy rule (`FFP022`). Protection remains an
+  operational review boundary, not file encryption, authentication, or a claim
+  to reproduce Excel's complete style cascade.
+
 ## 0.15.0 — 2026-07-24
 
 - Inventory worksheet conditional-formatting controls directly from OOXML:

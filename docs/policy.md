@@ -23,6 +23,7 @@ rules:
   no_table_definition_changes: true
   no_data_validation_changes: true
   no_conditional_formatting_changes: true
+  no_protection_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
   max_changed_formulas: 20
@@ -71,6 +72,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_table_definition_changes` | boolean | An Excel table is added, removed, moved, renamed, or has its columns/header/total-row configuration changed. |
 | `no_data_validation_changes` | boolean | A worksheet data-validation control changes, including its target ranges, criteria, blank/dropdown behavior, prompts, error alert, or global prompt-disable setting. |
 | `no_conditional_formatting_changes` | boolean | A worksheet conditional-formatting control changes, including its precedence, target ranges, criteria, flags, visual style, or retained OOXML extension fragment. |
+| `no_protection_changes` | boolean | A workbook, worksheet, dialog-sheet, chart-sheet, protected-range, or direct cell/row/column protection control changes. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
@@ -167,6 +169,27 @@ evidence. Any change emits `FF021`; enable
 `no_conditional_formatting_changes` to make it `FFP021` in CI. FormulaFence
 does not calculate a rule, resolve its relative references for every target, or
 predict a cell's final rendered format.
+
+FormulaFence separately inventories **operational protection controls** from
+raw OOXML because an editable input, an exposed formula, or a removed workbook
+structure lock can matter even when no formula text changes. It compares
+workbook `lockStructure`, `lockWindows`, and `lockRevision`; worksheet and
+dialog-sheet action locks using their effective OOXML defaults; chart-sheet
+`content`/`objects` locks; protected-range target areas; and direct serialized
+cell, row, and column `locked`/`hidden` style assignments on active protected
+sheets. It retains protected-range target spans compactly and does not expand a
+row, column, or large styled range into cell records.
+
+Profiles and local reports omit legacy password verifiers, modern hash/salt
+values, protected-range names, and security-descriptor contents. Private
+fingerprints still make a changed verifier, range name, security descriptor, or
+unmodelled protection fragment visible as a change. Any protection-control
+change emits `FF022`; enable `no_protection_changes` to make it `FFP022` in CI.
+This is not encryption, authentication, or an access-control decision:
+workbook/worksheet protection is an operational Excel control, and
+FormulaFence does not determine whether an actor can edit a workbook or fully
+recreate Excel's style-precedence rendering. File encryption and rights
+management remain outside scope.
 
 When a formula cannot be tokenized at all, FormulaFence records its location in
 the profile and emits `FF016` for a new instance. Enable

@@ -18,6 +18,8 @@ from formulafence.models import (
     DataValidationSnapshot,
     DiffReport,
     Finding,
+    ProtectionCredentialSnapshot,
+    ProtectionOpaqueMetadataSnapshot,
     WorkbookSnapshot,
 )
 
@@ -254,6 +256,26 @@ def _three_d_reference_scope_changes(
     return changes, findings
 
 
+def _credential_material_changed(
+    before: ProtectionCredentialSnapshot | None,
+    after: ProtectionCredentialSnapshot | None,
+) -> bool:
+    """Compare private verifier signatures without returning verifier material."""
+    return (before.signature if before is not None else None) != (
+        after.signature if after is not None else None
+    )
+
+
+def _opaque_protection_metadata_changed(
+    before: ProtectionOpaqueMetadataSnapshot | None,
+    after: ProtectionOpaqueMetadataSnapshot | None,
+) -> bool:
+    """Compare private opaque metadata fingerprints without exposing content."""
+    return (before.signature if before is not None else None) != (
+        after.signature if after is not None else None
+    )
+
+
 def _workbook_control_changes(
     before: WorkbookSnapshot, after: WorkbookSnapshot
 ) -> tuple[list[Change], list[Finding]]:
@@ -445,6 +467,222 @@ def _workbook_control_changes(
                 "FF021",
                 "high",
                 f"Conditional-formatting controls changed on worksheet: {sheet}.",
+                details=details,
+            )
+        )
+
+    if before.workbook_protection != after.workbook_protection:
+        old_protection = before.workbook_protection
+        new_protection = after.workbook_protection
+        details: dict[str, object] = {
+            "before": old_protection.to_dict() if old_protection is not None else None,
+            "after": new_protection.to_dict() if new_protection is not None else None,
+        }
+        credential_changes = {
+            "workbook": _credential_material_changed(
+                (
+                    old_protection.workbook_credential
+                    if old_protection is not None
+                    else None
+                ),
+                (
+                    new_protection.workbook_credential
+                    if new_protection is not None
+                    else None
+                ),
+            ),
+            "revisions": _credential_material_changed(
+                (
+                    old_protection.revisions_credential
+                    if old_protection is not None
+                    else None
+                ),
+                (
+                    new_protection.revisions_credential
+                    if new_protection is not None
+                    else None
+                ),
+            ),
+        }
+        if any(credential_changes.values()):
+            details["credential_material_changed"] = credential_changes
+        if _opaque_protection_metadata_changed(
+            old_protection.opaque_metadata if old_protection is not None else None,
+            new_protection.opaque_metadata if new_protection is not None else None,
+        ):
+            details["opaque_metadata_changed"] = True
+        changes.append(
+            Change(
+                "workbook_protection_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF022",
+                "high",
+                "Workbook protection controls changed.",
+                details=details,
+            )
+        )
+
+    before_sheet_protections = {
+        protection.sheet: protection for protection in before.sheet_protections
+    }
+    after_sheet_protections = {
+        protection.sheet: protection for protection in after.sheet_protections
+    }
+    for sheet in sorted(
+        set(before_sheet_protections) | set(after_sheet_protections), key=str.casefold
+    ):
+        old_protection = before_sheet_protections.get(sheet)
+        new_protection = after_sheet_protections.get(sheet)
+        if old_protection == new_protection:
+            continue
+        details = {
+            "sheet": sheet,
+            "before": old_protection.to_dict() if old_protection is not None else None,
+            "after": new_protection.to_dict() if new_protection is not None else None,
+        }
+        if _credential_material_changed(
+            old_protection.credential if old_protection is not None else None,
+            new_protection.credential if new_protection is not None else None,
+        ):
+            details["credential_material_changed"] = True
+        if _opaque_protection_metadata_changed(
+            old_protection.opaque_metadata if old_protection is not None else None,
+            new_protection.opaque_metadata if new_protection is not None else None,
+        ):
+            details["opaque_metadata_changed"] = True
+        changes.append(
+            Change(
+                "sheet_protection_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF022",
+                "high",
+                f"Sheet protection controls changed: {sheet}.",
+                details=details,
+            )
+        )
+
+    before_ranges: dict[str, list[object]] = defaultdict(list)
+    after_ranges: dict[str, list[object]] = defaultdict(list)
+    for protected_range in before.protected_ranges:
+        before_ranges[protected_range.sheet].append(protected_range)
+    for protected_range in after.protected_ranges:
+        after_ranges[protected_range.sheet].append(protected_range)
+    for sheet in sorted(set(before_ranges) | set(after_ranges), key=str.casefold):
+        old_ranges = tuple(before_ranges.get(sheet, ()))
+        new_ranges = tuple(after_ranges.get(sheet, ()))
+        if old_ranges == new_ranges:
+            continue
+        details = {
+            "sheet": sheet,
+            "before": [protected_range.to_dict() for protected_range in old_ranges],
+            "after": [protected_range.to_dict() for protected_range in new_ranges],
+        }
+        if tuple(item.name_signature for item in old_ranges) != tuple(
+            item.name_signature for item in new_ranges
+        ):
+            details["range_name_material_changed"] = True
+        if tuple(item.security_descriptor_signature for item in old_ranges) != tuple(
+            item.security_descriptor_signature for item in new_ranges
+        ):
+            details["security_descriptor_material_changed"] = True
+        if tuple(item.credential.signature for item in old_ranges) != tuple(
+            item.credential.signature for item in new_ranges
+        ):
+            details["credential_material_changed"] = True
+        if tuple(item.opaque_metadata.signature for item in old_ranges) != tuple(
+            item.opaque_metadata.signature for item in new_ranges
+        ):
+            details["opaque_metadata_changed"] = True
+        changes.append(
+            Change(
+                "protected_range_permissions_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF022",
+                "high",
+                f"Protected-range permissions changed on worksheet: {sheet}.",
+                details=details,
+            )
+        )
+
+    if before.cell_protection_default != after.cell_protection_default:
+        details = {
+            "before": (
+                before.cell_protection_default.to_dict()
+                if before.cell_protection_default is not None
+                else None
+            ),
+            "after": (
+                after.cell_protection_default.to_dict()
+                if after.cell_protection_default is not None
+                else None
+            ),
+        }
+        changes.append(
+            Change(
+                "cell_protection_default_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF022",
+                "high",
+                "Default locked/hidden cell protection changed.",
+                details=details,
+            )
+        )
+
+    before_assignments: dict[str, list[object]] = defaultdict(list)
+    after_assignments: dict[str, list[object]] = defaultdict(list)
+    for assignment in before.cell_protection_assignments:
+        before_assignments[assignment.sheet].append(assignment)
+    for assignment in after.cell_protection_assignments:
+        after_assignments[assignment.sheet].append(assignment)
+    for sheet in sorted(
+        set(before_assignments) | set(after_assignments), key=str.casefold
+    ):
+        old_assignments = tuple(before_assignments.get(sheet, ()))
+        new_assignments = tuple(after_assignments.get(sheet, ()))
+        if old_assignments == new_assignments:
+            continue
+        details = {
+            "sheet": sheet,
+            "before": [assignment.to_dict() for assignment in old_assignments],
+            "after": [assignment.to_dict() for assignment in new_assignments],
+        }
+        changes.append(
+            Change(
+                "cell_protection_assignments_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF022",
+                "high",
+                f"Direct cell protection assignments changed on worksheet: {sheet}.",
                 details=details,
             )
         )

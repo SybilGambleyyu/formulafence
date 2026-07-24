@@ -14,7 +14,7 @@ from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
 from openpyxl import load_workbook
-from openpyxl.utils.cell import get_column_letter, range_boundaries
+from openpyxl.utils.cell import column_index_from_string, get_column_letter, range_boundaries
 from openpyxl.utils.exceptions import InvalidFileException
 
 from formulafence.formulas import (
@@ -30,15 +30,22 @@ from formulafence.formulas import (
 from formulafence.models import (
     ArrayFormulaRange,
     CellKey,
+    CellProtectionAssignmentSnapshot,
+    CellProtectionDefaultSnapshot,
     CellSnapshot,
     ConditionalFormattingExtensionSnapshot,
     ConditionalFormattingSnapshot,
     DataValidationSnapshot,
     DynamicArrayOutputReference,
+    ProtectedRangeSnapshot,
+    ProtectionCredentialSnapshot,
+    ProtectionOpaqueMetadataSnapshot,
     RangeDependency,
+    SheetProtectionSnapshot,
     SheetSnapshot,
     TableSnapshot,
     WorkbookLoadError,
+    WorkbookProtectionSnapshot,
     WorkbookSnapshot,
     XmlFragmentSnapshot,
     display_location,
@@ -112,6 +119,50 @@ class _ConditionalFormattingMetadata:
     warnings: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _ProtectionMetadata:
+    """Raw OOXML protection controls retained before libraries can omit them."""
+
+    workbook_protection: WorkbookProtectionSnapshot | None
+    sheet_protections: tuple[SheetProtectionSnapshot, ...]
+    protected_ranges: tuple[ProtectedRangeSnapshot, ...]
+    cell_protection_default: CellProtectionDefaultSnapshot | None
+    cell_protection_assignments: tuple[CellProtectionAssignmentSnapshot, ...]
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _StyleProtection:
+    """Effective protection from one cell XF, plus whether it is explicit."""
+
+    locked: bool
+    hidden: bool
+    explicit: bool = False
+
+
+_SHEET_PROTECTION_ACTIONS = (
+    ("objects", "objects", False),
+    ("scenarios", "scenarios", False),
+    ("formatCells", "format_cells", True),
+    ("formatColumns", "format_columns", True),
+    ("formatRows", "format_rows", True),
+    ("insertColumns", "insert_columns", True),
+    ("insertRows", "insert_rows", True),
+    ("insertHyperlinks", "insert_hyperlinks", True),
+    ("deleteColumns", "delete_columns", True),
+    ("deleteRows", "delete_rows", True),
+    ("selectLockedCells", "select_locked_cells", False),
+    ("sort", "sort", True),
+    ("autoFilter", "auto_filter", True),
+    ("pivotTables", "pivot_tables", True),
+    ("selectUnlockedCells", "select_unlocked_cells", False),
+)
+_CHART_SHEET_PROTECTION_ACTIONS = (
+    ("content", "content", False),
+    ("objects", "objects", False),
+)
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as file_handle:
@@ -150,26 +201,27 @@ def _normalise_package_target(target: str) -> str | None:
     return normalised
 
 
-def _worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
-    """Map visible worksheet titles to their OOXML worksheet parts."""
+def _sheet_xml_parts(archive: ZipFile) -> dict[str, tuple[str, str]]:
+    """Map workbook sheet titles to safe OOXML parts and their sheet kind."""
     workbook = _xml_root(archive, "xl/workbook.xml")
     relationships = _xml_root(archive, "xl/_rels/workbook.xml.rels")
-    relationship_targets: dict[str, str] = {}
+    relationship_targets: dict[str, tuple[str, str]] = {}
     relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
     for relationship in relationships.findall(relationship_tag):
         relationship_type = relationship.get("Type", "")
         relationship_id = relationship.get("Id")
         target = relationship.get("Target")
+        sheet_type = relationship_type.rsplit("/", maxsplit=1)[-1]
         if (
-            not relationship_type.endswith("/worksheet")
+            sheet_type not in {"worksheet", "chartsheet", "dialogsheet"}
             or not relationship_id
             or not target
             or (normalised := _normalise_package_target(target)) is None
         ):
             continue
-        relationship_targets[relationship_id] = normalised
+        relationship_targets[relationship_id] = (normalised, sheet_type)
 
-    worksheet_paths: dict[str, str] = {}
+    sheet_parts: dict[str, tuple[str, str]] = {}
     sheet_tag = f"{{{_SPREADSHEETML_NS}}}sheet"
     relationship_id_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
     for sheet in workbook.iter(sheet_tag):
@@ -177,9 +229,18 @@ def _worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
         relationship_id = sheet.get(relationship_id_attribute)
         if not title or not relationship_id:
             continue
-        if target := relationship_targets.get(relationship_id):
-            worksheet_paths[title] = target
-    return worksheet_paths
+        if part := relationship_targets.get(relationship_id):
+            sheet_parts[title] = part
+    return sheet_parts
+
+
+def _worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
+    """Map standard worksheet titles to their OOXML worksheet parts."""
+    return {
+        title: member
+        for title, (member, sheet_type) in _sheet_xml_parts(archive).items()
+        if sheet_type == "worksheet"
+    }
 
 
 def _xml_local_name(tag: str) -> str:
@@ -587,6 +648,763 @@ def _conditional_formatting_metadata(path: Path) -> _ConditionalFormattingMetada
         extensions=tuple(
             sorted(extensions, key=ConditionalFormattingExtensionSnapshot.sort_key)
         ),
+        warnings=tuple(sorted(warnings)),
+    )
+
+
+def _protection_bool(
+    value: str | None,
+    default: bool,
+    attribute: str,
+    warnings: set[str],
+) -> bool:
+    """Read a protection boolean while retaining its schema default."""
+    if value is None:
+        return default
+    lowered = value.casefold()
+    if lowered in {"1", "true", "on"}:
+        return True
+    if lowered in {"0", "false", "off"}:
+        return False
+    warnings.add(
+        "FormulaFence could not interpret a protection "
+        f"{attribute} boolean; the schema default was used."
+    )
+    return default
+
+
+def _protection_int(
+    element: ElementTree.Element,
+    attribute: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> int | None:
+    """Read an optional non-negative protection integer conservatively."""
+    value = element.get(attribute)
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        warnings.add(
+            "FormulaFence could not interpret a "
+            f"{context} {attribute} integer; the affected protection has a coverage gap."
+        )
+        return None
+    if parsed < 0:
+        warnings.add(
+            "FormulaFence found a negative "
+            f"{context} {attribute} integer; the affected protection has a coverage gap."
+        )
+        return None
+    return parsed
+
+
+def _private_protection_signature(
+    entries: tuple[tuple[str, str], ...],
+) -> str | None:
+    """Hash sensitive comparison material without retaining it in output models."""
+    if not entries:
+        return None
+    digest = hashlib.sha256()
+    for name, value in entries:
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(value.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _merge_opaque_protection_metadata(
+    *metadata: ProtectionOpaqueMetadataSnapshot,
+) -> ProtectionOpaqueMetadataSnapshot:
+    """Combine opaque fragments while leaving their contents private."""
+    present = tuple(
+        item for item in metadata if item.count and item.signature is not None
+    )
+    if not present:
+        return ProtectionOpaqueMetadataSnapshot()
+    return ProtectionOpaqueMetadataSnapshot(
+        count=sum(item.count for item in present),
+        signature=_private_protection_signature(
+            tuple(
+                (str(index), item.signature or "")
+                for index, item in enumerate(present, start=1)
+            )
+        ),
+    )
+
+
+def _opaque_protection_metadata(
+    element: ElementTree.Element,
+    *,
+    known_attributes: set[str],
+    known_children: set[str] = frozenset(),
+) -> ProtectionOpaqueMetadataSnapshot:
+    """Fingerprint unmodelled protection XML without exposing its contents."""
+    entries: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if _xml_local_name(attribute) not in known_attributes:
+            entries.append((f"attribute:{_xml_display_name(attribute)}", value))
+    for child in element:
+        if _xml_local_name(child.tag) in known_children:
+            continue
+        entries.append(
+            (
+                f"child:{_xml_display_name(child.tag)}",
+                repr(_xml_fragment(child).sort_key()),
+            )
+        )
+    entries.sort()
+    return ProtectionOpaqueMetadataSnapshot(
+        count=len(entries),
+        signature=_private_protection_signature(tuple(entries)),
+    )
+
+
+def _protection_credential_snapshot(
+    element: ElementTree.Element,
+    *,
+    legacy_attribute: str,
+    algorithm_attribute: str,
+    hash_attribute: str,
+    salt_attribute: str,
+    spin_count_attribute: str,
+    context: str,
+    warnings: set[str],
+) -> ProtectionCredentialSnapshot:
+    """Record safe verifier metadata while hashing the actual verifier values."""
+    attribute_names = (
+        legacy_attribute,
+        algorithm_attribute,
+        hash_attribute,
+        salt_attribute,
+        spin_count_attribute,
+    )
+    signature_entries = tuple(
+        (attribute, value)
+        for attribute in attribute_names
+        if (value := element.get(attribute)) is not None
+    )
+    modern_attributes = (
+        algorithm_attribute,
+        hash_attribute,
+        salt_attribute,
+        spin_count_attribute,
+    )
+    has_modern_verifier = any(element.get(attribute) is not None for attribute in modern_attributes)
+    if has_modern_verifier and not (
+        element.get(hash_attribute) is not None and element.get(salt_attribute) is not None
+    ):
+        warnings.add(
+            "FormulaFence found incomplete modern "
+            f"{context} verifier metadata; its presence is compared but has a coverage gap."
+        )
+    return ProtectionCredentialSnapshot(
+        has_legacy_verifier=element.get(legacy_attribute) is not None,
+        has_modern_verifier=has_modern_verifier,
+        algorithm=element.get(algorithm_attribute),
+        spin_count=_protection_int(
+            element,
+            spin_count_attribute,
+            warnings,
+            context=context,
+        ),
+        signature=_private_protection_signature(signature_entries),
+    )
+
+
+def _workbook_protection_snapshot(
+    workbook: ElementTree.Element,
+    warnings: set[str],
+) -> WorkbookProtectionSnapshot | None:
+    """Read workbook protection without passing verifier material to openpyxl."""
+    element = workbook.find(f"{{{_SPREADSHEETML_NS}}}workbookProtection")
+    if element is None:
+        return None
+    workbook_credential = _protection_credential_snapshot(
+        element,
+        legacy_attribute="workbookPassword",
+        algorithm_attribute="workbookAlgorithmName",
+        hash_attribute="workbookHashValue",
+        salt_attribute="workbookSaltValue",
+        spin_count_attribute="workbookSpinCount",
+        context="workbook-protection",
+        warnings=warnings,
+    )
+    revisions_credential = _protection_credential_snapshot(
+        element,
+        legacy_attribute="revisionsPassword",
+        algorithm_attribute="revisionsAlgorithmName",
+        hash_attribute="revisionsHashValue",
+        salt_attribute="revisionsSaltValue",
+        spin_count_attribute="revisionsSpinCount",
+        context="revision-protection",
+        warnings=warnings,
+    )
+    return WorkbookProtectionSnapshot(
+        lock_structure=_protection_bool(
+            element.get("lockStructure"), False, "lockStructure", warnings
+        ),
+        lock_windows=_protection_bool(
+            element.get("lockWindows"), False, "lockWindows", warnings
+        ),
+        lock_revision=_protection_bool(
+            element.get("lockRevision"), False, "lockRevision", warnings
+        ),
+        workbook_credential=workbook_credential,
+        revisions_credential=revisions_credential,
+        opaque_metadata=_opaque_protection_metadata(
+            element,
+            known_attributes={
+                "lockStructure",
+                "lockWindows",
+                "lockRevision",
+                "workbookPassword",
+                "workbookAlgorithmName",
+                "workbookHashValue",
+                "workbookSaltValue",
+                "workbookSpinCount",
+                "revisionsPassword",
+                "revisionsAlgorithmName",
+                "revisionsHashValue",
+                "revisionsSaltValue",
+                "revisionsSpinCount",
+            },
+        ),
+    )
+
+
+def _sheet_protection_snapshot(
+    sheet: str,
+    sheet_type: str,
+    root: ElementTree.Element,
+    warnings: set[str],
+) -> SheetProtectionSnapshot | None:
+    """Read one sheet-protection declaration with effective action defaults."""
+    element = root.find(f"{{{_SPREADSHEETML_NS}}}sheetProtection")
+    if element is None:
+        return None
+    actions = (
+        _CHART_SHEET_PROTECTION_ACTIONS
+        if sheet_type == "chartsheet"
+        else _SHEET_PROTECTION_ACTIONS
+    )
+    enabled = (
+        any(
+            _protection_bool(element.get(attribute), default, attribute, warnings)
+            for attribute, _name, default in actions
+        )
+        if sheet_type == "chartsheet"
+        else _protection_bool(element.get("sheet"), False, "sheet", warnings)
+    )
+    locked_actions = (
+        tuple(
+            name
+            for attribute, name, default in actions
+            if _protection_bool(element.get(attribute), default, attribute, warnings)
+        )
+        if enabled
+        else ()
+    )
+    credential = _protection_credential_snapshot(
+        element,
+        legacy_attribute="password",
+        algorithm_attribute="algorithmName",
+        hash_attribute="hashValue",
+        salt_attribute="saltValue",
+        spin_count_attribute="spinCount",
+        context="sheet-protection",
+        warnings=warnings,
+    )
+    known_attributes = {
+        *(attribute for attribute, _name, _default in actions),
+        "password",
+        "algorithmName",
+        "hashValue",
+        "saltValue",
+        "spinCount",
+    }
+    if sheet_type == "chartsheet":
+        known_attributes.add("content")
+    else:
+        known_attributes.add("sheet")
+    return SheetProtectionSnapshot(
+        sheet=sheet,
+        sheet_type=sheet_type,
+        enabled=enabled,
+        locked_actions=locked_actions,
+        credential=credential,
+        opaque_metadata=_opaque_protection_metadata(
+            element,
+            known_attributes=known_attributes,
+        ),
+    )
+
+
+def _protected_range_snapshots(
+    sheet: str,
+    root: ElementTree.Element,
+    warnings: set[str],
+) -> tuple[tuple[ProtectedRangeSnapshot, ...], ProtectionOpaqueMetadataSnapshot]:
+    """Read protected ranges while redacting names and security descriptors."""
+    container = root.find(f"{{{_SPREADSHEETML_NS}}}protectedRanges")
+    if container is None:
+        return (), ProtectionOpaqueMetadataSnapshot()
+    snapshots: list[ProtectedRangeSnapshot] = []
+    range_tag = f"{{{_SPREADSHEETML_NS}}}protectedRange"
+    for protected_range in container.findall(range_tag):
+        ranges = _conditional_ranges(protected_range.get("sqref"))
+        if not ranges:
+            warnings.add(
+                "FormulaFence found a protected range without target references; "
+                "the affected permission has a coverage gap."
+            )
+        name = protected_range.get("name")
+        if name is None:
+            warnings.add(
+                "FormulaFence found a protected range without its required name; "
+                "the affected permission has a coverage gap."
+            )
+        security_descriptor = protected_range.get("securityDescriptor")
+        credential = _protection_credential_snapshot(
+            protected_range,
+            legacy_attribute="password",
+            algorithm_attribute="algorithmName",
+            hash_attribute="hashValue",
+            salt_attribute="saltValue",
+            spin_count_attribute="spinCount",
+            context="protected-range",
+            warnings=warnings,
+        )
+        snapshots.append(
+            ProtectedRangeSnapshot(
+                sheet=sheet,
+                ranges=ranges,
+                has_name=name is not None,
+                name_signature=_private_protection_signature(
+                    (("name", name),) if name is not None else ()
+                ),
+                credential=credential,
+                has_security_descriptor=security_descriptor is not None,
+                security_descriptor_signature=_private_protection_signature(
+                    (("securityDescriptor", security_descriptor),)
+                    if security_descriptor is not None
+                    else ()
+                ),
+                opaque_metadata=_opaque_protection_metadata(
+                    protected_range,
+                    known_attributes={
+                        "name",
+                        "sqref",
+                        "password",
+                        "algorithmName",
+                        "hashValue",
+                        "saltValue",
+                        "spinCount",
+                        "securityDescriptor",
+                    },
+                ),
+            )
+        )
+    return (
+        tuple(sorted(snapshots, key=ProtectedRangeSnapshot.sort_key)),
+        _opaque_protection_metadata(
+            container,
+            known_attributes=set(),
+            known_children={"protectedRange"},
+        ),
+    )
+
+
+def _style_index(
+    element: ElementTree.Element,
+    attribute: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> int | None:
+    """Read a zero-based style index without silently accepting malformed XML."""
+    value = element.get(attribute)
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        warnings.add(
+            "FormulaFence could not interpret a "
+            f"{context} style index; the affected cell-protection assignment has a coverage gap."
+        )
+        return None
+    if parsed < 0:
+        warnings.add(
+            "FormulaFence found a negative "
+            f"{context} style index; the affected cell-protection assignment has a coverage gap."
+        )
+        return None
+    return parsed
+
+
+def _xf_protection(
+    xf: ElementTree.Element,
+    inherited: _StyleProtection,
+    warnings: set[str],
+    *,
+    context: str,
+) -> _StyleProtection:
+    """Resolve the protection part of one XF without inspecting formatting data."""
+    protection = xf.find(f"{{{_SPREADSHEETML_NS}}}protection")
+    if protection is None:
+        return inherited
+    if (
+        any(
+            _xml_local_name(attribute) not in {"locked", "hidden"}
+            for attribute in protection.attrib
+        )
+        or list(protection)
+    ):
+        warnings.add(
+            "FormulaFence found unmodelled cell-protection style metadata; "
+            "the affected assignment has a coverage gap."
+        )
+    applies = _protection_bool(
+        xf.get("applyProtection"),
+        True,
+        "applyProtection",
+        warnings,
+    )
+    if not applies:
+        return inherited
+    return _StyleProtection(
+        locked=_protection_bool(
+            protection.get("locked"), True, f"{context} locked", warnings
+        ),
+        hidden=_protection_bool(
+            protection.get("hidden"), False, f"{context} hidden", warnings
+        ),
+        explicit=True,
+    )
+
+
+def _styles_with_protection(
+    archive: ZipFile,
+    warnings: set[str],
+) -> tuple[_StyleProtection, tuple[_StyleProtection, ...]]:
+    """Return the base default and effective cell-XF protection table."""
+    default = _StyleProtection(locked=True, hidden=False)
+    try:
+        styles = _xml_root(archive, "xl/styles.xml")
+    except KeyError:
+        return default, (default,)
+    style_xfs = styles.find(f"{{{_SPREADSHEETML_NS}}}cellStyleXfs")
+    base_styles: list[_StyleProtection] = []
+    if style_xfs is not None:
+        for xf in style_xfs.findall(f"{{{_SPREADSHEETML_NS}}}xf"):
+            base_styles.append(
+                _xf_protection(xf, default, warnings, context="base-cell-style")
+            )
+    if not base_styles:
+        base_styles.append(default)
+
+    cell_xfs = styles.find(f"{{{_SPREADSHEETML_NS}}}cellXfs")
+    effective_styles: list[_StyleProtection] = []
+    if cell_xfs is not None:
+        for xf in cell_xfs.findall(f"{{{_SPREADSHEETML_NS}}}xf"):
+            xf_id = _style_index(xf, "xfId", warnings, context="cell-XF")
+            inherited = default
+            if xf_id is not None:
+                if xf_id >= len(base_styles):
+                    warnings.add(
+                        "FormulaFence found a cell-XF with an unknown base style; "
+                        "the affected cell-protection assignment has a coverage gap."
+                    )
+                else:
+                    inherited = base_styles[xf_id]
+            effective_styles.append(
+                _xf_protection(xf, inherited, warnings, context="cell-style")
+            )
+    if not effective_styles:
+        effective_styles.append(default)
+    return effective_styles[0], tuple(effective_styles)
+
+
+def _style_is_protection_relevant(
+    style: _StyleProtection,
+    default: _StyleProtection,
+) -> bool:
+    """Return whether a styled record can alter visible protection behavior."""
+    return style.explicit or (style.locked, style.hidden) != (default.locked, default.hidden)
+
+
+def _style_for_assignment(
+    element: ElementTree.Element,
+    attribute: str,
+    styles: tuple[_StyleProtection, ...],
+    warnings: set[str],
+    *,
+    context: str,
+) -> _StyleProtection | None:
+    """Resolve a direct style reference, returning ``None`` when absent/invalid."""
+    style_index = _style_index(element, attribute, warnings, context=context)
+    if style_index is None:
+        return None
+    if style_index >= len(styles):
+        warnings.add(
+            "FormulaFence found a "
+            f"{context} style index outside the workbook style table; "
+            "the affected cell-protection assignment has a coverage gap."
+        )
+        return None
+    return styles[style_index]
+
+
+def _column_span(
+    element: ElementTree.Element,
+    warnings: set[str],
+) -> tuple[int, int, str] | None:
+    """Return a compact column span from a raw ``col`` record."""
+    start = _protection_int(element, "min", warnings, context="column-protection")
+    end = _protection_int(element, "max", warnings, context="column-protection")
+    if start is None or end is None or start < 1 or end < start or end > 16_384:
+        warnings.add(
+            "FormulaFence could not interpret a column-protection span; "
+            "the affected assignment has a coverage gap."
+        )
+        return None
+    try:
+        start_column = get_column_letter(start)
+        end_column = get_column_letter(end)
+    except ValueError:
+        warnings.add(
+            "FormulaFence found a column-protection span outside Excel's column range; "
+            "the affected assignment has a coverage gap."
+        )
+        return None
+    return start, end, f"{start_column}:{end_column}"
+
+
+def _cell_protection_assignments(
+    archive: ZipFile,
+    sheet_parts: Mapping[str, tuple[str, str]],
+    sheet_protections: tuple[SheetProtectionSnapshot, ...],
+    warnings: set[str],
+) -> tuple[
+    CellProtectionDefaultSnapshot | None,
+    tuple[CellProtectionAssignmentSnapshot, ...],
+]:
+    """Read sparse direct cell/row/column protection assignments from OOXML.
+
+    The inventory deliberately retains raw assignment scopes instead of
+    expanding rows, columns, or styled rectangles into cells. It records only
+    normal protected sheets, because locked/hidden cell styles are inactive on
+    an unprotected sheet.
+    """
+    protected_sheets = {
+        protection.sheet
+        for protection in sheet_protections
+        if protection.enabled and protection.sheet_type in {"worksheet", "dialogsheet"}
+    }
+    if not protected_sheets:
+        return None, ()
+    default, styles = _styles_with_protection(archive, warnings)
+    assignments: set[CellProtectionAssignmentSnapshot] = set()
+    row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+    cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+    column_tag = f"{{{_SPREADSHEETML_NS}}}col"
+    for sheet in sorted(protected_sheets, key=str.casefold):
+        part = sheet_parts.get(sheet)
+        if part is None:
+            warnings.add(
+                "FormulaFence could not locate OOXML for a protected worksheet; "
+                "cell-protection assignments have a coverage gap."
+            )
+            continue
+        member, _sheet_type = part
+        worksheet = _xml_root(archive, member)
+        raw_rows: list[tuple[int, _StyleProtection]] = []
+        raw_columns: list[tuple[int, int, str, _StyleProtection]] = []
+        for row in worksheet.iter(row_tag):
+            style = _style_for_assignment(
+                row, "s", styles, warnings, context="row-protection"
+            )
+            if style is None:
+                continue
+            row_number = _protection_int(row, "r", warnings, context="row-protection")
+            if row_number is None or row_number < 1:
+                warnings.add(
+                    "FormulaFence could not interpret a row-protection target; "
+                    "the affected assignment has a coverage gap."
+                )
+                continue
+            raw_rows.append((row_number, style))
+        for column in worksheet.iter(column_tag):
+            style = _style_for_assignment(
+                column, "style", styles, warnings, context="column-protection"
+            )
+            if style is None or (span := _column_span(column, warnings)) is None:
+                continue
+            start_column, end_column, target = span
+            raw_columns.append((start_column, end_column, target, style))
+
+        relevant_rows = {
+            row_number
+            for row_number, style in raw_rows
+            if _style_is_protection_relevant(style, default)
+        }
+        relevant_columns = [
+            column_target
+            for _start_column, _end_column, column_target, style in raw_columns
+            if _style_is_protection_relevant(style, default)
+        ]
+        for row_number, style in raw_rows:
+            if not _style_is_protection_relevant(style, default) and not relevant_columns:
+                continue
+            assignments.add(
+                CellProtectionAssignmentSnapshot(
+                    sheet=sheet,
+                    scope="row",
+                    target=str(row_number),
+                    locked=style.locked,
+                    hidden=style.hidden,
+                )
+            )
+        for _start_column, _end_column, target, style in raw_columns:
+            if not _style_is_protection_relevant(style, default) and not relevant_rows:
+                continue
+            assignments.add(
+                CellProtectionAssignmentSnapshot(
+                    sheet=sheet,
+                    scope="column",
+                    target=target,
+                    locked=style.locked,
+                    hidden=style.hidden,
+                )
+            )
+
+        for cell in worksheet.iter(cell_tag):
+            style = _style_for_assignment(
+                cell, "s", styles, warnings, context="cell-protection"
+            )
+            if style is None:
+                continue
+            coordinate = cell.get("r")
+            if not coordinate:
+                warnings.add(
+                    "FormulaFence found a styled cell without a coordinate; "
+                    "the affected cell-protection assignment has a coverage gap."
+                )
+                continue
+            match = re.fullmatch(r"([A-Za-z]+)([1-9][0-9]*)", coordinate)
+            if match is None:
+                warnings.add(
+                    "FormulaFence could not interpret a styled cell coordinate; "
+                    "the affected cell-protection assignment has a coverage gap."
+                )
+                continue
+            column_letters, raw_row_number = match.groups()
+            row_number = int(raw_row_number)
+            try:
+                column_number = column_index_from_string(column_letters)
+            except ValueError:
+                warnings.add(
+                    "FormulaFence could not interpret a styled cell column; "
+                    "the affected cell-protection assignment has a coverage gap."
+                )
+                continue
+            intersects_relevant_column = any(
+                start_column <= column_number <= end_column
+                for start_column, end_column, _target, style in raw_columns
+                if _style_is_protection_relevant(style, default)
+            )
+            if not (
+                _style_is_protection_relevant(style, default)
+                or row_number in relevant_rows
+                or intersects_relevant_column
+            ):
+                continue
+            assignments.add(
+                CellProtectionAssignmentSnapshot(
+                    sheet=sheet,
+                    scope="cell",
+                    target=coordinate.upper(),
+                    locked=style.locked,
+                    hidden=style.hidden,
+                )
+            )
+    return (
+        CellProtectionDefaultSnapshot(locked=default.locked, hidden=default.hidden),
+        tuple(sorted(assignments, key=CellProtectionAssignmentSnapshot.sort_key)),
+    )
+
+
+def _protection_metadata(path: Path) -> _ProtectionMetadata:
+    """Read protection controls directly from OOXML before a library drops data."""
+    warnings: set[str] = set()
+    try:
+        with ZipFile(path) as archive:
+            workbook = _xml_root(archive, "xl/workbook.xml")
+            sheet_parts = _sheet_xml_parts(archive)
+            workbook_protection = _workbook_protection_snapshot(workbook, warnings)
+            sheet_protections: dict[str, SheetProtectionSnapshot] = {}
+            protected_ranges: list[ProtectedRangeSnapshot] = []
+            for sheet, (member, sheet_type) in sheet_parts.items():
+                root = _xml_root(archive, member)
+                sheet_protection = _sheet_protection_snapshot(
+                    sheet, sheet_type, root, warnings
+                )
+                ranges: tuple[ProtectedRangeSnapshot, ...] = ()
+                range_container_opaque = ProtectionOpaqueMetadataSnapshot()
+                if sheet_type != "chartsheet":
+                    ranges, range_container_opaque = _protected_range_snapshots(
+                        sheet, root, warnings
+                    )
+                    protected_ranges.extend(ranges)
+                if sheet_protection is not None:
+                    sheet_protections[sheet] = replace(
+                        sheet_protection,
+                        opaque_metadata=_merge_opaque_protection_metadata(
+                            sheet_protection.opaque_metadata,
+                            range_container_opaque,
+                        ),
+                    )
+                elif range_container_opaque.present:
+                    sheet_protections[sheet] = SheetProtectionSnapshot(
+                        sheet=sheet,
+                        sheet_type=sheet_type,
+                        enabled=False,
+                        locked_actions=(),
+                        opaque_metadata=range_container_opaque,
+                    )
+            sorted_sheet_protections = tuple(
+                sorted(sheet_protections.values(), key=SheetProtectionSnapshot.sort_key)
+            )
+            cell_default, cell_assignments = _cell_protection_assignments(
+                archive,
+                sheet_parts,
+                sorted_sheet_protections,
+                warnings,
+            )
+    except (BadZipFile, ElementTree.ParseError, KeyError, OSError, ValueError) as error:
+        return _ProtectionMetadata(
+            workbook_protection=None,
+            sheet_protections=(),
+            protected_ranges=(),
+            cell_protection_default=None,
+            cell_protection_assignments=(),
+            warnings=(
+                "FormulaFence could not inspect protection OOXML "
+                f"({type(error).__name__}); protection controls were not compared.",
+            ),
+        )
+    return _ProtectionMetadata(
+        workbook_protection=workbook_protection,
+        sheet_protections=sorted_sheet_protections,
+        protected_ranges=tuple(
+            sorted(protected_ranges, key=ProtectedRangeSnapshot.sort_key)
+        ),
+        cell_protection_default=cell_default,
+        cell_protection_assignments=cell_assignments,
         warnings=tuple(sorted(warnings)),
     )
 
@@ -1531,6 +2349,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(array_formula_classification.warnings)
     conditional_formatting_metadata = _conditional_formatting_metadata(source)
     parser_warnings.update(conditional_formatting_metadata.warnings)
+    protection_metadata = _protection_metadata(source)
+    parser_warnings.update(protection_metadata.warnings)
 
     sheets: dict[str, SheetSnapshot] = {}
     cells: dict[CellKey, CellSnapshot] = {}
@@ -1700,6 +2520,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         data_validations=data_validations,
         conditional_formatting=conditional_formatting_metadata.rules,
         conditional_formatting_extensions=conditional_formatting_metadata.extensions,
+        workbook_protection=protection_metadata.workbook_protection,
+        sheet_protections=protection_metadata.sheet_protections,
+        protected_ranges=protection_metadata.protected_ranges,
+        cell_protection_default=protection_metadata.cell_protection_default,
+        cell_protection_assignments=protection_metadata.cell_protection_assignments,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),
@@ -1727,6 +2552,27 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "conditional_formatting_extensions": [
             extension.profile_dict()
             for extension in snapshot.conditional_formatting_extensions
+        ],
+        "workbook_protection": (
+            snapshot.workbook_protection.to_dict()
+            if snapshot.workbook_protection is not None
+            else None
+        ),
+        "sheet_protections": [
+            protection.profile_dict() for protection in snapshot.sheet_protections
+        ],
+        "protected_ranges": [
+            protected_range.profile_dict()
+            for protected_range in snapshot.protected_ranges
+        ],
+        "cell_protection_default": (
+            snapshot.cell_protection_default.to_dict()
+            if snapshot.cell_protection_default is not None
+            else None
+        ),
+        "cell_protection_assignments": [
+            assignment.profile_dict()
+            for assignment in snapshot.cell_protection_assignments
         ],
         "defined_names": sorted(snapshot.defined_names),
         "calculation_settings": snapshot.calculation_settings,

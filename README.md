@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.15.0/formulafence-0.15.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.16.0/formulafence-0.16.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -73,6 +73,7 @@ rules:
   no_table_definition_changes: true
   no_data_validation_changes: true
   no_conditional_formatting_changes: true
+  no_protection_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -94,7 +95,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation and conditional-formatting controls, array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, and operational protection controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -217,6 +218,25 @@ calculate a conditional-formatting formula, resolve a relative rule for every
 target cell, or predict the final visual display. The scope follows Microsoft's
 [conditional-formatting precedence guidance](https://support.microsoft.com/en-us/excel/use-conditional-formatting-to-highlight-information-in-excel)
 and [OOXML conditional-formatting model](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-conditional-formatting).
+
+FormulaFence also inventories **operational protection controls** directly from
+OOXML: workbook structure/windows/revision locks; worksheet and dialog-sheet
+permissions; chart-sheet content/object locks; protected-range target areas;
+and explicit cell, row, and column `locked`/`hidden` assignments when a normal
+sheet is protected. This catches a newly editable input or newly hidden formula
+without expanding styled rows or columns into cells. It normalizes effective
+OOXML defaults for sheet actions, so writers that omit or explicitly serialize
+the same defaults do not create a diff. The profile and every report redact
+legacy verifiers, password hashes, salts, protected-range names, and security
+descriptors; FormulaFence retains only private comparison fingerprints plus
+safe presence metadata. Any change emits `FF022`; enable
+`no_protection_changes` for `FFP022`. These controls are not file encryption,
+identity enforcement, or a security guarantee: workbook and worksheet
+protection are an operational review surface, and FormulaFence does not decide
+who can successfully edit a file or fully emulate Excel's style cascade. The
+scope follows Microsoft's [workbook protection guidance](https://support.microsoft.com/en-US/Excel/protect-a-workbook),
+[worksheet protection guidance](https://support.microsoft.com/en-us/excel/protect-a-worksheet),
+and [protection-and-security overview](https://support.microsoft.com/en-US/Excel/protection-and-security-in-excel).
 
 FormulaFence also follows a call to a workbook- or worksheet-local defined name
 when its complete definition is one statically resolvable `LAMBDA` expression.

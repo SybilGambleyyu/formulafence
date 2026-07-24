@@ -6,6 +6,8 @@ from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import Workbook
+from openpyxl.chart import BarChart, Reference
+from openpyxl.chartsheet.protection import ChartsheetProtection
 from openpyxl.formatting.rule import (
     CellIsRule,
     ColorScaleRule,
@@ -13,7 +15,7 @@ from openpyxl.formatting.rule import (
     FormulaRule,
     IconSetRule,
 )
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Font, PatternFill, Protection
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.formula import ArrayFormula
@@ -194,6 +196,194 @@ def make_conditional_formatting_model(path: Path) -> Path:
     )
     workbook.save(path)
     return path
+
+
+def _rewrite_archive(path: Path, mutate: Callable[[dict[str, bytes]], None], suffix: str) -> Path:
+    """Apply a small raw OOXML test mutation without changing ZIP member order."""
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry.filename) for entry in archive.infolist()
+        }
+    mutate(contents)
+    staging = path.with_suffix(suffix)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+    staging.replace(path)
+    return path
+
+
+def _inputs_worksheet_root(contents: dict[str, bytes]) -> ElementTree.Element:
+    """Return the fixture's first worksheet XML root."""
+    return ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+
+
+def _save_inputs_worksheet(contents: dict[str, bytes], root: ElementTree.Element) -> None:
+    contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+        root,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+
+
+def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Path:
+    """Create a workbook with operational protection and sparse style controls."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Controlled input"
+    inputs["B2"] = 10
+    inputs["C2"] = "=B2*2"
+    inputs["D2"] = "Column default"
+    inputs["B2"].protection = Protection(locked=False)
+    inputs["C2"].protection = Protection(hidden=True)
+    inputs.row_dimensions[5].protection = Protection(hidden=True)
+    inputs.column_dimensions["D"].protection = Protection(locked=False)
+    inputs.protection.sheet = True
+    inputs.protection.formatCells = False
+    inputs.protection.sort = False
+    inputs.protection.autoFilter = False
+    inputs.protection.selectLockedCells = True
+    inputs.protection.set_password("synthetic-sheet-password")
+
+    workbook.security.lockStructure = True
+    workbook.security.set_workbook_password("synthetic-workbook-password")
+    if include_chartsheet:
+        chart = BarChart()
+        chart.add_data(
+            Reference(inputs, min_col=2, min_row=2, max_row=2), titles_from_data=False
+        )
+        dashboard = workbook.create_chartsheet("Dashboard")
+        dashboard.add_chart(chart)
+        dashboard.sheetProtection = ChartsheetProtection(
+            content=True,
+            objects=True,
+            password="synthetic-chart-password",
+        )
+    workbook.save(path)
+    return add_protected_range(path)
+
+
+def add_protected_range(
+    path: Path,
+    *,
+    name: str = "Synthetic approved inputs",
+    sqref: str = "B2:B5",
+    password: str = "A1B2",
+    security_descriptor: str = "synthetic-security-descriptor",
+) -> Path:
+    """Add an OOXML protected range that openpyxl intentionally does not model."""
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = _inputs_worksheet_root(contents)
+        protected_ranges = root.find(f"{{{namespace}}}protectedRanges")
+        if protected_ranges is None:
+            protected_ranges = ElementTree.Element(f"{{{namespace}}}protectedRanges")
+            protection = root.find(f"{{{namespace}}}sheetProtection")
+            insertion_index = (
+                list(root).index(protection) + 1
+                if protection is not None
+                else len(root)
+            )
+            root.insert(insertion_index, protected_ranges)
+        protected_range = ElementTree.SubElement(
+            protected_ranges,
+            f"{{{namespace}}}protectedRange",
+        )
+        protected_range.set("name", name)
+        protected_range.set("sqref", sqref)
+        protected_range.set("password", password)
+        protected_range.set("securityDescriptor", security_descriptor)
+        _save_inputs_worksheet(contents, root)
+
+    return _rewrite_archive(path, mutate, ".protected-range.tmp.xlsx")
+
+
+def set_sheet_protection_defaults(path: Path, *, explicit: bool) -> Path:
+    """Toggle equivalent omitted versus explicit normal-sheet protection defaults."""
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    defaults = {
+        "objects": "0",
+        "scenarios": "0",
+        "formatCells": "1",
+        "formatColumns": "1",
+        "formatRows": "1",
+        "insertColumns": "1",
+        "insertRows": "1",
+        "insertHyperlinks": "1",
+        "deleteColumns": "1",
+        "deleteRows": "1",
+        "selectLockedCells": "0",
+        "sort": "1",
+        "autoFilter": "1",
+        "pivotTables": "1",
+        "selectUnlockedCells": "0",
+    }
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = _inputs_worksheet_root(contents)
+        protection = root.find(f"{{{namespace}}}sheetProtection")
+        if protection is None:
+            raise ValueError("Fixture does not contain sheet protection")
+        for attribute, value in defaults.items():
+            if explicit:
+                protection.set(attribute, value)
+            else:
+                protection.attrib.pop(attribute, None)
+        _save_inputs_worksheet(contents, root)
+
+    return _rewrite_archive(path, mutate, ".protection-defaults.tmp.xlsx")
+
+
+def set_sheet_protection_modern_verifier(path: Path, hash_value: str) -> Path:
+    """Set synthetic SHA-512 verifier fields for redaction and equality tests."""
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = _inputs_worksheet_root(contents)
+        protection = root.find(f"{{{namespace}}}sheetProtection")
+        if protection is None:
+            raise ValueError("Fixture does not contain sheet protection")
+        protection.attrib.pop("password", None)
+        protection.set("algorithmName", "SHA-512")
+        protection.set("hashValue", hash_value)
+        protection.set("saltValue", "c3ludGhldGljLXNhbHQ=")
+        protection.set("spinCount", "100000")
+        _save_inputs_worksheet(contents, root)
+
+    return _rewrite_archive(path, mutate, ".modern-verifier.tmp.xlsx")
+
+
+def change_protected_range(
+    path: Path,
+    *,
+    sqref: str | None = None,
+    name: str | None = None,
+    password: str | None = None,
+    security_descriptor: str | None = None,
+) -> Path:
+    """Change one synthetic protected range's non-secret test properties."""
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = _inputs_worksheet_root(contents)
+        protected_range = root.find(
+            f"{{{namespace}}}protectedRanges/{{{namespace}}}protectedRange"
+        )
+        if protected_range is None:
+            raise ValueError("Fixture does not contain a protected range")
+        for attribute, value in (
+            ("sqref", sqref),
+            ("name", name),
+            ("password", password),
+            ("securityDescriptor", security_descriptor),
+        ):
+            if value is not None:
+                protected_range.set(attribute, value)
+        _save_inputs_worksheet(contents, root)
+
+    return _rewrite_archive(path, mutate, ".protected-range-change.tmp.xlsx")
 
 
 def reorder_conditional_differential_styles(path: Path) -> Path:

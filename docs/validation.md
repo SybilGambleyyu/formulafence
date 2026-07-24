@@ -301,6 +301,38 @@ relative formula over every target cell, or emulate the final interaction with
 manual formats and all overlapping rules. The policy control is
 `no_conditional_formatting_changes` (`FFP021`).
 
+## Protection controls and redaction — 2026-07-24
+
+Microsoft distinguishes workbook structure protection and worksheet editing
+controls from file encryption. FormulaFence 0.16.0 therefore treats them as a
+reviewable operational surface, not proof that a workbook is secure. We
+profiled Excel Easy's public [Protect Sheet example](https://www.excel-easy.com/examples/protect-sheet.html)
+and [Protect Workbook example](https://www.excel-easy.com/examples/protect-workbook.html),
+downloaded only for local compatibility validation and not bundled with the
+project. Their SHA-256 values were respectively
+`579328b0579140919ae0ccc468d1d4ebb4b840229d47d25a1a038f44415af855` and
+`2cd04503595ecb6cfb425f26890a6edf274bbb11d3ec159fb1983b2ace280330`.
+
+The sheet example has active worksheet protection and a modern SHA-512 verifier
+with 100,000 iterations; FormulaFence reported one protected sheet, no parser
+warning, and no raw verifier/hash/salt value in the profile. The workbook
+example has active structure protection with the same modern verifier shape;
+FormulaFence reported the structure lock and no protected-sheet declaration.
+This checks current Excel-produced OOXML representation, not password strength
+or access enforcement.
+
+Controlled fixtures additionally covered legacy verifiers, a protected range
+with a credential and security descriptor, explicit unlocked and hidden cell
+styles, row/column style assignments, and a protected chart sheet. Omitted and
+explicit schema-default worksheet action flags compared equal. Changing only a
+modern verifier, a protected-range name, a security descriptor, a structure
+lock, an action lock, or an unlocked cell emitted `FF022`; the policy emitted
+`FFP022`. A redaction check read the raw OOXML verifier, salt, protected-range
+name, and security descriptor, then verified that none appeared in JSON,
+Markdown, or SARIF artifacts. This validates comparison and data-minimisation
+behavior, not Excel authentication, file encryption, rights management, or the
+complete style-cascade result.
+
 ## Public structured-reference example — 2026-07-24
 
 FormulaFence 0.6.0 was also profiled against the public

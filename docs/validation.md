@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Embedded Power Pivot/Data Model — 2026-07-24
+
+FormulaFence 0.29.0 was validated with controlled raw-OOXML `.xlsx` packages
+that add an `x15:dataModel` workbook declaration, two private model-table
+records, one private model relationship, an explicit workbook
+`powerPivotData` binding, and a harmless opaque `xl/model/item.data` payload to
+a small ordinary workbook. The payload was never deserialized or opened in
+Office. Changing only the raw payload or only the declaration emitted `FF033`;
+`no_power_pivot_data_model_changes` emitted `FFP033`. Synthetic table,
+relationship, connection, column, and payload values were verified absent from
+JSON, Markdown, ordinary reports, and SARIF.
+
+The controlled suite rewrote a workbook relationship ID, used an equivalent
+internal target spelling, and regenerated writer GUIDs in model metadata; those
+equivalent representations produced no finding. Moving the binding,
+externalizing it, adding an unexpected direct relationship on the model part,
+and lowering the payload-size limit each produced `FF033` or a visible coverage
+warning. External targets were not fetched or exposed. A model-free workbook
+did not consume the Data Model payload budget.
+
+As an independent package-compatibility check, FormulaFence profiled Microsoft's
+public [Customer Profitability Excel sample](https://github.com/MicrosoftDocs/powerbi-docs/blob/main/powerbi-docs/create-reports/sample-datasets.md),
+downloaded locally from the pinned
+[`powerbi-desktop-samples` source revision](https://github.com/microsoft/powerbi-desktop-samples/tree/f66e8c775a1426504254f7a061b8fed482601800)
+and not bundled with this repository. The downloaded workbook SHA-256 was
+`76f21c59d631e95bbad5489350695a46d903061aedb179e88b72f038772666d4`.
+FormulaFence found one embedded model payload and workbook binding, one Data
+Model declaration, nine model tables, eight model relationships, and no
+Data-Model coverage warning. The source workbook's unrelated external-data
+coverage notes remained visible. This validates static, relationship-aware
+comparison and data minimisation—not Analysis Services deserialization, DAX
+evaluation, refresh, report calculation/rendering, model-to-cell impact,
+external-target retrieval, or the semantic correctness of model data. Production
+raw payload reads are bounded to 512 MiB per part, 512 MiB per workbook, and 16
+parts. The declaration boundary follows the Open XML
+[`x15:dataModel` reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.linq.x15.datamodel?view=openxml-3.0.1).
+
 ## Slicer and Timeline cache filter state — 2026-07-24
 
 FormulaFence 0.28.0 was validated with controlled raw-OOXML `.xlsx` packages

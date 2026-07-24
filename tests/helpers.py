@@ -511,6 +511,293 @@ def change_power_query_refresh_noise(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".power-query-noise.tmp.xlsx")
 
 
+def make_power_pivot_data_model(path: Path) -> Path:
+    """Create a harmless relationship-backed Power Pivot/Data Model fixture.
+
+    ``item.data`` is intentionally opaque: FormulaFence must fingerprint its
+    bounded bytes without trying to deserialize an Analysis Services backup or
+    exposing its contents. The controlled package is never opened in Office.
+    """
+    make_model(path)
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+    data_model = _OFFICE_2013_SPREADSHEET_NS
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        extensions = ElementTree.SubElement(workbook, f"{{{spreadsheet}}}extLst")
+        extension = ElementTree.SubElement(
+            extensions,
+            f"{{{spreadsheet}}}ext",
+            {"uri": "{FCE2AD5D-F65C-4FA6-A056-5C36A1767C68}"},
+        )
+        model = ElementTree.SubElement(
+            extension,
+            f"{{{data_model}}}dataModel",
+            {"minVersionLoad": "1"},
+        )
+        model_tables = ElementTree.SubElement(model, f"{{{data_model}}}modelTables")
+        ElementTree.SubElement(
+            model_tables,
+            f"{{{data_model}}}modelTable",
+            {
+                "id": "PrivateRevenue_{11111111-1111-1111-1111-111111111111}",
+                "name": "Private baseline revenue table",
+                "connection": "Private baseline data connection",
+            },
+        )
+        ElementTree.SubElement(
+            model_tables,
+            f"{{{data_model}}}modelTable",
+            {
+                "id": "PrivateCalendar_{22222222-2222-2222-2222-222222222222}",
+                "name": "Private baseline calendar table",
+                "connection": "Private baseline calendar connection",
+            },
+        )
+        model_relationships = ElementTree.SubElement(
+            model,
+            f"{{{data_model}}}modelRelationships",
+        )
+        ElementTree.SubElement(
+            model_relationships,
+            f"{{{data_model}}}modelRelationship",
+            {
+                "fromTable": "Private baseline revenue table",
+                "fromColumn": "Private baseline calendar key",
+                "toTable": "Private baseline calendar table",
+                "toColumn": "Private baseline date key",
+            },
+        )
+        contents["xl/workbook.xml"] = serialize(workbook)
+
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFencePowerPivotData",
+                "Type": f"{document_relationships}/powerPivotData",
+                "Target": "model/item.data",
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        default_tag = f"{{{content_types}}}Default"
+        if not any(item.get("Extension") == "data" for item in types.findall(default_tag)):
+            ElementTree.SubElement(
+                types,
+                default_tag,
+                {
+                    "Extension": "data",
+                    "ContentType": "application/vnd.openxmlformats-officedocument.model+data",
+                },
+            )
+        contents["[Content_Types].xml"] = serialize(types)
+        contents["xl/model/item.data"] = b"private baseline Power Pivot data model payload"
+
+    return _rewrite_archive(path, mutate, ".power-pivot-data-model.tmp.xlsx")
+
+
+def change_power_pivot_data_model_payload(path: Path) -> Path:
+    """Change only the private raw embedded Data Model payload."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["xl/model/item.data"] = b"private candidate Power Pivot data model payload"
+
+    return _rewrite_archive(path, mutate, ".power-pivot-data-payload.tmp.xlsx")
+
+
+def change_power_pivot_data_model_declaration(path: Path) -> Path:
+    """Change a private model relationship without touching raw payload bytes."""
+    data_model = _OFFICE_2013_SPREADSHEET_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        relationship = next(
+            workbook.iter(f"{{{data_model}}}modelRelationship")
+        )
+        relationship.set("toColumn", "Private candidate calendar key")
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".power-pivot-data-declaration.tmp.xlsx")
+
+
+def renumber_power_pivot_data_model_relationship(path: Path) -> Path:
+    """Rewrite the workbook binding ID while retaining its semantic target."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        relationship = next(
+            item
+            for item in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if item.get("Id") == "rIdFencePowerPivotData"
+        )
+        relationship.set("Id", "rIdFenceRenumberedPowerPivotData")
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".power-pivot-data-renumber.tmp.xlsx")
+
+
+def rewrite_power_pivot_data_model_internal_target_spelling(path: Path) -> Path:
+    """Use an equivalent relative spelling for the embedded model target."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        relationship = next(
+            item
+            for item in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if item.get("Id") == "rIdFencePowerPivotData"
+        )
+        relationship.set("Target", "./model/../model/item.data")
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".power-pivot-data-target.tmp.xlsx")
+
+
+def set_power_pivot_data_model_equivalent_guids(path: Path) -> Path:
+    """Regenerate writer IDs that do not alter model table relationships."""
+    data_model = _OFFICE_2013_SPREADSHEET_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        tables = tuple(workbook.iter(f"{{{data_model}}}modelTable"))
+        tables[0].set("id", "PrivateRevenue_{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}")
+        tables[1].set("id", "PrivateCalendar_{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}")
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".power-pivot-data-guid.tmp.xlsx")
+
+
+def rebind_power_pivot_data_model(path: Path) -> Path:
+    """Move the embedded Data Model to a different package member."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        relationship = next(
+            item
+            for item in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if item.get("Id") == "rIdFencePowerPivotData"
+        )
+        relationship.set("Target", "model/item2.data")
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["xl/model/item2.data"] = contents.pop("xl/model/item.data")
+
+    return _rewrite_archive(path, mutate, ".power-pivot-data-rebind.tmp.xlsx")
+
+
+def externalize_power_pivot_data_model(path: Path) -> Path:
+    """Turn the workbook Data Model binding into an external redaction fixture."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        relationship = next(
+            item
+            for item in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if item.get("Id") == "rIdFencePowerPivotData"
+        )
+        relationship.set("Target", "https://example.invalid/private-power-pivot-data-model")
+        relationship.set("TargetMode", "External")
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".power-pivot-data-external.tmp.xlsx")
+
+
+def remove_power_pivot_data_model_workbook_binding(path: Path) -> Path:
+    """Leave Data Model metadata and payload orphaned from the workbook."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        relationship = next(
+            item
+            for item in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if item.get("Id") == "rIdFencePowerPivotData"
+        )
+        relationships.remove(relationship)
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".power-pivot-data-unbound.tmp.xlsx")
+
+
+def add_power_pivot_data_model_direct_relationship(path: Path) -> Path:
+    """Add an unexpected direct model-part relationship for coverage tests."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFencePowerPivotRelated",
+                "Type": f"{document_relationships}/image",
+                "Target": "private-model-preview.png",
+            },
+        )
+        contents["xl/model/_rels/item.data.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["xl/model/private-model-preview.png"] = b"private model preview payload"
+
+    return _rewrite_archive(path, mutate, ".power-pivot-data-related.tmp.xlsx")
+
+
 def make_external_data_refresh_model(path: Path) -> Path:
     """Create a raw-OOXML fixture covering every external-data refresh layer."""
     make_model(path)

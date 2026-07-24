@@ -52,6 +52,7 @@ from formulafence.models import (
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
+    PowerPivotDataModelSnapshot,
     PowerQueryPermissionControlsSnapshot,
     PowerQuerySnapshot,
     ProtectedRangeSnapshot,
@@ -212,6 +213,11 @@ _TIMELINE_CACHE_PART_PATTERN = re.compile(
 _SLICER_TIMELINE_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _SLICER_TIMELINE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _SLICER_TIMELINE_TOTAL_XML_MAX_COUNT = 512
+_POWER_PIVOT_DATA_PART_PATTERN = re.compile(r"^xl/model/[^/]+\.data$", re.IGNORECASE)
+_POWER_PIVOT_DATA_MAX_BYTES = 512 * 1024 * 1024
+_POWER_PIVOT_DATA_TOTAL_MAX_BYTES = 512 * 1024 * 1024
+_POWER_PIVOT_DATA_TOTAL_MAX_COUNT = 16
+_POWER_PIVOT_DATA_HASH_CHUNK_BYTES = 1024 * 1024
 _ACTIVEX_NS = "http://schemas.microsoft.com/office/2006/activeX"
 _VML_NS = "urn:schemas-microsoft-com:vml"
 _VML_OFFICE_NS = "urn:schemas-microsoft-com:office:office"
@@ -236,6 +242,7 @@ _PIVOT_CACHE_DEFINITION_RELATIONSHIP = (
     f"{_DOCUMENT_RELATIONSHIP_NS}/pivotCacheDefinition"
 )
 _PIVOT_CACHE_RECORDS_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/pivotCacheRecords"
+_POWER_PIVOT_DATA_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/powerPivotData"
 _SLICER_CACHE_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2007/relationships/slicerCache"
 )
@@ -425,6 +432,14 @@ class _SlicerTimelineMetadata:
 
 
 @dataclass(frozen=True)
+class _PowerPivotDataModelMetadata:
+    """Raw embedded Power Pivot/Data Model evidence retained before reader loss."""
+
+    data_model: PowerPivotDataModelSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _WorksheetEmbeddedControlMetadata:
     """Raw worksheet control evidence retained before the workbook reader omits it."""
 
@@ -593,6 +608,28 @@ class _SlicerTimelineRawRelationship:
         )
 
 
+@dataclass(frozen=True)
+class _PowerPivotRawRelationship:
+    """One private Power Pivot/Data Model relationship and canonical target."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return relationship semantics without writer-chosen identifiers."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        return (
+            self.relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
 @dataclass
 class _RibbonCustomizationBudget:
     """Bound total custom-UI bytes read across one RibbonX package scan."""
@@ -647,6 +684,14 @@ class _SlicerTimelineXmlBudget:
 
     remaining_bytes: int = _SLICER_TIMELINE_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _SLICER_TIMELINE_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _PowerPivotDataBudget:
+    """Bound embedded Power Pivot/Data Model bytes in one package scan."""
+
+    remaining_bytes: int = _POWER_PIVOT_DATA_TOTAL_MAX_BYTES
+    remaining_parts: int = _POWER_PIVOT_DATA_TOTAL_MAX_COUNT
 
 
 @dataclass
@@ -908,6 +953,16 @@ class _SlicerTimelineCacheInspection:
     inspected: bool = False
     definition_signature: str | None = None
     relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _PowerPivotDataPayloadInspection:
+    """Private bounded fingerprint result for embedded Data Model payloads."""
+
+    data_part_count: int = 0
+    fingerprinted_part_count: int = 0
+    uninspected_part_count: int = 0
+    payload_signature: str | None = None
 
 
 @dataclass(frozen=True)
@@ -9945,6 +10000,393 @@ def _slicer_timeline_metadata(
     return _SlicerTimelineMetadata(snapshot, tuple(sorted(warnings)))
 
 
+def _power_pivot_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> tuple[_PowerPivotRawRelationship, ...]:
+    """Read Power Pivot/Data Model relationships without opening their targets."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for Power Pivot/Data Model inspection "
+            f"({type(error).__name__}); affected models were not compared."
+        )
+        return ()
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting a Power Pivot/Data Model; "
+            "affected models were not compared."
+        )
+        return ()
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_PowerPivotRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _PowerPivotRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting a Power "
+            "Pivot/Data Model; affected models may be incomplete."
+        )
+    return tuple(relationships)
+
+
+def _power_pivot_relationship_signature(
+    relationships: tuple[_PowerPivotRawRelationship, ...],
+) -> str | None:
+    """Fingerprint Data Model relationship semantics without arbitrary IDs."""
+    material = sorted(relationship.semantic_key() for relationship in relationships)
+    return _private_external_data_signature(
+        tuple(
+            (f"relationship:{index}", repr(relationship))
+            for index, relationship in enumerate(material)
+        )
+    )
+
+
+def _power_pivot_data_model_fragment(
+    element: ElementTree.Element,
+) -> tuple[object, ...]:
+    """Canonicalize private x15 Data Model metadata without leaking it.
+
+    Model-table identifiers commonly carry writer-generated GUIDs. They do not
+    identify the table relationship described by the extension, so normalizing
+    the GUID component avoids a noisy rewrite while retaining the surrounding
+    table, connection, column, and relationship material in the private hash.
+    """
+    attributes = tuple(
+        sorted(
+            (
+                _xml_display_name(attribute),
+                _normalise_guid(value),
+            )
+            for attribute, value in element.attrib.items()
+        )
+    )
+    children = tuple(_power_pivot_data_model_fragment(child) for child in element)
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    if text is not None:
+        text = _normalise_guid(text)
+    return (
+        _xml_display_name(element.tag),
+        attributes,
+        text,
+        children,
+    )
+
+
+def _power_pivot_data_payloads(
+    archive: ZipFile,
+    members: set[str],
+    unresolved_entries: list[tuple[str, str]],
+    warnings: set[str],
+    budget: _PowerPivotDataBudget,
+) -> _PowerPivotDataPayloadInspection:
+    """Fingerprint bounded raw Data Model payloads without parsing DAX or data."""
+    entries = list(unresolved_entries)
+    fingerprinted_part_count = 0
+    uninspected_part_count = len(unresolved_entries)
+    for member in sorted(members, key=str.casefold):
+        if budget.remaining_parts == 0:
+            warnings.add(
+                "FormulaFence reached its bounded Power Pivot/Data Model part count "
+                "budget; affected models have a coverage gap."
+            )
+            entries.append(("part-count-budget-exhausted", member))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_parts -= 1
+        try:
+            info = archive.getinfo(member)
+        except KeyError:
+            warnings.add(
+                "FormulaFence could not locate a Power Pivot/Data Model package part; "
+                "affected models were not compared."
+            )
+            entries.append(("missing-part", member))
+            uninspected_part_count += 1
+            continue
+        metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+        if info.file_size > _POWER_PIVOT_DATA_MAX_BYTES:
+            warnings.add(
+                "FormulaFence did not fully read an oversized Power Pivot/Data Model "
+                "part; affected models have a coverage gap."
+            )
+            entries.append(("oversized-part", metadata))
+            uninspected_part_count += 1
+            continue
+        if info.file_size > budget.remaining_bytes:
+            warnings.add(
+                "FormulaFence reached its bounded Power Pivot/Data Model read budget; "
+                "affected models have a coverage gap."
+            )
+            entries.append(("read-budget-exhausted", metadata))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_bytes -= info.file_size
+        digest = hashlib.sha256()
+        bytes_read = 0
+        try:
+            with archive.open(info) as payload:
+                while chunk := payload.read(_POWER_PIVOT_DATA_HASH_CHUNK_BYTES):
+                    bytes_read += len(chunk)
+                    if bytes_read > info.file_size:
+                        raise ValueError("payload exceeded its declared size")
+                    digest.update(chunk)
+            if bytes_read != info.file_size:
+                raise ValueError("payload did not match its declared size")
+        except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+            warnings.add(
+                "FormulaFence could not fingerprint a Power Pivot/Data Model part "
+                f"({type(error).__name__}); affected models were not compared."
+            )
+            entries.append(("unreadable-part", metadata))
+            uninspected_part_count += 1
+            continue
+        entries.append(("payload", repr((member, digest.hexdigest()))))
+        fingerprinted_part_count += 1
+
+    entries.sort()
+    return _PowerPivotDataPayloadInspection(
+        data_part_count=len(members),
+        fingerprinted_part_count=fingerprinted_part_count,
+        uninspected_part_count=uninspected_part_count,
+        payload_signature=_private_external_data_signature(tuple(entries)),
+    )
+
+
+def _power_pivot_data_model_metadata(path: Path) -> _PowerPivotDataModelMetadata:
+    """Inspect an embedded Power Pivot/Data Model without loading its contents.
+
+    The binary Data Model is an Analysis Services payload. FormulaFence does
+    not deserialize it, evaluate DAX, refresh it, or expose any stored data;
+    it follows only its workbook relationship and hashes bounded raw bytes.
+    """
+    warnings: set[str] = set()
+    default = PowerPivotDataModelSnapshot()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                workbook_root = _xml_root(archive, "xl/workbook.xml")
+            except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+                return _PowerPivotDataModelMetadata(
+                    default,
+                    (
+                        "FormulaFence could not map workbook OOXML for Power Pivot/Data "
+                        f"Model inspection ({type(error).__name__}); affected models were "
+                        "not compared.",
+                    ),
+                )
+
+            workbook_relationships = _power_pivot_raw_relationships(
+                archive,
+                "xl/workbook.xml",
+                warnings,
+                context="workbook",
+            )
+            power_pivot_relationships = tuple(
+                relationship
+                for relationship in workbook_relationships
+                if relationship.relationship_type.casefold()
+                == _POWER_PIVOT_DATA_RELATIONSHIP.casefold()
+            )
+            data_model_elements = tuple(
+                element
+                for element in workbook_root.iter()
+                if _xml_namespace(element.tag) == _OFFICE_2013_SPREADSHEET_NS
+                and _xml_local_name(element.tag) == "dataModel"
+            )
+
+            declaration_entries: list[tuple[str, str]] = []
+            data_model_members: set[str] = set()
+            unresolved_payload_entries: list[tuple[str, str]] = []
+            workbook_binding_count = 0
+            external_relationship_count = 0
+            unrecognized_part_count = 0
+            for relationship in power_pivot_relationships:
+                if (
+                    relationship.target_mode.casefold() != "internal"
+                    or relationship.safe_target is None
+                ):
+                    warnings.add(
+                        "FormulaFence found a Power Pivot/Data Model workbook binding "
+                        "without a safe internal target; affected models were not compared."
+                    )
+                    declaration_entries.append(
+                        ("external-workbook-binding", repr(relationship.semantic_key()))
+                    )
+                    unresolved_payload_entries.append(
+                        ("external-workbook-binding", repr(relationship.semantic_key()))
+                    )
+                    external_relationship_count += int(
+                        relationship.target_mode.casefold() != "internal"
+                    )
+                    unrecognized_part_count += 1
+                    continue
+                declaration_entries.append(
+                    ("data-model-part", relationship.safe_target)
+                )
+                if not _POWER_PIVOT_DATA_PART_PATTERN.fullmatch(
+                    relationship.safe_target
+                ):
+                    warnings.add(
+                        "FormulaFence found a Power Pivot/Data Model workbook binding to "
+                        "an unexpected package part; affected models have a coverage gap."
+                    )
+                    unrecognized_part_count += 1
+                data_model_members.add(relationship.safe_target)
+                workbook_binding_count += 1
+
+            if data_model_elements and not power_pivot_relationships:
+                warnings.add(
+                    "FormulaFence found Power Pivot/Data Model workbook metadata without "
+                    "a Power Pivot data relationship; affected models have a coverage gap."
+                )
+                unrecognized_part_count += len(data_model_elements)
+
+            model_table_count = 0
+            model_relationship_count = 0
+            for index, element in enumerate(data_model_elements):
+                model_table_count += sum(
+                    _xml_namespace(child.tag) == _OFFICE_2013_SPREADSHEET_NS
+                    and _xml_local_name(child.tag) == "modelTable"
+                    for child in element.iter()
+                )
+                model_relationship_count += sum(
+                    _xml_namespace(child.tag) == _OFFICE_2013_SPREADSHEET_NS
+                    and _xml_local_name(child.tag) == "modelRelationship"
+                    for child in element.iter()
+                )
+                try:
+                    fragment = repr(_power_pivot_data_model_fragment(element))
+                except RecursionError:
+                    warnings.add(
+                        "FormulaFence could not fully traverse an excessively nested Power "
+                        "Pivot/Data Model declaration; affected models were not compared."
+                    )
+                    fragment = _private_payload_signature(
+                        ElementTree.tostring(element, encoding="utf-8")
+                    )
+                    unrecognized_part_count += 1
+                declaration_entries.append((f"data-model-declaration:{index}", fragment))
+
+            referenced_members = set(data_model_members)
+            for entry in archive.infolist():
+                member = entry.filename
+                if _POWER_PIVOT_DATA_PART_PATTERN.fullmatch(member):
+                    data_model_members.add(member)
+                    if member not in referenced_members:
+                        warnings.add(
+                            "FormulaFence found a Power Pivot/Data Model package part not "
+                            "bound by an inspected workbook relationship; affected models "
+                            "have a coverage gap."
+                        )
+                        declaration_entries.append(("orphan-data-model-part", member))
+                        unrecognized_part_count += 1
+                elif (
+                    member.startswith("xl/model/")
+                    and not member.startswith("xl/model/_rels/")
+                    and not member.endswith("/")
+                ):
+                    warnings.add(
+                        "FormulaFence found an unrecognized Power Pivot/Data Model package "
+                        "part; affected models have a coverage gap."
+                    )
+                    declaration_entries.append(("unrecognized-data-model-part", member))
+                    unrecognized_part_count += 1
+
+            payload_inspection = _power_pivot_data_payloads(
+                archive,
+                data_model_members,
+                unresolved_payload_entries,
+                warnings,
+                _PowerPivotDataBudget(),
+            )
+            relationship_entries: list[tuple[str, str]] = []
+            related_relationship_count = 0
+            for member in sorted(data_model_members, key=str.casefold):
+                relationships = _power_pivot_raw_relationships(
+                    archive,
+                    member,
+                    warnings,
+                    context="Power Pivot/Data Model package part",
+                )
+                if not relationships:
+                    continue
+                warnings.add(
+                    "FormulaFence found direct relationships on a Power Pivot/Data Model "
+                    "package part; affected models have a coverage gap."
+                )
+                related_relationship_count += len(relationships)
+                external_relationship_count += sum(
+                    relationship.target_mode.casefold() != "internal"
+                    for relationship in relationships
+                )
+                unrecognized_part_count += len(relationships)
+                if signature := _power_pivot_relationship_signature(relationships):
+                    relationship_entries.append((member, signature))
+
+            declaration_entries.sort()
+            relationship_entries.sort()
+            snapshot = PowerPivotDataModelSnapshot(
+                data_model_part_count=len(data_model_members),
+                workbook_binding_count=workbook_binding_count,
+                data_model_declaration_count=len(data_model_elements),
+                model_table_count=model_table_count,
+                model_relationship_count=model_relationship_count,
+                related_relationship_count=related_relationship_count,
+                external_relationship_count=external_relationship_count,
+                fingerprinted_data_part_count=payload_inspection.fingerprinted_part_count,
+                uninspected_data_part_count=payload_inspection.uninspected_part_count,
+                unrecognized_part_count=unrecognized_part_count,
+                declaration_signature=_private_external_data_signature(
+                    tuple(declaration_entries)
+                ),
+                relationship_signature=_private_external_data_signature(
+                    tuple(relationship_entries)
+                ),
+                payload_signature=payload_inspection.payload_signature,
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _PowerPivotDataModelMetadata(
+            default,
+            (
+                "FormulaFence could not inspect Power Pivot/Data Model OOXML "
+                f"({type(error).__name__}); affected models were not compared.",
+            ),
+        )
+    return _PowerPivotDataModelMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _pivot_reader_cache_record_replacements(
     path: Path,
 ) -> tuple[dict[str, bytes], tuple[str, ...]]:
@@ -12668,6 +13110,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         source,
         dict(pivot_table_metadata.slicer_timeline_pivot_cache_members_by_id),
     )
+    power_pivot_data_model_metadata = _power_pivot_data_model_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -12699,6 +13142,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(office_web_addin_metadata.warnings)
     parser_warnings.update(pivot_table_metadata.warnings)
     parser_warnings.update(slicer_timeline_metadata.warnings)
+    parser_warnings.update(power_pivot_data_model_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -12911,6 +13355,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         office_web_addins=office_web_addin_metadata.addins,
         pivot_table_definitions=pivot_table_metadata.pivot_tables,
         slicer_timeline_caches=slicer_timeline_metadata.caches,
+        power_pivot_data_model=power_pivot_data_model_metadata.data_model,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -12979,6 +13424,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
         "pivot_table_definitions": snapshot.pivot_table_definitions.profile_dict(),
         "slicer_timeline_caches": snapshot.slicer_timeline_caches.profile_dict(),
+        "power_pivot_data_model": snapshot.power_pivot_data_model.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -12999,6 +13445,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_office_web_addins": snapshot.office_web_addins.present,
             "has_pivot_table_definitions": snapshot.pivot_table_definitions.present,
             "has_slicer_timeline_caches": snapshot.slicer_timeline_caches.present,
+            "has_power_pivot_data_model": snapshot.power_pivot_data_model.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

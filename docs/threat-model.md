@@ -10,10 +10,14 @@ financial correctness or replace model review.
   network requests.
 - It loads formulas as text with `data_only=False`; it does not calculate them.
 - It never executes VBA, XLM macro sheets, RibbonX callbacks, DDE, external
-  links, Power Query, Office Web Add-in code, or worksheet ActiveX/OLE code.
+  links, Power Query, Power Pivot/DAX, Office Web Add-in code, or worksheet
+  ActiveX/OLE code.
 - VBA payloads, XLM macro-sheet source material, RibbonX control/callback
   material, Office Web Add-in task-pane material, and worksheet control/OLE
   material are compared through private fingerprints only.
+- Embedded Power Pivot/Data Model declarations and bounded raw model payloads
+  are compared through private fingerprints only; table names, relationships,
+  DAX, stored values, and connection details are never emitted.
 - Protection credential material is never emitted: legacy verifiers, modern
   hashes/salts, protected-range names, and security descriptors are compared
   through private fingerprints and reported only as safe presence/change metadata.
@@ -216,6 +220,22 @@ review prompt, not proof of an error.
   malformed, orphaned, unbound, externally targeted, oversized, or over-budget
   material remains a visible parser-coverage warning. Cache XML reads are
   bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts.
+- Embedded Power Pivot/Data Model packages are followed from the workbook's
+  explicit `powerPivotData` relationship and `x15:dataModel` declaration.
+  FormulaFence privately fingerprints declaration material, normalized workbook
+  relationship semantics, and bounded raw `xl/model/*.data` payloads while
+  exposing only model-part, binding, declaration, table, relationship, payload,
+  and coverage counts. Table/column/relationship names, connection details,
+  DAX, stored values, targets, XML, and raw bytes remain private. A material
+  change emits `FF033` and can be blocked with
+  `no_power_pivot_data_model_changes`. Relationship IDs, equivalent internal
+  target spellings, and GUIDs in Data Model metadata are normalized. FormulaFence
+  does **not** deserialize the Analysis Services payload, evaluate DAX, refresh
+  the model, calculate/render a report, infer model-to-cell impact, or fetch an
+  external target. Missing, malformed, orphaned, unbound, externally targeted,
+  unexpected directly related, oversized, or over-budget material remains a
+  visible parser-coverage warning. Raw payload reads are bounded to 512 MiB per
+  part, 512 MiB per workbook, and 16 parts.
 - DrawingML chart definitions and cached presentation data are followed from
   standard worksheet or chartsheet `drawing` relationships through chart parts
   and direct `userShapes` overlays. FormulaFence privately fingerprints
@@ -296,13 +316,15 @@ review prompt, not proof of an error.
 - It inventories sheet visibility, defined names, calculation settings, the VBA
   payload, XLM macro-sheet packages, RibbonX custom UI packages, Office Web
   Add-in task-pane packages, PivotTable view/cache-schema/shared-item/cached-
-  record chains, Slicer and Timeline cache filter-definition chains, DrawingML
-  chart definition/cached-presentation/overlay chains,
+  record chains, Slicer and Timeline cache filter-definition chains, embedded
+  Power Pivot/Data Model declaration/raw-payload chains, DrawingML chart
+  definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link
   packages, and private Power Query definition material. It does not yet
-  interpret PivotTable OLAP or extension-list semantics; apply Slicer/Timeline
-  filters or model their worksheet/drawing view geometry/styles; modern
+  interpret PivotTable OLAP or extension-list semantics; deserialize or execute
+  Power Pivot/Data Model content; apply Slicer/Timeline filters or model their
+  worksheet/drawing view geometry/styles; modern
   `chartEx` or nested-chart semantics; general drawing layout/objects or
   chart-to-cell impact; Ribbon image payloads; VML/drawing control layout or
   comment content; embedded OLE/package formats; worksheet-scoped Web Add-in

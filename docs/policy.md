@@ -18,6 +18,7 @@ rules:
   no_chart_definition_changes: true
   no_pivot_table_definition_changes: true
   no_slicer_timeline_cache_changes: true
+  no_power_pivot_data_model_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -77,6 +78,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_chart_definition_changes` | boolean | A DrawingML chart binding, chart definition, cached series data, chart-overlay shape, direct relationship, or bounded direct related payload changes. |
 | `no_pivot_table_definition_changes` | boolean | A PivotTable binding/layout, cache schema, shared item, cache-record relationship, or bounded cached-record payload changes. Source and refresh controls remain under `no_external_data_connection_changes`. |
 | `no_slicer_timeline_cache_changes` | boolean | A Slicer or Timeline workbook binding, cached filter state, source binding, filtered-PivotTable binding, or direct cache-part relationship changes. |
+| `no_power_pivot_data_model_changes` | boolean | An embedded Power Pivot/Data Model workbook binding, `x15:dataModel` declaration, direct model-part relationship, or bounded raw model payload changes. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -355,6 +357,24 @@ Slicer or Timeline view geometry and styles. Missing, malformed, orphaned,
 unbound, externally targeted, oversized, or over-budget material remains a
 visible coverage warning. Cache XML reads are bounded to 16 MiB per part, 64
 MiB per workbook, and 512 parts.
+
+An embedded Power Pivot/Data Model can carry tables, relationships,
+calculations, and stored values outside ordinary worksheet cells. FormulaFence
+follows its explicit workbook `powerPivotData` binding and `x15:dataModel`
+declaration, then privately fingerprints declaration material and bounded raw
+`xl/model/*.data` payloads. A material change emits `FF033`; enable
+`no_power_pivot_data_model_changes` to make it `FFP033` in CI. Profiles expose
+only counts for model parts, bindings, declarations, tables, relationships,
+fingerprinted payloads, and coverage. Table/column/relationship names,
+connection details, DAX, stored values, targets, XML, and raw bytes remain
+private. Relationship IDs, equivalent internal target spellings, and Data
+Model GUIDs are normalized. FormulaFence does not deserialize the Analysis
+Services payload, evaluate DAX, refresh a model, calculate/render a report,
+infer model-to-cell impact, or fetch an external target. Missing, malformed,
+orphaned, unbound, externally targeted, unexpected directly related,
+oversized, or over-budget material remains a visible coverage warning. Raw
+payload reads are bounded to 512 MiB per part, 512 MiB per workbook, and 16
+parts.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

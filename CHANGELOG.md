@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.29.0 — 2026-07-24
+
+- Inspect embedded Power Pivot/Data Model packages from the workbook's explicit
+  `powerPivotData` relationship and `x15:dataModel` declaration. Private
+  fingerprints retain complete declaration material, normalized relationship
+  semantics, and bounded raw model payload hashes without serializing table,
+  column, relationship, connection, DAX, stored-value, target, XML, or payload
+  content.
+- Emit `FF033` for a Data Model binding, declaration, direct model-part
+  relationship, or bounded raw payload change, and add the fail-closed
+  `no_power_pivot_data_model_changes` policy rule (`FFP033`). Relationship IDs,
+  equivalent internal target spellings, and writer-generated Data Model GUIDs
+  are normalized away. Missing, malformed, orphaned, unbound, externally
+  targeted, unexpected directly related, oversized, over-budget, or
+  unrecognized material remains a visible coverage warning. Raw model payload
+  reads are bounded to 512 MiB per part, 512 MiB per workbook, and 16 parts.
+- Never deserialize the embedded Analysis Services payload, evaluate DAX,
+  refresh a model, calculate/render a report, infer model-to-cell impact, or
+  fetch an external target.
+
 ## 0.28.0 — 2026-07-24
 
 - Inspect Slicer and Timeline cache definitions directly from documented

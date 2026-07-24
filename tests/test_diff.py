@@ -14,6 +14,7 @@ from formulafence.workbook import load_snapshot, profile_snapshot
 
 from .helpers import (
     add_conditional_formatting_databar_extension,
+    add_power_pivot_data_model_direct_relationship,
     add_protected_range,
     break_slicer_timeline_pivot_cache_binding,
     change_chart_cached_data,
@@ -26,6 +27,8 @@ from .helpers import (
     change_office_web_addin_controls,
     change_pivot_table_definition_material,
     change_pivot_table_refresh_control,
+    change_power_pivot_data_model_declaration,
+    change_power_pivot_data_model_payload,
     change_power_query_controls,
     change_power_query_refresh_noise,
     change_protected_range,
@@ -48,6 +51,7 @@ from .helpers import (
     duplicate_external_link_sheet_names,
     externalize_chart_overlay_relationship,
     externalize_pivot_table_cache_record_relationship,
+    externalize_power_pivot_data_model,
     externalize_slicer_timeline_cache_relationship,
     make_chart_definition_model,
     make_conditional_formatting_model,
@@ -65,6 +69,7 @@ from .helpers import (
     make_named_lambda_model,
     make_office_web_addin_model,
     make_pivot_table_definition_model,
+    make_power_pivot_data_model,
     make_power_query_model,
     make_protection_model,
     make_ribbon_customization_model,
@@ -79,7 +84,9 @@ from .helpers import (
     mark_array_formula_unclassified,
     rebind_external_link_declaration,
     rebind_pivot_table_cache_records,
+    rebind_power_pivot_data_model,
     rebind_slicer_timeline_cache,
+    remove_power_pivot_data_model_workbook_binding,
     remove_xlm_macro_sheet_related_part_payload,
     renumber_chart_relationships,
     renumber_external_link_declaration_relationships,
@@ -87,6 +94,7 @@ from .helpers import (
     renumber_office_web_addin_relationships,
     renumber_pivot_table_cache_id,
     renumber_pivot_table_relationships,
+    renumber_power_pivot_data_model_relationship,
     renumber_ribbon_customization_relationships,
     renumber_slicer_timeline_pivot_cache_id,
     renumber_slicer_timeline_relationships,
@@ -98,11 +106,13 @@ from .helpers import (
     rewrite_legacy_vml_control_internal_target_spelling,
     rewrite_office_web_addin_internal_target_spelling,
     rewrite_pivot_table_internal_target_spelling,
+    rewrite_power_pivot_data_model_internal_target_spelling,
     rewrite_ribbon_customization_internal_target_spelling,
     rewrite_slicer_timeline_internal_target_spelling,
     rewrite_worksheet_embedded_control_internal_target_spelling,
     rewrite_xlm_macro_sheet_internal_target_spelling,
     set_external_data_connection_defaults,
+    set_power_pivot_data_model_equivalent_guids,
     set_sheet_protection_defaults,
     set_sheet_protection_modern_verifier,
     set_slicer_timeline_equivalent_defaults,
@@ -3538,6 +3548,240 @@ def test_slicerless_workbook_does_not_consume_filter_cache_budget(tmp_path, monk
     assert snapshot.slicer_timeline_caches.slicer_cache_part_count == 0
     assert snapshot.slicer_timeline_caches.timeline_cache_part_count == 0
     assert not any("slicer/Timeline XML" in warning for warning in snapshot.parser_warnings)
+
+
+def test_power_pivot_data_model_is_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_power_pivot_data_model(tmp_path / "baseline.xlsx")
+    payload_candidate = make_power_pivot_data_model(tmp_path / "payload.xlsx")
+    declaration_candidate = make_power_pivot_data_model(tmp_path / "declaration.xlsx")
+    change_power_pivot_data_model_payload(payload_candidate)
+    change_power_pivot_data_model_declaration(declaration_candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    payload_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(payload_candidate),
+    )
+    declaration_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(declaration_candidate),
+    )
+    payload_change = next(
+        change
+        for change in payload_report.changes
+        if change.kind == "power_pivot_data_model_changed"
+    )
+    declaration_change = next(
+        change
+        for change in declaration_report.changes
+        if change.kind == "power_pivot_data_model_changed"
+    )
+
+    data_model = profile["power_pivot_data_model"]
+    assert baseline_snapshot.summary()["power_pivot_data_model_part_count"] == 1
+    assert baseline_snapshot.summary()["power_pivot_data_model_table_count"] == 2
+    assert data_model == {
+        "present": True,
+        "data_model_part_count": 1,
+        "workbook_binding_count": 1,
+        "data_model_declaration_count": 1,
+        "model_table_count": 2,
+        "model_relationship_count": 1,
+        "related_relationship_count": 0,
+        "external_relationship_count": 0,
+        "fingerprinted_data_part_count": 1,
+        "uninspected_data_part_count": 0,
+        "unrecognized_part_count": 0,
+    }
+    assert "## Power Pivot Data Model" in markdown
+    assert payload_change.details["embedded_data_model_payload_changed"] is True
+    assert "workbook_data_model_declaration_changed" not in payload_change.details
+    assert declaration_change.details["workbook_data_model_declaration_changed"] is True
+    assert "embedded_data_model_payload_changed" not in declaration_change.details
+    assert "FF033" in {finding.rule_id for finding in payload_report.findings}
+    assert "FF033" in {finding.rule_id for finding in declaration_report.findings}
+
+    sensitive_values = (
+        "Private baseline revenue table",
+        "Private baseline calendar table",
+        "Private baseline data connection",
+        "Private baseline calendar key",
+        "private baseline Power Pivot data model payload",
+        "private candidate Power Pivot data model payload",
+        "Private candidate calendar key",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(payload_report.to_dict()),
+        report_to_markdown(payload_report),
+        json.dumps(report_to_sarif(payload_report)),
+        json.dumps(declaration_report.to_dict()),
+        report_to_markdown(declaration_report),
+        json.dumps(report_to_sarif(declaration_report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_power_pivot_data_model_binding_noise_and_writer_guids_are_normalized(
+    tmp_path,
+) -> None:
+    baseline = make_power_pivot_data_model(tmp_path / "baseline.xlsx")
+    renumbered = make_power_pivot_data_model(tmp_path / "renumbered.xlsx")
+    target_rewritten = make_power_pivot_data_model(tmp_path / "target.xlsx")
+    regenerated_guids = make_power_pivot_data_model(tmp_path / "guids.xlsx")
+    renumber_power_pivot_data_model_relationship(renumbered)
+    rewrite_power_pivot_data_model_internal_target_spelling(target_rewritten)
+    set_power_pivot_data_model_equivalent_guids(regenerated_guids)
+
+    reports = (
+        compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered)),
+        compare_snapshots(load_snapshot(baseline), load_snapshot(target_rewritten)),
+        compare_snapshots(load_snapshot(baseline), load_snapshot(regenerated_guids)),
+    )
+
+    for report in reports:
+        assert "power_pivot_data_model_changed" not in {
+            change.kind for change in report.changes
+        }
+        assert "FF033" not in {finding.rule_id for finding in report.findings}
+
+
+def test_power_pivot_data_model_bindings_payload_bounds_and_direct_rels_fail_closed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_power_pivot_data_model(tmp_path / "baseline.xlsx")
+    rebound = make_power_pivot_data_model(tmp_path / "rebound.xlsx")
+    external = make_power_pivot_data_model(tmp_path / "external.xlsx")
+    related = make_power_pivot_data_model(tmp_path / "related.xlsx")
+    rebind_power_pivot_data_model(rebound)
+    externalize_power_pivot_data_model(external)
+    add_power_pivot_data_model_direct_relationship(related)
+
+    rebound_report = compare_snapshots(load_snapshot(baseline), load_snapshot(rebound))
+    external_snapshot = load_snapshot(external)
+    external_profile = profile_snapshot(external_snapshot)
+    external_report = compare_snapshots(load_snapshot(baseline), external_snapshot)
+    related_snapshot = load_snapshot(related)
+    related_report = compare_snapshots(load_snapshot(baseline), related_snapshot)
+
+    rebound_change = next(
+        change
+        for change in rebound_report.changes
+        if change.kind == "power_pivot_data_model_changed"
+    )
+    assert rebound_change.details["workbook_data_model_declaration_changed"] is True
+    assert "FF033" in {finding.rule_id for finding in rebound_report.findings}
+    assert external_snapshot.power_pivot_data_model.external_relationship_count == 1
+    assert external_snapshot.power_pivot_data_model.unrecognized_part_count >= 1
+    assert any(
+        "without a safe internal target" in warning
+        for warning in external_snapshot.parser_warnings
+    )
+    assert "FF033" in {finding.rule_id for finding in external_report.findings}
+    assert related_snapshot.power_pivot_data_model.related_relationship_count == 1
+    assert related_snapshot.power_pivot_data_model.unrecognized_part_count >= 1
+    assert any(
+        "direct relationships on a Power Pivot/Data Model" in warning
+        for warning in related_snapshot.parser_warnings
+    )
+    assert "FF033" in {finding.rule_id for finding in related_report.findings}
+    rendered_artifacts = (
+        json.dumps(external_profile),
+        profile_to_markdown(external_profile),
+        json.dumps(external_report.to_dict()),
+        report_to_markdown(external_report),
+        json.dumps(report_to_sarif(external_report)),
+    )
+    assert all(
+        "example.invalid/private-power-pivot-data-model" not in artifact
+        for artifact in rendered_artifacts
+    )
+
+    oversized = make_power_pivot_data_model(tmp_path / "oversized.xlsx")
+    monkeypatch.setattr(workbook_module, "_POWER_PIVOT_DATA_MAX_BYTES", 1)
+    oversized_snapshot = load_snapshot(oversized)
+
+    assert oversized_snapshot.power_pivot_data_model.uninspected_data_part_count == 1
+    assert any(
+        "oversized Power Pivot/Data Model part" in warning
+        for warning in oversized_snapshot.parser_warnings
+    )
+
+
+def test_power_pivot_data_model_unbound_declaration_fails_closed(tmp_path) -> None:
+    baseline = make_power_pivot_data_model(tmp_path / "baseline.xlsx")
+    candidate = make_power_pivot_data_model(tmp_path / "candidate.xlsx")
+    remove_power_pivot_data_model_workbook_binding(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    data_model = candidate_snapshot.power_pivot_data_model
+    assert data_model.present is True
+    assert data_model.workbook_binding_count == 0
+    assert data_model.data_model_declaration_count == 1
+    assert data_model.fingerprinted_data_part_count == 1
+    assert data_model.unrecognized_part_count >= 2
+    assert any(
+        "workbook metadata without a Power Pivot data relationship" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert any(
+        "package part not bound by an inspected workbook relationship" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "FF033" in {finding.rule_id for finding in report.findings}
+
+
+def test_power_pivot_data_model_payload_budgets_remain_covered(tmp_path, monkeypatch) -> None:
+    budget_type = workbook_module._PowerPivotDataBudget
+    part_limited = make_power_pivot_data_model(tmp_path / "part-limited.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_PowerPivotDataBudget",
+        lambda: budget_type(remaining_parts=0),
+    )
+
+    part_limited_snapshot = load_snapshot(part_limited)
+
+    assert part_limited_snapshot.power_pivot_data_model.uninspected_data_part_count == 1
+    assert any(
+        "Power Pivot/Data Model part count budget" in warning
+        for warning in part_limited_snapshot.parser_warnings
+    )
+
+    byte_limited = make_power_pivot_data_model(tmp_path / "byte-limited.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_PowerPivotDataBudget",
+        lambda: budget_type(remaining_bytes=1),
+    )
+
+    byte_limited_snapshot = load_snapshot(byte_limited)
+
+    assert byte_limited_snapshot.power_pivot_data_model.uninspected_data_part_count == 1
+    assert any(
+        "Power Pivot/Data Model read budget" in warning
+        for warning in byte_limited_snapshot.parser_warnings
+    )
+
+
+def test_data_model_free_workbook_does_not_consume_payload_budget(tmp_path, monkeypatch) -> None:
+    workbook = make_model(tmp_path / "data-model-free.xlsx")
+    monkeypatch.setattr(workbook_module, "_POWER_PIVOT_DATA_MAX_BYTES", 1)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.power_pivot_data_model.present is False
+    assert snapshot.power_pivot_data_model.data_model_part_count == 0
+    assert not any(
+        "Power Pivot/Data Model part" in warning for warning in snapshot.parser_warnings
+    )
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

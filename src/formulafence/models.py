@@ -1280,6 +1280,59 @@ class SlicerTimelineCacheSnapshot:
 
 
 @dataclass(frozen=True)
+class PowerPivotDataModelSnapshot:
+    """Safe aggregate of an embedded Power Pivot / Data Model package.
+
+    An Excel Data Model can hold tables, relationships, and DAX calculations
+    outside the ordinary cell grid. Private signatures retain its workbook
+    declaration, relationship bindings, and bounded raw model bytes for
+    comparison; ``to_dict`` deliberately exposes only structural counts.
+    """
+
+    data_model_part_count: int = 0
+    workbook_binding_count: int = 0
+    data_model_declaration_count: int = 0
+    model_table_count: int = 0
+    model_relationship_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    fingerprinted_data_part_count: int = 0
+    uninspected_data_part_count: int = 0
+    unrecognized_part_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+    payload_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.data_model_part_count
+            or self.workbook_binding_count
+            or self.data_model_declaration_count
+            or self.unrecognized_part_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return Data Model evidence without names, DAX, values, or targets."""
+        return {
+            "present": self.present,
+            "data_model_part_count": self.data_model_part_count,
+            "workbook_binding_count": self.workbook_binding_count,
+            "data_model_declaration_count": self.data_model_declaration_count,
+            "model_table_count": self.model_table_count,
+            "model_relationship_count": self.model_relationship_count,
+            "related_relationship_count": self.related_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+            "fingerprinted_data_part_count": self.fingerprinted_data_part_count,
+            "uninspected_data_part_count": self.uninspected_data_part_count,
+            "unrecognized_part_count": self.unrecognized_part_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -1663,6 +1716,9 @@ class WorkbookSnapshot:
     slicer_timeline_caches: SlicerTimelineCacheSnapshot = field(
         default_factory=SlicerTimelineCacheSnapshot
     )
+    power_pivot_data_model: PowerPivotDataModelSnapshot = field(
+        default_factory=PowerPivotDataModelSnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -1791,6 +1847,13 @@ class WorkbookSnapshot:
                 self.slicer_timeline_caches.selected_slicer_item_count
             ),
             "has_slicer_timeline_caches": self.slicer_timeline_caches.present,
+            "power_pivot_data_model_part_count": (
+                self.power_pivot_data_model.data_model_part_count
+            ),
+            "power_pivot_data_model_table_count": (
+                self.power_pivot_data_model.model_table_count
+            ),
+            "has_power_pivot_data_model": self.power_pivot_data_model.present,
             "chart_host_sheet_count": self.chart_definitions.chart_host_sheet_count,
             "chart_drawing_part_count": self.chart_definitions.chart_drawing_part_count,
             "chart_part_count": self.chart_definitions.chart_part_count,

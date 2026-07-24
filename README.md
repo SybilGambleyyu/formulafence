@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.28.0/formulafence-0.28.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.29.0/formulafence-0.29.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -68,6 +68,7 @@ rules:
   no_chart_definition_changes: true
   no_pivot_table_definition_changes: true
   no_slicer_timeline_cache_changes: true
+  no_power_pivot_data_model_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -105,7 +106,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -424,6 +425,29 @@ part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/7dbb4
 [Timeline Cache part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/29a0f58c-d942-4641-8ed0-4f02010326f2),
 [Slicer-to-PivotCache relationship](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/2a393f85-21f9-4a27-a2b7-4867223f4b9a),
 and [Slicer view boundary](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/69c0e0f9-d014-4bd5-9f2d-2f554c715083).
+
+FormulaFence also inventories **embedded Power Pivot/Data Model packages**. An
+Excel Data Model can hold tables, relationships, calculations, and stored data
+outside ordinary worksheet cells. FormulaFence follows the workbook's explicit
+`powerPivotData` relationship and its `x15:dataModel` declaration, then
+privately fingerprints the complete declaration and bounded raw
+`xl/model/*.data` payload. A material change emits `FF033`; enable
+`no_power_pivot_data_model_changes` for `FFP033`.
+
+Profiles expose only safe counts for model parts, workbook bindings,
+declarations, tables, relationships, fingerprinted payloads, and coverage.
+Table names, column and relationship details, connection details, DAX,
+stored values, relationship targets, XML, and raw payload bytes never enter a
+profile or report. Writer-chosen relationship IDs, equivalent internal target
+spellings, and GUIDs in Data Model metadata are normalized away. Missing,
+malformed, orphaned, unbound, externally targeted, unexpected directly related,
+oversized, or over-budget material becomes a visible coverage warning. Raw
+payload reads are bounded to 512 MiB per part, 512 MiB per workbook, and 16
+parts. FormulaFence does not deserialize the Analysis Services payload,
+evaluate DAX, refresh a model, calculate or render a report, infer model-to-cell
+impact, or fetch an external target. The boundary follows Microsoft's
+[PowerPivot Model guidance](https://learn.microsoft.com/en-us/office/vba/excel/concepts/about-the-powerpivot-model-object-in-excel)
+and the Open XML [`x15:dataModel` declaration](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.linq.x15.datamodel?view=openxml-3.0.1).
 
 FormulaFence also inventories relationship-backed **worksheet controls, legacy
 VML form controls, and OLE objects**. A worksheet can bind modern `<control>`

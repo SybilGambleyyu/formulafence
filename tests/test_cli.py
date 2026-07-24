@@ -75,6 +75,7 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
     assert "no_office_web_addin_changes: true" in content
     assert "no_pivot_table_definition_changes: true" in content
     assert "no_slicer_timeline_cache_changes: true" in content
+    assert "no_power_pivot_data_model_changes: true" in content
     assert "no_worksheet_embedded_control_changes: true" in content
     assert "no_power_query_changes: true" in content
     assert "no_new_tokenization_failures: true" in content

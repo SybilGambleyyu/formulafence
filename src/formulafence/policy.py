@@ -23,6 +23,7 @@ _RULE_FIELDS = {
     "no_chart_definition_changes",
     "no_pivot_table_definition_changes",
     "no_slicer_timeline_cache_changes",
+    "no_power_pivot_data_model_changes",
     "no_worksheet_embedded_control_changes",
     "no_new_parser_warnings",
     "no_new_unresolved_references",
@@ -79,6 +80,7 @@ class Policy:
     no_chart_definition_changes: bool = False
     no_pivot_table_definition_changes: bool = False
     no_slicer_timeline_cache_changes: bool = False
+    no_power_pivot_data_model_changes: bool = False
     no_worksheet_embedded_control_changes: bool = False
     no_new_parser_warnings: bool = False
     no_new_unresolved_references: bool = False
@@ -117,6 +119,7 @@ rules:
   no_chart_definition_changes: true
   no_pivot_table_definition_changes: true
   no_slicer_timeline_cache_changes: true
+  no_power_pivot_data_model_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -230,6 +233,9 @@ def parse_policy(data: object) -> Policy:
         ),
         no_slicer_timeline_cache_changes=_boolean_rule(
             rules, "no_slicer_timeline_cache_changes"
+        ),
+        no_power_pivot_data_model_changes=_boolean_rule(
+            rules, "no_power_pivot_data_model_changes"
         ),
         no_worksheet_embedded_control_changes=_boolean_rule(
             rules, "no_worksheet_embedded_control_changes"
@@ -555,6 +561,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP032",
                     "high",
                     "Policy forbids slicer and Timeline cache filter-state changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_power_pivot_data_model_changes:
+        for finding in _rule_triggered(report, "FF033"):
+            violations.append(
+                Finding(
+                    "FFP033",
+                    "high",
+                    "Policy forbids embedded Power Pivot/Data Model changes.",
                     details=finding.details,
                 )
             )

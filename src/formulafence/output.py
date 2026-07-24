@@ -1054,6 +1054,49 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "PivotTable names, relationship targets, and XML are compared privately and "
             "intentionally omitted."
         )
+    power_pivot_data_model = profile["power_pivot_data_model"]
+    if power_pivot_data_model["present"]:
+        lines.extend(
+            [
+                "",
+                "## Power Pivot Data Model",
+                "",
+                (
+                    "- **Embedded model parts / workbook bindings:** "
+                    f"{power_pivot_data_model['data_model_part_count']} / "
+                    f"{power_pivot_data_model['workbook_binding_count']}"
+                ),
+                (
+                    "- **Workbook Data Model declarations:** "
+                    f"{power_pivot_data_model['data_model_declaration_count']}"
+                ),
+                (
+                    "- **Model tables / relationships:** "
+                    f"{power_pivot_data_model['model_table_count']} / "
+                    f"{power_pivot_data_model['model_relationship_count']}"
+                ),
+                (
+                    "- **Fingerprinted / uninspected model payloads:** "
+                    f"{power_pivot_data_model['fingerprinted_data_part_count']} / "
+                    f"{power_pivot_data_model['uninspected_data_part_count']}"
+                ),
+                (
+                    "- **Related package relationships:** "
+                    f"{power_pivot_data_model['related_relationship_count']} "
+                    f"({power_pivot_data_model['external_relationship_count']} external)"
+                ),
+            ]
+        )
+        if power_pivot_data_model["unrecognized_part_count"]:
+            lines.append(
+                "- **Unrecognized or uninspected model parts/bindings:** "
+                f"{power_pivot_data_model['unrecognized_part_count']}"
+            )
+        lines.append(
+            "Power Pivot/Data Model table names, relationships, connection details, DAX, "
+            "stored values, relationship targets, and raw payload bytes are compared "
+            "privately and intentionally omitted."
+        )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:
         lines.extend(

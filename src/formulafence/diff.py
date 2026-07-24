@@ -24,6 +24,7 @@ from formulafence.models import (
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
+    PowerPivotDataModelSnapshot,
     PowerQuerySnapshot,
     ProtectionCredentialSnapshot,
     ProtectionOpaqueMetadataSnapshot,
@@ -1267,6 +1268,35 @@ def _workbook_control_changes(
                 "FF032",
                 "high",
                 "Slicer or Timeline cache filter state or definition changed.",
+                details=details,
+            )
+        )
+    if before.power_pivot_data_model != after.power_pivot_data_model:
+        old_data_model: PowerPivotDataModelSnapshot = before.power_pivot_data_model
+        new_data_model: PowerPivotDataModelSnapshot = after.power_pivot_data_model
+        details: dict[str, object] = {
+            "before": old_data_model.to_dict(),
+            "after": new_data_model.to_dict(),
+        }
+        if old_data_model.declaration_signature != new_data_model.declaration_signature:
+            details["workbook_data_model_declaration_changed"] = True
+        if old_data_model.relationship_signature != new_data_model.relationship_signature:
+            details["related_data_model_relationships_changed"] = True
+        if old_data_model.payload_signature != new_data_model.payload_signature:
+            details["embedded_data_model_payload_changed"] = True
+        changes.append(
+            Change(
+                "power_pivot_data_model_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF033",
+                "high",
+                "Embedded Power Pivot/Data Model definition or payload changed.",
                 details=details,
             )
         )

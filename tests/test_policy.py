@@ -14,6 +14,7 @@ from .helpers import (
     change_legacy_vml_control_controls,
     change_office_web_addin_auto_show,
     change_pivot_table_definition_material,
+    change_power_pivot_data_model_payload,
     change_power_query_controls,
     change_ribbon_customization_callback,
     change_slicer_timeline_filter_material,
@@ -29,6 +30,7 @@ from .helpers import (
     make_model,
     make_office_web_addin_model,
     make_pivot_table_definition_model,
+    make_power_pivot_data_model,
     make_power_query_model,
     make_protection_model,
     make_ribbon_customization_model,
@@ -347,6 +349,19 @@ def test_policy_can_block_slicer_timeline_cache_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP032"}
+
+
+def test_policy_can_block_power_pivot_data_model_changes(tmp_path) -> None:
+    baseline = make_power_pivot_data_model(tmp_path / "baseline.xlsx")
+    candidate = make_power_pivot_data_model(tmp_path / "candidate.xlsx")
+    change_power_pivot_data_model_payload(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_power_pivot_data_model_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP033"}
 
 
 def test_policy_can_block_worksheet_embedded_control_changes(tmp_path) -> None:

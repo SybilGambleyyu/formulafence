@@ -2473,6 +2473,486 @@ def corrupt_office_web_addin_definition_root(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".office-web-addin-corrupt.tmp.xlsx")
 
 
+def make_worksheet_embedded_control_model(
+    path: Path,
+    *,
+    alternate_content: bool = False,
+) -> Path:
+    """Create harmless raw OOXML ActiveX, form-control, and OLE test material.
+
+    The arbitrary binary bytes are never opened by an Office application. They
+    exist only to prove FormulaFence's bounded, non-executing package scanner.
+    """
+    make_model(path)
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+    form_control_namespace = (
+        "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+    )
+    activex = "http://schemas.microsoft.com/office/2006/activeX"
+    markup_compatibility = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+    control_relationship = f"{document_relationships}/control"
+    control_properties_relationship = f"{document_relationships}/ctrlProp"
+    ole_object_relationship = f"{document_relationships}/oleObject"
+    image_relationship = f"{document_relationships}/image"
+    activex_binary_relationship = (
+        "http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary"
+    )
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_override(
+        root: ElementTree.Element,
+        part_name: str,
+        content_type: str,
+    ) -> None:
+        ElementTree.SubElement(
+            root,
+            f"{{{content_types}}}Override",
+            {"PartName": part_name, "ContentType": content_type},
+        )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        add_override(
+            types,
+            "/xl/activeX/activeX1.xml",
+            "application/vnd.ms-office.activeX+xml",
+        )
+        add_override(
+            types,
+            "/xl/ctrlProps/ctrlProp1.xml",
+            "application/vnd.ms-excel.controlproperties+xml",
+        )
+        contents["[Content_Types].xml"] = serialize(types)
+
+        worksheet = _inputs_worksheet_root(contents)
+        controls = ElementTree.SubElement(worksheet, f"{{{spreadsheet}}}controls")
+        active_x_control = ElementTree.Element(
+            f"{{{spreadsheet}}}control",
+            {
+                "shapeId": "1025",
+                "name": "PrivateBaselineCommandButton",
+                f"{{{document_relationships}}}id": "rIdFenceActiveX",
+            },
+        )
+        ElementTree.SubElement(
+            active_x_control,
+            f"{{{spreadsheet}}}controlPr",
+            {
+                "defaultSize": "0",
+                f"{{{document_relationships}}}id": "rIdFenceControlPresentation",
+            },
+        )
+        form_control_element = ElementTree.Element(
+            f"{{{spreadsheet}}}control",
+            {
+                "shapeId": "1028",
+                "name": "PrivateBaselineFormControl",
+                f"{{{document_relationships}}}id": "rIdFenceControlProperties",
+            },
+        )
+        ElementTree.SubElement(
+            form_control_element,
+            f"{{{spreadsheet}}}controlPr",
+            {
+                "macro": "PrivateBaselineControlMacro",
+                "linkedCell": "Inputs!$B$2",
+                "listFillRange": "Inputs!$B$2:$B$4",
+            },
+        )
+        if alternate_content:
+            alternate = ElementTree.SubElement(
+                controls,
+                f"{{{markup_compatibility}}}AlternateContent",
+            )
+            choice = ElementTree.SubElement(
+                alternate,
+                f"{{{markup_compatibility}}}Choice",
+                {"Requires": "x14"},
+            )
+            choice.append(active_x_control)
+            fallback = ElementTree.SubElement(
+                alternate,
+                f"{{{markup_compatibility}}}Fallback",
+            )
+            ElementTree.SubElement(
+                fallback,
+                f"{{{spreadsheet}}}control",
+                {
+                    "shapeId": "1025",
+                    "name": "PrivateBaselineCommandButton",
+                    f"{{{document_relationships}}}id": "rIdFenceActiveX",
+                },
+            )
+            controls.append(form_control_element)
+        else:
+            controls.extend((active_x_control, form_control_element))
+
+        ole_objects = ElementTree.SubElement(
+            worksheet,
+            f"{{{spreadsheet}}}oleObjects",
+        )
+        embedded_ole = ElementTree.SubElement(
+            ole_objects,
+            f"{{{spreadsheet}}}oleObject",
+            {
+                "progId": "Private.Baseline.Embedded.Object",
+                "shapeId": "1026",
+                "autoLoad": "1",
+                f"{{{document_relationships}}}id": "rIdFenceEmbeddedOle",
+            },
+        )
+        ElementTree.SubElement(
+            embedded_ole,
+            f"{{{spreadsheet}}}objectPr",
+            {f"{{{document_relationships}}}id": "rIdFenceOlePresentation"},
+        )
+        ElementTree.SubElement(
+            ole_objects,
+            f"{{{spreadsheet}}}oleObject",
+            {
+                "progId": "Private.Baseline.Linked.Object",
+                "shapeId": "1027",
+                "link": "private-baseline-link-name",
+                "oleUpdate": "always",
+                f"{{{document_relationships}}}id": "rIdFenceLinkedOle",
+            },
+        )
+        _save_inputs_worksheet(contents, worksheet)
+
+        worksheet_relationships = ElementTree.fromstring(
+            contents.get(
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<Relationships xmlns="http://schemas.openxmlformats.org/'
+                    b'package/2006/relationships"/>'
+                ),
+            )
+        )
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        for relationship_id, relationship_type, target, target_mode in (
+            (
+                "rIdFenceActiveX",
+                control_relationship,
+                "../activeX/activeX1.xml",
+                None,
+            ),
+            (
+                "rIdFenceControlProperties",
+                control_properties_relationship,
+                "../ctrlProps/ctrlProp1.xml",
+                None,
+            ),
+            (
+                "rIdFenceControlPresentation",
+                image_relationship,
+                "../media/private-baseline-control.png",
+                None,
+            ),
+            (
+                "rIdFenceEmbeddedOle",
+                ole_object_relationship,
+                "../embeddings/private-baseline-ole.bin",
+                None,
+            ),
+            (
+                "rIdFenceLinkedOle",
+                ole_object_relationship,
+                "file:///private/baseline-linked-ole.bin",
+                "External",
+            ),
+            (
+                "rIdFenceOlePresentation",
+                image_relationship,
+                "../media/private-baseline-ole.png",
+                None,
+            ),
+        ):
+            attributes = {
+                "Id": relationship_id,
+                "Type": relationship_type,
+                "Target": target,
+            }
+            if target_mode is not None:
+                attributes["TargetMode"] = target_mode
+            ElementTree.SubElement(worksheet_relationships, relationship_tag, attributes)
+        contents["xl/worksheets/_rels/sheet1.xml.rels"] = serialize(
+            worksheet_relationships
+        )
+
+        activex_root = ElementTree.Element(
+            f"{{{activex}}}ocx",
+            {
+                "classid": "{11111111-1111-1111-1111-111111111111}",
+                "license": "private-baseline-activex-license",
+                "persistence": "persistStreamInit",
+                f"{{{document_relationships}}}id": "rIdFenceActiveXBinary",
+            },
+        )
+        contents["xl/activeX/activeX1.xml"] = serialize(activex_root)
+        activex_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            activex_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceActiveXBinary",
+                "Type": activex_binary_relationship,
+                "Target": "activeX1.bin",
+            },
+        )
+        contents["xl/activeX/_rels/activeX1.xml.rels"] = serialize(
+            activex_relationships
+        )
+
+        form_control_root = ElementTree.Element(
+            f"{{{form_control_namespace}}}formControlPr",
+            {
+                "objectType": "Drop",
+                "fmlaGroup": "Inputs!$B$2",
+                "fmlaLink": "Inputs!$B$3",
+                "fmlaRange": "Inputs!$B$2:$B$4",
+                "fmlaTxbx": "Inputs!$A$1",
+            },
+        )
+        contents["xl/ctrlProps/ctrlProp1.xml"] = serialize(form_control_root)
+        contents["xl/activeX/activeX1.bin"] = b"private baseline ActiveX binary payload"
+        contents["xl/embeddings/private-baseline-ole.bin"] = (
+            b"private baseline embedded OLE payload"
+        )
+        contents["xl/media/private-baseline-ole.png"] = b"private OLE presentation"
+        contents["xl/media/private-baseline-control.png"] = b"private control presentation"
+
+    return _rewrite_archive(path, mutate, ".worksheet-embedded-control.tmp.xlsx")
+
+
+def change_worksheet_embedded_control_controls(path: Path) -> Path:
+    """Change private worksheet-control, ActiveX, and OLE configuration material."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = _inputs_worksheet_root(contents)
+        control_properties = next(
+            (
+                properties
+                for properties in worksheet.iter(f"{{{spreadsheet}}}controlPr")
+                if properties.get("macro") is not None
+            ),
+            None,
+        )
+        embedded_ole = worksheet.find(
+            f".//{{{spreadsheet}}}oleObject"
+        )
+        if control_properties is None or embedded_ole is None:
+            raise ValueError("Fixture does not contain worksheet embedded controls")
+        control_properties.set("macro", "PrivateCandidateControlMacro")
+        control_properties.set("linkedCell", "Inputs!$B$4")
+        embedded_ole.set("autoLoad", "0")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        activex_root = ElementTree.fromstring(contents["xl/activeX/activeX1.xml"])
+        activex_root.set("classid", "{22222222-2222-2222-2222-222222222222}")
+        activex_root.set("license", "private-candidate-activex-license")
+        contents["xl/activeX/activeX1.xml"] = ElementTree.tostring(
+            activex_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        form_control = ElementTree.fromstring(contents["xl/ctrlProps/ctrlProp1.xml"])
+        form_control.set("fmlaRange", "Inputs!$B$3:$B$4")
+        contents["xl/ctrlProps/ctrlProp1.xml"] = ElementTree.tostring(
+            form_control,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships_name = "xl/worksheets/_rels/sheet1.xml.rels"
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        relationship = next(
+            (
+                item
+                for item in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if item.get("Id") == "rIdFenceEmbeddedOle"
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain an embedded OLE relationship")
+        relationship.set("Target", "../embeddings/private-candidate-ole.bin")
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["xl/embeddings/private-candidate-ole.bin"] = (
+            b"private candidate embedded OLE payload"
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-embedded-control-change.tmp.xlsx")
+
+
+def change_worksheet_embedded_control_payload(path: Path) -> Path:
+    """Change only an embedded OLE payload to exercise private byte fingerprinting."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["xl/embeddings/private-baseline-ole.bin"] = (
+            b"private candidate changed embedded OLE payload"
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-embedded-control-payload.tmp.xlsx")
+
+
+def renumber_worksheet_embedded_control_relationships(path: Path) -> Path:
+    """Rewrite only writer-chosen relationship IDs across the control chain."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    replacements = {
+        "rIdFenceActiveX": "rIdFenceRenumberedActiveX",
+        "rIdFenceControlProperties": "rIdFenceRenumberedControlProperties",
+        "rIdFenceControlPresentation": "rIdFenceRenumberedControlPresentation",
+        "rIdFenceEmbeddedOle": "rIdFenceRenumberedEmbeddedOle",
+        "rIdFenceLinkedOle": "rIdFenceRenumberedLinkedOle",
+        "rIdFenceOlePresentation": "rIdFenceRenumberedOlePresentation",
+        "rIdFenceActiveXBinary": "rIdFenceRenumberedActiveXBinary",
+    }
+
+    def replace_relationship_ids(root: ElementTree.Element) -> None:
+        for relationship in root.findall(f"{{{package_relationships}}}Relationship"):
+            if replacement := replacements.get(relationship.get("Id")):
+                relationship.set("Id", replacement)
+
+    def replace_xml_ids(root: ElementTree.Element) -> None:
+        relationship_attribute = f"{{{document_relationships}}}id"
+        for element in root.iter():
+            if replacement := replacements.get(element.get(relationship_attribute)):
+                element.set(relationship_attribute, replacement)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        for member in (
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            "xl/activeX/_rels/activeX1.xml.rels",
+        ):
+            relationships = ElementTree.fromstring(contents[member])
+            replace_relationship_ids(relationships)
+            contents[member] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+        for member in ("xl/worksheets/sheet1.xml", "xl/activeX/activeX1.xml"):
+            root = ElementTree.fromstring(contents[member])
+            replace_xml_ids(root)
+            contents[member] = ElementTree.tostring(
+                root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".worksheet-embedded-control-renumber.tmp.xlsx")
+
+
+def rewrite_worksheet_embedded_control_internal_target_spelling(path: Path) -> Path:
+    """Use equivalent relative spellings without changing control semantics."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def set_target(
+        relationships: ElementTree.Element,
+        relationship_id: str,
+        target: str,
+    ) -> None:
+        relationship = next(
+            (
+                item
+                for item in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if item.get("Id") == relationship_id
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError(f"Fixture does not contain relationship {relationship_id}")
+        relationship.set("Target", target)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_relationships_name = "xl/worksheets/_rels/sheet1.xml.rels"
+        worksheet_relationships = ElementTree.fromstring(
+            contents[worksheet_relationships_name]
+        )
+        set_target(
+            worksheet_relationships,
+            "rIdFenceActiveX",
+            "../activeX/./activeX1.xml",
+        )
+        set_target(
+            worksheet_relationships,
+            "rIdFenceControlProperties",
+            "../ctrlProps/./ctrlProp1.xml",
+        )
+        set_target(
+            worksheet_relationships,
+            "rIdFenceControlPresentation",
+            "../media/./private-baseline-control.png",
+        )
+        set_target(
+            worksheet_relationships,
+            "rIdFenceEmbeddedOle",
+            "../embeddings/./private-baseline-ole.bin",
+        )
+        contents[worksheet_relationships_name] = ElementTree.tostring(
+            worksheet_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        activex_relationships_name = "xl/activeX/_rels/activeX1.xml.rels"
+        activex_relationships = ElementTree.fromstring(
+            contents[activex_relationships_name]
+        )
+        set_target(
+            activex_relationships,
+            "rIdFenceActiveXBinary",
+            "./activeX1.bin",
+        )
+        contents[activex_relationships_name] = ElementTree.tostring(
+            activex_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-embedded-control-target.tmp.xlsx")
+
+
+def corrupt_worksheet_embedded_control_activex_root(path: Path) -> Path:
+    """Replace an ActiveX root with unexpected XML for fail-closed coverage tests."""
+    activex = "http://schemas.microsoft.com/office/2006/activeX"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = ElementTree.fromstring(contents["xl/activeX/activeX1.xml"])
+        root.tag = f"{{{activex}}}notOcx"
+        contents["xl/activeX/activeX1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-embedded-control-corrupt.tmp.xlsx")
+
+
 def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Path:
     """Create a workbook with operational protection and sparse style controls."""
     workbook = Workbook()

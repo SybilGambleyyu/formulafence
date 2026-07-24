@@ -362,6 +362,43 @@ that none entered JSON, Markdown, or SARIF. This validates static comparison
 and redaction—not M execution, connection refresh, source trust, or returned
 data correctness.
 
+## Worksheet embedded-control and OLE guardrails — 2026-07-24
+
+FormulaFence 0.24.0 was validated with controlled raw-OOXML `.xlsx` packages
+following a worksheet control chain: one `<control>` bound to an
+`xl/activeX/activeX1.xml` persistence part and its raw binary target, nested
+`controlPr` markup bound to an `xl/ctrlProps/ctrlProp1.xml` form-control part,
+and both one embedded and one externally linked `<oleObject>`. The raw binary
+and OLE payloads were harmless fixture bytes; the workbook was never opened in
+Office. FormulaFence only inspected bounded package parts before the ordinary
+workbook reader loaded the file.
+
+Changing private control macro/link material, OLE auto-load behavior, ActiveX
+class/license material, a form-control formula range, and a direct OLE target
+emitted `FF029` with the corresponding private material flags. A change to only
+the raw OLE payload emitted `FF029` with only the private payload-material flag.
+Synthetic control names, macros, class/license values, formulas/ranges, OLE
+program/link values, relationship targets, and payload markers were verified
+absent from JSON, Markdown, and SARIF output. The
+`no_worksheet_embedded_control_changes` policy produced `FFP029`.
+
+The controlled suite also covered `mc:AlternateContent` duplicate control
+markup, relationship-ID-only rewrites, equivalent internal target spellings, an
+unexpected ActiveX root, oversized XML/raw payloads, and deliberately lowered
+XML and payload byte/part budgets. Duplicate fallback markup was not
+double-counted; identifier and spelling rewrites did not produce `FF029`; an
+ordinary worksheet with no relevant relationship did not consume the control
+XML budget; malformed or bounded-out material remained explicitly visible as a
+coverage warning. Production limits are 16 MiB per relevant XML part, 64 MiB
+per workbook, and 512 parts; direct payload hashes are limited to 32 MiB per
+part, 64 MiB per workbook, and 512 parts. This validates static
+comparison and data minimisation—not ActiveX initialization, OLE/package
+deserialization, Office rendering, event dispatch, source trust, or embedded
+payload behavior. The fixture shape follows Microsoft's guidance for [sheet
+ActiveX controls](https://learn.microsoft.com/en-us/office/vba/excel/concepts/controls-dialogboxes-forms/using-activex-controls-on-sheets),
+the [`ocx` persistence schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/b30a660a-95eb-4716-b201-a46aae788610),
+and [form-control properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/3d054a6d-4f94-4082-837a-f939fd8d4a45).
+
 ## Office Web Add-in task-pane controls and redaction — 2026-07-24
 
 FormulaFence 0.23.0 was validated with controlled raw-OOXML `.xlsx` packages

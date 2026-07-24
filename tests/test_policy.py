@@ -13,6 +13,7 @@ from .helpers import (
     change_office_web_addin_auto_show,
     change_power_query_controls,
     change_ribbon_customization_callback,
+    change_worksheet_embedded_control_controls,
     change_xlm_macro_sheet_controls,
     make_conditional_formatting_model,
     make_data_validation_model,
@@ -26,6 +27,7 @@ from .helpers import (
     make_ribbon_customization_model,
     make_table_model,
     make_three_d_model,
+    make_worksheet_embedded_control_model,
     make_xlm_macro_sheet_model,
     mark_array_formula_dynamic,
     rewrite,
@@ -298,6 +300,22 @@ def test_policy_can_block_office_web_addin_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP028"}
+
+
+def test_policy_can_block_worksheet_embedded_control_changes(tmp_path) -> None:
+    baseline = make_worksheet_embedded_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    change_worksheet_embedded_control_controls(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_worksheet_embedded_control_changes": True},
+        }
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP029"}
 
 
 def test_policy_can_block_power_query_changes(tmp_path) -> None:

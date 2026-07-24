@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.24.0 — 2026-07-24
+
+- Inspect relationship-backed worksheet ActiveX, form-control, and OLE-object
+  chains directly from raw OOXML before the workbook reader can omit them.
+  Private fingerprints retain worksheet declarations, control configuration,
+  ActiveX persistence XML, form-control properties, relationships, and bounded
+  direct ActiveX/OLE/package payload hashes without serializing control names,
+  class IDs, licenses, macro assignments, formulas/ranges, OLE identities,
+  relationship targets, XML, or payload bytes.
+- Emit `FF029` for worksheet-control bindings, definitions, ActiveX/form-control
+  material, OLE configuration, related relationships, or direct payload changes,
+  and add the fail-closed `no_worksheet_embedded_control_changes` policy rule
+  (`FFP029`). Writer-chosen relationship IDs and equivalent internal target
+  spellings are normalized away. Malformed, orphaned, unbound, oversized, or
+  over-budget material remains a visible coverage warning. XML reads are bounded
+  to 16 MiB per part, 64 MiB per workbook, and 512 parts; raw direct payload
+  hashes are bounded to 32 MiB per part, 64 MiB per workbook, and 512 parts.
+  FormulaFence never initializes an ActiveX control, deserializes or opens an OLE
+  object/package, renders its drawing surface, follows an external target, or
+  infers event dispatch.
+
 ## 0.23.0 — 2026-07-24
 
 - Inspect document-linked Office Web Add-in task-pane packages directly from

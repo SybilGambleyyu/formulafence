@@ -110,6 +110,18 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['office_web_addin_auto_show_taskpane_count']}"
         ),
         (
+            "- **Worksheet embedded-control sheets:** "
+            f"{workbook['worksheet_embedded_control_sheet_count']}"
+        ),
+        (
+            "- **Worksheet ActiveX parts:** "
+            f"{workbook['worksheet_active_x_part_count']}"
+        ),
+        (
+            "- **Worksheet OLE objects:** "
+            f"{workbook['worksheet_ole_object_count']}"
+        ),
+        (
             "- **Connections refreshing on open:** "
             f"{workbook['external_data_connections_refresh_on_load']}"
         ),
@@ -886,6 +898,87 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Add-in identities, store references, properties, bindings, snapshots, and "
             "relationship targets are compared privately and intentionally omitted."
+        )
+    worksheet_embedded_controls = profile["worksheet_embedded_controls"]
+    if worksheet_embedded_controls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Worksheet embedded controls and OLE objects",
+                "",
+                (
+                    "- **Control-bearing worksheets:** "
+                    f"{worksheet_embedded_controls['control_sheet_count']}"
+                ),
+                (
+                    "- **Worksheet controls:** "
+                    f"{worksheet_embedded_controls['worksheet_control_count']}"
+                ),
+                (
+                    "- **ActiveX persistence parts:** "
+                    f"{worksheet_embedded_controls['active_x_part_count']}"
+                ),
+                (
+                    "- **ActiveX binary references:** "
+                    f"{worksheet_embedded_controls['active_x_binary_reference_count']}"
+                ),
+                (
+                    "- **Form-control properties parts:** "
+                    f"{worksheet_embedded_controls['form_control_property_part_count']}"
+                ),
+                (
+                    "- **Control macro assignments:** "
+                    f"{worksheet_embedded_controls['control_macro_assignment_count']}"
+                ),
+                (
+                    "- **Control cell links:** "
+                    f"{worksheet_embedded_controls['control_cell_link_count']}"
+                ),
+                (
+                    "- **Control source-range bindings:** "
+                    f"{worksheet_embedded_controls['control_source_range_count']}"
+                ),
+                (
+                    "- **Form-control formula bindings:** "
+                    f"{worksheet_embedded_controls['form_control_formula_binding_count']}"
+                ),
+                (
+                    "- **OLE objects:** "
+                    f"{worksheet_embedded_controls['ole_object_count']} "
+                    f"({worksheet_embedded_controls['linked_ole_object_count']} linked)"
+                ),
+                (
+                    "- **OLE auto-load / auto-update requests:** "
+                    f"{worksheet_embedded_controls['auto_load_ole_object_count']} / "
+                    f"{worksheet_embedded_controls['auto_update_ole_object_count']}"
+                ),
+                (
+                    "- **Related package relationships:** "
+                    f"{worksheet_embedded_controls['related_relationship_count']} "
+                    f"({worksheet_embedded_controls['external_relationship_count']} external)"
+                ),
+                (
+                    "- **Internal direct payloads:** "
+                    f"{worksheet_embedded_controls['internal_related_part_count']} "
+                    f"({worksheet_embedded_controls['fingerprinted_related_part_count']} "
+                    "fingerprinted)"
+                ),
+            ]
+        )
+        if worksheet_embedded_controls["uninspected_related_part_count"]:
+            lines.append(
+                "- **Uninspected direct payloads:** "
+                f"{worksheet_embedded_controls['uninspected_related_part_count']}"
+            )
+        if worksheet_embedded_controls["unrecognized_part_count"]:
+            lines.append(
+                "- **Unrecognized or uninspected parts/bindings:** "
+                f"{worksheet_embedded_controls['unrecognized_part_count']}"
+            )
+        lines.append(
+            "Control names, class IDs, macros, linked formulas/ranges, OLE identities, "
+            "relationship targets, and direct payloads are compared privately and "
+            "intentionally omitted."
         )
     power_query = profile["power_query"]
     if power_query["present"]:

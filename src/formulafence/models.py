@@ -1030,6 +1030,83 @@ class OfficeWebAddinSnapshot:
 
 
 @dataclass(frozen=True)
+class WorksheetEmbeddedControlSnapshot:
+    """Safe aggregate of worksheet ActiveX, form-control, and OLE package data.
+
+    Worksheet controls can bind persisted ActiveX state, form-control formulas,
+    OLE payloads, and external linked objects outside cells and the VBA project.
+    Private signatures retain all control definitions, relationships, and safely
+    fingerprinted direct payloads for comparison; ``to_dict`` deliberately
+    exposes only structural counts.
+    """
+
+    control_sheet_count: int = 0
+    worksheet_control_count: int = 0
+    active_x_part_count: int = 0
+    active_x_binary_reference_count: int = 0
+    form_control_property_part_count: int = 0
+    control_macro_assignment_count: int = 0
+    control_cell_link_count: int = 0
+    control_source_range_count: int = 0
+    form_control_formula_binding_count: int = 0
+    ole_object_count: int = 0
+    linked_ole_object_count: int = 0
+    auto_load_ole_object_count: int = 0
+    auto_update_ole_object_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    internal_related_part_count: int = 0
+    fingerprinted_related_part_count: int = 0
+    uninspected_related_part_count: int = 0
+    unrecognized_part_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    control_definition_signature: str | None = field(default=None, repr=False)
+    active_x_definition_signature: str | None = field(default=None, repr=False)
+    form_control_property_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+    related_part_payload_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.control_sheet_count
+            or self.worksheet_control_count
+            or self.active_x_part_count
+            or self.form_control_property_part_count
+            or self.ole_object_count
+            or self.unrecognized_part_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe control inventory without identities, formulas, or payloads."""
+        return {
+            "present": self.present,
+            "control_sheet_count": self.control_sheet_count,
+            "worksheet_control_count": self.worksheet_control_count,
+            "active_x_part_count": self.active_x_part_count,
+            "active_x_binary_reference_count": self.active_x_binary_reference_count,
+            "form_control_property_part_count": self.form_control_property_part_count,
+            "control_macro_assignment_count": self.control_macro_assignment_count,
+            "control_cell_link_count": self.control_cell_link_count,
+            "control_source_range_count": self.control_source_range_count,
+            "form_control_formula_binding_count": self.form_control_formula_binding_count,
+            "ole_object_count": self.ole_object_count,
+            "linked_ole_object_count": self.linked_ole_object_count,
+            "auto_load_ole_object_count": self.auto_load_ole_object_count,
+            "auto_update_ole_object_count": self.auto_update_ole_object_count,
+            "related_relationship_count": self.related_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+            "internal_related_part_count": self.internal_related_part_count,
+            "fingerprinted_related_part_count": self.fingerprinted_related_part_count,
+            "uninspected_related_part_count": self.uninspected_related_part_count,
+            "unrecognized_part_count": self.unrecognized_part_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class PowerQueryPermissionControlsSnapshot:
     """Safe aggregate controls from Data Mashup permission documents."""
 
@@ -1310,6 +1387,9 @@ class WorkbookSnapshot:
     office_web_addins: OfficeWebAddinSnapshot = field(
         default_factory=OfficeWebAddinSnapshot
     )
+    worksheet_embedded_controls: WorksheetEmbeddedControlSnapshot = field(
+        default_factory=WorksheetEmbeddedControlSnapshot
+    )
     power_query: PowerQuerySnapshot = field(default_factory=PowerQuerySnapshot)
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -1417,6 +1497,16 @@ class WorkbookSnapshot:
                 self.office_web_addins.auto_show_taskpane_count
             ),
             "has_office_web_addins": self.office_web_addins.present,
+            "worksheet_embedded_control_sheet_count": (
+                self.worksheet_embedded_controls.control_sheet_count
+            ),
+            "worksheet_active_x_part_count": (
+                self.worksheet_embedded_controls.active_x_part_count
+            ),
+            "worksheet_ole_object_count": (
+                self.worksheet_embedded_controls.ole_object_count
+            ),
+            "has_worksheet_embedded_controls": self.worksheet_embedded_controls.present,
             "power_query_mashup_count": self.power_query.mashup_count,
             "power_query_formula_document_count": self.power_query.formula_document_count,
             "power_query_metadata_item_count": self.power_query.metadata_item_count,

@@ -10,10 +10,10 @@ financial correctness or replace model review.
   network requests.
 - It loads formulas as text with `data_only=False`; it does not calculate them.
 - It never executes VBA, XLM macro sheets, RibbonX callbacks, DDE, external
-  links, Power Query, or Office Web Add-in code.
+  links, Power Query, Office Web Add-in code, or worksheet ActiveX/OLE code.
 - VBA payloads, XLM macro-sheet source material, RibbonX control/callback
-  material, and Office Web Add-in task-pane material are compared through
-  private fingerprints only.
+  material, Office Web Add-in task-pane material, and worksheet control/OLE
+  material are compared through private fingerprints only.
 - Protection credential material is never emitted: legacy verifiers, modern
   hashes/salts, protected-range names, and security descriptors are compared
   through private fingerprints and reported only as safe presence/change metadata.
@@ -178,6 +178,23 @@ review prompt, not proof of an error.
   reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts.
   Worksheet-scoped web-extension markup outside this task-pane chain is not
   yet modeled.
+- Relationship-backed worksheet embedded controls and OLE objects are read from
+  the raw worksheet control/OLE markup and its direct control relationships
+  before the workbook reader can omit them. FormulaFence privately fingerprints
+  worksheet declarations, ActiveX `ocx` persistence XML, form-control-property
+  XML, relationship semantics, and bounded direct ActiveX binary and
+  OLE/package payload hashes. Profiles report only structural counts; control
+  names, class IDs, licenses, macros, formulas/ranges, OLE identities, targets,
+  XML, and payload bytes remain private. A material change emits `FF029` and
+  can be blocked with `no_worksheet_embedded_control_changes`. FormulaFence
+  does **not** initialize an ActiveX control, deserialize/open an OLE object or
+  package, render a drawing surface, follow an external relationship, or infer
+event dispatch. Relevant XML reads are bounded to 16 MiB per part, 64 MiB per
+workbook, and 512 parts; direct payload hashing is bounded to 32 MiB per
+part, 64 MiB per workbook, and 512 parts. Missing, malformed, orphaned,
+  unbound, oversized, or over-budget material remains a visible parser-coverage
+  warning. VML/drawing layout, embedded payload formats, and behavior outside
+  this relationship-backed chain are not modeled.
 - Power Query Data Mashup custom XML is inspected without serializing its M
   formulas or data/source material. FormulaFence privately compares the
   `Section1.m` formula document, logical package content, stable query metadata,
@@ -219,12 +236,14 @@ review prompt, not proof of an error.
   is deliberately omitted rather than partially guessed.
 - It inventories sheet visibility, defined names, calculation settings, the VBA
   payload, XLM macro-sheet packages, RibbonX custom UI packages, Office Web
-  Add-in task-pane packages, the protection controls above, external-data
-  refresh controls, external-link packages, and private Power Query definition
-  material. It does not yet diff chart definitions, PivotTable layout or cached
-  data, Ribbon image payloads, worksheet-scoped Web Add-in markup, Power Query
-  runtime behavior or returned data, ordinary styles beyond direct protection
-  assignments, complete Excel style-cascade results, or every OOXML part.
+  Add-in task-pane packages, relationship-backed worksheet ActiveX/form-control/
+  OLE chains, the protection controls above, external-data refresh controls,
+  external-link packages, and private Power Query definition material. It does
+  not yet diff chart definitions, PivotTable layout or cached data, Ribbon image
+  payloads, VML/drawing control layout, embedded OLE/package formats,
+  worksheet-scoped Web Add-in markup, Power Query runtime behavior or returned
+  data, ordinary styles beyond direct protection assignments, complete Excel
+  style-cascade results, or every OOXML part.
 - The tool preserves Excel formula text and uses a limited A1-reference
   normalizer for peer-pattern detection; it is not an Excel-compatible parser
   or calculation engine.

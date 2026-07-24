@@ -24,10 +24,13 @@ from .helpers import (
     change_protected_range,
     change_ribbon_customization_callback,
     change_ribbon_customization_controls,
+    change_worksheet_embedded_control_controls,
+    change_worksheet_embedded_control_payload,
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
     corrupt_office_web_addin_definition_root,
     corrupt_ribbon_customization_root,
+    corrupt_worksheet_embedded_control_activex_root,
     corrupt_xlm_macro_sheet_root,
     duplicate_external_link_definition,
     duplicate_external_link_sheet_names,
@@ -50,6 +53,7 @@ from .helpers import (
     make_spill_model,
     make_table_model,
     make_three_d_model,
+    make_worksheet_embedded_control_model,
     make_xlm_macro_sheet_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
@@ -58,11 +62,13 @@ from .helpers import (
     renumber_external_link_declaration_relationships,
     renumber_office_web_addin_relationships,
     renumber_ribbon_customization_relationships,
+    renumber_worksheet_embedded_control_relationships,
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
     rewrite,
     rewrite_office_web_addin_internal_target_spelling,
     rewrite_ribbon_customization_internal_target_spelling,
+    rewrite_worksheet_embedded_control_internal_target_spelling,
     rewrite_xlm_macro_sheet_internal_target_spelling,
     set_external_data_connection_defaults,
     set_sheet_protection_defaults,
@@ -2365,6 +2371,325 @@ def test_malformed_office_web_addin_parts_fail_closed(tmp_path) -> None:
     )
     assert "office_web_addins_changed" in {change.kind for change in report.changes}
     assert "FF028" in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_embedded_controls_are_profiled_and_diffed_privately(tmp_path) -> None:
+    baseline = make_worksheet_embedded_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    change_worksheet_embedded_control_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    control_change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_embedded_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["has_worksheet_embedded_controls"] is True
+    assert baseline_snapshot.summary()["worksheet_active_x_part_count"] == 1
+    assert baseline_snapshot.summary()["worksheet_ole_object_count"] == 2
+    assert baseline_snapshot.parser_warnings == ()
+    assert profile["worksheet_embedded_controls"] == {
+        "present": True,
+        "control_sheet_count": 1,
+        "worksheet_control_count": 2,
+        "active_x_part_count": 1,
+        "active_x_binary_reference_count": 1,
+        "form_control_property_part_count": 1,
+        "control_macro_assignment_count": 1,
+        "control_cell_link_count": 4,
+        "control_source_range_count": 2,
+        "form_control_formula_binding_count": 4,
+        "ole_object_count": 2,
+        "linked_ole_object_count": 1,
+        "auto_load_ole_object_count": 1,
+        "auto_update_ole_object_count": 1,
+        "related_relationship_count": 7,
+        "external_relationship_count": 1,
+        "internal_related_part_count": 2,
+        "fingerprinted_related_part_count": 2,
+        "uninspected_related_part_count": 0,
+        "unrecognized_part_count": 0,
+    }
+    assert "## Worksheet embedded controls and OLE objects" in markdown
+    assert "**ActiveX persistence parts:** 1" in markdown
+    assert control_change.details["worksheet_binding_changed"] is True
+    assert control_change.details["worksheet_control_definition_material_changed"] is True
+    assert control_change.details["active_x_definition_material_changed"] is True
+    assert control_change.details["form_control_property_material_changed"] is True
+    assert control_change.details["related_part_relationships_changed"] is True
+    assert control_change.details["embedded_payload_material_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF029"}
+
+    sensitive_values = (
+        "PrivateBaselineCommandButton",
+        "PrivateBaselineFormControl",
+        "PrivateBaselineControlMacro",
+        "Private.Baseline.Embedded.Object",
+        "private-baseline-link-name",
+        "private baseline ActiveX binary payload",
+        "private baseline embedded OLE payload",
+        "private control presentation",
+        "private/baseline-linked-ole.bin",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_embedded_control_alternate_content_is_not_double_counted(tmp_path) -> None:
+    workbook = make_worksheet_embedded_control_model(
+        tmp_path / "alternate-content.xlsx",
+        alternate_content=True,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_embedded_controls.worksheet_control_count == 2
+    assert snapshot.worksheet_embedded_controls.control_macro_assignment_count == 1
+    assert snapshot.parser_warnings == ()
+
+
+def test_worksheet_embedded_control_package_addition_is_critical(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    control_change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_embedded_controls_changed"
+    )
+
+    assert control_change.details["before"]["present"] is False
+    assert control_change.details["after"]["present"] is True
+    assert control_change.details["worksheet_binding_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF029"}
+
+
+def test_worksheet_embedded_control_payloads_are_guarded_privately(tmp_path) -> None:
+    baseline = make_worksheet_embedded_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    change_worksheet_embedded_control_payload(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    control_change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_embedded_controls_changed"
+    )
+
+    assert baseline_snapshot.worksheet_embedded_controls.internal_related_part_count == 2
+    assert baseline_snapshot.worksheet_embedded_controls.fingerprinted_related_part_count == 2
+    assert control_change.details["embedded_payload_material_changed"] is True
+    assert "worksheet_control_definition_material_changed" not in control_change.details
+    assert "related_part_relationships_changed" not in control_change.details
+
+
+def test_worksheet_embedded_control_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_worksheet_embedded_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    renumber_worksheet_embedded_control_relationships(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "worksheet_embedded_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF029" not in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_embedded_control_equivalent_target_spellings_are_ignored(tmp_path) -> None:
+    baseline = make_worksheet_embedded_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    rewrite_worksheet_embedded_control_internal_target_spelling(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "worksheet_embedded_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF029" not in {finding.rule_id for finding in report.findings}
+
+
+def test_ordinary_worksheets_do_not_consume_control_xml_budget(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_model(tmp_path / "ordinary.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKSHEET_EMBEDDED_CONTROL_MAX_XML_PART_BYTES",
+        1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_embedded_controls.present is False
+    assert not any(
+        "worksheet embedded-control XML" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_oversized_worksheet_embedded_control_parts_fail_closed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    monkeypatch.setattr(
+        "formulafence.workbook._WORKSHEET_EMBEDDED_CONTROL_MAX_XML_PART_BYTES",
+        1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_embedded_controls.unrecognized_part_count >= 1
+    assert any(
+        "oversized worksheet embedded-control XML part" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_worksheet_embedded_control_xml_byte_budget_remains_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._WorksheetEmbeddedControlXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_WorksheetEmbeddedControlXmlBudget",
+        lambda: budget_type(remaining_bytes=1),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_embedded_controls.unrecognized_part_count >= 1
+    assert any(
+        "worksheet embedded-control XML read budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_worksheet_embedded_control_xml_part_budget_remains_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._WorksheetEmbeddedControlXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_WorksheetEmbeddedControlXmlBudget",
+        lambda: budget_type(remaining_parts=1),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_embedded_controls.unrecognized_part_count >= 1
+    assert any(
+        "worksheet embedded-control XML part count budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_oversized_worksheet_embedded_control_payloads_remain_uninspected(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKSHEET_EMBEDDED_CONTROL_RELATED_PART_MAX_BYTES",
+        1,
+    )
+
+    snapshot = load_snapshot(workbook)
+    controls = snapshot.worksheet_embedded_controls
+
+    assert controls.internal_related_part_count == 2
+    assert controls.fingerprinted_related_part_count == 0
+    assert controls.uninspected_related_part_count == 2
+    assert any(
+        "oversized worksheet embedded-control payload part" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_worksheet_embedded_control_payload_byte_budget_remains_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._WorksheetEmbeddedControlRelatedPartBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_WorksheetEmbeddedControlRelatedPartBudget",
+        lambda: budget_type(remaining_bytes=1),
+    )
+
+    snapshot = load_snapshot(workbook)
+    controls = snapshot.worksheet_embedded_controls
+
+    assert controls.fingerprinted_related_part_count == 0
+    assert controls.uninspected_related_part_count == 2
+    assert any(
+        "worksheet embedded-control payload read budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_worksheet_embedded_control_payload_part_budget_remains_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._WorksheetEmbeddedControlRelatedPartBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_WorksheetEmbeddedControlRelatedPartBudget",
+        lambda: budget_type(remaining_parts=1),
+    )
+
+    snapshot = load_snapshot(workbook)
+    controls = snapshot.worksheet_embedded_controls
+
+    assert controls.fingerprinted_related_part_count == 1
+    assert controls.uninspected_related_part_count == 1
+    assert any(
+        "worksheet embedded-control payload part count budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_malformed_worksheet_embedded_control_activex_parts_fail_closed(tmp_path) -> None:
+    baseline = make_worksheet_embedded_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    corrupt_worksheet_embedded_control_activex_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.worksheet_embedded_controls.unrecognized_part_count == 1
+    assert any(
+        "ActiveX control part with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "worksheet_embedded_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF029" in {finding.rule_id for finding in report.findings}
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

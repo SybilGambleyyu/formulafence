@@ -61,6 +61,7 @@ from formulafence.models import (
     WorkbookLoadError,
     WorkbookProtectionSnapshot,
     WorkbookSnapshot,
+    WorksheetEmbeddedControlSnapshot,
     XlmMacroSheetSnapshot,
     XmlFragmentSnapshot,
     display_location,
@@ -156,6 +157,27 @@ _WEB_EXTENSION_TASKPANES_RELATIONSHIP = (
 _WEB_EXTENSION_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2011/relationships/webextension"
 )
+_WORKSHEET_EMBEDDED_CONTROL_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_COUNT = 512
+_WORKSHEET_EMBEDDED_CONTROL_RELATED_PART_MAX_BYTES = 32 * 1024 * 1024
+_WORKSHEET_EMBEDDED_CONTROL_RELATED_PART_TOTAL_MAX_BYTES = 64 * 1024 * 1024
+_WORKSHEET_EMBEDDED_CONTROL_RELATED_PART_TOTAL_MAX_COUNT = 512
+_WORKSHEET_EMBEDDED_CONTROL_HASH_CHUNK_BYTES = 1024 * 1024
+_WORKSHEET_ACTIVEX_PART_PATTERN = re.compile(
+    r"^xl/activeX/[^/]+\.xml$", re.IGNORECASE
+)
+_WORKSHEET_CONTROL_PROPERTY_PART_PATTERN = re.compile(
+    r"^xl/ctrlProps/[^/]+\.xml$", re.IGNORECASE
+)
+_ACTIVEX_NS = "http://schemas.microsoft.com/office/2006/activeX"
+_WORKSHEET_CONTROL_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/control"
+_WORKSHEET_CTRLPROP_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/ctrlProp"
+_WORKSHEET_OLE_OBJECT_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/oleObject"
+_WORKSHEET_EMBEDDED_PACKAGE_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/package"
+_WORKSHEET_ACTIVEX_BINARY_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary"
+)
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 
 
@@ -242,6 +264,14 @@ class _OfficeWebAddinMetadata:
 
 
 @dataclass(frozen=True)
+class _WorksheetEmbeddedControlMetadata:
+    """Raw worksheet control evidence retained before the workbook reader omits it."""
+
+    controls: WorksheetEmbeddedControlSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _XlmRawRelationship:
     """One private package relationship, including the original target material."""
 
@@ -307,6 +337,28 @@ class _OfficeWebAddinRawRelationship:
         )
 
 
+@dataclass(frozen=True)
+class _WorksheetControlRawRelationship:
+    """One private worksheet-control relationship and canonical target."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return relationship semantics while ignoring arbitrary identifiers."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        return (
+            self.relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
 @dataclass
 class _RibbonCustomizationBudget:
     """Bound total custom-UI bytes read across one RibbonX package scan."""
@@ -321,6 +373,22 @@ class _OfficeWebAddinBudget:
 
     remaining_bytes: int = _WEB_EXTENSION_TOTAL_MAX_BYTES
     remaining_parts: int = _WEB_EXTENSION_TOTAL_MAX_COUNT
+
+
+@dataclass
+class _WorksheetEmbeddedControlXmlBudget:
+    """Bound worksheet-control XML bytes read across one package scan."""
+
+    remaining_bytes: int = _WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _WorksheetEmbeddedControlRelatedPartBudget:
+    """Bound direct embedded-control payload bytes across one package scan."""
+
+    remaining_bytes: int = _WORKSHEET_EMBEDDED_CONTROL_RELATED_PART_TOTAL_MAX_BYTES
+    remaining_parts: int = _WORKSHEET_EMBEDDED_CONTROL_RELATED_PART_TOTAL_MAX_COUNT
 
 
 @dataclass
@@ -407,6 +475,76 @@ class _OfficeWebAddinExtensionInspection:
     related_relationship_count: int = 0
     external_relationship_count: int = 0
     unresolved_snapshot_reference_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _WorksheetControlRelatedPartPayloadInspection:
+    """Private fingerprint result for direct embedded-control payload parts."""
+
+    internal_part_count: int = 0
+    fingerprinted_part_count: int = 0
+    uninspected_part_count: int = 0
+    payload_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _WorksheetControlSheetInspection:
+    """Private parsed worksheet controls and OLE declarations for one sheet."""
+
+    member: str
+    present: bool = False
+    worksheet_control_count: int = 0
+    control_macro_assignment_count: int = 0
+    control_cell_link_count: int = 0
+    control_source_range_count: int = 0
+    ole_object_count: int = 0
+    linked_ole_object_count: int = 0
+    auto_load_ole_object_count: int = 0
+    auto_update_ole_object_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    active_x_members: tuple[str, ...] = ()
+    control_property_members: tuple[str, ...] = ()
+    payload_members: tuple[str, ...] = ()
+    unresolved_payload_entries: tuple[tuple[str, str], ...] = ()
+    unrecognized_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _WorksheetControlActiveXInspection:
+    """Private parsed state for one worksheet ActiveX persistence part."""
+
+    member: str
+    binary_reference_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    payload_members: tuple[str, ...] = ()
+    unresolved_payload_entries: tuple[tuple[str, str], ...] = ()
+    unrecognized_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _WorksheetControlPropertyInspection:
+    """Private parsed state for one form-control properties part."""
+
+    member: str
+    formula_binding_count: int = 0
+    cell_link_count: int = 0
+    source_range_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    payload_members: tuple[str, ...] = ()
+    unresolved_payload_entries: tuple[tuple[str, str], ...] = ()
+    unrecognized_count: int = 0
     inspected: bool = False
     definition_signature: str | None = None
     relationship_signature: str | None = None
@@ -6393,6 +6531,1314 @@ def _office_web_addin_metadata(path: Path) -> _OfficeWebAddinMetadata:
     return _OfficeWebAddinMetadata(snapshot, tuple(sorted(warnings)))
 
 
+def _worksheet_control_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+    missing_is_warning: bool = False,
+) -> tuple[_WorksheetControlRawRelationship, ...]:
+    """Read worksheet-control relationships without opening any package target."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        if missing_is_warning:
+            warnings.add(
+                "FormulaFence could not locate "
+                f"{context} relationships while inspecting worksheet embedded controls; "
+                "affected controls may be incomplete."
+            )
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for worksheet embedded controls "
+            f"({type(error).__name__}); affected controls were not compared."
+        )
+        return ()
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting worksheet embedded controls; "
+            "affected controls were not compared."
+        )
+        return ()
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_WorksheetControlRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _WorksheetControlRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting worksheet "
+            "embedded controls; affected controls may be incomplete."
+        )
+    return tuple(relationships)
+
+
+def _worksheet_control_relationship_signature(
+    relationships: tuple[_WorksheetControlRawRelationship, ...],
+) -> str | None:
+    """Fingerprint control relationship semantics without identifier churn."""
+    material = sorted(relationship.semantic_key() for relationship in relationships)
+    return _private_external_data_signature(
+        tuple(
+            (f"relationship:{index}", repr(relationship))
+            for index, relationship in enumerate(material)
+        )
+    )
+
+
+def _worksheet_control_relationship_semantics(
+    relationships: tuple[_WorksheetControlRawRelationship, ...],
+    warnings: set[str],
+    *,
+    context: str,
+) -> dict[str, tuple[str, str, str]]:
+    """Resolve private relationship identifiers while preserving malformed evidence."""
+    relationships_by_id: dict[str, list[_WorksheetControlRawRelationship]] = defaultdict(
+        list
+    )
+    for relationship in relationships:
+        if relationship.relationship_id:
+            relationships_by_id[relationship.relationship_id].append(relationship)
+        else:
+            warnings.add(
+                "FormulaFence found a worksheet embedded-control "
+                f"{context} relationship without an id; affected controls have a coverage gap."
+            )
+    semantics: dict[str, tuple[str, str, str]] = {}
+    for relationship_id, matches in relationships_by_id.items():
+        values = sorted(match.semantic_key() for match in matches)
+        if len(values) > 1:
+            warnings.add(
+                "FormulaFence found duplicate worksheet embedded-control "
+                f"{context} relationship ids; affected controls have a coverage gap."
+            )
+        semantics[relationship_id] = values[0]
+    return semantics
+
+
+def _worksheet_control_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+) -> tuple[object, ...]:
+    """Canonicalize private control XML while resolving relationship identifiers."""
+    relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if attribute == relationship_attribute:
+            relationship = relationship_semantics.get(value)
+            resolved = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+        else:
+            attributes.append((_xml_display_name(attribute), value))
+    children = tuple(
+        _worksheet_control_fragment(child, relationship_semantics) for child in element
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+    )
+
+
+def _worksheet_control_boolean(
+    value: str | None,
+    default: bool,
+    warnings: set[str],
+    *,
+    context: str,
+    attribute: str,
+) -> bool:
+    """Read an OOXML boolean while retaining invalid values privately."""
+    if value is None:
+        return default
+    lowered = value.casefold()
+    if lowered in {"1", "true", "on"}:
+        return True
+    if lowered in {"0", "false", "off"}:
+        return False
+    warnings.add(
+        "FormulaFence could not interpret a worksheet embedded-control "
+        f"{context} {attribute} boolean; the affected control has a coverage gap."
+    )
+    return default
+
+
+def _worksheet_control_ole_auto_update(
+    value: str | None,
+    warnings: set[str],
+) -> bool:
+    """Return whether an OLE link requests automatic updates."""
+    if value is None or value.casefold() == "oncall":
+        return False
+    if value.casefold() == "always":
+        return True
+    warnings.add(
+        "FormulaFence found an unrecognized worksheet embedded-control OLE update "
+        "setting; the affected control has a coverage gap."
+    )
+    return False
+
+
+def _worksheet_control_xml_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _WorksheetEmbeddedControlXmlBudget,
+) -> tuple[bytes | None, str | None]:
+    """Read one bounded control XML part without parsing it or following targets."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded worksheet embedded-control XML part count "
+            "budget; the affected controls have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("part-count-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a worksheet embedded-control XML package part; "
+            "the affected controls were not compared."
+        )
+        return None, _private_external_data_signature((("missing-member", member),))
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _WORKSHEET_EMBEDDED_CONTROL_MAX_XML_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized worksheet embedded-control XML "
+            "part; the affected controls have a coverage gap."
+        )
+        return None, _private_external_data_signature((("oversized-part", metadata),))
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded worksheet embedded-control XML read budget; "
+            "the affected controls have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a worksheet embedded-control XML package part "
+            f"({type(error).__name__}); the affected controls were not compared."
+        )
+        return None, _private_external_data_signature((("unreadable-part", metadata),))
+
+
+def _worksheet_control_related_part_payloads(
+    archive: ZipFile,
+    members: set[str],
+    unresolved_entries: list[tuple[str, str]],
+    warnings: set[str],
+    budget: _WorksheetEmbeddedControlRelatedPartBudget,
+) -> _WorksheetControlRelatedPartPayloadInspection:
+    """Fingerprint bounded direct control payloads without opening their contents.
+
+    ActiveX binary data and OLE/package payloads are arbitrary formats. The
+    scanner therefore resolves only safe internal targets and hashes their
+    bytes; it never executes, parses, or follows embedded or external content.
+    """
+    entries = list(unresolved_entries)
+    fingerprinted_part_count = 0
+    uninspected_part_count = len(unresolved_entries)
+    for member in sorted(members, key=str.casefold):
+        if budget.remaining_parts == 0:
+            warnings.add(
+                "FormulaFence reached its bounded worksheet embedded-control payload "
+                "part count budget; the affected controls have a coverage gap."
+            )
+            entries.append(("part-count-budget-exhausted", member))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_parts -= 1
+        try:
+            info = archive.getinfo(member)
+        except KeyError:
+            warnings.add(
+                "FormulaFence could not locate a worksheet embedded-control payload part; "
+                "the affected controls were not compared."
+            )
+            entries.append(("missing-part", member))
+            uninspected_part_count += 1
+            continue
+        metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+        if info.file_size > _WORKSHEET_EMBEDDED_CONTROL_RELATED_PART_MAX_BYTES:
+            warnings.add(
+                "FormulaFence did not fully read an oversized worksheet embedded-control "
+                "payload part; the affected controls have a coverage gap."
+            )
+            entries.append(("oversized-part", metadata))
+            uninspected_part_count += 1
+            continue
+        if info.file_size > budget.remaining_bytes:
+            warnings.add(
+                "FormulaFence reached its bounded worksheet embedded-control payload "
+                "read budget; the affected controls have a coverage gap."
+            )
+            entries.append(("read-budget-exhausted", metadata))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_bytes -= info.file_size
+        digest = hashlib.sha256()
+        bytes_read = 0
+        try:
+            with archive.open(info) as payload:
+                while chunk := payload.read(_WORKSHEET_EMBEDDED_CONTROL_HASH_CHUNK_BYTES):
+                    bytes_read += len(chunk)
+                    if bytes_read > info.file_size:
+                        raise ValueError("payload exceeded its declared size")
+                    digest.update(chunk)
+            if bytes_read != info.file_size:
+                raise ValueError("payload did not match its declared size")
+        except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+            warnings.add(
+                "FormulaFence could not fingerprint a worksheet embedded-control payload "
+                f"part ({type(error).__name__}); the affected controls were not compared."
+            )
+            entries.append(("unreadable-part", metadata))
+            uninspected_part_count += 1
+            continue
+        entries.append(("payload", repr((member, digest.hexdigest()))))
+        fingerprinted_part_count += 1
+
+    entries.sort()
+    return _WorksheetControlRelatedPartPayloadInspection(
+        internal_part_count=len(members) + len(unresolved_entries),
+        fingerprinted_part_count=fingerprinted_part_count,
+        uninspected_part_count=uninspected_part_count,
+        payload_signature=_private_external_data_signature(tuple(entries)),
+    )
+
+
+def _worksheet_control_sheet_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    xml_budget: _WorksheetEmbeddedControlXmlBudget,
+) -> _WorksheetControlSheetInspection:
+    """Inspect one worksheet's control bindings without reading cells or payloads."""
+    relationships = _worksheet_control_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="worksheet",
+    )
+    relationship_semantics = _worksheet_control_relationship_semantics(
+        relationships,
+        warnings,
+        context="worksheet",
+    )
+    relationship_by_id: dict[str, _WorksheetControlRawRelationship] = {}
+    for relationship in relationships:
+        if (
+            relationship.relationship_id
+            and relationship.relationship_id not in relationship_by_id
+        ):
+            relationship_by_id[relationship.relationship_id] = relationship
+
+    active_x_members: set[str] = set()
+    control_property_members: set[str] = set()
+    payload_members: set[str] = set()
+    unresolved_payload_entries: list[tuple[str, str]] = []
+    relevant_relationship_types = {
+        _WORKSHEET_CONTROL_RELATIONSHIP,
+        _WORKSHEET_CTRLPROP_RELATIONSHIP,
+        _WORKSHEET_OLE_OBJECT_RELATIONSHIP,
+        _WORKSHEET_EMBEDDED_PACKAGE_RELATIONSHIP,
+        _WORKSHEET_ACTIVEX_BINARY_RELATIONSHIP,
+    }
+    for relationship in relationships:
+        if relationship.relationship_type == _WORKSHEET_CONTROL_RELATIONSHIP:
+            if relationship.safe_target is not None:
+                active_x_members.add(relationship.safe_target)
+        elif relationship.relationship_type == _WORKSHEET_CTRLPROP_RELATIONSHIP:
+            if relationship.safe_target is not None:
+                control_property_members.add(relationship.safe_target)
+        elif (
+            relationship.relationship_type
+            in {
+                _WORKSHEET_OLE_OBJECT_RELATIONSHIP,
+                _WORKSHEET_EMBEDDED_PACKAGE_RELATIONSHIP,
+                _WORKSHEET_ACTIVEX_BINARY_RELATIONSHIP,
+            }
+            and relationship.target_mode.casefold() == "internal"
+        ):
+            if relationship.safe_target is not None:
+                payload_members.add(relationship.safe_target)
+            else:
+                unresolved_payload_entries.append(
+                    (
+                        "unsafe-direct-payload-target",
+                        repr((relationship.relationship_type, relationship.target)),
+                    )
+                )
+
+    relevant_relationships = tuple(
+        relationship
+        for relationship in relationships
+        if relationship.relationship_type in relevant_relationship_types
+    )
+    # A conforming worksheet control or OLE object is relationship-bound. Do
+    # not consume the bounded XML-read budget for ordinary worksheets that
+    # have no relevant relationship declaration at all: large data sheets are
+    # common, and no valid control chain can start there.
+    if not relevant_relationships:
+        return _WorksheetControlSheetInspection(member=member)
+    payload, fallback_signature = _worksheet_control_xml_payload(
+        archive,
+        member,
+        warnings,
+        xml_budget,
+    )
+    if payload is None:
+        return _WorksheetControlSheetInspection(
+            member=member,
+            present=bool(relevant_relationships),
+            active_x_members=tuple(sorted(active_x_members, key=str.casefold)),
+            control_property_members=tuple(
+                sorted(control_property_members, key=str.casefold)
+            ),
+            payload_members=tuple(sorted(payload_members, key=str.casefold)),
+            unresolved_payload_entries=tuple(unresolved_payload_entries),
+            unrecognized_count=int(bool(relevant_relationships)),
+            definition_signature=fallback_signature,
+            relationship_signature=_worksheet_control_relationship_signature(
+                relevant_relationships
+            ),
+        )
+
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a worksheet embedded-control XML part "
+            f"({type(error).__name__}); the affected controls were not compared."
+        )
+        return _WorksheetControlSheetInspection(
+            member=member,
+            present=bool(relevant_relationships),
+            active_x_members=tuple(sorted(active_x_members, key=str.casefold)),
+            control_property_members=tuple(
+                sorted(control_property_members, key=str.casefold)
+            ),
+            payload_members=tuple(sorted(payload_members, key=str.casefold)),
+            unresolved_payload_entries=tuple(unresolved_payload_entries),
+            unrecognized_count=int(bool(relevant_relationships)),
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_worksheet_control_relationship_signature(
+                relevant_relationships
+            ),
+        )
+    if (
+        _xml_local_name(root.tag) != "worksheet"
+        or _xml_namespace(root.tag) != _SPREADSHEETML_NS
+    ):
+        warnings.add(
+            "FormulaFence found a worksheet embedded-control part with an unexpected root; "
+            "the affected controls were not compared."
+        )
+        return _WorksheetControlSheetInspection(
+            member=member,
+            present=bool(relevant_relationships),
+            active_x_members=tuple(sorted(active_x_members, key=str.casefold)),
+            control_property_members=tuple(
+                sorted(control_property_members, key=str.casefold)
+            ),
+            payload_members=tuple(sorted(payload_members, key=str.casefold)),
+            unresolved_payload_entries=tuple(unresolved_payload_entries),
+            unrecognized_count=int(bool(relevant_relationships)),
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_worksheet_control_relationship_signature(
+                relevant_relationships
+            ),
+        )
+
+    controls_tag = f"{{{_SPREADSHEETML_NS}}}controls"
+    control_tag = f"{{{_SPREADSHEETML_NS}}}control"
+    control_properties_tag = f"{{{_SPREADSHEETML_NS}}}controlPr"
+    ole_objects_tag = f"{{{_SPREADSHEETML_NS}}}oleObjects"
+    ole_object_tag = f"{{{_SPREADSHEETML_NS}}}oleObject"
+    object_properties_tag = f"{{{_SPREADSHEETML_NS}}}objectPr"
+    relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+
+    controls_containers = list(root.iter(controls_tag))
+    ole_objects_containers = list(root.iter(ole_objects_tag))
+    raw_controls = [
+        control
+        for container in controls_containers
+        for control in container.iter(control_tag)
+    ]
+    controls: list[ElementTree.Element] = []
+    seen_control_keys: set[tuple[str, ...]] = set()
+    for index, control in enumerate(raw_controls):
+        relationship_id = control.get(relationship_attribute)
+        if relationship_id:
+            key = ("relationship", relationship_id)
+        else:
+            key = (
+                "unbound",
+                str(index),
+                control.get("shapeId", ""),
+                control.get("name", ""),
+            )
+        if key in seen_control_keys:
+            continue
+        seen_control_keys.add(key)
+        controls.append(control)
+    ole_objects = [
+        ole_object
+        for container in ole_objects_containers
+        for ole_object in container
+        if ole_object.tag == ole_object_tag
+    ]
+
+    selected_relationship_ids: set[str] = set()
+    unrecognized_count = 0
+
+    def relationship_for(
+        relationship_id: str,
+        *,
+        context: str,
+    ) -> _WorksheetControlRawRelationship | None:
+        nonlocal unrecognized_count
+        selected_relationship_ids.add(relationship_id)
+        if relationship_id not in relationship_semantics:
+            warnings.add(
+                "FormulaFence found a worksheet embedded-control "
+                f"{context} reference without a matching relationship; affected controls "
+                "have a coverage gap."
+            )
+            unrecognized_count += 1
+            return None
+        return relationship_by_id.get(relationship_id)
+
+    control_macro_assignment_count = 0
+    control_cell_link_count = 0
+    control_source_range_count = 0
+    for control in controls:
+        relationship_id = control.get(relationship_attribute)
+        if relationship_id is None:
+            warnings.add(
+                "FormulaFence found a worksheet control without a relationship id; "
+                "the affected controls have a coverage gap."
+            )
+            unrecognized_count += 1
+        elif relationship := relationship_for(relationship_id, context="control"):
+            if relationship.relationship_type == _WORKSHEET_CONTROL_RELATIONSHIP:
+                if relationship.safe_target is None:
+                    warnings.add(
+                        "FormulaFence found a worksheet control without a safe internal "
+                        "ActiveX target; the affected controls were not compared."
+                    )
+                    unrecognized_count += 1
+                else:
+                    active_x_members.add(relationship.safe_target)
+            elif relationship.relationship_type == _WORKSHEET_CTRLPROP_RELATIONSHIP:
+                if relationship.safe_target is None:
+                    warnings.add(
+                        "FormulaFence found a worksheet control without a safe internal "
+                        "form-control properties target; the affected controls were not compared."
+                    )
+                    unrecognized_count += 1
+                else:
+                    control_property_members.add(relationship.safe_target)
+            else:
+                warnings.add(
+                    "FormulaFence found a worksheet control with an unexpected relationship "
+                    "type; the affected controls have a coverage gap."
+                )
+                unrecognized_count += 1
+
+        for properties in control:
+            if properties.tag != control_properties_tag:
+                continue
+            control_macro_assignment_count += int(properties.get("macro") is not None)
+            control_cell_link_count += int(properties.get("linkedCell") is not None)
+            control_source_range_count += int(
+                properties.get("listFillRange") is not None
+            )
+            properties_relationship_id = properties.get(relationship_attribute)
+            if properties_relationship_id is None:
+                continue
+            if relationship := relationship_for(
+                properties_relationship_id,
+                context="control properties",
+            ):
+                # An inline controlPr can bind an image/presentation relationship
+                # for an ActiveX control as well as a ctrlProp package part for a
+                # form control. Retain every relationship semantically, but only
+                # traverse the documented ctrlProp target type.
+                if relationship.relationship_type == _WORKSHEET_CTRLPROP_RELATIONSHIP:
+                    if relationship.safe_target is None:
+                        warnings.add(
+                            "FormulaFence found worksheet control properties without a safe "
+                            "internal target; the affected controls were not compared."
+                        )
+                        unrecognized_count += 1
+                    else:
+                        control_property_members.add(relationship.safe_target)
+                elif relationship.relationship_type == _WORKSHEET_CONTROL_RELATIONSHIP:
+                    warnings.add(
+                        "FormulaFence found worksheet control properties with a control-part "
+                        "relationship; the affected controls have a coverage gap."
+                    )
+                    unrecognized_count += 1
+
+    linked_ole_object_count = 0
+    auto_load_ole_object_count = 0
+    auto_update_ole_object_count = 0
+    for ole_object in ole_objects:
+        relationship_id = ole_object.get(relationship_attribute)
+        relationship: _WorksheetControlRawRelationship | None = None
+        if relationship_id is None:
+            warnings.add(
+                "FormulaFence found a worksheet OLE object without a relationship id; "
+                "the affected controls have a coverage gap."
+            )
+            unrecognized_count += 1
+        else:
+            relationship = relationship_for(relationship_id, context="OLE object")
+            if relationship is not None and relationship.relationship_type not in {
+                _WORKSHEET_OLE_OBJECT_RELATIONSHIP,
+                _WORKSHEET_EMBEDDED_PACKAGE_RELATIONSHIP,
+            }:
+                warnings.add(
+                    "FormulaFence found a worksheet OLE object with an unexpected relationship "
+                    "type; the affected controls have a coverage gap."
+                )
+                unrecognized_count += 1
+        linked_ole_object_count += int(
+            ole_object.get("link") is not None
+            or (
+                relationship is not None
+                and relationship.target_mode.casefold() != "internal"
+            )
+        )
+        auto_load_ole_object_count += _worksheet_control_boolean(
+            ole_object.get("autoLoad"),
+            False,
+            warnings,
+            context="OLE object",
+            attribute="autoLoad",
+        )
+        auto_update_ole_object_count += _worksheet_control_ole_auto_update(
+            ole_object.get("oleUpdate"),
+            warnings,
+        )
+        for properties in ole_object.iter(object_properties_tag):
+            properties_relationship_id = properties.get(relationship_attribute)
+            if properties_relationship_id is not None:
+                relationship_for(
+                    properties_relationship_id,
+                    context="OLE presentation",
+                )
+
+    for relationship in relevant_relationships:
+        if (
+            relationship.relationship_id is None
+            or relationship.relationship_id not in selected_relationship_ids
+        ):
+            warnings.add(
+                "FormulaFence found a worksheet embedded-control relationship not bound "
+                "by inspected worksheet markup; the affected controls have a coverage gap."
+            )
+            unrecognized_count += 1
+
+    selected_relationships = tuple(
+        relationship
+        for relationship in relationships
+        if (
+            relationship.relationship_id in selected_relationship_ids
+            or relationship.relationship_type in relevant_relationship_types
+        )
+    )
+    fragments: list[tuple[str, str]] = []
+    try:
+        fragments.extend(
+            (
+                f"controls:{index}",
+                repr(_worksheet_control_fragment(container, relationship_semantics)),
+            )
+            for index, container in enumerate(controls_containers)
+        )
+        fragments.extend(
+            (
+                f"ole-objects:{index}",
+                repr(_worksheet_control_fragment(container, relationship_semantics)),
+            )
+            for index, container in enumerate(ole_objects_containers)
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested worksheet "
+            "embedded-control part; the affected controls were not compared."
+        )
+        definition_signature = _private_payload_signature(payload)
+        inspected = False
+        unrecognized_count += 1
+    else:
+        definition_signature = _private_external_data_signature(tuple(fragments))
+        inspected = True
+    return _WorksheetControlSheetInspection(
+        member=member,
+        present=bool(controls_containers or ole_objects_containers or relevant_relationships),
+        worksheet_control_count=len(controls),
+        control_macro_assignment_count=control_macro_assignment_count,
+        control_cell_link_count=control_cell_link_count,
+        control_source_range_count=control_source_range_count,
+        ole_object_count=len(ole_objects),
+        linked_ole_object_count=linked_ole_object_count,
+        auto_load_ole_object_count=auto_load_ole_object_count,
+        auto_update_ole_object_count=auto_update_ole_object_count,
+        related_relationship_count=len(selected_relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in selected_relationships
+        ),
+        active_x_members=tuple(sorted(active_x_members, key=str.casefold)),
+        control_property_members=tuple(
+            sorted(control_property_members, key=str.casefold)
+        ),
+        payload_members=tuple(sorted(payload_members, key=str.casefold)),
+        unresolved_payload_entries=tuple(unresolved_payload_entries),
+        unrecognized_count=unrecognized_count,
+        inspected=inspected,
+        definition_signature=definition_signature,
+        relationship_signature=_worksheet_control_relationship_signature(
+            selected_relationships
+        ),
+    )
+
+
+def _worksheet_control_activex_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    xml_budget: _WorksheetEmbeddedControlXmlBudget,
+) -> _WorksheetControlActiveXInspection:
+    """Inspect one ActiveX persistence XML part without interpreting its binary data."""
+    relationships = _worksheet_control_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="ActiveX control",
+    )
+    relationship_semantics = _worksheet_control_relationship_semantics(
+        relationships,
+        warnings,
+        context="ActiveX control",
+    )
+    relationship_by_id: dict[str, _WorksheetControlRawRelationship] = {}
+    for relationship in relationships:
+        if (
+            relationship.relationship_id
+            and relationship.relationship_id not in relationship_by_id
+        ):
+            relationship_by_id[relationship.relationship_id] = relationship
+
+    payload_members: set[str] = set()
+    unresolved_payload_entries: list[tuple[str, str]] = []
+    for relationship in relationships:
+        if relationship.relationship_type != _WORKSHEET_ACTIVEX_BINARY_RELATIONSHIP:
+            continue
+        if relationship.target_mode.casefold() != "internal":
+            continue
+        if relationship.safe_target is not None:
+            payload_members.add(relationship.safe_target)
+        else:
+            unresolved_payload_entries.append(
+                (
+                    "unsafe-activex-binary-target",
+                    repr((relationship.relationship_type, relationship.target)),
+                )
+            )
+
+    payload, fallback_signature = _worksheet_control_xml_payload(
+        archive,
+        member,
+        warnings,
+        xml_budget,
+    )
+    if payload is None:
+        return _WorksheetControlActiveXInspection(
+            member=member,
+            related_relationship_count=len(relationships),
+            external_relationship_count=sum(
+                relationship.target_mode.casefold() != "internal"
+                for relationship in relationships
+            ),
+            payload_members=tuple(sorted(payload_members, key=str.casefold)),
+            unresolved_payload_entries=tuple(unresolved_payload_entries),
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+            relationship_signature=_worksheet_control_relationship_signature(
+                relationships
+            ),
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect an ActiveX control XML part "
+            f"({type(error).__name__}); the affected controls were not compared."
+        )
+        return _WorksheetControlActiveXInspection(
+            member=member,
+            related_relationship_count=len(relationships),
+            external_relationship_count=sum(
+                relationship.target_mode.casefold() != "internal"
+                for relationship in relationships
+            ),
+            payload_members=tuple(sorted(payload_members, key=str.casefold)),
+            unresolved_payload_entries=tuple(unresolved_payload_entries),
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_worksheet_control_relationship_signature(
+                relationships
+            ),
+        )
+    if _xml_local_name(root.tag) != "ocx" or _xml_namespace(root.tag) != _ACTIVEX_NS:
+        warnings.add(
+            "FormulaFence found an ActiveX control part with an unexpected root; "
+            "the affected controls were not compared."
+        )
+        return _WorksheetControlActiveXInspection(
+            member=member,
+            related_relationship_count=len(relationships),
+            external_relationship_count=sum(
+                relationship.target_mode.casefold() != "internal"
+                for relationship in relationships
+            ),
+            payload_members=tuple(sorted(payload_members, key=str.casefold)),
+            unresolved_payload_entries=tuple(unresolved_payload_entries),
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_worksheet_control_relationship_signature(
+                relationships
+            ),
+        )
+
+    relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    referenced_relationship_ids = {
+        relationship_id
+        for element in root.iter()
+        if (relationship_id := element.get(relationship_attribute)) is not None
+    }
+    unrecognized_count = 0
+    for relationship_id in referenced_relationship_ids:
+        semantic = relationship_semantics.get(relationship_id)
+        if semantic is None:
+            warnings.add(
+                "FormulaFence found an ActiveX control binary reference without a matching "
+                "relationship; the affected controls have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        if semantic[0] != _WORKSHEET_ACTIVEX_BINARY_RELATIONSHIP:
+            warnings.add(
+                "FormulaFence found an ActiveX control reference with an unexpected "
+                "relationship type; the affected controls have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        relationship = relationship_by_id.get(relationship_id)
+        if relationship is None or relationship.safe_target is None:
+            warnings.add(
+                "FormulaFence found an ActiveX control binary reference without a safe "
+                "internal target; the affected controls were not compared."
+            )
+            unrecognized_count += 1
+            continue
+        payload_members.add(relationship.safe_target)
+
+    for relationship in relationships:
+        if relationship.relationship_type != _WORKSHEET_ACTIVEX_BINARY_RELATIONSHIP:
+            warnings.add(
+                "FormulaFence found an unexpected ActiveX control relationship type; "
+                "the affected controls have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        if (
+            relationship.relationship_id is None
+            or relationship.relationship_id not in referenced_relationship_ids
+        ):
+            warnings.add(
+                "FormulaFence found an ActiveX binary relationship not bound by the "
+                "control definition; the affected controls have a coverage gap."
+            )
+            unrecognized_count += 1
+
+    try:
+        definition_signature = _private_external_data_signature(
+            (("activex", repr(_worksheet_control_fragment(root, relationship_semantics))),)
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested ActiveX control "
+            "part; the affected controls were not compared."
+        )
+        definition_signature = _private_payload_signature(payload)
+        inspected = False
+        unrecognized_count += 1
+    else:
+        inspected = True
+    return _WorksheetControlActiveXInspection(
+        member=member,
+        binary_reference_count=len(referenced_relationship_ids),
+        related_relationship_count=len(relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in relationships
+        ),
+        payload_members=tuple(sorted(payload_members, key=str.casefold)),
+        unresolved_payload_entries=tuple(unresolved_payload_entries),
+        unrecognized_count=unrecognized_count,
+        inspected=inspected,
+        definition_signature=definition_signature,
+        relationship_signature=_worksheet_control_relationship_signature(relationships),
+    )
+
+
+def _worksheet_control_property_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    xml_budget: _WorksheetEmbeddedControlXmlBudget,
+) -> _WorksheetControlPropertyInspection:
+    """Inspect one form-control properties part without disclosing formulas or labels."""
+    relationships = _worksheet_control_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="form-control properties",
+    )
+    relationship_semantics = _worksheet_control_relationship_semantics(
+        relationships,
+        warnings,
+        context="form-control properties",
+    )
+    payload_members: set[str] = set()
+    unresolved_payload_entries: list[tuple[str, str]] = []
+    for relationship in relationships:
+        if relationship.target_mode.casefold() != "internal":
+            continue
+        if relationship.safe_target is not None:
+            payload_members.add(relationship.safe_target)
+        else:
+            unresolved_payload_entries.append(
+                (
+                    "unsafe-control-properties-target",
+                    repr((relationship.relationship_type, relationship.target)),
+                )
+            )
+
+    payload, fallback_signature = _worksheet_control_xml_payload(
+        archive,
+        member,
+        warnings,
+        xml_budget,
+    )
+    if payload is None:
+        return _WorksheetControlPropertyInspection(
+            member=member,
+            related_relationship_count=len(relationships),
+            external_relationship_count=sum(
+                relationship.target_mode.casefold() != "internal"
+                for relationship in relationships
+            ),
+            payload_members=tuple(sorted(payload_members, key=str.casefold)),
+            unresolved_payload_entries=tuple(unresolved_payload_entries),
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+            relationship_signature=_worksheet_control_relationship_signature(
+                relationships
+            ),
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a form-control properties XML part "
+            f"({type(error).__name__}); the affected controls were not compared."
+        )
+        return _WorksheetControlPropertyInspection(
+            member=member,
+            related_relationship_count=len(relationships),
+            external_relationship_count=sum(
+                relationship.target_mode.casefold() != "internal"
+                for relationship in relationships
+            ),
+            payload_members=tuple(sorted(payload_members, key=str.casefold)),
+            unresolved_payload_entries=tuple(unresolved_payload_entries),
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_worksheet_control_relationship_signature(
+                relationships
+            ),
+        )
+    if (
+        _xml_local_name(root.tag) != "formControlPr"
+        or _xml_namespace(root.tag) != _OFFICE_2010_SPREADSHEET_NS
+    ):
+        warnings.add(
+            "FormulaFence found a form-control properties part with an unexpected root; "
+            "the affected controls were not compared."
+        )
+        return _WorksheetControlPropertyInspection(
+            member=member,
+            related_relationship_count=len(relationships),
+            external_relationship_count=sum(
+                relationship.target_mode.casefold() != "internal"
+                for relationship in relationships
+            ),
+            payload_members=tuple(sorted(payload_members, key=str.casefold)),
+            unresolved_payload_entries=tuple(unresolved_payload_entries),
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_worksheet_control_relationship_signature(
+                relationships
+            ),
+        )
+
+    unrecognized_count = 0
+    if relationships:
+        warnings.add(
+            "FormulaFence found relationships from a form-control properties part; "
+            "the affected controls have a coverage gap."
+        )
+        unrecognized_count += len(relationships)
+    formula_attributes = ("fmlaGroup", "fmlaLink", "fmlaRange", "fmlaTxbx")
+    formula_binding_count = sum(
+        root.get(attribute) is not None for attribute in formula_attributes
+    )
+    cell_link_count = sum(
+        root.get(attribute) is not None
+        for attribute in ("fmlaGroup", "fmlaLink", "fmlaTxbx")
+    )
+    source_range_count = int(root.get("fmlaRange") is not None)
+    try:
+        definition_signature = _private_external_data_signature(
+            (
+                (
+                    "form-control-properties",
+                    repr(_worksheet_control_fragment(root, relationship_semantics)),
+                ),
+            )
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested form-control "
+            "properties part; the affected controls were not compared."
+        )
+        definition_signature = _private_payload_signature(payload)
+        inspected = False
+        unrecognized_count += 1
+    else:
+        inspected = True
+    return _WorksheetControlPropertyInspection(
+        member=member,
+        formula_binding_count=formula_binding_count,
+        cell_link_count=cell_link_count,
+        source_range_count=source_range_count,
+        related_relationship_count=len(relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in relationships
+        ),
+        payload_members=tuple(sorted(payload_members, key=str.casefold)),
+        unresolved_payload_entries=tuple(unresolved_payload_entries),
+        unrecognized_count=unrecognized_count,
+        inspected=inspected,
+        definition_signature=definition_signature,
+        relationship_signature=_worksheet_control_relationship_signature(relationships),
+    )
+
+
+def _worksheet_embedded_control_metadata(
+    path: Path,
+) -> _WorksheetEmbeddedControlMetadata:
+    """Inspect worksheet ActiveX, form-control, and OLE data before load time.
+
+    This scan is intentionally package-only: it does not initialize controls,
+    deserialize OLE data, open embedded packages, or follow external targets.
+    """
+    warnings: set[str] = set()
+    default = WorksheetEmbeddedControlSnapshot()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                sheet_parts = _sheet_xml_parts(archive)
+            except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+                return _WorksheetEmbeddedControlMetadata(
+                    default,
+                    (
+                        "FormulaFence could not map worksheet OOXML for embedded-control "
+                        f"inspection ({type(error).__name__}); affected controls were not "
+                        "compared.",
+                    ),
+                )
+
+            xml_budget = _WorksheetEmbeddedControlXmlBudget()
+            payload_budget = _WorksheetEmbeddedControlRelatedPartBudget()
+            sheet_inspections: list[_WorksheetControlSheetInspection] = []
+            active_x_sources: dict[str, set[str]] = defaultdict(set)
+            control_property_sources: dict[str, set[str]] = defaultdict(set)
+            declared_active_x_members: set[str] = set()
+            declared_control_property_members: set[str] = set()
+            payload_members: set[str] = set()
+            unresolved_payload_entries: list[tuple[str, str]] = []
+            declaration_entries: list[tuple[str, str]] = []
+
+            for _, (member, sheet_kind) in sorted(
+                sheet_parts.items(),
+                key=lambda item: item[0].casefold(),
+            ):
+                if sheet_kind != "worksheet":
+                    continue
+                inspection = _worksheet_control_sheet_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    xml_budget,
+                )
+                sheet_inspections.append(inspection)
+                if inspection.present:
+                    declaration_entries.append(
+                        (
+                            "worksheet-control-part",
+                            repr(
+                                (
+                                    member,
+                                    inspection.active_x_members,
+                                    inspection.control_property_members,
+                                    inspection.payload_members,
+                                )
+                            ),
+                        )
+                    )
+                for active_x_member in inspection.active_x_members:
+                    active_x_sources[active_x_member].add(member)
+                    declared_active_x_members.add(active_x_member)
+                for control_property_member in inspection.control_property_members:
+                    control_property_sources[control_property_member].add(member)
+                    declared_control_property_members.add(control_property_member)
+                payload_members.update(inspection.payload_members)
+                unresolved_payload_entries.extend(inspection.unresolved_payload_entries)
+
+            orphan_part_count = 0
+            discovered_active_x_members = {
+                entry.filename
+                for entry in archive.infolist()
+                if _WORKSHEET_ACTIVEX_PART_PATTERN.fullmatch(entry.filename)
+            }
+            for member in discovered_active_x_members:
+                active_x_sources.setdefault(member, set())
+                if member not in declared_active_x_members:
+                    warnings.add(
+                        "FormulaFence found an ActiveX control package part not declared "
+                        "by an inspected worksheet; the affected controls have a coverage gap."
+                    )
+                    orphan_part_count += 1
+
+            discovered_control_property_members = {
+                entry.filename
+                for entry in archive.infolist()
+                if _WORKSHEET_CONTROL_PROPERTY_PART_PATTERN.fullmatch(entry.filename)
+            }
+            for member in discovered_control_property_members:
+                control_property_sources.setdefault(member, set())
+                if member not in declared_control_property_members:
+                    warnings.add(
+                        "FormulaFence found a form-control properties package part not declared "
+                        "by an inspected worksheet; the affected controls have a coverage gap."
+                    )
+                    orphan_part_count += 1
+
+            active_x_inspections: list[_WorksheetControlActiveXInspection] = []
+            for member in sorted(active_x_sources, key=str.casefold):
+                sources = tuple(sorted(active_x_sources[member], key=str.casefold))
+                declaration_entries.append(
+                    ("activex-part", repr((member, sources)))
+                )
+                inspection = _worksheet_control_activex_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    xml_budget,
+                )
+                active_x_inspections.append(inspection)
+                payload_members.update(inspection.payload_members)
+                unresolved_payload_entries.extend(inspection.unresolved_payload_entries)
+
+            control_property_inspections: list[_WorksheetControlPropertyInspection] = []
+            for member in sorted(control_property_sources, key=str.casefold):
+                sources = tuple(sorted(control_property_sources[member], key=str.casefold))
+                declaration_entries.append(
+                    ("form-control-properties-part", repr((member, sources)))
+                )
+                inspection = _worksheet_control_property_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    xml_budget,
+                )
+                control_property_inspections.append(inspection)
+                payload_members.update(inspection.payload_members)
+                unresolved_payload_entries.extend(inspection.unresolved_payload_entries)
+
+            payload_inspection = _worksheet_control_related_part_payloads(
+                archive,
+                payload_members,
+                unresolved_payload_entries,
+                warnings,
+                payload_budget,
+            )
+
+            def aggregate_signature(
+                inspections: list[object],
+                attribute: str,
+            ) -> str | None:
+                material = sorted(
+                    (inspection.member, value)
+                    for inspection in inspections
+                    if (value := getattr(inspection, attribute)) is not None
+                )
+                return _private_external_data_signature(tuple(material))
+
+            all_inspections: list[object] = [
+                *sheet_inspections,
+                *active_x_inspections,
+                *control_property_inspections,
+            ]
+            declaration_entries.sort()
+            snapshot = WorksheetEmbeddedControlSnapshot(
+                control_sheet_count=sum(
+                    inspection.present for inspection in sheet_inspections
+                ),
+                worksheet_control_count=sum(
+                    inspection.worksheet_control_count for inspection in sheet_inspections
+                ),
+                active_x_part_count=len(active_x_sources),
+                active_x_binary_reference_count=sum(
+                    inspection.binary_reference_count
+                    for inspection in active_x_inspections
+                ),
+                form_control_property_part_count=len(control_property_sources),
+                control_macro_assignment_count=sum(
+                    inspection.control_macro_assignment_count
+                    for inspection in sheet_inspections
+                ),
+                control_cell_link_count=sum(
+                    inspection.control_cell_link_count for inspection in sheet_inspections
+                )
+                + sum(
+                    inspection.cell_link_count
+                    for inspection in control_property_inspections
+                ),
+                control_source_range_count=sum(
+                    inspection.control_source_range_count
+                    for inspection in sheet_inspections
+                )
+                + sum(
+                    inspection.source_range_count
+                    for inspection in control_property_inspections
+                ),
+                form_control_formula_binding_count=sum(
+                    inspection.formula_binding_count
+                    for inspection in control_property_inspections
+                ),
+                ole_object_count=sum(
+                    inspection.ole_object_count for inspection in sheet_inspections
+                ),
+                linked_ole_object_count=sum(
+                    inspection.linked_ole_object_count for inspection in sheet_inspections
+                ),
+                auto_load_ole_object_count=sum(
+                    inspection.auto_load_ole_object_count for inspection in sheet_inspections
+                ),
+                auto_update_ole_object_count=sum(
+                    inspection.auto_update_ole_object_count
+                    for inspection in sheet_inspections
+                ),
+                related_relationship_count=sum(
+                    inspection.related_relationship_count for inspection in all_inspections
+                ),
+                external_relationship_count=sum(
+                    inspection.external_relationship_count for inspection in all_inspections
+                ),
+                internal_related_part_count=payload_inspection.internal_part_count,
+                fingerprinted_related_part_count=payload_inspection.fingerprinted_part_count,
+                uninspected_related_part_count=payload_inspection.uninspected_part_count,
+                unrecognized_part_count=orphan_part_count
+                + sum(inspection.unrecognized_count for inspection in all_inspections),
+                declaration_signature=_private_external_data_signature(
+                    tuple(declaration_entries)
+                ),
+                control_definition_signature=aggregate_signature(
+                    list(sheet_inspections),
+                    "definition_signature",
+                ),
+                active_x_definition_signature=aggregate_signature(
+                    list(active_x_inspections),
+                    "definition_signature",
+                ),
+                form_control_property_signature=aggregate_signature(
+                    list(control_property_inspections),
+                    "definition_signature",
+                ),
+                relationship_signature=aggregate_signature(
+                    all_inspections,
+                    "relationship_signature",
+                ),
+                related_part_payload_signature=payload_inspection.payload_signature,
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _WorksheetEmbeddedControlMetadata(
+            default,
+            (
+                "FormulaFence could not inspect worksheet embedded-control OOXML "
+                f"({type(error).__name__}); affected controls were not compared.",
+            ),
+        )
+    return _WorksheetEmbeddedControlMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _dynamic_metadata_indexes(archive: ZipFile) -> set[int]:
     """Return the one-based cell-metadata indexes marked as dynamic arrays."""
     try:
@@ -7300,6 +8746,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     xlm_macro_metadata = _xlm_macro_metadata(source)
     ribbon_customization_metadata = _ribbon_customization_metadata(source)
     office_web_addin_metadata = _office_web_addin_metadata(source)
+    worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     try:
         with warnings.catch_warnings(record=True) as caught_warnings:
             warnings.simplefilter("always")
@@ -7317,6 +8764,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(xlm_macro_metadata.warnings)
     parser_warnings.update(ribbon_customization_metadata.warnings)
     parser_warnings.update(office_web_addin_metadata.warnings)
+    parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
         _is_array_formula(cell)
         for worksheet in workbook.worksheets
@@ -7525,6 +8973,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
+        worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
@@ -7589,6 +9038,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
+        "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
         "defined_names": sorted(snapshot.defined_names),
         "calculation_settings": snapshot.calculation_settings,
@@ -7605,6 +9055,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_xlm_macro_sheets": snapshot.xlm_macro_sheets.present,
             "has_ribbon_customization": snapshot.ribbon_customization.present,
             "has_office_web_addins": snapshot.office_web_addins.present,
+            "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),
             "unresolved_reference_cells": [
                 {

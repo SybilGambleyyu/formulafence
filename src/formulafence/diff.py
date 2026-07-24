@@ -28,6 +28,7 @@ from formulafence.models import (
     QueryTableRefreshSnapshot,
     RibbonCustomizationSnapshot,
     WorkbookSnapshot,
+    WorksheetEmbeddedControlSnapshot,
     XlmMacroSheetSnapshot,
 )
 
@@ -1087,6 +1088,53 @@ def _workbook_control_changes(
                 "FF028",
                 "critical",
                 "Office Web Add-in task-pane controls changed.",
+                details=details,
+            )
+        )
+    if before.worksheet_embedded_controls != after.worksheet_embedded_controls:
+        old_controls: WorksheetEmbeddedControlSnapshot = before.worksheet_embedded_controls
+        new_controls: WorksheetEmbeddedControlSnapshot = after.worksheet_embedded_controls
+        details = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.declaration_signature != new_controls.declaration_signature:
+            details["worksheet_binding_changed"] = True
+        if (
+            old_controls.control_definition_signature
+            != new_controls.control_definition_signature
+        ):
+            details["worksheet_control_definition_material_changed"] = True
+        if (
+            old_controls.active_x_definition_signature
+            != new_controls.active_x_definition_signature
+        ):
+            details["active_x_definition_material_changed"] = True
+        if (
+            old_controls.form_control_property_signature
+            != new_controls.form_control_property_signature
+        ):
+            details["form_control_property_material_changed"] = True
+        if old_controls.relationship_signature != new_controls.relationship_signature:
+            details["related_part_relationships_changed"] = True
+        if (
+            old_controls.related_part_payload_signature
+            != new_controls.related_part_payload_signature
+        ):
+            details["embedded_payload_material_changed"] = True
+        changes.append(
+            Change(
+                "worksheet_embedded_controls_changed",
+                None,
+                "critical",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF029",
+                "critical",
+                "Worksheet embedded controls and OLE objects changed.",
                 details=details,
             )
         )

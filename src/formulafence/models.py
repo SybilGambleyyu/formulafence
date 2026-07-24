@@ -163,6 +163,7 @@ class WorkbookSnapshot:
     defined_names: dict[str, str]
     macro_hash: str | None
     calculation_settings: dict[str, Any]
+    parser_warnings: tuple[str, ...]
 
     def direct_dependents(self, location: CellKey) -> set[CellKey]:
         dependents = set(self.reverse_dependencies.get(location, set()))
@@ -183,6 +184,7 @@ class WorkbookSnapshot:
             "has_vba": self.macro_hash is not None,
             "external_reference_cells": len(self.external_references),
             "broken_reference_cells": len(self.broken_references),
+            "parser_warning_count": len(self.parser_warnings),
         }
 
 

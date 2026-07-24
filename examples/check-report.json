@@ -7,8 +7,9 @@
     "formula_cells": 1,
     "has_vba": false,
     "nonempty_cells": 6,
+    "parser_warning_count": 0,
     "path": "examples/candidate-risky.xlsx",
-    "sha256": "4f2a31e14a6e4f2f8d56066564c7b06f1440294277bbf2175b4f74e31da995b0",
+    "sha256": "0184966d097c04bb7326e1c256904de54209f8eb7c7f2efe6c0673e9ed5fea13",
     "sheet_count": 3
   },
   "before": {
@@ -19,8 +20,9 @@
     "formula_cells": 2,
     "has_vba": false,
     "nonempty_cells": 6,
+    "parser_warning_count": 0,
     "path": "examples/baseline.xlsx",
-    "sha256": "5f44a24575449c4c71a8bbe4956a236ed0b8b066f7019b25dc913b42de3b4e3f",
+    "sha256": "e3275fe8d769d9cda38a11ed78c7ca35426968cacf8b1c9c2ecf80cbd523cffe",
     "sheet_count": 3
   },
   "changes": [

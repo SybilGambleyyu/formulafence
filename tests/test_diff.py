@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 from formulafence.diff import compare_snapshots
 from formulafence.workbook import load_snapshot
 
@@ -50,3 +52,37 @@ def test_defined_name_change_is_semantic_control_change(tmp_path) -> None:
 
     assert any(change.kind == "defined_name_changed" for change in report.changes)
     assert any(finding.rule_id == "FF008" for finding in report.findings)
+
+
+def test_snapshot_captures_parser_coverage_warnings(tmp_path, monkeypatch) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    import formulafence.workbook as workbook_module
+
+    original_load_workbook = workbook_module.load_workbook
+
+    def noisy_load_workbook(*args, **kwargs):
+        warnings.warn("fixture-only unsupported extension", UserWarning, stacklevel=2)
+        return original_load_workbook(*args, **kwargs)
+
+    monkeypatch.setattr(workbook_module, "load_workbook", noisy_load_workbook)
+    snapshot = load_snapshot(baseline)
+
+    assert snapshot.parser_warnings == ("fixture-only unsupported extension",)
+
+
+def test_diff_surfaces_new_parser_coverage_warning(tmp_path, monkeypatch) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    import formulafence.workbook as workbook_module
+
+    original_load_workbook = workbook_module.load_workbook
+
+    def conditionally_noisy_load_workbook(path, *args, **kwargs):
+        if str(path) == str(candidate):
+            warnings.warn("candidate-only unsupported extension", UserWarning, stacklevel=2)
+        return original_load_workbook(path, *args, **kwargs)
+
+    monkeypatch.setattr(workbook_module, "load_workbook", conditionally_noisy_load_workbook)
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert any(finding.rule_id == "FF010" for finding in report.findings)

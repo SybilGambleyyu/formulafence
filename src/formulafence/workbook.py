@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import warnings
 from collections import defaultdict
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
@@ -129,16 +130,19 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         )
 
     try:
-        workbook = load_workbook(
-            source,
-            read_only=False,
-            data_only=False,
-            keep_vba=False,
-            keep_links=False,
-            rich_text=False,
-        )
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.simplefilter("always")
+            workbook = load_workbook(
+                source,
+                read_only=False,
+                data_only=False,
+                keep_vba=False,
+                keep_links=False,
+                rich_text=False,
+            )
     except (BadZipFile, InvalidFileException, OSError, ValueError) as error:
         raise WorkbookLoadError(f"Could not read workbook {source}: {error}") from error
+    parser_warnings = tuple(sorted({str(warning.message) for warning in caught_warnings}))
 
     sheets: dict[str, SheetSnapshot] = {}
     cells: dict[CellKey, CellSnapshot] = {}
@@ -219,6 +223,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),
         calculation_settings=_calculation_settings(workbook),
+        parser_warnings=parser_warnings,
     )
 
 
@@ -240,5 +245,6 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
                 for sheet, coordinate in sorted(snapshot.broken_references)
             ],
             "has_vba": snapshot.macro_hash is not None,
+            "parser_warnings": list(snapshot.parser_warnings),
         },
     }

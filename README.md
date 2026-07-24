@@ -57,6 +57,7 @@ rules:
   no_new_external_links: true
   no_new_broken_references: true
   no_macro_changes: true
+  no_new_parser_warnings: true
   max_changed_formulas: 20
   max_downstream_impact: 100
 
@@ -79,11 +80,14 @@ allowed_changes:
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
 | Workbook controls | Sheet visibility, defined names, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
+| Coverage changes | New unsupported-workbook parser warnings |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
 | CI output | Deterministic JSON, reviewer-friendly Markdown, and SARIF |
 
 See [the policy reference](docs/policy.md) for the configuration contract and
-[the threat model](docs/threat-model.md) for important limits.
+[the threat model](docs/threat-model.md) for important limits. The
+[external validation notes](docs/validation.md) record an independently
+maintained financial-model compatibility check.
 
 ## Development
 

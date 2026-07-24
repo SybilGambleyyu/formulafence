@@ -50,6 +50,10 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             lines.append(f"- Explicit external reference: `{location}`")
         for location in features["broken_reference_cells"]:
             lines.append(f"- Broken `#REF!` formula: `{location}`")
+    if features["parser_warnings"]:
+        lines.extend(["", "## Inspection coverage notes", ""])
+        for warning in features["parser_warnings"]:
+            lines.append(f"- {_markdown_escape(warning)}")
     return "\n".join(lines) + "\n"
 
 

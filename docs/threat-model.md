@@ -13,6 +13,8 @@ financial correctness or replace model review.
 - Macro payloads are reported by cryptographic hash only.
 - It uses sparse cell storage rather than walking every coordinate in a workbook's
   declared used rectangle.
+- Parser warnings from unsupported OOXML extensions are captured in the profile
+  as coverage notes; FormulaFence does not silently discard them from its report.
 
 ## What a finding means
 

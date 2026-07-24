@@ -246,6 +246,27 @@ def _workbook_control_changes(
                 "VBA macro payload was added, removed, or changed.",
             )
         )
+    new_parser_warnings = sorted(set(after.parser_warnings) - set(before.parser_warnings))
+    if new_parser_warnings:
+        changes.append(
+            Change(
+                "parser_coverage_warning_added",
+                None,
+                "medium",
+                details={"warnings": new_parser_warnings},
+            )
+        )
+        findings.append(
+            Finding(
+                "FF010",
+                "medium",
+                (
+                    "Candidate contains unsupported workbook features; "
+                    "inspection coverage may be incomplete."
+                ),
+                details={"warnings": new_parser_warnings},
+            )
+        )
     return changes, findings
 
 

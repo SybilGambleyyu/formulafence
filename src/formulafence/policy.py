@@ -17,6 +17,7 @@ _RULE_FIELDS = {
     "no_new_external_links",
     "no_new_broken_references",
     "no_macro_changes",
+    "no_new_parser_warnings",
     "no_sheet_visibility_changes",
     "max_changed_formulas",
     "max_downstream_impact",
@@ -50,6 +51,7 @@ class Policy:
     no_new_external_links: bool = False
     no_new_broken_references: bool = False
     no_macro_changes: bool = False
+    no_new_parser_warnings: bool = False
     no_sheet_visibility_changes: bool = False
     max_changed_formulas: int | None = None
     max_downstream_impact: int | None = None
@@ -65,6 +67,7 @@ rules:
   no_new_external_links: true
   no_new_broken_references: true
   no_macro_changes: true
+  no_new_parser_warnings: true
   max_changed_formulas: 20
   max_downstream_impact: 100
 
@@ -148,6 +151,7 @@ def parse_policy(data: object) -> Policy:
         no_new_external_links=_boolean_rule(rules, "no_new_external_links"),
         no_new_broken_references=_boolean_rule(rules, "no_new_broken_references"),
         no_macro_changes=_boolean_rule(rules, "no_macro_changes"),
+        no_new_parser_warnings=_boolean_rule(rules, "no_new_parser_warnings"),
         no_sheet_visibility_changes=_boolean_rule(rules, "no_sheet_visibility_changes"),
         max_changed_formulas=_integer_rule(rules, "max_changed_formulas"),
         max_downstream_impact=_integer_rule(rules, "max_downstream_impact"),
@@ -210,6 +214,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
         violations.append(
             Finding("FFP004", "critical", "Policy forbids changes to the VBA macro payload.")
         )
+    if policy.no_new_parser_warnings:
+        for finding in _rule_triggered(report, "FF010"):
+            violations.append(
+                Finding(
+                    "FFP010",
+                    "high",
+                    "Policy forbids new unsupported-workbook coverage warnings.",
+                    details=finding.details,
+                )
+            )
     if policy.no_sheet_visibility_changes:
         for finding in _rule_triggered(report, "FF007"):
             violations.append(

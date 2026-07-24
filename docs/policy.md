@@ -12,6 +12,7 @@ rules:
   no_new_external_links: true
   no_new_broken_references: true
   no_macro_changes: true
+  no_new_parser_warnings: true
   no_sheet_visibility_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -48,6 +49,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_external_links` | boolean | A formula adds a statically visible external-workbook reference. |
 | `no_new_broken_references` | boolean | A formula adds `#REF!`. |
 | `no_macro_changes` | boolean | The `xl/vbaProject.bin` payload is added, removed, or has a different SHA-256. |
+| `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
 | `max_downstream_impact` | non-negative integer | A changed cell reaches more downstream formula cells than allowed. |

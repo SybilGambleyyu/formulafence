@@ -364,7 +364,7 @@ data correctness.
 
 ## Excel 4.0 / XLM macro-sheet controls and redaction — 2026-07-24
 
-FormulaFence 0.20.0 was validated with a controlled, macro-enabled OOXML
+FormulaFence 0.21.0 was validated with a controlled, macro-enabled OOXML
 package shaped according to Microsoft's documented Macro Sheet and
 International Macro Sheet relationship/content-type definitions. It included a
 very-hidden macro sheet, two macro formula cells, one internal embedded-object
@@ -376,7 +376,8 @@ the package as a macro sheet (`!type: "macro"`) while reporting no VBA blob.
 The ordinary Python workbook reader retained the sheet tab but exposed zero
 formula cells. FormulaFence's raw preflight reported one macro-sheet part, two
 macro formula cells, one external relationship, two OLE-object relationships,
-and one package relationship with no parser warnings.
+one package relationship, and two fingerprinted internal related parts with no
+parser warnings.
 
 On a local, non-distributed copy, changing private macro formula text, cell
 material, an embedded-object program identifier, related-part targets, and the
@@ -385,9 +386,17 @@ workbook-binding flags; `no_xlm_macro_sheet_changes` added `FFP026`. The
 synthetic command arguments, values, identifiers, targets, and extension
 payload did not appear in JSON, Markdown, or SARIF. Rewriting only relationship
 identifiers did not create an XLM control diff. An unexpected macro-sheet root
-produced an explicit coverage warning and still produced `FF026`. This
-validates static package comparison and redaction—not XLM execution or
-emulation, embedded-object loading, source trust, or Excel runtime behavior.
+produced an explicit coverage warning and still produced `FF026`.
+
+A separate local mutation changed only the bytes of an internal embedded OLE
+payload while retaining the macro XML and every relationship target. It emitted
+`FF026` with the private `related_part_payload_material_changed` flag; neither
+the baseline nor candidate bytes or paths entered JSON, Markdown, or SARIF.
+The regression suite also lowers the per-part byte, aggregate byte, and part
+count budgets to confirm that each bound emits a coverage warning without
+parsing payloads. This validates static package comparison and redaction—not
+XLM execution or emulation, embedded-object execution or parsing, source
+trust, or Excel runtime behavior.
 
 ## External-link package controls and redaction — 2026-07-24
 

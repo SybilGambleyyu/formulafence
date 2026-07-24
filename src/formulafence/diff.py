@@ -1007,6 +1007,11 @@ def _workbook_control_changes(
             != new_xlm_macro_sheets.relationship_signature
         ):
             details["related_part_relationships_changed"] = True
+        if (
+            old_xlm_macro_sheets.related_part_payload_signature
+            != new_xlm_macro_sheets.related_part_payload_signature
+        ):
+            details["related_part_payload_material_changed"] = True
         changes.append(
             Change(
                 "xlm_macro_sheets_changed",

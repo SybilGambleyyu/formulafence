@@ -7,6 +7,7 @@ from openpyxl.styles import Protection
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
+import formulafence.workbook as workbook_module
 from formulafence.diff import compare_snapshots
 from formulafence.output import profile_to_markdown, report_to_markdown, report_to_sarif
 from formulafence.workbook import load_snapshot, profile_snapshot
@@ -20,6 +21,7 @@ from .helpers import (
     change_power_query_refresh_noise,
     change_protected_range,
     change_xlm_macro_sheet_controls,
+    change_xlm_macro_sheet_related_part_payload,
     corrupt_xlm_macro_sheet_root,
     duplicate_external_link_definition,
     duplicate_external_link_sheet_names,
@@ -44,6 +46,7 @@ from .helpers import (
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
     rebind_external_link_declaration,
+    remove_xlm_macro_sheet_related_part_payload,
     renumber_external_link_declaration_relationships,
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
@@ -1740,6 +1743,9 @@ def test_xlm_macro_sheets_are_profiled_and_diffed_privately(tmp_path) -> None:
         "formula_cell_count": 2,
         "related_relationship_count": 3,
         "external_relationship_count": 1,
+        "internal_related_part_count": 2,
+        "fingerprinted_related_part_count": 2,
+        "uninspected_related_part_count": 0,
         "embedded_object_relationship_count": 2,
         "embedded_package_relationship_count": 1,
     }
@@ -1801,6 +1807,126 @@ def test_xlm_macro_sheet_relationship_identifier_rewrites_are_ignored(tmp_path) 
 
     assert "xlm_macro_sheets_changed" not in {change.kind for change in report.changes}
     assert "FF026" not in {finding.rule_id for finding in report.findings}
+
+
+def test_xlm_macro_sheet_related_part_payloads_are_guarded_privately(tmp_path) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    change_xlm_macro_sheet_related_part_payload(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    macro_sheet_change = next(
+        change for change in report.changes if change.kind == "xlm_macro_sheets_changed"
+    )
+
+    assert profile["workbook"]["xlm_related_part_payload_count"] == 2
+    assert profile["xlm_macro_sheets"]["internal_related_part_count"] == 2
+    assert profile["xlm_macro_sheets"]["fingerprinted_related_part_count"] == 2
+    assert profile["xlm_macro_sheets"]["uninspected_related_part_count"] == 0
+    assert macro_sheet_change.details["related_part_payload_material_changed"] is True
+    assert "workbook_binding_changed" not in macro_sheet_change.details
+    assert "macro_program_material_changed" not in macro_sheet_change.details
+    assert "related_part_relationships_changed" not in macro_sheet_change.details
+    assert {finding.rule_id for finding in report.findings} >= {"FF026"}
+
+    sensitive_values = (
+        "private baseline embedded XLM object payload",
+        "private candidate XLM related-part payload only",
+        "private-baseline-xl-object.bin",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_missing_xlm_related_part_payloads_fail_closed(tmp_path) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    remove_xlm_macro_sheet_related_part_payload(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.xlm_macro_sheets.internal_related_part_count == 2
+    assert candidate_snapshot.xlm_macro_sheets.fingerprinted_related_part_count == 1
+    assert candidate_snapshot.xlm_macro_sheets.uninspected_related_part_count == 1
+    assert any(
+        "could not locate an XLM macro-sheet internal related part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "xlm_macro_sheets_changed" in {change.kind for change in report.changes}
+    assert "FF026" in {finding.rule_id for finding in report.findings}
+
+
+def test_oversized_xlm_related_part_payloads_remain_covered(tmp_path, monkeypatch) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    change_xlm_macro_sheet_related_part_payload(candidate)
+    monkeypatch.setattr("formulafence.workbook._XLM_RELATED_PART_MAX_BYTES", 1)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    macro_sheet_change = next(
+        change for change in report.changes if change.kind == "xlm_macro_sheets_changed"
+    )
+
+    assert baseline_snapshot.xlm_macro_sheets.fingerprinted_related_part_count == 0
+    assert baseline_snapshot.xlm_macro_sheets.uninspected_related_part_count == 2
+    assert any(
+        "oversized XLM macro-sheet related part" in warning
+        for warning in baseline_snapshot.parser_warnings
+    )
+    assert macro_sheet_change.details["related_part_payload_material_changed"] is True
+    assert "FF026" in {finding.rule_id for finding in report.findings}
+
+
+def test_xlm_related_part_count_budget_remains_covered(tmp_path, monkeypatch) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    budget_type = workbook_module._XlmRelatedPartBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_XlmRelatedPartBudget",
+        lambda: budget_type(remaining_parts=1),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.xlm_macro_sheets.internal_related_part_count == 2
+    assert snapshot.xlm_macro_sheets.fingerprinted_related_part_count == 1
+    assert snapshot.xlm_macro_sheets.uninspected_related_part_count == 1
+    assert any(
+        "XLM macro-sheet related-part count budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_xlm_related_part_byte_budget_remains_covered(tmp_path, monkeypatch) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    budget_type = workbook_module._XlmRelatedPartBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_XlmRelatedPartBudget",
+        lambda: budget_type(remaining_bytes=1),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.xlm_macro_sheets.internal_related_part_count == 2
+    assert snapshot.xlm_macro_sheets.fingerprinted_related_part_count == 0
+    assert snapshot.xlm_macro_sheets.uninspected_related_part_count == 2
+    assert any(
+        "XLM macro-sheet related-part read budget" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_xlm_macro_sheet_equivalent_internal_target_spellings_are_ignored(

@@ -864,9 +864,9 @@ class XlmMacroSheetSnapshot:
     """Safe aggregate of raw Excel 4.0 / XLM macro-sheet package parts.
 
     XLM automation lives in XML macro-sheet parts rather than in the VBA
-    binary.  The private signatures retain complete program and relationship
-    evidence for comparison, while ``to_dict`` intentionally exposes only
-    structural counts.
+    binary. The private signatures retain complete program, relationship, and
+    direct internal related-part evidence for comparison, while ``to_dict``
+    intentionally exposes only structural counts.
     """
 
     declared_macro_sheet_count: int = 0
@@ -878,11 +878,15 @@ class XlmMacroSheetSnapshot:
     formula_cell_count: int = 0
     related_relationship_count: int = 0
     external_relationship_count: int = 0
+    internal_related_part_count: int = 0
+    fingerprinted_related_part_count: int = 0
+    uninspected_related_part_count: int = 0
     embedded_object_relationship_count: int = 0
     embedded_package_relationship_count: int = 0
     declaration_signature: str | None = field(default=None, repr=False)
     program_signature: str | None = field(default=None, repr=False)
     relationship_signature: str | None = field(default=None, repr=False)
+    related_part_payload_signature: str | None = field(default=None, repr=False)
 
     @property
     def present(self) -> bool:
@@ -901,6 +905,9 @@ class XlmMacroSheetSnapshot:
             "formula_cell_count": self.formula_cell_count,
             "related_relationship_count": self.related_relationship_count,
             "external_relationship_count": self.external_relationship_count,
+            "internal_related_part_count": self.internal_related_part_count,
+            "fingerprinted_related_part_count": self.fingerprinted_related_part_count,
+            "uninspected_related_part_count": self.uninspected_related_part_count,
             "embedded_object_relationship_count": (
                 self.embedded_object_relationship_count
             ),
@@ -1276,6 +1283,9 @@ class WorkbookSnapshot:
             "ole_link_count": self.external_link_packages.ole_link_count,
             "xlm_macro_sheet_count": self.xlm_macro_sheets.macro_sheet_count,
             "xlm_macro_formula_cell_count": self.xlm_macro_sheets.formula_cell_count,
+            "xlm_related_part_payload_count": (
+                self.xlm_macro_sheets.fingerprinted_related_part_count
+            ),
             "has_xlm_macro_sheets": self.xlm_macro_sheets.present,
             "power_query_mashup_count": self.power_query.mashup_count,
             "power_query_formula_document_count": self.power_query.formula_document_count,

@@ -137,12 +137,16 @@ review prompt, not proof of an error.
   package parts before a workbook library can omit their executable cells.
   FormulaFence binds the documented workbook relationships to those parts,
   privately fingerprints complete XML plus related-part relationships, and
+  streams direct safe internal targets into private payload fingerprints. It
   reports only structural counts. Commands, cell values, relationship targets,
   and embedded-object payloads remain private. A material change emits `FF026`
   and can be blocked with `no_xlm_macro_sheet_changes`. FormulaFence does
-  **not** execute, emulate, open, or resolve any XLM command, related target,
-  or embedded object. Oversized, malformed, unbound, or unrecognized parts
-  remain visible parser-coverage warnings rather than being silently ignored.
+  **not** execute, emulate, resolve, or parse any XLM command, related target,
+  or embedded object, and it never follows an external target. Direct internal
+  payload streams are bounded to 32 MiB per part, 64 MiB per workbook, and 256
+  parts. Oversized, missing, unreadable, over-budget, malformed, unbound, or
+  unrecognized parts remain visible parser-coverage warnings rather than being
+  silently ignored.
 - Power Query Data Mashup custom XML is inspected without serializing its M
   formulas or data/source material. FormulaFence privately compares the
   `Section1.m` formula document, logical package content, stable query metadata,

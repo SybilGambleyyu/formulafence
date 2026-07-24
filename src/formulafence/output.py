@@ -86,6 +86,10 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['xlm_macro_formula_cell_count']}"
         ),
         (
+            "- **Fingerprinted XLM related parts:** "
+            f"{workbook['xlm_related_part_payload_count']}"
+        ),
+        (
             "- **Connections refreshing on open:** "
             f"{workbook['external_data_connections_refresh_on_load']}"
         ),
@@ -738,16 +742,27 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     f"{xlm_macro_sheets['embedded_object_relationship_count']} OLE object, "
                     f"{xlm_macro_sheets['embedded_package_relationship_count']} package)"
                 ),
+                (
+                    "- **Internal related parts:** "
+                    f"{xlm_macro_sheets['internal_related_part_count']} "
+                    f"({xlm_macro_sheets['fingerprinted_related_part_count']} "
+                    "fingerprinted)"
+                ),
             ]
         )
+        if xlm_macro_sheets["uninspected_related_part_count"]:
+            lines.append(
+                "- **Uninspected related parts:** "
+                f"{xlm_macro_sheets['uninspected_related_part_count']}"
+            )
         if xlm_macro_sheets["unrecognized_macro_sheet_count"]:
             lines.append(
                 "- **Unrecognized or uninspected macro-sheet parts:** "
                 f"{xlm_macro_sheets['unrecognized_macro_sheet_count']}"
             )
         lines.append(
-            "XLM commands, cell values, relationship targets, and embedded-object "
-            "contents are compared privately and intentionally omitted."
+            "XLM commands, cell values, relationship targets, and direct internal "
+            "related-part contents are compared privately and intentionally omitted."
         )
     power_query = profile["power_query"]
     if power_query["present"]:

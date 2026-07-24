@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.21.0 — 2026-07-24
+
+- Extend the XLM macro-sheet control boundary to direct internal related parts,
+  including embedded OLE objects and packages. FormulaFence streams those raw
+  bytes into private fingerprints without parsing or serializing payload
+  contents; a payload-only change now remains a critical `FF026` finding.
+- Bound that work to 32 MiB per related part, 64 MiB across a workbook, and
+  256 parts. Missing, unreadable, oversized, or over-budget targets surface as
+  safe inventory counts and parser-coverage warnings rather than silent gaps.
+
 ## 0.20.0 — 2026-07-24
 
 - Inspect Excel 4.0 / XLM Macro Sheet and International Macro Sheet package

@@ -1582,6 +1582,26 @@ def change_xlm_macro_sheet_controls(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".xlm-macro-sheet-change.tmp.xlsx")
 
 
+def change_xlm_macro_sheet_related_part_payload(path: Path) -> Path:
+    """Change only a private internal payload reached from an XLM macro sheet."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["xl/embeddings/private-baseline-xl-object.bin"] = (
+            b"private candidate XLM related-part payload only"
+        )
+
+    return _rewrite_archive(path, mutate, ".xlm-related-payload-change.tmp.xlsx")
+
+
+def remove_xlm_macro_sheet_related_part_payload(path: Path) -> Path:
+    """Remove one internal XLM related payload to exercise fail-closed coverage."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents.pop("xl/embeddings/private-baseline-xl-object.bin")
+
+    return _rewrite_archive(path, mutate, ".xlm-related-payload-missing.tmp.xlsx")
+
+
 def renumber_xlm_macro_sheet_relationships(path: Path) -> Path:
     """Rewrite arbitrary XLM relationship ids while retaining their bindings."""
     package_relationships = (

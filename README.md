@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.20.0/formulafence-0.20.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.21.0/formulafence-0.21.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -276,11 +276,15 @@ VBA, this executable automation is stored in raw macro-sheet XML parts (usually
 `xl/macrosheets/*.xml`), not `xl/vbaProject.bin`. FormulaFence binds the
 documented `xlMacrosheet` and `xlIntlMacrosheet` workbook relationships to
 their parts, privately fingerprints complete macro XML and related package
-relationships, and exposes only safe counts for sheets, formula cells,
-visibility, and related OLE/package parts. A material change emits `FF026`;
-enable `no_xlm_macro_sheet_changes` for `FFP026`. FormulaFence never executes,
-emulates, opens, or resolves XLM commands, relationship targets, or embedded
-objects. The package shape follows Microsoft's [Macro Sheet
+relationships, then streams direct safe internal relationship targets into
+private payload fingerprints. Profiles expose only safe counts for sheets,
+formula cells, visibility, related OLE/package parts, and fingerprinted versus
+uninspected internal targets. A material change emits `FF026`; enable
+`no_xlm_macro_sheet_changes` for `FFP026`. FormulaFence never executes,
+emulates, resolves, or parses XLM commands, relationship targets, or embedded
+objects. It never follows external targets; direct internal payload scanning is
+bounded to 32 MiB per part, 64 MiB per workbook, and 256 parts, after which a
+coverage warning remains visible. The package shape follows Microsoft's [Macro Sheet
 part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-offmacro/b8bee527-ef5a-4734-bb8c-6eae4166b6c9)
 and [International Macro Sheet
 part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-offmacro/450634cb-ca5a-4350-9edb-940a90707f49).

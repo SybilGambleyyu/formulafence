@@ -106,6 +106,10 @@ _EXTERNAL_LINK_PART_PATTERN = re.compile(
 _EXTERNAL_LINK_MAX_PART_BYTES = 16 * 1024 * 1024
 _XLM_MACRO_SHEET_PART_PATTERN = re.compile(r"^xl/macrosheets/[^/]+\.xml$", re.IGNORECASE)
 _XLM_MACRO_SHEET_MAX_PART_BYTES = 16 * 1024 * 1024
+_XLM_RELATED_PART_MAX_BYTES = 32 * 1024 * 1024
+_XLM_RELATED_PART_TOTAL_MAX_BYTES = 64 * 1024 * 1024
+_XLM_RELATED_PART_TOTAL_MAX_COUNT = 256
+_XLM_RELATED_PART_HASH_CHUNK_BYTES = 1024 * 1024
 _XLM_MACRO_SHEET_RELATIONSHIPS = {
     "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet": "macro",
     "http://schemas.microsoft.com/office/2006/relationships/xlIntlMacrosheet": (
@@ -207,6 +211,24 @@ class _XlmRawRelationship:
         )
 
 
+@dataclass
+class _XlmRelatedPartBudget:
+    """Bound total related-part bytes read across one XLM package scan."""
+
+    remaining_bytes: int = _XLM_RELATED_PART_TOTAL_MAX_BYTES
+    remaining_parts: int = _XLM_RELATED_PART_TOTAL_MAX_COUNT
+
+
+@dataclass(frozen=True)
+class _XlmRelatedPartPayloadInspection:
+    """Private fingerprint result for direct, internal XLM related parts."""
+
+    internal_part_count: int = 0
+    fingerprinted_part_count: int = 0
+    uninspected_part_count: int = 0
+    payload_signature: str | None = None
+
+
 @dataclass(frozen=True)
 class _XlmMacroSheetInspection:
     """Private parsed state for one candidate XLM macro-sheet part."""
@@ -215,11 +237,15 @@ class _XlmMacroSheetInspection:
     formula_cell_count: int = 0
     related_relationship_count: int = 0
     external_relationship_count: int = 0
+    internal_related_part_count: int = 0
+    fingerprinted_related_part_count: int = 0
+    uninspected_related_part_count: int = 0
     embedded_object_relationship_count: int = 0
     embedded_package_relationship_count: int = 0
     inspected: bool = False
     program_signature: str | None = None
     relationship_signature: str | None = None
+    related_part_payload_signature: str | None = None
 
 
 @dataclass(frozen=True)
@@ -4342,6 +4368,109 @@ def _xlm_relationship_signature(
     )
 
 
+def _xlm_related_part_payloads(
+    archive: ZipFile,
+    relationships: tuple[_XlmRawRelationship, ...],
+    warnings: set[str],
+    budget: _XlmRelatedPartBudget,
+) -> _XlmRelatedPartPayloadInspection:
+    """Fingerprint direct internal XLM relationship targets without parsing them.
+
+    Macro-sheet XML can point to OLE objects, embedded packages, drawings, and
+    other package parts. Hash their bytes only after resolving a safe internal
+    target; never follow an external target or parse an embedded payload.
+    """
+    members: set[str] = set()
+    unresolved_entries: list[tuple[str, str]] = []
+    for relationship in relationships:
+        if relationship.target_mode.casefold() != "internal":
+            continue
+        if relationship.safe_target is None:
+            warnings.add(
+                "FormulaFence found an XLM macro-sheet internal relationship without "
+                "a safe related-part target; the affected controls have a coverage gap."
+            )
+            unresolved_entries.append(
+                (
+                    "unsafe-target",
+                    repr((relationship.relationship_type, relationship.target)),
+                )
+            )
+            continue
+        members.add(relationship.safe_target)
+
+    entries = list(unresolved_entries)
+    fingerprinted_part_count = 0
+    uninspected_part_count = len(unresolved_entries)
+    for member in sorted(members, key=str.casefold):
+        if budget.remaining_parts == 0:
+            warnings.add(
+                "FormulaFence reached its bounded XLM macro-sheet related-part count "
+                "budget; the affected controls have a coverage gap."
+            )
+            entries.append(("part-count-budget-exhausted", member))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_parts -= 1
+        try:
+            info = archive.getinfo(member)
+        except KeyError:
+            warnings.add(
+                "FormulaFence could not locate an XLM macro-sheet internal related "
+                "part; the affected controls were not compared."
+            )
+            entries.append(("missing-part", member))
+            uninspected_part_count += 1
+            continue
+        metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+        if info.file_size > _XLM_RELATED_PART_MAX_BYTES:
+            warnings.add(
+                "FormulaFence did not fully read an oversized XLM macro-sheet related "
+                "part; the affected controls have a coverage gap."
+            )
+            entries.append(("oversized-part", metadata))
+            uninspected_part_count += 1
+            continue
+        if info.file_size > budget.remaining_bytes:
+            warnings.add(
+                "FormulaFence reached its bounded XLM macro-sheet related-part read "
+                "budget; the affected controls have a coverage gap."
+            )
+            entries.append(("read-budget-exhausted", metadata))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_bytes -= info.file_size
+        digest = hashlib.sha256()
+        bytes_read = 0
+        try:
+            with archive.open(info) as related_part:
+                while chunk := related_part.read(_XLM_RELATED_PART_HASH_CHUNK_BYTES):
+                    bytes_read += len(chunk)
+                    if bytes_read > info.file_size:
+                        raise ValueError("related part exceeded its declared size")
+                    digest.update(chunk)
+            if bytes_read != info.file_size:
+                raise ValueError("related part did not match its declared size")
+        except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+            warnings.add(
+                "FormulaFence could not fingerprint an XLM macro-sheet internal related "
+                f"part ({type(error).__name__}); the affected controls were not compared."
+            )
+            entries.append(("unreadable-part", metadata))
+            uninspected_part_count += 1
+            continue
+        entries.append(("payload", repr((member, digest.hexdigest()))))
+        fingerprinted_part_count += 1
+
+    entries.sort()
+    return _XlmRelatedPartPayloadInspection(
+        internal_part_count=len(members) + len(unresolved_entries),
+        fingerprinted_part_count=fingerprinted_part_count,
+        uninspected_part_count=uninspected_part_count,
+        payload_signature=_private_external_data_signature(tuple(entries)),
+    )
+
+
 def _xlm_macro_fragment(
     element: ElementTree.Element,
     relationship_semantics: Mapping[str, tuple[str, str, str]],
@@ -4392,6 +4521,7 @@ def _xlm_macro_part_inspection(
     archive: ZipFile,
     member: str,
     warnings: set[str],
+    related_part_budget: _XlmRelatedPartBudget,
 ) -> _XlmMacroSheetInspection:
     """Fingerprint one XLM macro-sheet part and its relationships privately."""
     try:
@@ -4493,6 +4623,12 @@ def _xlm_macro_part_inspection(
         relationship.relationship_type.rsplit("/", maxsplit=1)[-1]
         for relationship in relationships
     ]
+    related_part_payloads = _xlm_related_part_payloads(
+        archive,
+        relationships,
+        warnings,
+        related_part_budget,
+    )
     formula_cell_count = _xlm_macro_formula_cell_count(root)
     try:
         program_signature = _private_external_data_signature(
@@ -4511,10 +4647,16 @@ def _xlm_macro_part_inspection(
                 relationship.target_mode.casefold() != "internal"
                 for relationship in relationships
             ),
+            internal_related_part_count=related_part_payloads.internal_part_count,
+            fingerprinted_related_part_count=(
+                related_part_payloads.fingerprinted_part_count
+            ),
+            uninspected_related_part_count=related_part_payloads.uninspected_part_count,
             embedded_object_relationship_count=relationship_kinds.count("oleObject"),
             embedded_package_relationship_count=relationship_kinds.count("package"),
             program_signature=_private_payload_signature(payload),
             relationship_signature=_xlm_relationship_signature(relationships),
+            related_part_payload_signature=related_part_payloads.payload_signature,
         )
     return _XlmMacroSheetInspection(
         member=member,
@@ -4524,11 +4666,15 @@ def _xlm_macro_part_inspection(
             relationship.target_mode.casefold() != "internal"
             for relationship in relationships
         ),
+        internal_related_part_count=related_part_payloads.internal_part_count,
+        fingerprinted_related_part_count=related_part_payloads.fingerprinted_part_count,
+        uninspected_related_part_count=related_part_payloads.uninspected_part_count,
         embedded_object_relationship_count=relationship_kinds.count("oleObject"),
         embedded_package_relationship_count=relationship_kinds.count("package"),
         inspected=True,
         program_signature=program_signature,
         relationship_signature=_xlm_relationship_signature(relationships),
+        related_part_payload_signature=related_part_payloads.payload_signature,
     )
 
 
@@ -4712,6 +4858,7 @@ def _xlm_macro_metadata(path: Path) -> _XlmMacroMetadata:
             inspections: list[_XlmMacroSheetInspection] = []
             unrecognized_macro_sheet_members: set[str] = set()
             international_macro_sheet_count = 0
+            related_part_budget = _XlmRelatedPartBudget()
             for member in sorted(candidate_kinds, key=str.casefold):
                 kinds = candidate_kinds[member]
                 if len(kinds) != 1:
@@ -4722,7 +4869,12 @@ def _xlm_macro_metadata(path: Path) -> _XlmMacroMetadata:
                     unrecognized_macro_sheet_members.add(member)
                 elif "international" in kinds:
                     international_macro_sheet_count += 1
-                inspection = _xlm_macro_part_inspection(archive, member, warnings)
+                inspection = _xlm_macro_part_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    related_part_budget,
+                )
                 inspections.append(inspection)
                 if not inspection.inspected:
                     unrecognized_macro_sheet_members.add(member)
@@ -4753,6 +4905,16 @@ def _xlm_macro_metadata(path: Path) -> _XlmMacroMetadata:
                 external_relationship_count=sum(
                     inspection.external_relationship_count for inspection in inspections
                 ),
+                internal_related_part_count=sum(
+                    inspection.internal_related_part_count for inspection in inspections
+                ),
+                fingerprinted_related_part_count=sum(
+                    inspection.fingerprinted_related_part_count
+                    for inspection in inspections
+                ),
+                uninspected_related_part_count=sum(
+                    inspection.uninspected_related_part_count for inspection in inspections
+                ),
                 embedded_object_relationship_count=sum(
                     inspection.embedded_object_relationship_count
                     for inspection in inspections
@@ -4766,6 +4928,9 @@ def _xlm_macro_metadata(path: Path) -> _XlmMacroMetadata:
                 ),
                 program_signature=aggregate_signature("program_signature"),
                 relationship_signature=aggregate_signature("relationship_signature"),
+                related_part_payload_signature=aggregate_signature(
+                    "related_part_payload_signature"
+                ),
             )
     except (BadZipFile, OSError, RuntimeError, ValueError) as error:
         return _XlmMacroMetadata(

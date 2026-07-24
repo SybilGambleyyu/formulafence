@@ -97,6 +97,38 @@ def make_three_d_model(path: Path) -> Path:
     return path
 
 
+def make_named_formula_model(path: Path) -> Path:
+    """Create global and local names whose definitions contain formulas."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Named-formula inputs"
+    inputs["B2"] = 0.1
+    inputs["B3"] = 100
+    inputs["B4"] = 7
+
+    summary = workbook.create_sheet("Summary")
+    summary["A1"] = "Named-formula outputs"
+    summary["B2"] = "=DiscountedValue"
+    summary["B3"] = "=StaticRate"
+    summary["B4"] = "=LocalMetric"
+
+    report = workbook.create_sheet("Report")
+    report["A1"] = "Qualified local-name output"
+    report["B2"] = "=Summary!LocalMetric"
+
+    workbook.defined_names.add(DefinedName("TaxRate", attr_text="=Inputs!$B$2"))
+    workbook.defined_names.add(
+        DefinedName("DiscountedValue", attr_text="=Inputs!$B$3*(1-TaxRate)")
+    )
+    workbook.defined_names.add(DefinedName("StaticRate", attr_text="=0.05"))
+    workbook.defined_names.add(
+        DefinedName("LocalMetric", attr_text="=Inputs!$B$4*2", localSheetId=1)
+    )
+    workbook.save(path)
+    return path
+
+
 def rewrite(path: Path, mutate: Callable[[Workbook], None]) -> Path:
     """Load, mutate, and save a fixture in place."""
     from openpyxl import load_workbook

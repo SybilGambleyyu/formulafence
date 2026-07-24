@@ -42,6 +42,19 @@ def test_formula_inspection_resolves_names_and_marks_static_coverage_gaps() -> N
     assert inspection.dynamic_reference_functions == ("INDIRECT",)
 
 
+def test_formula_inspection_recognises_a_known_named_constant() -> None:
+    inspection = inspect_formula("=StaticRate", {"staticrate": ()})
+
+    assert inspection.references == ()
+    assert inspection.unresolved_range_tokens == ()
+
+
+def test_formula_inspection_marks_tokenization_failures() -> None:
+    inspection = inspect_formula("=SUM(A1#)")
+
+    assert inspection.tokenization_failed is True
+
+
 def test_formula_inspection_resolves_static_structured_table_references() -> None:
     sales = StructuredTable(
         name="Sales",

@@ -40,6 +40,26 @@ notes rather than silent holes in an impact trace. The result does not judge the
 model's use of `INDIRECT`; it gives a reviewer or policy author a concrete,
 machine-readable scope for the limitation.
 
+## Formula-defined names — 2026-07-24
+
+FormulaFence 0.7.0 adds conservative expansion for defined names whose
+definitions are formulas. [Microsoft documents that a defined name can
+represent a cell, range, formula, or constant](https://support.microsoft.com/en-us/excel/names-in-formulas),
+including reusable formulas in modern Excel. In a controlled local workbook,
+`DiscountedValue` expanded through another name (`TaxRate`) to two `Inputs`
+cells; changing the rate reached the formula that used `=DiscountedValue`. A
+sheet-local `LocalMetric` definition also resolved both from its own sheet and
+through an explicitly qualified use from another sheet. A named constant was
+recognized without inventing a cell edge.
+
+The same fixture confirmed the boundary: relative definitions, `OFFSET`,
+cycles, 3-D spans inside a definition, and spill syntax rejected by the
+underlying tokenizer remained unresolved at the consuming formula. FormulaFence
+does not try to infer those paths. The public Foresight cap-table workbook was
+re-profiled after the change with the same 4,228 formula cells, 36 `INDIRECT`
+cells, zero unresolved formula-reference cells, and one parser warning. This
+is a graph-coverage validation, not a claim to calculate Excel results.
+
 ## Public structured-reference example — 2026-07-24
 
 FormulaFence 0.6.0 was also profiled against the public

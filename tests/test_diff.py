@@ -11,6 +11,7 @@ from formulafence.workbook import load_snapshot, profile_snapshot
 from .helpers import (
     make_current_row_table_model,
     make_model,
+    make_named_formula_model,
     make_table_model,
     make_three_d_model,
     rewrite,
@@ -98,6 +99,99 @@ def test_named_ranges_resolve_into_the_dependency_index(tmp_path) -> None:
     assert ("Model", "D3") in snapshot.direct_dependents(("Inputs", "B2"))
     assert ("Control", "B2") in snapshot.direct_dependents(("Inputs", "B2"))
     assert "Model!LocalInput" in snapshot.defined_names
+
+
+def test_formula_defined_names_expand_nested_and_local_static_dependencies(tmp_path) -> None:
+    baseline = make_named_formula_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_formula_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Inputs"]["B2"], "value", 0.2))
+
+    snapshot = load_snapshot(baseline)
+    assert snapshot.unresolved_reference_tokens == {}
+    assert snapshot.direct_dependents(("Inputs", "B2")) == {("Summary", "B2")}
+    assert snapshot.direct_dependents(("Inputs", "B3")) == {("Summary", "B2")}
+    assert snapshot.direct_dependents(("Inputs", "B4")) == {
+        ("Report", "B2"),
+        ("Summary", "B4"),
+    }
+    assert snapshot.direct_dependents(("Summary", "B3")) == set()
+    assert "Summary!LocalMetric" in snapshot.defined_names
+
+    report = compare_snapshots(snapshot, load_snapshot(candidate))
+    change = next(change for change in report.changes if change.location == ("Inputs", "B2"))
+
+    assert change.impacted_cells == (("Summary", "B2"),)
+
+
+def test_formula_defined_name_change_remains_a_semantic_control_change(tmp_path) -> None:
+    baseline = make_named_formula_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_formula_model(tmp_path / "candidate.xlsx")
+    rewrite(
+        candidate,
+        lambda workbook: setattr(
+            workbook.defined_names["TaxRate"], "attr_text", "=Inputs!$B$4"
+        ),
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert any(change.kind == "defined_name_changed" for change in report.changes)
+    assert any(finding.rule_id == "FF008" for finding in report.findings)
+
+
+def test_formula_defined_names_remain_coverage_gaps_when_not_fully_static(tmp_path) -> None:
+    workbook_path = make_named_formula_model(tmp_path / "named-formulas.xlsx")
+
+    def add_unsafe_formula_names(workbook) -> None:
+        workbook.defined_names.add(DefinedName("RelativeMetric", attr_text="=B2"))
+        workbook.defined_names.add(
+            DefinedName("DynamicMetric", attr_text="=OFFSET(Inputs!$B$2,0,0)")
+        )
+        workbook.defined_names.add(DefinedName("CircularMetricA", attr_text="=CircularMetricB"))
+        workbook.defined_names.add(DefinedName("CircularMetricB", attr_text="=CircularMetricA"))
+        workbook.defined_names.add(DefinedName("PeriodMetric", attr_text="=SUM(Inputs:Report!B2)"))
+        workbook.defined_names.add(DefinedName("SpillMetric", attr_text="=SUM(Inputs!$B$2#)"))
+        workbook["Summary"]["B5"] = "=RelativeMetric"
+        workbook["Summary"]["B6"] = "=DynamicMetric"
+        workbook["Summary"]["B7"] = "=CircularMetricA"
+        workbook["Summary"]["B8"] = "=PeriodMetric"
+        workbook["Summary"]["B9"] = "=SpillMetric"
+
+    rewrite(workbook_path, add_unsafe_formula_names)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.unresolved_reference_tokens == {
+        ("Summary", "B5"): ("RelativeMetric",),
+        ("Summary", "B6"): ("DynamicMetric",),
+        ("Summary", "B7"): ("CircularMetricA",),
+        ("Summary", "B8"): ("PeriodMetric",),
+        ("Summary", "B9"): ("SpillMetric",),
+    }
+    assert ("Summary", "B5") not in snapshot.direct_dependents(("Inputs", "B2"))
+    assert ("Summary", "B6") not in snapshot.direct_dependents(("Inputs", "B2"))
+    assert ("Summary", "B7") not in snapshot.direct_dependents(("Inputs", "B2"))
+    assert ("Summary", "B8") not in snapshot.direct_dependents(("Inputs", "B2"))
+    assert ("Summary", "B9") not in snapshot.direct_dependents(("Inputs", "B2"))
+
+
+def test_formula_defined_names_expand_supported_static_table_references(tmp_path) -> None:
+    workbook_path = make_table_model(tmp_path / "table.xlsx")
+
+    def add_table_formula_name(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName("SalesAmount", attr_text="=SUM(Sales[Amount])")
+        )
+        workbook["Report"]["C2"] = "=SalesAmount"
+
+    rewrite(workbook_path, add_table_formula_name)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.unresolved_reference_tokens == {}
+    assert snapshot.direct_dependents(("Data", "A2")) >= {
+        ("Report", "B2"),
+        ("Report", "B3"),
+        ("Report", "C2"),
+    }
 
 
 def test_diff_surfaces_new_static_coverage_gaps(tmp_path) -> None:

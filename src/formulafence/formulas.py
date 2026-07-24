@@ -52,6 +52,7 @@ class FormulaInspection:
     unresolved_range_tokens: tuple[str, ...]
     dynamic_reference_functions: tuple[str, ...]
     three_d_reference_tokens: tuple[str, ...] = ()
+    tokenization_failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -674,7 +675,7 @@ def inspect_formula(
     try:
         tokens = Tokenizer(formula).items
     except Exception:
-        return FormulaInspection((), (), ())
+        return FormulaInspection((), (), (), tokenization_failed=True)
     resolved_names = named_references or {}
     resolved_tables = structured_tables or {}
     references: list[ParsedReference] = []
@@ -692,9 +693,9 @@ def inspect_formula(
                 references.extend(three_d_reference)
                 three_d_reference_tokens.append(token.value)
                 continue
-            named_range = resolved_names.get(reference_lookup_key(token.value))
-            if named_range:
-                references.extend(named_range)
+            named_key = reference_lookup_key(token.value)
+            if named_key in resolved_names:
+                references.extend(resolved_names[named_key])
                 continue
             table_reference = resolve_structured_reference(
                 token.value, resolved_tables, origin

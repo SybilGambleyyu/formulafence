@@ -32,18 +32,21 @@ review prompt, not proof of an error.
 - Supported files are `.xlsx` and `.xlsm`; legacy `.xls` and password-protected
   workbooks are outside scope.
 - Ordinary workbook and sheet-local names with static A1 destinations are
-  resolved into the dependency graph. FormulaFence also resolves table names,
-  static columns/contiguous column ranges, and
+  resolved into the dependency graph. It also expands formula-defined names
+  whose whole definition is statically visible and internal, including nested
+  workbook and sheet-local names and constants. FormulaFence also resolves
+  table names, static columns/contiguous column ranges, and
   `#All`/`#Data`/`#Headers`/`#Totals` regions; it inventories and diffs the
   table definitions that give those references meaning. It resolves `@` and
   `#This Row` only when the formula location statically identifies a named
   table's data row; unqualified current-row forms additionally require the
   formula cell itself to be in that table. Header/total-row, cross-sheet,
   ambiguous, and complex bracket-escape table syntax, `INDIRECT`, `OFFSET`,
-  named formulas, dynamic array behavior, cube functions, add-ins, and custom
-  functions cannot always be statically resolved. FormulaFence flags newly
-  introduced unresolved tokens and `INDIRECT`/`OFFSET` use, but does not
-  fabricate dependencies for them.
+  relative/cyclic/external/3-D/tokenizer-unsupported formula-defined names,
+  dynamic array behavior, cube functions, add-ins, and custom functions cannot
+  always be statically resolved. FormulaFence flags newly introduced unresolved
+  tokens and `INDIRECT`/`OFFSET` use, but does not fabricate dependencies for
+  them.
 - Static internal 3-D A1 references such as `Jan:Mar!B2:B10` are expanded over
   every worksheet in the endpoint tab span. FormulaFence compares the resolved
   span when the same 3-D formula survives a workbook change, because moving,

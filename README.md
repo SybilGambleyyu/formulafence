@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.6.0/formulafence-0.6.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.7.0/formulafence-0.7.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -85,7 +85,7 @@ allowed_changes:
 | Capability | What it catches |
 | --- | --- |
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
-| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named-range, Excel-table, and 3-D worksheet references |
+| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges and formula-defined names, Excel-table, and 3-D worksheet references |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
@@ -108,6 +108,16 @@ qualified forms such as `Sales[@Amount]` and
 total, cross-sheet, ambiguous, and complex bracket-escape cases remain explicit
 coverage notes. The supported subset follows Excel's documented
 [structured-reference semantics](https://support.microsoft.com/en-us/excel/using-structured-references-with-excel-tables).
+
+FormulaFence expands a formula-defined name when its complete definition can be
+statically resolved to internal dependencies or a constant. It follows nested
+workbook and sheet-local definitions, so a formula such as
+`=DiscountedValue`, where `DiscountedValue` uses `TaxRate`, receives edges to
+the underlying inputs. Relative references, cycles, external links,
+`INDIRECT`/`OFFSET`, 3-D spans inside a name definition, and syntax the formula
+tokenizer cannot inspect remain unresolved at the use site rather than being
+treated as a safe dependency. This builds on Excel's documented support for
+[names that represent formulas and constants](https://support.microsoft.com/en-us/excel/names-in-formulas).
 
 FormulaFence also expands internal static 3-D A1 references such as
 `Jan:Mar!B2:B10` over every worksheet tab between the named endpoints. Profiles

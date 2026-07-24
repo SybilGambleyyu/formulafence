@@ -81,7 +81,7 @@ allowed_changes:
 | Capability | What it catches |
 | --- | --- |
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
-| Impact trace | Formula cells downstream of each changed cell, including cross-sheet references |
+| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet references |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
 | Workbook controls | Sheet visibility, defined names, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |

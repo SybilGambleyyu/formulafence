@@ -290,7 +290,11 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                         f"({change.impact_count} > {policy.max_downstream_impact})."
                     ),
                     change.location,
-                    details={"actual": change.impact_count, "limit": policy.max_downstream_impact},
+                    details={
+                        "actual": change.impact_count,
+                        "limit": policy.max_downstream_impact,
+                        "impact_paths": change.details.get("impact_paths", []),
+                    },
                 )
             )
     return violations

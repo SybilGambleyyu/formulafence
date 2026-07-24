@@ -35,7 +35,13 @@ def test_check_emits_sarif_and_fails_for_a_policy_violation(tmp_path) -> None:
     assert result == 1
     payload = json.loads(sarif.read_text(encoding="utf-8"))
     assert payload["version"] == "2.1.0"
-    assert any(item["ruleId"] == "FFP001" for item in payload["runs"][0]["results"])
+    results = payload["runs"][0]["results"]
+    assert any(item["ruleId"] == "FFP001" for item in results)
+    formula_override = next(item for item in results if item["ruleId"] == "FF001")
+    assert formula_override["properties"]["impact_paths"] == [
+        {"path": ["Model!B2", "Model!C2", "Dashboard!B12"], "target": "Dashboard!B12"},
+        {"path": ["Model!B2", "Model!C2"], "target": "Model!C2"},
+    ]
 
 
 def test_profile_does_not_expose_cell_values(tmp_path) -> None:

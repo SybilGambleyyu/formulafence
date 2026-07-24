@@ -20,9 +20,12 @@ financial correctness or replace model review.
 
 An impact count traces explicit A1-style cell dependencies available in the
 baseline and candidate. It is an aid to review, not a claim that the cells will
-recalculate correctly in Excel. A formula-pattern finding means both immediate
-peers have the same relative formula fingerprint while the changed middle cell
-does not; it is a focused review prompt, not proof of an error.
+recalculate correctly in Excel. FormulaFence also emits deterministic shortest
+path samples from the changed cell to sampled downstream formulas. These paths
+are explicit static dependencies, not proof of runtime evaluation. A
+formula-pattern finding means both immediate peers have the same relative
+formula fingerprint while the changed middle cell does not; it is a focused
+review prompt, not proof of an error.
 
 ## Deliberate limits in v0.1
 

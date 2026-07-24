@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 — 2026-07-24
+
+- Add deterministic shortest dependency-path samples to every changed cell's
+  impact record, FormulaFence hazard finding metadata, Markdown reports, and
+  SARIF properties.
+- Include the same path evidence when an impact-limit policy fails.
+
 ## 0.1.1 — 2026-07-24
 
 - Capture workbook-parser warnings as structured profile coverage notes instead

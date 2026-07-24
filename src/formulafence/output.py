@@ -116,6 +116,16 @@ def report_to_markdown(report: DiffReport, extra_findings: Iterable[Finding] = (
         for change in impacted:
             sample = ", ".join(f"`{cell}`" for cell in change["impacted_cells"])
             lines.append(f"- `{change['location']}` affects: {sample}")
+        path_samples = [
+            (change["location"], path)
+            for change in impacted
+            for path in change["details"].get("impact_paths", [])
+        ]
+        if path_samples:
+            lines.extend(["", "## Dependency paths", ""])
+            for _, path_sample in path_samples:
+                path = " → ".join(f"`{step}`" for step in path_sample["path"])
+                lines.append(f"- {path}")
     return "\n".join(lines) + "\n"
 
 

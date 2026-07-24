@@ -3,6 +3,7 @@ from __future__ import annotations
 import warnings
 
 from formulafence.diff import compare_snapshots
+from formulafence.output import report_to_markdown
 from formulafence.workbook import load_snapshot
 
 from .helpers import make_model, rewrite
@@ -20,7 +21,18 @@ def test_formula_to_value_traces_cross_sheet_downstream_impact(tmp_path) -> None
     assert change.impact_count == 2
     assert ("Model", "C2") in change.impacted_cells
     assert ("Dashboard", "B12") in change.impacted_cells
+    assert change.details["impact_paths"] == [
+        {
+            "target": "Dashboard!B12",
+            "path": ["Model!B2", "Model!C2", "Dashboard!B12"],
+        },
+        {
+            "target": "Model!C2",
+            "path": ["Model!B2", "Model!C2"],
+        },
+    ]
     assert any(finding.rule_id == "FF001" for finding in report.findings)
+    assert "`Model!B2` → `Model!C2` → `Dashboard!B12`" in report_to_markdown(report)
 
 
 def test_diff_detects_pattern_break_and_static_hazards(tmp_path) -> None:

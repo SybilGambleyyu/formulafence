@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
 
@@ -18,6 +19,15 @@ from formulafence.models import (
 
 _IMPACT_SAMPLE_SIZE = 20
 _IMPACT_NODE_LIMIT = 100_000
+
+
+@dataclass(frozen=True)
+class ImpactAnalysis:
+    """A deterministic, shortest-path view of explicit downstream dependencies."""
+
+    impacted: frozenset[CellKey]
+    paths: dict[CellKey, tuple[CellKey, ...]]
+    truncated: bool
 
 
 def _cell_change_kind(
@@ -40,11 +50,11 @@ def _cell_change_kind(
     return None
 
 
-def downstream_impact(
+def analyze_downstream_impact(
     location: CellKey,
     *snapshots: WorkbookSnapshot,
     node_limit: int = _IMPACT_NODE_LIMIT,
-) -> tuple[set[CellKey], bool]:
+) -> ImpactAnalysis:
     """Find formula cells affected through explicit dependency paths.
 
     Range references are checked lazily instead of expanded, so a formula such as
@@ -53,23 +63,57 @@ def downstream_impact(
     queue: deque[CellKey] = deque([location])
     visited: set[CellKey] = {location}
     impacted: set[CellKey] = set()
+    parents: dict[CellKey, CellKey | None] = {location: None}
     truncated = False
     while queue:
         current = queue.popleft()
         dependents: set[CellKey] = set()
         for snapshot in snapshots:
             dependents.update(snapshot.direct_dependents(current))
-        for dependent in dependents:
+        for dependent in sorted(dependents, key=_location_sort_key):
             if dependent in visited:
                 continue
             visited.add(dependent)
             impacted.add(dependent)
+            parents[dependent] = current
             if len(visited) >= node_limit:
                 truncated = True
                 queue.clear()
                 break
             queue.append(dependent)
-    return impacted, truncated
+    paths: dict[CellKey, tuple[CellKey, ...]] = {}
+    for target in impacted:
+        path: list[CellKey] = []
+        current: CellKey | None = target
+        while current is not None:
+            path.append(current)
+            current = parents[current]
+        paths[target] = tuple(reversed(path))
+    return ImpactAnalysis(frozenset(impacted), paths, truncated)
+
+
+def downstream_impact(
+    location: CellKey,
+    *snapshots: WorkbookSnapshot,
+    node_limit: int = _IMPACT_NODE_LIMIT,
+) -> tuple[set[CellKey], bool]:
+    """Backward-compatible shortcut for callers that need counts only."""
+    analysis = analyze_downstream_impact(location, *snapshots, node_limit=node_limit)
+    return set(analysis.impacted), analysis.truncated
+
+
+def _serialise_impact_paths(
+    targets: Iterable[CellKey], paths: dict[CellKey, tuple[CellKey, ...]]
+) -> list[dict[str, object]]:
+    from formulafence.models import display_location
+
+    return [
+        {
+            "target": display_location(target),
+            "path": [display_location(step) for step in paths[target]],
+        }
+        for target in targets
+    ]
 
 
 def _location_sort_key(location: CellKey | None) -> tuple[str, int, int]:
@@ -284,9 +328,15 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         if classified is None:
             continue
         kind, severity = classified
-        impact, impact_truncated = downstream_impact(location, before, after)
+        impact_analysis = analyze_downstream_impact(location, before, after)
+        impact = impact_analysis.impacted
+        sampled_impacts = tuple(sorted(impact, key=_location_sort_key)[:_IMPACT_SAMPLE_SIZE])
         details: dict[str, object] = {}
-        if impact_truncated:
+        if sampled_impacts:
+            details["impact_paths"] = _serialise_impact_paths(
+                sampled_impacts, impact_analysis.paths
+            )
+        if impact_analysis.truncated:
             details["impact_truncated_at"] = _IMPACT_NODE_LIMIT
         changes.append(
             Change(
@@ -296,7 +346,7 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
                 before=old_cell,
                 after=new_cell,
                 impact_count=len(impact),
-                impacted_cells=tuple(sorted(impact, key=_location_sort_key)[:_IMPACT_SAMPLE_SIZE]),
+                impacted_cells=sampled_impacts,
                 details=details,
             )
         )
@@ -311,7 +361,10 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
                     "high",
                     "Formula was replaced with a value.",
                     location,
-                    details={"impact_count": len(impact)},
+                    details={
+                        "impact_count": len(impact),
+                        "impact_paths": details.get("impact_paths", []),
+                    },
                 )
             )
         elif kind == "formula_removed":
@@ -321,7 +374,10 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
                     "high",
                     "Formula cell was removed or blanked.",
                     location,
-                    details={"impact_count": len(impact)},
+                    details={
+                        "impact_count": len(impact),
+                        "impact_paths": details.get("impact_paths", []),
+                    },
                 )
             )
 

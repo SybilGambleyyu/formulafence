@@ -21,3 +21,7 @@
 ## Impact samples
 
 - `Model!B2` affects: `Dashboard!B12`
+
+## Dependency paths
+
+- `Model!B2` → `Dashboard!B12`

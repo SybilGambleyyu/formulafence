@@ -189,6 +189,8 @@ class WorkbookSnapshot:
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     tables: dict[str, TableSnapshot] = field(default_factory=dict)
+    sheet_order: tuple[str, ...] = ()
+    three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
 
     def direct_dependents(self, location: CellKey) -> set[CellKey]:
         dependents = set(self.reverse_dependencies.get(location, set()))
@@ -212,6 +214,7 @@ class WorkbookSnapshot:
             "broken_reference_cells": len(self.broken_references),
             "unresolved_reference_cells": len(self.unresolved_reference_tokens),
             "dynamic_reference_cells": len(self.dynamic_reference_functions),
+            "three_d_reference_cells": len(self.three_d_reference_tokens),
             "parser_warning_count": len(self.parser_warnings),
         }
 

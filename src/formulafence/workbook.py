@@ -330,9 +330,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     broken_references: set[CellKey] = set()
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = {}
+    three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
     global_named_references, local_named_references = _named_reference_maps(workbook)
     tables = _table_snapshots(workbook)
     structured_tables = _structured_table_map(tables)
+    sheet_order = tuple(worksheet.title for worksheet in workbook.worksheets)
 
     for worksheet in workbook.worksheets:
         named_references = {
@@ -364,6 +366,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 named_references,
                 structured_tables,
                 snapshot.location,
+                sheet_order,
             )
             if inspection.unresolved_range_tokens:
                 unresolved_reference_tokens[snapshot.location] = inspection.unresolved_range_tokens
@@ -371,6 +374,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 dynamic_reference_functions[snapshot.location] = (
                     inspection.dynamic_reference_functions
                 )
+            if inspection.three_d_reference_tokens:
+                three_d_reference_tokens[snapshot.location] = inspection.three_d_reference_tokens
             for reference in inspection.references:
                 if reference.is_external:
                     external_references.add(snapshot.location)
@@ -421,7 +426,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         broken_references=broken_references,
         unresolved_reference_tokens=unresolved_reference_tokens,
         dynamic_reference_functions=dynamic_reference_functions,
+        three_d_reference_tokens=three_d_reference_tokens,
         tables=tables,
+        sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),
         calculation_settings=_calculation_settings(workbook),
@@ -465,6 +472,13 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
                     "functions": list(functions),
                 }
                 for location, functions in sorted(snapshot.dynamic_reference_functions.items())
+            ],
+            "three_d_reference_cells": [
+                {
+                    "location": display_location(location),
+                    "tokens": list(tokens),
+                }
+                for location, tokens in sorted(snapshot.three_d_reference_tokens.items())
             ],
         },
     }

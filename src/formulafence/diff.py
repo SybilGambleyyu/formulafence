@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
 
+from formulafence.formulas import resolve_3d_reference
 from formulafence.models import (
     CellKey,
     CellSnapshot,
@@ -193,6 +194,63 @@ def _new_coverage_items(
     return additions
 
 
+def _three_d_reference_scope_changes(
+    before: WorkbookSnapshot, after: WorkbookSnapshot
+) -> tuple[list[Change], list[Finding]]:
+    """Find unchanged 3-D formulas whose workbook tab span now resolves differently."""
+    changes: list[Change] = []
+    findings: list[Finding] = []
+    locations = sorted(
+        set(before.three_d_reference_tokens) | set(after.three_d_reference_tokens),
+        key=_location_sort_key,
+    )
+    for location in locations:
+        before_cell = before.cells.get(location)
+        after_cell = after.cells.get(location)
+        if before_cell is None or after_cell is None or before_cell.formula != after_cell.formula:
+            continue
+        tokens = sorted(
+            set(before.three_d_reference_tokens.get(location, ()))
+            | set(after.three_d_reference_tokens.get(location, ())),
+            key=str.casefold,
+        )
+        changed_references: list[dict[str, object]] = []
+        for token in tokens:
+            before_references = resolve_3d_reference(token, before.sheet_order) or ()
+            after_references = resolve_3d_reference(token, after.sheet_order) or ()
+            before_sheets = [reference.sheet for reference in before_references]
+            after_sheets = [reference.sheet for reference in after_references]
+            if before_sheets != after_sheets:
+                changed_references.append(
+                    {
+                        "token": token,
+                        "before_sheets": before_sheets,
+                        "after_sheets": after_sheets,
+                    }
+                )
+        if not changed_references:
+            continue
+        details = {"references": changed_references}
+        changes.append(
+            Change(
+                "three_d_reference_scope_changed",
+                location,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF014",
+                "high",
+                "Worksheet changes altered the scope of a static 3-D reference.",
+                location,
+                details=details,
+            )
+        )
+    return changes, findings
+
+
 def _workbook_control_changes(
     before: WorkbookSnapshot, after: WorkbookSnapshot
 ) -> tuple[list[Change], list[Finding]]:
@@ -239,7 +297,11 @@ def _workbook_control_changes(
                     ),
                     details={"sheet": title, "before": old_sheet.state, "after": new_sheet.state},
                 )
-            )
+                )
+
+    three_d_changes, three_d_findings = _three_d_reference_scope_changes(before, after)
+    changes.extend(three_d_changes)
+    findings.extend(three_d_findings)
 
     for name in sorted(set(before.defined_names) | set(after.defined_names), key=str.casefold):
         old_value = before.defined_names.get(name)

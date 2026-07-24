@@ -8,7 +8,13 @@ from formulafence.diff import compare_snapshots
 from formulafence.output import profile_to_markdown, report_to_markdown
 from formulafence.workbook import load_snapshot, profile_snapshot
 
-from .helpers import make_current_row_table_model, make_model, make_table_model, rewrite
+from .helpers import (
+    make_current_row_table_model,
+    make_model,
+    make_table_model,
+    make_three_d_model,
+    rewrite,
+)
 
 
 def test_formula_to_value_traces_cross_sheet_downstream_impact(tmp_path) -> None:
@@ -198,6 +204,83 @@ def test_current_row_table_references_trace_only_the_matching_row(tmp_path) -> N
     assert change.impacted_cells == (("Data", "C2"), ("Data", "E2"), ("Report", "B2"))
     assert ("Data", "C3") not in change.impacted_cells
     assert ("Data", "C4") not in change.impacted_cells
+
+
+def test_three_d_references_trace_every_sheet_in_the_tab_span(tmp_path) -> None:
+    baseline = make_three_d_model(tmp_path / "baseline.xlsx")
+    candidate = make_three_d_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Feb"]["B2"], "value", 200))
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    assert baseline_snapshot.unresolved_reference_tokens == {}
+    assert baseline_snapshot.summary()["three_d_reference_cells"] == 1
+    for sheet in ("Jan", "Feb", "Mar"):
+        assert baseline_snapshot.direct_dependents((sheet, "B2")) == {("Summary", "B2")}
+    assert baseline_snapshot.direct_dependents(("Jan:Mar", "B2")) == set()
+    assert profile["features"]["three_d_reference_cells"] == [
+        {"location": "Summary!B2", "tokens": ["Jan:Mar!B2"]}
+    ]
+    assert "## 3-D worksheet references" in profile_to_markdown(profile)
+
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(change for change in report.changes if change.location == ("Feb", "B2"))
+
+    assert change.impacted_cells == (("Summary", "B2"),)
+
+
+def test_three_d_reference_scope_change_is_reported_when_tabs_move(tmp_path) -> None:
+    baseline = make_three_d_model(tmp_path / "baseline.xlsx")
+    candidate = make_three_d_model(tmp_path / "candidate.xlsx")
+
+    def move_february_after_march(workbook) -> None:
+        workbook._sheets = [  # noqa: SLF001 - sheet tab order is the scenario under test
+            workbook["Jan"],
+            workbook["Mar"],
+            workbook["Feb"],
+            workbook["Summary"],
+        ]
+
+    rewrite(candidate, move_february_after_march)
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    scope_change = next(
+        change
+        for change in report.changes
+        if change.kind == "three_d_reference_scope_changed"
+    )
+
+    assert scope_change.location == ("Summary", "B2")
+    assert scope_change.details == {
+        "references": [
+            {
+                "token": "Jan:Mar!B2",
+                "before_sheets": ["Jan", "Feb", "Mar"],
+                "after_sheets": ["Jan", "Mar"],
+            }
+        ]
+    }
+    assert any(finding.rule_id == "FF014" for finding in report.findings)
+
+
+def test_three_d_references_include_a_sheet_inserted_between_tab_endpoints(tmp_path) -> None:
+    baseline = make_three_d_model(tmp_path / "baseline.xlsx")
+    candidate = make_three_d_model(tmp_path / "candidate.xlsx")
+
+    def insert_period(workbook) -> None:
+        inserted = workbook.create_sheet("Feb Extra", 1)
+        inserted["A1"] = "Period input"
+        inserted["B2"] = 25
+
+    rewrite(candidate, insert_period)
+    after = load_snapshot(candidate)
+    assert after.direct_dependents(("Feb Extra", "B2")) == {("Summary", "B2")}
+
+    report = compare_snapshots(load_snapshot(baseline), after)
+    change = next(change for change in report.changes if change.location == ("Feb Extra", "B2"))
+
+    assert change.kind == "value_added"
+    assert change.impacted_cells == (("Summary", "B2"),)
+    assert any(finding.rule_id == "FF014" for finding in report.findings)
 
 
 def test_snapshot_captures_parser_coverage_warnings(tmp_path, monkeypatch) -> None:

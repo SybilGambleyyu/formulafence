@@ -7,7 +7,7 @@ from formulafence.models import PolicyError
 from formulafence.policy import evaluate_policy, parse_policy
 from formulafence.workbook import load_snapshot
 
-from .helpers import make_model, make_table_model, rewrite
+from .helpers import make_model, make_table_model, make_three_d_model, rewrite
 
 
 def test_policy_fails_formula_override_and_protected_output(tmp_path) -> None:
@@ -76,3 +76,24 @@ def test_policy_can_block_table_definition_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP013"}
+
+
+def test_policy_can_block_three_d_reference_scope_changes(tmp_path) -> None:
+    baseline = make_three_d_model(tmp_path / "baseline.xlsx")
+    candidate = make_three_d_model(tmp_path / "candidate.xlsx")
+
+    def move_february_after_march(workbook) -> None:
+        workbook._sheets = [  # noqa: SLF001 - sheet tab order is the scenario under test
+            workbook["Jan"],
+            workbook["Mar"],
+            workbook["Feb"],
+            workbook["Summary"],
+        ]
+
+    rewrite(candidate, move_february_after_march)
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_3d_reference_scope_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP014"}

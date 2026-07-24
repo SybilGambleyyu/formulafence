@@ -64,6 +64,38 @@ def test_formula_inspection_resolves_static_structured_table_references() -> Non
     assert inspection.unresolved_range_tokens == ()
 
 
+def test_formula_inspection_resolves_three_d_references_in_tab_order() -> None:
+    inspection = inspect_formula(
+        "=SUM('Jan 2026:Mar 2026'!$B$2:$B$3)",
+        sheet_order=("Jan 2026", "Feb 2026", "Mar 2026", "Summary"),
+    )
+
+    assert inspection.references == (
+        ParsedReference("Jan 2026", 2, 2, 2, 3, raw="'Jan 2026:Mar 2026'!$B$2:$B$3"),
+        ParsedReference("Feb 2026", 2, 2, 2, 3, raw="'Jan 2026:Mar 2026'!$B$2:$B$3"),
+        ParsedReference("Mar 2026", 2, 2, 2, 3, raw="'Jan 2026:Mar 2026'!$B$2:$B$3"),
+    )
+    assert inspection.three_d_reference_tokens == ("'Jan 2026:Mar 2026'!$B$2:$B$3",)
+    assert inspection.unresolved_range_tokens == ()
+
+
+def test_formula_inspection_keeps_three_d_references_visible_without_sheet_order() -> None:
+    inspection = inspect_formula("=SUM(Jan:Mar!B2)")
+    missing_endpoint = inspect_formula(
+        "=SUM(Jan:Mar!B2)", sheet_order=("Jan", "Summary")
+    )
+    external = inspect_formula(
+        "=SUM('[book.xlsx]Jan:Mar'!B2)", sheet_order=("Jan", "Feb", "Mar")
+    )
+
+    assert inspection.references == ()
+    assert inspection.three_d_reference_tokens == ()
+    assert inspection.unresolved_range_tokens == ("Jan:Mar!B2",)
+    assert missing_endpoint.unresolved_range_tokens == ("Jan:Mar!B2",)
+    assert external.references[0].is_external
+    assert external.unresolved_range_tokens == ()
+
+
 def test_formula_inspection_requires_table_data_origin_for_this_row_references() -> None:
     sales = StructuredTable(
         name="Sales",

@@ -42,7 +42,7 @@ machine-readable scope for the limitation.
 
 ## Public structured-reference example — 2026-07-24
 
-FormulaFence 0.5.0 was also profiled against the public
+FormulaFence 0.6.0 was also profiled against the public
 [Excel Easy structured-reference example](https://www.excel-easy.com/examples/structured-references.html).
 The downloaded workbook was used locally for compatibility validation only and
 is not bundled with FormulaFence. Its profile reported one Excel table, 79
@@ -75,6 +75,22 @@ the matching calculated-column cell, the adjacent qualified-reference cell,
 and the external `SUM(Sales[Value])` output. FormulaFence did not report the
 other two table rows as impacted. This validates graph precision for the
 supported subset; it does not claim to recalculate or certify Excel results.
+
+## 3-D worksheet references — 2026-07-24
+
+FormulaFence 0.6.0 adds static expansion for internal 3-D A1 references. The
+[Microsoft 3-D-reference documentation](https://support.microsoft.com/en-us/excel/create-a-3-d-reference-to-the-same-cell-range-on-multiple-worksheets)
+defines a reference such as `Sales:Marketing!B3` over every worksheet tab
+between those endpoints, and specifies that inserting or moving tabs can change
+the calculation.
+
+In a controlled local workbook with `Jan`, `Feb`, `Mar`, and `Summary` tabs,
+`=SUM(Jan:Mar!B2)` created dependency edges from all three period inputs to the
+summary, with zero unresolved reference tokens. Changing `Feb!B2` reached the
+summary. Inserting a new period tab between the endpoints also reached the
+summary, while moving `Feb` outside the `Jan:Mar` span produced `FF014` and the
+optional `no_3d_reference_scope_changes` policy produced `FFP014`. This is a
+static graph validation, not a claim to calculate Excel results.
 
 ## Controlled local change
 

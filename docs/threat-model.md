@@ -44,6 +44,12 @@ review prompt, not proof of an error.
   functions cannot always be statically resolved. FormulaFence flags newly
   introduced unresolved tokens and `INDIRECT`/`OFFSET` use, but does not
   fabricate dependencies for them.
+- Static internal 3-D A1 references such as `Jan:Mar!B2:B10` are expanded over
+  every worksheet in the endpoint tab span. FormulaFence compares the resolved
+  span when the same 3-D formula survives a workbook change, because moving,
+  adding, or removing tabs can change its semantics. External 3-D references
+  remain external-link hazards; malformed, endpoint-missing, and non-A1 3-D
+  forms remain explicit coverage gaps.
 - Explicit external-workbook references are detected. References assembled from
   text or macro code are not.
 - It inventories sheet visibility, defined names, calculation settings, and the

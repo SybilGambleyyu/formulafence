@@ -16,6 +16,7 @@ rules:
   no_new_unresolved_references: true
   no_new_dynamic_references: true
   no_table_definition_changes: true
+  no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -56,6 +57,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_unresolved_references` | boolean | A formula adds a name, table reference, or other range token that cannot be resolved statically. |
 | `no_new_dynamic_references` | boolean | A formula adds a dynamic reference function such as `INDIRECT` or `OFFSET`. |
 | `no_table_definition_changes` | boolean | An Excel table is added, removed, moved, renamed, or has its columns/header/total-row configuration changed. |
+| `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
 | `max_downstream_impact` | non-negative integer | A changed cell reaches more downstream formula cells than allowed. |
@@ -75,6 +77,15 @@ the named table's data row, including an adjacent cell on that worksheet. The
 coverage controls are for remaining cases—such as named formulas, header/total
 row current-row syntax, exotic bracket escapes, and dynamic address
 construction—where FormulaFence intentionally does not guess at dependencies.
+
+Static internal 3-D A1 references such as `Jan:Mar!B2:B10` are expanded across
+every tab between their endpoints in workbook order. FormulaFence records the
+cells that use them in a profile. If sheet insertion, removal, or movement
+changes the resolved span while the formula text remains the same, it emits
+`FF014`; `no_3d_reference_scope_changes` turns that condition into `FFP014`.
+External 3-D forms remain external-link hazards; malformed, endpoint-missing,
+and non-A1 3-D forms stay visible as unresolved coverage rather than being
+assigned to a synthetic sheet.
 
 ## Exit status
 

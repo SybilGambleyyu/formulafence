@@ -29,6 +29,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         f"- **Non-empty cells:** {workbook['nonempty_cells']}",
         f"- **Formula cells:** {workbook['formula_cells']}",
         f"- **Tables:** {workbook['table_count']}",
+        f"- **3-D reference formulas:** {workbook['three_d_reference_cells']}",
         f"- **VBA payload:** {'present' if workbook['has_vba'] else 'absent'}",
         "",
         "## Sheets",
@@ -70,6 +71,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             lines.append(f"- Explicit external reference: `{location}`")
         for location in features["broken_reference_cells"]:
             lines.append(f"- Broken `#REF!` formula: `{location}`")
+    if features["three_d_reference_cells"]:
+        lines.extend(["", "## 3-D worksheet references", ""])
+        for issue in features["three_d_reference_cells"]:
+            tokens = ", ".join(f"`{token}`" for token in issue["tokens"])
+            lines.append(f"- Static 3-D reference at `{issue['location']}`: {tokens}")
     if (
         features["parser_warnings"]
         or features["unresolved_reference_cells"]

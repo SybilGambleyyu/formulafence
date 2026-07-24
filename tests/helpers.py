@@ -77,6 +77,26 @@ def make_current_row_table_model(path: Path) -> Path:
     return path
 
 
+def make_three_d_model(path: Path) -> Path:
+    """Create a period-stack workbook with one static 3-D summary formula."""
+    workbook = Workbook()
+    january = workbook.active
+    january.title = "Jan"
+    january["A1"] = "Period input"
+    january["B2"] = 10
+
+    for title, amount in (("Feb", 20), ("Mar", 30)):
+        period = workbook.create_sheet(title)
+        period["A1"] = "Period input"
+        period["B2"] = amount
+
+    summary = workbook.create_sheet("Summary")
+    summary["A1"] = "3-D consolidation"
+    summary["B2"] = "=SUM(Jan:Mar!B2)"
+    workbook.save(path)
+    return path
+
+
 def rewrite(path: Path, mutate: Callable[[Workbook], None]) -> Path:
     """Load, mutate, and save a fixture in place."""
     from openpyxl import load_workbook

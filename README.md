@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.5.0/formulafence-0.5.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.6.0/formulafence-0.6.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -66,6 +66,7 @@ rules:
   no_new_unresolved_references: true
   no_new_dynamic_references: true
   no_table_definition_changes: true
+  no_3d_reference_scope_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
 
@@ -84,9 +85,9 @@ allowed_changes:
 | Capability | What it catches |
 | --- | --- |
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
-| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named-range, and basic Excel-table references |
+| Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named-range, Excel-table, and 3-D worksheet references |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), and dynamic-reference functions (`INDIRECT`/`OFFSET`) |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -107,6 +108,16 @@ qualified forms such as `Sales[@Amount]` and
 total, cross-sheet, ambiguous, and complex bracket-escape cases remain explicit
 coverage notes. The supported subset follows Excel's documented
 [structured-reference semantics](https://support.microsoft.com/en-us/excel/using-structured-references-with-excel-tables).
+
+FormulaFence also expands internal static 3-D A1 references such as
+`Jan:Mar!B2:B10` over every worksheet tab between the named endpoints. Profiles
+identify those formula cells. If an unchanged 3-D formula's tab span changes
+because a sheet is inserted, removed, or moved, FormulaFence emits `FF014`; the
+`no_3d_reference_scope_changes` policy rule can make that a hard boundary.
+Unknown endpoints and non-A1 constructs remain explicit coverage cases rather
+than invented dependencies; external 3-D references remain external-link
+hazards. This follows Excel's
+[3-D-reference behavior](https://support.microsoft.com/en-us/excel/create-a-3-d-reference-to-the-same-cell-range-on-multiple-worksheets).
 
 ## Development
 

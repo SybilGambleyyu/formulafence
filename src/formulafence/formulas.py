@@ -51,6 +51,7 @@ class FormulaInspection:
     references: tuple[ParsedReference, ...]
     unresolved_range_tokens: tuple[str, ...]
     dynamic_reference_functions: tuple[str, ...]
+    three_d_reference_tokens: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -164,6 +165,10 @@ def parse_reference_token(value: str) -> ParsedReference | None:
     normalised_sheet, external = _normalise_sheet_name(sheet)
     if external:
         return ParsedReference(None, None, None, None, None, value, is_external=True)
+    if normalised_sheet is not None and ":" in normalised_sheet:
+        # A 3-D reference needs workbook tab order to resolve safely. Returning
+        # None here prevents an invented ``Sheet1:Sheet3`` pseudo-sheet edge.
+        return None
 
     # Table references and named ranges arrive as RANGE tokens too. Their
     # resolution is deliberately handled by inspect_formula, where a workbook
@@ -184,6 +189,54 @@ def parse_reference_token(value: str) -> ParsedReference | None:
         max_column,
         max_row,
         value,
+    )
+
+
+def resolve_3d_reference(
+    value: str, sheet_order: Sequence[str] | None
+) -> tuple[ParsedReference, ...] | None:
+    """Expand a static Excel 3-D A1 reference across its tab-order endpoints.
+
+    Excel treats ``Sales:Marketing!B3`` as the same cell on every worksheet
+    from ``Sales`` through ``Marketing`` in workbook tab order. There is no
+    safe single-sheet approximation, so unknown, external, malformed, or
+    endpoint-missing references deliberately return ``None`` for coverage
+    reporting instead of creating a fictitious sheet dependency.
+    """
+    if not sheet_order:
+        return None
+    sheet, address = _split_sheet_reference(value)
+    normalised_sheet, external = _normalise_sheet_name(sheet)
+    if external or normalised_sheet is None:
+        return None
+    first_sheet, separator, last_sheet = normalised_sheet.partition(":")
+    if not separator or not first_sheet or not last_sheet or ":" in last_sheet:
+        return None
+
+    sheet_positions = {title.casefold(): position for position, title in enumerate(sheet_order)}
+    first_position = sheet_positions.get(first_sheet.casefold())
+    last_position = sheet_positions.get(last_sheet.casefold())
+    if first_position is None or last_position is None or first_position > last_position:
+        return None
+    try:
+        min_column, min_row, max_column, max_row = range_boundaries(address)
+    except ValueError:
+        return None
+
+    min_column = min_column or 1
+    max_column = max_column or MAX_EXCEL_COLUMN
+    min_row = min_row or 1
+    max_row = max_row or MAX_EXCEL_ROW
+    return tuple(
+        ParsedReference(
+            sheet=sheet_order[position],
+            min_column=min_column,
+            min_row=min_row,
+            max_column=max_column,
+            max_row=max_row,
+            raw=value,
+        )
+        for position in range(first_position, last_position + 1)
     )
 
 
@@ -608,14 +661,15 @@ def inspect_formula(
     named_references: Mapping[str, Sequence[ParsedReference]] | None = None,
     structured_tables: Mapping[str, StructuredTable] | None = None,
     origin: tuple[str, str] | None = None,
+    sheet_order: Sequence[str] | None = None,
 ) -> FormulaInspection:
     """Inspect static reference coverage while resolving known named ranges.
 
     A caller provides a case-folded name-to-range map assembled from the
     workbook. Supported fully qualified table references are resolved from table
-    metadata, while context-bound row references require the formula origin.
-    Other non-A1 tokens are returned explicitly instead of being silently
-    omitted from the graph.
+    metadata, context-bound row references require the formula origin, and
+    3-D references require workbook tab order. Other non-A1 tokens are returned
+    explicitly instead of being silently omitted from the graph.
     """
     try:
         tokens = Tokenizer(formula).items
@@ -626,11 +680,17 @@ def inspect_formula(
     references: list[ParsedReference] = []
     unresolved_range_tokens: list[str] = []
     dynamic_reference_functions: list[str] = []
+    three_d_reference_tokens: list[str] = []
     for token in tokens:
         if token.type == "OPERAND" and token.subtype == "RANGE":
             reference = parse_reference_token(token.value)
             if reference is not None:
                 references.append(reference)
+                continue
+            three_d_reference = resolve_3d_reference(token.value, sheet_order)
+            if three_d_reference is not None:
+                references.extend(three_d_reference)
+                three_d_reference_tokens.append(token.value)
                 continue
             named_range = resolved_names.get(reference_lookup_key(token.value))
             if named_range:
@@ -651,6 +711,7 @@ def inspect_formula(
         references=tuple(references),
         unresolved_range_tokens=tuple(dict.fromkeys(unresolved_range_tokens)),
         dynamic_reference_functions=tuple(dict.fromkeys(dynamic_reference_functions)),
+        three_d_reference_tokens=tuple(dict.fromkeys(three_d_reference_tokens)),
     )
 
 
@@ -659,10 +720,13 @@ def extract_references(
     named_references: Mapping[str, Sequence[ParsedReference]] | None = None,
     structured_tables: Mapping[str, StructuredTable] | None = None,
     origin: tuple[str, str] | None = None,
+    sheet_order: Sequence[str] | None = None,
 ) -> list[ParsedReference]:
     """Return A1-style, supplied named-range, and static table references."""
     return list(
-        inspect_formula(formula, named_references, structured_tables, origin).references
+        inspect_formula(
+            formula, named_references, structured_tables, origin, sheet_order
+        ).references
     )
 
 

@@ -30,3 +30,13 @@ support. FormulaFence now captures that as an explicit coverage note rather than
 allowing a dependency warning to leak into CI logs. This is a useful result, not
 a pass/fail claim about the model itself: unsupported workbook features should
 remain visible to the reviewer.
+
+## Controlled local change
+
+On a local, non-distributed copy, we replaced the formula in
+`'5 - Exit Waterfall'!O6` with a numeric value and ran the starter policy. The
+check identified a `formula_to_value` change, traced **330 downstream formula
+cells**, and failed both the formula-override and default impact-limit controls
+(`FFP001`, `FFP009`). The end-to-end check completed in approximately two
+seconds in the release environment. This is a compatibility demonstration, not
+a performance guarantee or an assertion about the source model's correctness.

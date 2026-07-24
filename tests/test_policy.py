@@ -8,6 +8,7 @@ from formulafence.policy import evaluate_policy, parse_policy
 from formulafence.workbook import load_snapshot
 
 from .helpers import (
+    change_chart_definition_material,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
     change_legacy_vml_control_controls,
@@ -16,6 +17,7 @@ from .helpers import (
     change_ribbon_customization_callback,
     change_worksheet_embedded_control_controls,
     change_xlm_macro_sheet_controls,
+    make_chart_definition_model,
     make_conditional_formatting_model,
     make_data_validation_model,
     make_external_data_refresh_model,
@@ -302,6 +304,19 @@ def test_policy_can_block_office_web_addin_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP028"}
+
+
+def test_policy_can_block_chart_definition_changes(tmp_path) -> None:
+    baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    change_chart_definition_material(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_chart_definition_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP030"}
 
 
 def test_policy_can_block_worksheet_embedded_control_changes(tmp_path) -> None:

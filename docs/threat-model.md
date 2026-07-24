@@ -178,6 +178,23 @@ review prompt, not proof of an error.
   reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts.
   Worksheet-scoped web-extension markup outside this task-pane chain is not
   yet modeled.
+- DrawingML chart definitions and cached presentation data are followed from
+  standard worksheet or chartsheet `drawing` relationships through chart parts
+  and direct `userShapes` overlays. FormulaFence privately fingerprints
+  non-cache chart definition material separately from `numCache`, `strCache`,
+  and `multiLvlStrCache` material, plus overlay XML, normalized relationship
+  semantics, and bounded direct internal related-part payloads. Profiles expose
+  only structural counts; chart formulas, cached values, titles, shape text,
+  relationship targets, XML, and payload bytes remain private. A material
+  change emits `FF030` and can be blocked with
+  `no_chart_definition_changes`. FormulaFence does **not** calculate a series
+  formula, render a chart, infer chart-to-cell impact, follow an external
+  target, parse media or embedded-package formats, or interpret modern
+  `chartEx`/nested-chart semantics. Missing, malformed, orphaned, unbound,
+  oversized, over-budget, or unrecognized material remains a visible
+  parser-coverage warning. Chart and overlay XML reads are bounded to 16 MiB
+  per part, 64 MiB per workbook, and 512 parts; direct related payload hashes
+  are bounded to 32 MiB per part, 64 MiB per workbook, and 512 parts.
 - Relationship-backed worksheet controls and OLE objects are read from raw
   worksheet control/OLE markup and direct control relationships before the
   workbook reader can omit them. FormulaFence also follows `vmlDrawing`
@@ -240,14 +257,16 @@ review prompt, not proof of an error.
   is deliberately omitted rather than partially guessed.
 - It inventories sheet visibility, defined names, calculation settings, the VBA
   payload, XLM macro-sheet packages, RibbonX custom UI packages, Office Web
-  Add-in task-pane packages, relationship-backed worksheet ActiveX/form-control/
-  legacy-VML/OLE chains, the protection controls above, external-data refresh controls,
+  Add-in task-pane packages, DrawingML chart definition/cached-presentation/
+  overlay chains, relationship-backed worksheet ActiveX/form-control/legacy-
+  VML/OLE chains, the protection controls above, external-data refresh controls,
   external-link packages, and private Power Query definition material. It does
-  not yet diff chart definitions, PivotTable layout or cached data, Ribbon image
-  payloads, VML/drawing control layout or comment content, embedded OLE/package formats,
-  worksheet-scoped Web Add-in markup, Power Query runtime behavior or returned
-  data, ordinary styles beyond direct protection assignments, complete Excel
-  style-cascade results, or every OOXML part.
+  not yet diff PivotTable layout or cached data, modern `chartEx` or nested-chart
+  semantics, general drawing layout/objects or chart-to-cell impact, Ribbon image
+  payloads, VML/drawing control layout or comment content, embedded OLE/package
+  formats, worksheet-scoped Web Add-in markup, Power Query runtime behavior or
+  returned data, ordinary styles beyond direct protection assignments, complete
+  Excel style-cascade results, or every OOXML part.
 - The tool preserves Excel formula text and uses a limited A1-reference
   normalizer for peer-pattern detection; it is not an Excel-compatible parser
   or calculation engine.

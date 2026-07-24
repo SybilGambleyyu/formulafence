@@ -1030,6 +1030,91 @@ class OfficeWebAddinSnapshot:
 
 
 @dataclass(frozen=True)
+class ChartDefinitionSnapshot:
+    """Safe aggregate of DrawingML chart definitions and presentation material.
+
+    Excel chart parts sit behind worksheet or chartsheet drawing relationships,
+    outside the ordinary cell grid. Private signatures retain chart formulas,
+    formatting, cached points, overlay-shape definitions, relationships, and
+    bounded direct payload evidence for comparison; ``to_dict`` deliberately
+    exposes only structural counts.
+    """
+
+    chart_host_sheet_count: int = 0
+    chart_drawing_part_count: int = 0
+    chart_reference_count: int = 0
+    chart_part_count: int = 0
+    chart_user_shape_part_count: int = 0
+    chart_user_shape_count: int = 0
+    chart_type_count: int = 0
+    series_count: int = 0
+    title_count: int = 0
+    data_reference_count: int = 0
+    numeric_data_reference_count: int = 0
+    string_data_reference_count: int = 0
+    literal_data_point_count: int = 0
+    cached_data_point_count: int = 0
+    pivot_source_count: int = 0
+    external_data_reference_count: int = 0
+    user_shape_reference_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    internal_related_part_count: int = 0
+    fingerprinted_related_part_count: int = 0
+    uninspected_related_part_count: int = 0
+    unrecognized_part_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    cached_data_signature: str | None = field(default=None, repr=False)
+    user_shape_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+    related_part_payload_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.chart_host_sheet_count
+            or self.chart_drawing_part_count
+            or self.chart_reference_count
+            or self.chart_part_count
+            or self.chart_user_shape_part_count
+            or self.unrecognized_part_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return chart evidence without labels, formulas, values, or targets."""
+        return {
+            "present": self.present,
+            "chart_host_sheet_count": self.chart_host_sheet_count,
+            "chart_drawing_part_count": self.chart_drawing_part_count,
+            "chart_reference_count": self.chart_reference_count,
+            "chart_part_count": self.chart_part_count,
+            "chart_user_shape_part_count": self.chart_user_shape_part_count,
+            "chart_user_shape_count": self.chart_user_shape_count,
+            "chart_type_count": self.chart_type_count,
+            "series_count": self.series_count,
+            "title_count": self.title_count,
+            "data_reference_count": self.data_reference_count,
+            "numeric_data_reference_count": self.numeric_data_reference_count,
+            "string_data_reference_count": self.string_data_reference_count,
+            "literal_data_point_count": self.literal_data_point_count,
+            "cached_data_point_count": self.cached_data_point_count,
+            "pivot_source_count": self.pivot_source_count,
+            "external_data_reference_count": self.external_data_reference_count,
+            "user_shape_reference_count": self.user_shape_reference_count,
+            "related_relationship_count": self.related_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+            "internal_related_part_count": self.internal_related_part_count,
+            "fingerprinted_related_part_count": self.fingerprinted_related_part_count,
+            "uninspected_related_part_count": self.uninspected_related_part_count,
+            "unrecognized_part_count": self.unrecognized_part_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -1407,6 +1492,9 @@ class WorkbookSnapshot:
     office_web_addins: OfficeWebAddinSnapshot = field(
         default_factory=OfficeWebAddinSnapshot
     )
+    chart_definitions: ChartDefinitionSnapshot = field(
+        default_factory=ChartDefinitionSnapshot
+    )
     worksheet_embedded_controls: WorksheetEmbeddedControlSnapshot = field(
         default_factory=WorksheetEmbeddedControlSnapshot
     )
@@ -1517,6 +1605,14 @@ class WorkbookSnapshot:
                 self.office_web_addins.auto_show_taskpane_count
             ),
             "has_office_web_addins": self.office_web_addins.present,
+            "chart_host_sheet_count": self.chart_definitions.chart_host_sheet_count,
+            "chart_drawing_part_count": self.chart_definitions.chart_drawing_part_count,
+            "chart_part_count": self.chart_definitions.chart_part_count,
+            "chart_series_count": self.chart_definitions.series_count,
+            "chart_cached_data_point_count": (
+                self.chart_definitions.cached_data_point_count
+            ),
+            "has_chart_definitions": self.chart_definitions.present,
             "worksheet_embedded_control_sheet_count": (
                 self.worksheet_embedded_controls.control_sheet_count
             ),

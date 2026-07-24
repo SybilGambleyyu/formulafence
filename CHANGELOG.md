@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.26.0 — 2026-07-24
+
+- Inspect DrawingML chart definitions, cached series presentation data, and
+  chart `userShapes` overlays directly through standard worksheet/chartsheet
+  drawing relationships. Private fingerprints retain chart definition and cache
+  material separately, normalized relationships, overlays, and bounded direct
+  related-part payload hashes without serializing formulas, cached values,
+  titles, shape text, relationship targets, XML, or payload bytes.
+- Emit `FF030` for chart bindings, definitions, cached data, overlays,
+  relationships, or direct related-payload changes, and add the fail-closed
+  `no_chart_definition_changes` policy rule (`FFP030`). Writer-chosen
+  relationship IDs and equivalent internal target spellings are normalized
+  away; malformed, orphaned, unbound, oversized, over-budget, or unrecognized
+  material remains a visible coverage warning. Chart and overlay XML reads are
+  bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts; direct related
+  payload hashes are bounded to 32 MiB per part, 64 MiB per workbook, and 512
+  parts.
+- Never calculate a series formula, render a chart, infer chart-to-cell impact,
+  follow an external target, parse media or embedded-package formats, or
+  interpret modern `chartEx`/nested-chart semantics.
+
 ## 0.25.0 — 2026-07-24
 
 - Extend the existing worksheet-control guardrail to legacy VML form controls.

@@ -430,6 +430,44 @@ structure and Microsoft’s notes on [`FmlaMacro`](https://learn.microsoft.com/e
 [`FmlaRange`](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/3d0c9716-88c5-4af3-b63a-feef60b8ebd8),
 and camera ranges.
 
+## DrawingML chart definitions and cached presentation data — 2026-07-24
+
+FormulaFence 0.26.0 was validated with controlled raw-OOXML `.xlsx` packages
+starting from a generated bar chart and its standard worksheet-to-drawing-to-
+chart relationship chain. The fixture then added numeric and string series
+caches, a chart `userShapes` overlay with private text, and an overlay image
+relationship. All chart text, formulas, cached values, relationship targets,
+and image bytes were harmless fixture values; the workbook was never opened in
+Office. FormulaFence only inspected bounded package parts before the ordinary
+workbook reader loaded the file.
+
+Changing only private chart definition material, an overlay shape, or a direct
+related presentation payload emitted `FF030` with the matching private
+definition, overlay, relationship, or payload-material flag. Changing only a
+cached series value emitted `FF030` with only the cached-series-material flag.
+Profiles exposed safe structural counts for host sheets, chart parts, series,
+references, caches, overlays, relationships, and bounded payloads. Synthetic
+formula text, cached values, titles, shape text, relationship targets, XML, and
+payload markers were verified absent from JSON, Markdown, and SARIF output. The
+`no_chart_definition_changes` policy produced `FFP030`.
+
+The controlled suite also covered a chartsheet chart chain, relationship-ID-
+only rewrites, equivalent internal target spellings, an unexpected chart root,
+an externally targeted overlay relation, and deliberately lowered chart-XML and
+related-payload budgets. Identifier and path-spelling churn produced no chart
+finding; the external target was counted without being fetched or exposed;
+malformed or bounded-out material remained explicitly visible as a coverage
+warning. Production chart
+and overlay XML reads are bounded to 16 MiB per part, 64 MiB per workbook, and
+512 parts; direct related payload hashes are limited to 32 MiB per part, 64 MiB
+per workbook, and 512 parts. This validates static, relationship-aware
+comparison and data minimisation—not series-formula calculation, chart
+rendering, chart-to-cell impact analysis, external-target retrieval, media or
+embedded-package parsing, source trust, or modern `chartEx`/nested-chart
+semantics. The fixture follows the OOXML [chart-part model](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Chart_topic_ID0ELZLM.html),
+the documented [number-reference cache](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.numberreference?view=openxml-3.0.1),
+and the [chart user-shapes relationship](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.usershapesreference?view=openxml-2.20.0).
+
 ## Office Web Add-in task-pane controls and redaction — 2026-07-24
 
 FormulaFence 0.23.0 was validated with controlled raw-OOXML `.xlsx` packages

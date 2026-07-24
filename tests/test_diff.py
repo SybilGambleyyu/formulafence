@@ -15,6 +15,8 @@ from formulafence.workbook import load_snapshot, profile_snapshot
 from .helpers import (
     add_conditional_formatting_databar_extension,
     add_protected_range,
+    change_chart_cached_data,
+    change_chart_definition_material,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
     change_legacy_vml_control_controls,
@@ -30,6 +32,7 @@ from .helpers import (
     change_worksheet_embedded_control_payload,
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
+    corrupt_chart_definition_root,
     corrupt_legacy_vml_control_root,
     corrupt_office_web_addin_definition_root,
     corrupt_ribbon_customization_root,
@@ -37,6 +40,8 @@ from .helpers import (
     corrupt_xlm_macro_sheet_root,
     duplicate_external_link_definition,
     duplicate_external_link_sheet_names,
+    externalize_chart_overlay_relationship,
+    make_chart_definition_model,
     make_conditional_formatting_model,
     make_current_row_table_model,
     make_data_validation_model,
@@ -64,6 +69,7 @@ from .helpers import (
     mark_array_formula_unclassified,
     rebind_external_link_declaration,
     remove_xlm_macro_sheet_related_part_payload,
+    renumber_chart_relationships,
     renumber_external_link_declaration_relationships,
     renumber_legacy_vml_control_relationships,
     renumber_office_web_addin_relationships,
@@ -72,6 +78,7 @@ from .helpers import (
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
     rewrite,
+    rewrite_chart_internal_target_spelling,
     rewrite_legacy_vml_control_internal_target_spelling,
     rewrite_office_web_addin_internal_target_spelling,
     rewrite_ribbon_customization_internal_target_spelling,
@@ -2847,6 +2854,213 @@ def test_malformed_worksheet_embedded_control_activex_parts_fail_closed(tmp_path
         change.kind for change in report.changes
     }
     assert "FF029" in {finding.rule_id for finding in report.findings}
+
+
+def test_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
+    baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    change_chart_definition_material(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    chart_change = next(
+        change for change in report.changes if change.kind == "chart_definitions_changed"
+    )
+
+    charts = profile["chart_definitions"]
+    assert baseline_snapshot.summary()["chart_host_sheet_count"] == 1
+    assert baseline_snapshot.summary()["chart_part_count"] == 1
+    assert baseline_snapshot.summary()["chart_series_count"] == 1
+    assert baseline_snapshot.summary()["chart_cached_data_point_count"] == 6
+    assert charts == {
+        "present": True,
+        "chart_host_sheet_count": 1,
+        "chart_drawing_part_count": 1,
+        "chart_reference_count": 1,
+        "chart_part_count": 1,
+        "chart_user_shape_part_count": 1,
+        "chart_user_shape_count": 1,
+        "chart_type_count": 1,
+        "series_count": 1,
+        "title_count": 1,
+        "data_reference_count": 3,
+        "numeric_data_reference_count": 2,
+        "string_data_reference_count": 1,
+        "literal_data_point_count": 0,
+        "cached_data_point_count": 6,
+        "pivot_source_count": 0,
+        "external_data_reference_count": 0,
+        "user_shape_reference_count": 1,
+        "related_relationship_count": 3,
+        "external_relationship_count": 0,
+        "internal_related_part_count": 1,
+        "fingerprinted_related_part_count": 1,
+        "uninspected_related_part_count": 0,
+        "unrecognized_part_count": 0,
+    }
+    assert baseline_snapshot.parser_warnings == ()
+    assert "## Chart definitions and cached presentation data" in markdown
+    assert chart_change.details["chart_definition_material_changed"] is True
+    assert chart_change.details["overlay_shape_material_changed"] is True
+    assert chart_change.details["related_part_relationships_changed"] is True
+    assert chart_change.details["related_part_payload_material_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF030"}
+
+    sensitive_values = (
+        "Private baseline chart title",
+        "Private candidate chart title",
+        "Private baseline overlay text",
+        "Private candidate overlay text",
+        "Inputs!$B$3:$B$4",
+        "private-chart-overlay-baseline.png",
+        "private-chart-overlay-candidate.png",
+        "999",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_chart_cached_data_is_compared_separately_from_chart_definition(tmp_path) -> None:
+    baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    change_chart_cached_data(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    chart_change = next(
+        change for change in report.changes if change.kind == "chart_definitions_changed"
+    )
+
+    assert chart_change.details["cached_series_material_changed"] is True
+    assert "chart_definition_material_changed" not in chart_change.details
+    assert "overlay_shape_material_changed" not in chart_change.details
+    assert {finding.rule_id for finding in report.findings} >= {"FF030"}
+
+
+def test_chartsheet_chart_parts_are_discovered_from_drawing_relationships(tmp_path) -> None:
+    workbook = make_protection_model(tmp_path / "chartsheet.xlsx", include_chartsheet=True)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.chart_definitions.present is True
+    assert snapshot.chart_definitions.chart_host_sheet_count == 1
+    assert snapshot.chart_definitions.chart_part_count == 1
+    assert snapshot.chart_definitions.series_count == 1
+    assert snapshot.parser_warnings == ()
+
+
+def test_chartless_workbook_does_not_consume_chart_xml_budget(tmp_path, monkeypatch) -> None:
+    workbook = make_model(tmp_path / "chartless.xlsx")
+    monkeypatch.setattr(workbook_module, "_CHART_MAX_XML_PART_BYTES", 1)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.chart_definitions.present is False
+    assert snapshot.chart_definitions.chart_part_count == 0
+    assert not any("chart XML" in warning for warning in snapshot.parser_warnings)
+
+
+def test_external_chart_targets_are_not_followed_or_exposed(tmp_path) -> None:
+    baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_chart_definition_model(tmp_path / "external-target.xlsx")
+    externalize_chart_overlay_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.chart_definitions.external_relationship_count == 1
+    assert candidate_snapshot.chart_definitions.internal_related_part_count == 0
+    assert candidate_snapshot.parser_warnings == ()
+    assert "FF030" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all(
+        "example.invalid/private-chart-overlay.png" not in artifact
+        for artifact in rendered_artifacts
+    )
+
+
+def test_chart_relationship_identifier_and_target_spelling_noise_is_ignored(tmp_path) -> None:
+    baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
+    renumbered = make_chart_definition_model(tmp_path / "renumbered.xlsx")
+    target_rewritten = make_chart_definition_model(tmp_path / "target-rewritten.xlsx")
+    renumber_chart_relationships(renumbered)
+    rewrite_chart_internal_target_spelling(target_rewritten)
+
+    renumbered_report = compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered))
+    target_report = compare_snapshots(
+        load_snapshot(baseline), load_snapshot(target_rewritten)
+    )
+
+    assert "chart_definitions_changed" not in {
+        change.kind for change in renumbered_report.changes
+    }
+    assert "FF030" not in {finding.rule_id for finding in renumbered_report.findings}
+    assert "chart_definitions_changed" not in {
+        change.kind for change in target_report.changes
+    }
+    assert "FF030" not in {finding.rule_id for finding in target_report.findings}
+
+
+def test_malformed_chart_parts_fail_closed(tmp_path) -> None:
+    baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    corrupt_chart_definition_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.chart_definitions.unrecognized_part_count >= 1
+    assert any(
+        "chart part with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "chart_definitions_changed" in {change.kind for change in report.changes}
+    assert "FF030" in {finding.rule_id for finding in report.findings}
+
+
+def test_chart_xml_and_related_part_budgets_fail_closed(tmp_path, monkeypatch) -> None:
+    workbook = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    monkeypatch.setattr(workbook_module, "_CHART_MAX_XML_PART_BYTES", 1)
+
+    oversized_snapshot = load_snapshot(workbook)
+
+    assert oversized_snapshot.chart_definitions.unrecognized_part_count >= 1
+    assert any(
+        "oversized chart XML part" in warning
+        for warning in oversized_snapshot.parser_warnings
+    )
+
+    payload_workbook = make_chart_definition_model(tmp_path / "payload.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_CHART_MAX_XML_PART_BYTES",
+        16 * 1024 * 1024,
+    )
+    monkeypatch.setattr(workbook_module, "_CHART_RELATED_PART_MAX_BYTES", 1)
+    payload_snapshot = load_snapshot(payload_workbook)
+
+    assert payload_snapshot.chart_definitions.internal_related_part_count == 1
+    assert payload_snapshot.chart_definitions.fingerprinted_related_part_count == 0
+    assert payload_snapshot.chart_definitions.uninspected_related_part_count == 1
+    assert any(
+        "oversized chart related part" in warning
+        for warning in payload_snapshot.parser_warnings
+    )
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

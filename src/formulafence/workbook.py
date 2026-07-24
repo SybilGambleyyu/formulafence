@@ -37,6 +37,7 @@ from formulafence.models import (
     CellProtectionAssignmentSnapshot,
     CellProtectionDefaultSnapshot,
     CellSnapshot,
+    ChartDefinitionSnapshot,
     ConditionalFormattingExtensionSnapshot,
     ConditionalFormattingSnapshot,
     DataValidationSnapshot,
@@ -173,19 +174,66 @@ _WORKSHEET_CONTROL_PROPERTY_PART_PATTERN = re.compile(
 _WORKSHEET_LEGACY_VML_PART_PATTERN = re.compile(
     r"^xl/drawings/[^/]+\.vml$", re.IGNORECASE
 )
+_CHART_PART_PATTERN = re.compile(r"^xl/charts/[^/]+\.xml$", re.IGNORECASE)
+_CHART_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_CHART_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_CHART_TOTAL_XML_MAX_COUNT = 512
+_CHART_RELATED_PART_MAX_BYTES = 32 * 1024 * 1024
+_CHART_RELATED_PART_TOTAL_MAX_BYTES = 64 * 1024 * 1024
+_CHART_RELATED_PART_TOTAL_MAX_COUNT = 512
+_CHART_RELATED_PART_HASH_CHUNK_BYTES = 1024 * 1024
 _ACTIVEX_NS = "http://schemas.microsoft.com/office/2006/activeX"
 _VML_NS = "urn:schemas-microsoft-com:vml"
 _VML_OFFICE_NS = "urn:schemas-microsoft-com:office:office"
 _VML_EXCEL_NS = "urn:schemas-microsoft-com:office:excel"
+_DRAWINGML_SPREADSHEET_NS = (
+    "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+)
+_DRAWINGML_CHART_NS = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+_DRAWINGML_CHART_DRAWING_NS = (
+    "http://schemas.openxmlformats.org/drawingml/2006/chartDrawing"
+)
 _WORKSHEET_CONTROL_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/control"
 _WORKSHEET_CTRLPROP_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/ctrlProp"
 _WORKSHEET_OLE_OBJECT_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/oleObject"
 _WORKSHEET_EMBEDDED_PACKAGE_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/package"
 _WORKSHEET_VML_DRAWING_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/vmlDrawing"
+_WORKSHEET_DRAWING_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/drawing"
+_CHART_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/chart"
+_CHART_USER_SHAPES_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/chartUserShapes"
 _WORKSHEET_ACTIVEX_BINARY_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary"
 )
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+_CHART_RELATIONSHIP_ATTRIBUTES = frozenset(
+    {
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}embed",
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}link",
+    }
+)
+_CHART_CACHE_ELEMENT_NAMES = frozenset({"numCache", "strCache", "multiLvlStrCache"})
+_CHART_LITERAL_ELEMENT_NAMES = frozenset({"numLit", "strLit", "multiLvlStrLit"})
+_CHART_TYPE_ELEMENT_NAMES = frozenset(
+    {
+        "area3DChart",
+        "areaChart",
+        "bar3DChart",
+        "barChart",
+        "bubbleChart",
+        "doughnutChart",
+        "line3DChart",
+        "lineChart",
+        "ofPieChart",
+        "pie3DChart",
+        "pieChart",
+        "radarChart",
+        "scatterChart",
+        "stockChart",
+        "surface3DChart",
+        "surfaceChart",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -267,6 +315,14 @@ class _OfficeWebAddinMetadata:
     """Raw Office Web Add-in task-pane evidence outside the workbook reader."""
 
     addins: OfficeWebAddinSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ChartDefinitionMetadata:
+    """Raw chart evidence retained before the workbook reader can omit it."""
+
+    charts: ChartDefinitionSnapshot
     warnings: tuple[str, ...]
 
 
@@ -366,6 +422,28 @@ class _WorksheetControlRawRelationship:
         )
 
 
+@dataclass(frozen=True)
+class _ChartRawRelationship:
+    """One private chart-package relationship and its canonical target."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return relationship semantics while ignoring arbitrary identifiers."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        return (
+            self.relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
 @dataclass
 class _RibbonCustomizationBudget:
     """Bound total custom-UI bytes read across one RibbonX package scan."""
@@ -380,6 +458,22 @@ class _OfficeWebAddinBudget:
 
     remaining_bytes: int = _WEB_EXTENSION_TOTAL_MAX_BYTES
     remaining_parts: int = _WEB_EXTENSION_TOTAL_MAX_COUNT
+
+
+@dataclass
+class _ChartXmlBudget:
+    """Bound chart, drawing, and overlay XML bytes in one package scan."""
+
+    remaining_bytes: int = _CHART_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _CHART_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _ChartRelatedPartBudget:
+    """Bound direct chart-presentation payload bytes in one package scan."""
+
+    remaining_bytes: int = _CHART_RELATED_PART_TOTAL_MAX_BYTES
+    remaining_parts: int = _CHART_RELATED_PART_TOTAL_MAX_COUNT
 
 
 @dataclass
@@ -495,6 +589,76 @@ class _WorksheetControlRelatedPartPayloadInspection:
     fingerprinted_part_count: int = 0
     uninspected_part_count: int = 0
     payload_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _ChartRelatedPartPayloadInspection:
+    """Private fingerprint result for direct chart-presentation payloads."""
+
+    internal_part_count: int = 0
+    fingerprinted_part_count: int = 0
+    uninspected_part_count: int = 0
+    payload_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _ChartDrawingInspection:
+    """Private chart bindings discovered in one worksheet/chart-sheet drawing."""
+
+    member: str
+    present: bool = False
+    chart_reference_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    chart_members: tuple[str, ...] = ()
+    unrecognized_count: int = 0
+    inspected: bool = False
+    declaration_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _ChartPartInspection:
+    """Private parsed state for one standard DrawingML chart part."""
+
+    member: str
+    chart_type_count: int = 0
+    series_count: int = 0
+    title_count: int = 0
+    data_reference_count: int = 0
+    numeric_data_reference_count: int = 0
+    string_data_reference_count: int = 0
+    literal_data_point_count: int = 0
+    cached_data_point_count: int = 0
+    pivot_source_count: int = 0
+    external_data_reference_count: int = 0
+    user_shape_reference_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    user_shape_members: tuple[str, ...] = ()
+    payload_members: tuple[str, ...] = ()
+    unresolved_payload_entries: tuple[tuple[str, str], ...] = ()
+    unrecognized_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
+    cached_data_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _ChartUserShapeInspection:
+    """Private parsed state for one chart-overlay drawing part."""
+
+    member: str
+    shape_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    payload_members: tuple[str, ...] = ()
+    unresolved_payload_entries: tuple[tuple[str, str], ...] = ()
+    unrecognized_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
+    relationship_signature: str | None = None
 
 
 @dataclass(frozen=True)
@@ -6560,6 +6724,1081 @@ def _office_web_addin_metadata(path: Path) -> _OfficeWebAddinMetadata:
     return _OfficeWebAddinMetadata(snapshot, tuple(sorted(warnings)))
 
 
+def _chart_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> tuple[_ChartRawRelationship, ...]:
+    """Read chart-package relationships without opening their targets."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for chart inspection "
+            f"({type(error).__name__}); affected charts were not compared."
+        )
+        return ()
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting charts; affected charts "
+            "were not compared."
+        )
+        return ()
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_ChartRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _ChartRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting charts; "
+            "affected charts may be incomplete."
+        )
+    return tuple(relationships)
+
+
+def _chart_relationship_signature(
+    relationships: tuple[_ChartRawRelationship, ...],
+) -> str | None:
+    """Fingerprint chart relationship semantics without identifier churn."""
+    material = sorted(relationship.semantic_key() for relationship in relationships)
+    return _private_external_data_signature(
+        tuple(
+            (f"relationship:{index}", repr(relationship))
+            for index, relationship in enumerate(material)
+        )
+    )
+
+
+def _chart_relationship_semantics(
+    relationships: tuple[_ChartRawRelationship, ...],
+    warnings: set[str],
+    *,
+    context: str,
+) -> dict[str, tuple[str, str, str]]:
+    """Resolve private chart relationship identifiers into stable semantics."""
+    relationships_by_id: dict[str, list[_ChartRawRelationship]] = defaultdict(list)
+    for relationship in relationships:
+        if relationship.relationship_id:
+            relationships_by_id[relationship.relationship_id].append(relationship)
+        else:
+            warnings.add(
+                "FormulaFence found a chart "
+                f"{context} relationship without an id; affected charts have a coverage gap."
+            )
+    semantics: dict[str, tuple[str, str, str]] = {}
+    for relationship_id, matches in relationships_by_id.items():
+        values = sorted(match.semantic_key() for match in matches)
+        if len(values) > 1:
+            warnings.add(
+                "FormulaFence found duplicate chart "
+                f"{context} relationship ids; affected charts have a coverage gap."
+            )
+        semantics[relationship_id] = values[0]
+    return semantics
+
+
+def _chart_xml_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+    *,
+    omit_cached_data: bool = False,
+) -> tuple[object, ...]:
+    """Canonicalize private chart XML while resolving relationship identifiers."""
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if attribute in _CHART_RELATIONSHIP_ATTRIBUTES:
+            relationship = relationship_semantics.get(value)
+            resolved = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+        else:
+            attributes.append((_xml_display_name(attribute), value))
+    children = tuple(
+        _chart_xml_fragment(
+            child,
+            relationship_semantics,
+            omit_cached_data=omit_cached_data,
+        )
+        for child in element
+        if not (
+            omit_cached_data
+            and _xml_namespace(child.tag) == _DRAWINGML_CHART_NS
+            and _xml_local_name(child.tag) in _CHART_CACHE_ELEMENT_NAMES
+        )
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+    )
+
+
+def _chart_xml_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _ChartXmlBudget,
+) -> tuple[bytes | None, str | None]:
+    """Read one bounded chart XML part without following relationship targets."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded chart XML part count budget; affected "
+            "charts have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("part-count-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a chart XML package part; affected charts "
+            "were not compared."
+        )
+        return None, _private_external_data_signature((("missing-member", member),))
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _CHART_MAX_XML_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized chart XML part; affected "
+            "charts have a coverage gap."
+        )
+        return None, _private_external_data_signature((("oversized-part", metadata),))
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded chart XML read budget; affected charts "
+            "have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a chart XML package part "
+            f"({type(error).__name__}); affected charts were not compared."
+        )
+        return None, _private_external_data_signature((("unreadable-part", metadata),))
+
+
+def _chart_related_part_payloads(
+    archive: ZipFile,
+    members: set[str],
+    unresolved_entries: list[tuple[str, str]],
+    warnings: set[str],
+    budget: _ChartRelatedPartBudget,
+) -> _ChartRelatedPartPayloadInspection:
+    """Fingerprint bounded direct chart-presentation payloads without opening them."""
+    entries = list(unresolved_entries)
+    fingerprinted_part_count = 0
+    uninspected_part_count = len(unresolved_entries)
+    for member in sorted(members, key=str.casefold):
+        if budget.remaining_parts == 0:
+            warnings.add(
+                "FormulaFence reached its bounded chart related-part count budget; "
+                "affected charts have a coverage gap."
+            )
+            entries.append(("part-count-budget-exhausted", member))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_parts -= 1
+        try:
+            info = archive.getinfo(member)
+        except KeyError:
+            warnings.add(
+                "FormulaFence could not locate a chart related part; affected charts "
+                "were not compared."
+            )
+            entries.append(("missing-part", member))
+            uninspected_part_count += 1
+            continue
+        metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+        if info.file_size > _CHART_RELATED_PART_MAX_BYTES:
+            warnings.add(
+                "FormulaFence did not fully read an oversized chart related part; "
+                "affected charts have a coverage gap."
+            )
+            entries.append(("oversized-part", metadata))
+            uninspected_part_count += 1
+            continue
+        if info.file_size > budget.remaining_bytes:
+            warnings.add(
+                "FormulaFence reached its bounded chart related-part read budget; "
+                "affected charts have a coverage gap."
+            )
+            entries.append(("read-budget-exhausted", metadata))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_bytes -= info.file_size
+        digest = hashlib.sha256()
+        bytes_read = 0
+        try:
+            with archive.open(info) as payload:
+                while chunk := payload.read(_CHART_RELATED_PART_HASH_CHUNK_BYTES):
+                    bytes_read += len(chunk)
+                    if bytes_read > info.file_size:
+                        raise ValueError("payload exceeded its declared size")
+                    digest.update(chunk)
+            if bytes_read != info.file_size:
+                raise ValueError("payload did not match its declared size")
+        except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+            warnings.add(
+                "FormulaFence could not fingerprint a chart related part "
+                f"({type(error).__name__}); affected charts were not compared."
+            )
+            entries.append(("unreadable-part", metadata))
+            uninspected_part_count += 1
+            continue
+        entries.append(("payload", repr((member, digest.hexdigest()))))
+        fingerprinted_part_count += 1
+
+    entries.sort()
+    return _ChartRelatedPartPayloadInspection(
+        internal_part_count=len(members) + len(unresolved_entries),
+        fingerprinted_part_count=fingerprinted_part_count,
+        uninspected_part_count=uninspected_part_count,
+        payload_signature=_private_external_data_signature(tuple(entries)),
+    )
+
+
+def _chart_drawing_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    xml_budget: _ChartXmlBudget,
+) -> _ChartDrawingInspection:
+    """Discover DrawingML chart bindings without interpreting worksheet cells."""
+    relationships = _chart_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="worksheet or chartsheet drawing",
+    )
+    relationship_semantics = _chart_relationship_semantics(
+        relationships,
+        warnings,
+        context="worksheet or chartsheet drawing",
+    )
+    relationship_by_id: dict[str, _ChartRawRelationship] = {}
+    for relationship in relationships:
+        if relationship.relationship_id and relationship.relationship_id not in relationship_by_id:
+            relationship_by_id[relationship.relationship_id] = relationship
+
+    payload, fallback_signature = _chart_xml_payload(
+        archive,
+        member,
+        warnings,
+        xml_budget,
+    )
+    if payload is None:
+        return _ChartDrawingInspection(
+            member=member,
+            unrecognized_count=1,
+            declaration_signature=fallback_signature,
+            relationship_signature=_chart_relationship_signature(relationships),
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a worksheet or chartsheet drawing XML part "
+            f"({type(error).__name__}); affected charts were not compared."
+        )
+        return _ChartDrawingInspection(
+            member=member,
+            unrecognized_count=1,
+            declaration_signature=_private_payload_signature(payload),
+            relationship_signature=_chart_relationship_signature(relationships),
+        )
+    if (
+        _xml_local_name(root.tag) != "wsDr"
+        or _xml_namespace(root.tag) != _DRAWINGML_SPREADSHEET_NS
+    ):
+        warnings.add(
+            "FormulaFence found a worksheet or chartsheet drawing part with an unexpected "
+            "root; affected charts were not compared."
+        )
+        return _ChartDrawingInspection(
+            member=member,
+            unrecognized_count=1,
+            declaration_signature=_private_payload_signature(payload),
+            relationship_signature=_chart_relationship_signature(relationships),
+        )
+
+    chart_tag = f"{{{_DRAWINGML_CHART_NS}}}chart"
+    relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    chart_nodes = list(root.iter(chart_tag))
+    selected_relationships: list[_ChartRawRelationship] = []
+    referenced_relationship_ids: set[str] = set()
+    chart_members: set[str] = set()
+    unrecognized_count = 0
+
+    for chart in chart_nodes:
+        relationship_id = chart.get(relationship_attribute)
+        if relationship_id is None:
+            warnings.add(
+                "FormulaFence found a DrawingML chart reference without a relationship id; "
+                "affected charts have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        referenced_relationship_ids.add(relationship_id)
+        relationship = relationship_by_id.get(relationship_id)
+        if relationship is None:
+            warnings.add(
+                "FormulaFence found a DrawingML chart reference without a matching "
+                "relationship; affected charts have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        selected_relationships.append(relationship)
+        if relationship.relationship_type != _CHART_RELATIONSHIP:
+            warnings.add(
+                "FormulaFence found a DrawingML chart reference with an unexpected "
+                "relationship type; affected charts have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        if relationship.target_mode.casefold() != "internal" or relationship.safe_target is None:
+            warnings.add(
+                "FormulaFence found a DrawingML chart reference without a safe internal "
+                "target; affected charts were not compared."
+            )
+            unrecognized_count += 1
+            continue
+        chart_members.add(relationship.safe_target)
+
+    for relationship in relationships:
+        if relationship.relationship_type != _CHART_RELATIONSHIP:
+            continue
+        if (
+            relationship.relationship_id is None
+            or relationship.relationship_id not in referenced_relationship_ids
+        ):
+            warnings.add(
+                "FormulaFence found a chart relationship not bound by an inspected drawing; "
+                "affected charts have a coverage gap."
+            )
+            unrecognized_count += 1
+
+    if not chart_nodes and not any(
+        relationship.relationship_type == _CHART_RELATIONSHIP for relationship in relationships
+    ):
+        return _ChartDrawingInspection(member=member, inspected=True)
+    try:
+        declaration_signature = _private_external_data_signature(
+            tuple(
+                (
+                    f"chart-reference:{index}",
+                    repr(_chart_xml_fragment(chart, relationship_semantics)),
+                )
+                for index, chart in enumerate(chart_nodes)
+            )
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested DrawingML chart "
+            "binding; affected charts were not compared."
+        )
+        declaration_signature = _private_payload_signature(payload)
+        inspected = False
+        unrecognized_count += 1
+    else:
+        inspected = True
+    return _ChartDrawingInspection(
+        member=member,
+        present=bool(chart_nodes or any(
+            relationship.relationship_type == _CHART_RELATIONSHIP
+            for relationship in relationships
+        )),
+        chart_reference_count=len(chart_nodes),
+        related_relationship_count=len(selected_relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in selected_relationships
+        ),
+        chart_members=tuple(sorted(chart_members, key=str.casefold)),
+        unrecognized_count=unrecognized_count,
+        inspected=inspected,
+        declaration_signature=declaration_signature,
+        relationship_signature=_chart_relationship_signature(tuple(selected_relationships)),
+    )
+
+
+def _chart_part_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    xml_budget: _ChartXmlBudget,
+) -> _ChartPartInspection:
+    """Inspect one standard chart part without evaluating series formulas."""
+    relationships = _chart_raw_relationships(archive, member, warnings, context="chart")
+    relationship_semantics = _chart_relationship_semantics(
+        relationships,
+        warnings,
+        context="chart",
+    )
+    relationship_by_id: dict[str, _ChartRawRelationship] = {}
+    for relationship in relationships:
+        if relationship.relationship_id and relationship.relationship_id not in relationship_by_id:
+            relationship_by_id[relationship.relationship_id] = relationship
+
+    payload, fallback_signature = _chart_xml_payload(
+        archive,
+        member,
+        warnings,
+        xml_budget,
+    )
+    if payload is None:
+        return _ChartPartInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+            relationship_signature=_chart_relationship_signature(relationships),
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a chart XML part "
+            f"({type(error).__name__}); affected charts were not compared."
+        )
+        return _ChartPartInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_chart_relationship_signature(relationships),
+        )
+    if (
+        _xml_local_name(root.tag) != "chartSpace"
+        or _xml_namespace(root.tag) != _DRAWINGML_CHART_NS
+    ):
+        warnings.add(
+            "FormulaFence found a chart part with an unexpected root; affected charts "
+            "were not compared."
+        )
+        return _ChartPartInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_chart_relationship_signature(relationships),
+        )
+
+    relationship_ids = {
+        value
+        for element in root.iter()
+        for attribute in _CHART_RELATIONSHIP_ATTRIBUTES
+        if (value := element.get(attribute)) is not None
+    }
+    user_shapes_tag = f"{{{_DRAWINGML_CHART_NS}}}userShapes"
+    relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    user_shape_relationship_ids = {
+        relationship_id
+        for element in root.iter(user_shapes_tag)
+        if (relationship_id := element.get(relationship_attribute)) is not None
+    }
+    selected_relationships: list[_ChartRawRelationship] = []
+    user_shape_members: set[str] = set()
+    payload_members: set[str] = set()
+    unresolved_payload_entries: list[tuple[str, str]] = []
+    unrecognized_count = 0
+
+    for relationship_id in relationship_ids:
+        relationship = relationship_by_id.get(relationship_id)
+        if relationship is None:
+            warnings.add(
+                "FormulaFence found a chart relationship reference without a matching "
+                "relationship; affected charts have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        selected_relationships.append(relationship)
+        is_user_shape = relationship_id in user_shape_relationship_ids
+        if is_user_shape and relationship.relationship_type != _CHART_USER_SHAPES_RELATIONSHIP:
+            warnings.add(
+                "FormulaFence found a chart overlay reference with an unexpected "
+                "relationship type; affected charts have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        if relationship.target_mode.casefold() != "internal":
+            if is_user_shape:
+                warnings.add(
+                    "FormulaFence found a chart overlay reference without an internal target; "
+                    "affected charts were not compared."
+                )
+                unrecognized_count += 1
+            continue
+        if relationship.safe_target is None:
+            warnings.add(
+                "FormulaFence found a chart relationship without a safe internal target; "
+                "affected charts were not compared."
+            )
+            unresolved_payload_entries.append(
+                ("unsafe-related-target", repr(relationship.semantic_key()))
+            )
+            unrecognized_count += 1
+            continue
+        if is_user_shape:
+            user_shape_members.add(relationship.safe_target)
+        else:
+            payload_members.add(relationship.safe_target)
+
+    for relationship in relationships:
+        if (
+            relationship.relationship_id is None
+            or relationship.relationship_id not in relationship_ids
+        ):
+            warnings.add(
+                "FormulaFence found a chart relationship not bound by inspected chart XML; "
+                "affected charts have a coverage gap."
+            )
+            unrecognized_count += 1
+
+    cache_nodes = [
+        element
+        for element in root.iter()
+        if _xml_namespace(element.tag) == _DRAWINGML_CHART_NS
+        and _xml_local_name(element.tag) in _CHART_CACHE_ELEMENT_NAMES
+    ]
+    literal_containers = [
+        element
+        for element in root.iter()
+        if _xml_namespace(element.tag) == _DRAWINGML_CHART_NS
+        and _xml_local_name(element.tag) in _CHART_LITERAL_ELEMENT_NAMES
+    ]
+    point_tag = f"{{{_DRAWINGML_CHART_NS}}}pt"
+    try:
+        definition_signature = _private_external_data_signature(
+            (
+                (
+                    "chart",
+                    repr(
+                        _chart_xml_fragment(
+                            root,
+                            relationship_semantics,
+                            omit_cached_data=True,
+                        )
+                    ),
+                ),
+            )
+        )
+        cached_data_signature = _private_external_data_signature(
+            tuple(
+                (f"cache:{index}", repr(_chart_xml_fragment(cache, relationship_semantics)))
+                for index, cache in enumerate(cache_nodes)
+            )
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested chart part; "
+            "affected charts were not compared."
+        )
+        definition_signature = _private_payload_signature(payload)
+        cached_data_signature = None
+        inspected = False
+        unrecognized_count += 1
+    else:
+        inspected = True
+    return _ChartPartInspection(
+        member=member,
+        chart_type_count=sum(
+            _xml_namespace(element.tag) == _DRAWINGML_CHART_NS
+            and _xml_local_name(element.tag) in _CHART_TYPE_ELEMENT_NAMES
+            for element in root.iter()
+        ),
+        series_count=sum(
+            element.tag == f"{{{_DRAWINGML_CHART_NS}}}ser" for element in root.iter()
+        ),
+        title_count=sum(
+            element.tag == f"{{{_DRAWINGML_CHART_NS}}}title" for element in root.iter()
+        ),
+        data_reference_count=sum(
+            element.tag == f"{{{_DRAWINGML_CHART_NS}}}f" for element in root.iter()
+        ),
+        numeric_data_reference_count=sum(
+            element.tag == f"{{{_DRAWINGML_CHART_NS}}}numRef" for element in root.iter()
+        ),
+        string_data_reference_count=sum(
+            element.tag
+            in {
+                f"{{{_DRAWINGML_CHART_NS}}}strRef",
+                f"{{{_DRAWINGML_CHART_NS}}}multiLvlStrRef",
+            }
+            for element in root.iter()
+        ),
+        literal_data_point_count=sum(
+            sum(point.tag == point_tag for point in container.iter())
+            for container in literal_containers
+        ),
+        cached_data_point_count=sum(
+            sum(point.tag == point_tag for point in cache.iter()) for cache in cache_nodes
+        ),
+        pivot_source_count=sum(
+            element.tag == f"{{{_DRAWINGML_CHART_NS}}}pivotSource" for element in root.iter()
+        ),
+        external_data_reference_count=sum(
+            element.tag == f"{{{_DRAWINGML_CHART_NS}}}externalData" for element in root.iter()
+        ),
+        user_shape_reference_count=len(user_shape_relationship_ids),
+        related_relationship_count=len(selected_relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in selected_relationships
+        ),
+        user_shape_members=tuple(sorted(user_shape_members, key=str.casefold)),
+        payload_members=tuple(sorted(payload_members, key=str.casefold)),
+        unresolved_payload_entries=tuple(unresolved_payload_entries),
+        unrecognized_count=unrecognized_count,
+        inspected=inspected,
+        definition_signature=definition_signature,
+        cached_data_signature=cached_data_signature,
+        relationship_signature=_chart_relationship_signature(tuple(selected_relationships)),
+    )
+
+
+def _chart_user_shape_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    xml_budget: _ChartXmlBudget,
+) -> _ChartUserShapeInspection:
+    """Inspect one chart overlay part without rendering shapes or opening media."""
+    relationships = _chart_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="chart overlay",
+    )
+    relationship_semantics = _chart_relationship_semantics(
+        relationships,
+        warnings,
+        context="chart overlay",
+    )
+    relationship_by_id: dict[str, _ChartRawRelationship] = {}
+    for relationship in relationships:
+        if relationship.relationship_id and relationship.relationship_id not in relationship_by_id:
+            relationship_by_id[relationship.relationship_id] = relationship
+
+    payload, fallback_signature = _chart_xml_payload(
+        archive,
+        member,
+        warnings,
+        xml_budget,
+    )
+    if payload is None:
+        return _ChartUserShapeInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+            relationship_signature=_chart_relationship_signature(relationships),
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a chart overlay XML part "
+            f"({type(error).__name__}); affected charts were not compared."
+        )
+        return _ChartUserShapeInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_chart_relationship_signature(relationships),
+        )
+    if (
+        _xml_local_name(root.tag) != "userShapes"
+        or _xml_namespace(root.tag) != _DRAWINGML_CHART_DRAWING_NS
+    ):
+        warnings.add(
+            "FormulaFence found a chart overlay part with an unexpected root; affected "
+            "charts were not compared."
+        )
+        return _ChartUserShapeInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_chart_relationship_signature(relationships),
+        )
+
+    relationship_ids = {
+        value
+        for element in root.iter()
+        for attribute in _CHART_RELATIONSHIP_ATTRIBUTES
+        if (value := element.get(attribute)) is not None
+    }
+    selected_relationships: list[_ChartRawRelationship] = []
+    payload_members: set[str] = set()
+    unresolved_payload_entries: list[tuple[str, str]] = []
+    unrecognized_count = 0
+    for relationship_id in relationship_ids:
+        relationship = relationship_by_id.get(relationship_id)
+        if relationship is None:
+            warnings.add(
+                "FormulaFence found a chart overlay relationship reference without a "
+                "matching relationship; affected charts have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        selected_relationships.append(relationship)
+        if relationship.target_mode.casefold() != "internal":
+            continue
+        if relationship.safe_target is None:
+            warnings.add(
+                "FormulaFence found a chart overlay relationship without a safe internal "
+                "target; affected charts were not compared."
+            )
+            unresolved_payload_entries.append(
+                ("unsafe-overlay-target", repr(relationship.semantic_key()))
+            )
+            unrecognized_count += 1
+            continue
+        payload_members.add(relationship.safe_target)
+
+    for relationship in relationships:
+        if (
+            relationship.relationship_id is None
+            or relationship.relationship_id not in relationship_ids
+        ):
+            warnings.add(
+                "FormulaFence found a chart overlay relationship not bound by inspected "
+                "overlay XML; affected charts have a coverage gap."
+            )
+            unrecognized_count += 1
+    try:
+        definition_signature = _private_external_data_signature(
+            (("chart-overlay", repr(_chart_xml_fragment(root, relationship_semantics))),)
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested chart overlay; "
+            "affected charts were not compared."
+        )
+        definition_signature = _private_payload_signature(payload)
+        inspected = False
+        unrecognized_count += 1
+    else:
+        inspected = True
+    shape_names = {"sp", "pic", "cxnSp", "graphicFrame", "grpSp"}
+    return _ChartUserShapeInspection(
+        member=member,
+        shape_count=sum(
+            _xml_namespace(element.tag) == _DRAWINGML_CHART_DRAWING_NS
+            and _xml_local_name(element.tag) in shape_names
+            for element in root.iter()
+        ),
+        related_relationship_count=len(selected_relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in selected_relationships
+        ),
+        payload_members=tuple(sorted(payload_members, key=str.casefold)),
+        unresolved_payload_entries=tuple(unresolved_payload_entries),
+        unrecognized_count=unrecognized_count,
+        inspected=inspected,
+        definition_signature=definition_signature,
+        relationship_signature=_chart_relationship_signature(tuple(selected_relationships)),
+    )
+
+
+def _chart_definition_metadata(path: Path) -> _ChartDefinitionMetadata:
+    """Inspect chart presentation parts before the workbook reader can omit them.
+
+    The scan is package-only: it does not calculate a series formula, render a
+    chart, open related media or embedded data, or follow external targets.
+    """
+    warnings: set[str] = set()
+    default = ChartDefinitionSnapshot()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                sheet_parts = _sheet_xml_parts(archive)
+            except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+                return _ChartDefinitionMetadata(
+                    default,
+                    (
+                        "FormulaFence could not map worksheet OOXML for chart inspection "
+                        f"({type(error).__name__}); affected charts were not compared.",
+                    ),
+                )
+
+            xml_budget = _ChartXmlBudget()
+            related_part_budget = _ChartRelatedPartBudget()
+            drawing_sources: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
+            unresolved_drawing_entries: list[tuple[str, str]] = []
+            unrecognized_declaration_count = 0
+            for sheet, (member, sheet_kind) in sorted(
+                sheet_parts.items(),
+                key=lambda item: item[0].casefold(),
+            ):
+                if sheet_kind not in {"worksheet", "chartsheet"}:
+                    continue
+                relationships = _chart_raw_relationships(
+                    archive,
+                    member,
+                    warnings,
+                    context="worksheet or chartsheet",
+                )
+                for relationship in relationships:
+                    if relationship.relationship_type != _WORKSHEET_DRAWING_RELATIONSHIP:
+                        continue
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.safe_target is None
+                    ):
+                        warnings.add(
+                            "FormulaFence found a worksheet or chartsheet drawing relationship "
+                            "without a safe internal target; affected charts were not compared."
+                        )
+                        unresolved_drawing_entries.append(
+                            (member, repr(relationship.semantic_key()))
+                        )
+                        unrecognized_declaration_count += 1
+                        continue
+                    drawing_sources[relationship.safe_target].add(
+                        (sheet, sheet_kind, member)
+                    )
+
+            drawing_inspections: list[_ChartDrawingInspection] = []
+            chart_sources: dict[str, set[str]] = defaultdict(set)
+            declaration_entries: list[tuple[str, str]] = []
+            for drawing_member in sorted(drawing_sources, key=str.casefold):
+                sources = tuple(
+                    sorted(drawing_sources[drawing_member], key=lambda item: item[0].casefold())
+                )
+                inspection = _chart_drawing_inspection(
+                    archive,
+                    drawing_member,
+                    warnings,
+                    xml_budget,
+                )
+                drawing_inspections.append(inspection)
+                if not inspection.present:
+                    continue
+                declaration_entries.append(
+                    ("chart-drawing-part", repr((drawing_member, sources)))
+                )
+                for chart_member in inspection.chart_members:
+                    chart_sources[chart_member].add(drawing_member)
+
+            orphan_chart_part_count = 0
+            discovered_chart_members = {
+                entry.filename
+                for entry in archive.infolist()
+                if _CHART_PART_PATTERN.fullmatch(entry.filename)
+            }
+            for chart_member in discovered_chart_members:
+                chart_sources.setdefault(chart_member, set())
+                if chart_member not in {
+                    member
+                    for inspection in drawing_inspections
+                    for member in inspection.chart_members
+                }:
+                    warnings.add(
+                        "FormulaFence found a chart package part not declared by an inspected "
+                        "worksheet or chartsheet drawing; affected charts have a coverage gap."
+                    )
+                    orphan_chart_part_count += 1
+
+            chart_inspections: list[_ChartPartInspection] = []
+            user_shape_sources: dict[str, set[str]] = defaultdict(set)
+            payload_members: set[str] = set()
+            unresolved_payload_entries: list[tuple[str, str]] = []
+            for chart_member in sorted(chart_sources, key=str.casefold):
+                sources = tuple(sorted(chart_sources[chart_member], key=str.casefold))
+                declaration_entries.append(("chart-part", repr((chart_member, sources))))
+                inspection = _chart_part_inspection(
+                    archive,
+                    chart_member,
+                    warnings,
+                    xml_budget,
+                )
+                chart_inspections.append(inspection)
+                for user_shape_member in inspection.user_shape_members:
+                    user_shape_sources[user_shape_member].add(chart_member)
+                payload_members.update(inspection.payload_members)
+                unresolved_payload_entries.extend(inspection.unresolved_payload_entries)
+
+            user_shape_inspections: list[_ChartUserShapeInspection] = []
+            for user_shape_member in sorted(user_shape_sources, key=str.casefold):
+                sources = tuple(sorted(user_shape_sources[user_shape_member], key=str.casefold))
+                declaration_entries.append(
+                    ("chart-overlay-part", repr((user_shape_member, sources)))
+                )
+                inspection = _chart_user_shape_inspection(
+                    archive,
+                    user_shape_member,
+                    warnings,
+                    xml_budget,
+                )
+                user_shape_inspections.append(inspection)
+                payload_members.update(inspection.payload_members)
+                unresolved_payload_entries.extend(inspection.unresolved_payload_entries)
+
+            payload_inspection = _chart_related_part_payloads(
+                archive,
+                payload_members,
+                unresolved_payload_entries,
+                warnings,
+                related_part_budget,
+            )
+
+            def aggregate_signature(
+                inspections: list[object], attribute: str
+            ) -> str | None:
+                material = sorted(
+                    (inspection.member, value)
+                    for inspection in inspections
+                    if (value := getattr(inspection, attribute)) is not None
+                )
+                return _private_external_data_signature(tuple(material))
+
+            chart_host_sheets = {
+                sheet
+                for drawing_member, sources in drawing_sources.items()
+                if any(
+                    inspection.member == drawing_member and inspection.present
+                    for inspection in drawing_inspections
+                )
+                for sheet, _sheet_kind, _member in sources
+            }
+            declaration_entries.extend(
+                ("unresolved-sheet-drawing-relationship", entry)
+                for entry in unresolved_drawing_entries
+            )
+            declaration_entries.sort()
+            all_inspections: list[object] = [
+                *drawing_inspections,
+                *chart_inspections,
+                *user_shape_inspections,
+            ]
+            snapshot = ChartDefinitionSnapshot(
+                chart_host_sheet_count=len(chart_host_sheets),
+                chart_drawing_part_count=sum(
+                    inspection.present for inspection in drawing_inspections
+                ),
+                chart_reference_count=sum(
+                    inspection.chart_reference_count for inspection in drawing_inspections
+                ),
+                chart_part_count=len(chart_sources),
+                chart_user_shape_part_count=len(user_shape_sources),
+                chart_user_shape_count=sum(
+                    inspection.shape_count for inspection in user_shape_inspections
+                ),
+                chart_type_count=sum(
+                    inspection.chart_type_count for inspection in chart_inspections
+                ),
+                series_count=sum(
+                    inspection.series_count for inspection in chart_inspections
+                ),
+                title_count=sum(
+                    inspection.title_count for inspection in chart_inspections
+                ),
+                data_reference_count=sum(
+                    inspection.data_reference_count for inspection in chart_inspections
+                ),
+                numeric_data_reference_count=sum(
+                    inspection.numeric_data_reference_count
+                    for inspection in chart_inspections
+                ),
+                string_data_reference_count=sum(
+                    inspection.string_data_reference_count
+                    for inspection in chart_inspections
+                ),
+                literal_data_point_count=sum(
+                    inspection.literal_data_point_count for inspection in chart_inspections
+                ),
+                cached_data_point_count=sum(
+                    inspection.cached_data_point_count for inspection in chart_inspections
+                ),
+                pivot_source_count=sum(
+                    inspection.pivot_source_count for inspection in chart_inspections
+                ),
+                external_data_reference_count=sum(
+                    inspection.external_data_reference_count
+                    for inspection in chart_inspections
+                ),
+                user_shape_reference_count=sum(
+                    inspection.user_shape_reference_count
+                    for inspection in chart_inspections
+                ),
+                related_relationship_count=sum(
+                    inspection.related_relationship_count for inspection in all_inspections
+                ),
+                external_relationship_count=sum(
+                    inspection.external_relationship_count for inspection in all_inspections
+                ),
+                internal_related_part_count=payload_inspection.internal_part_count,
+                fingerprinted_related_part_count=payload_inspection.fingerprinted_part_count,
+                uninspected_related_part_count=payload_inspection.uninspected_part_count,
+                unrecognized_part_count=(
+                    unrecognized_declaration_count
+                    + orphan_chart_part_count
+                    + sum(inspection.unrecognized_count for inspection in all_inspections)
+                ),
+                declaration_signature=_private_external_data_signature(
+                    tuple(declaration_entries)
+                ),
+                definition_signature=aggregate_signature(
+                    list(chart_inspections), "definition_signature"
+                ),
+                cached_data_signature=aggregate_signature(
+                    list(chart_inspections), "cached_data_signature"
+                ),
+                user_shape_signature=aggregate_signature(
+                    list(user_shape_inspections), "definition_signature"
+                ),
+                relationship_signature=aggregate_signature(
+                    all_inspections, "relationship_signature"
+                ),
+                related_part_payload_signature=payload_inspection.payload_signature,
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _ChartDefinitionMetadata(
+            default,
+            (
+                "FormulaFence could not inspect chart OOXML "
+                f"({type(error).__name__}); affected charts were not compared.",
+            ),
+        )
+    return _ChartDefinitionMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _worksheet_control_raw_relationships(
     archive: ZipFile,
     source_member: str,
@@ -9139,6 +10378,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     xlm_macro_metadata = _xlm_macro_metadata(source)
     ribbon_customization_metadata = _ribbon_customization_metadata(source)
     office_web_addin_metadata = _office_web_addin_metadata(source)
+    chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     try:
         with warnings.catch_warnings(record=True) as caught_warnings:
@@ -9157,6 +10397,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(xlm_macro_metadata.warnings)
     parser_warnings.update(ribbon_customization_metadata.warnings)
     parser_warnings.update(office_web_addin_metadata.warnings)
+    parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
         _is_array_formula(cell)
@@ -9366,6 +10607,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
+        chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
         sheet_order=sheet_order,
@@ -9431,6 +10673,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
+        "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
         "defined_names": sorted(snapshot.defined_names),
@@ -9448,6 +10691,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_xlm_macro_sheets": snapshot.xlm_macro_sheets.present,
             "has_ribbon_customization": snapshot.ribbon_customization.present,
             "has_office_web_addins": snapshot.office_web_addins.present,
+            "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),
             "unresolved_reference_cells": [

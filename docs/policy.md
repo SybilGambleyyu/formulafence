@@ -15,6 +15,7 @@ rules:
   no_xlm_macro_sheet_changes: true
   no_ribbon_customization_changes: true
   no_office_web_addin_changes: true
+  no_chart_definition_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -71,6 +72,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_xlm_macro_sheet_changes` | boolean | An Excel 4.0 / XLM macro-sheet declaration, program XML, related-part relationship, or direct internal related-part payload changes. |
 | `no_ribbon_customization_changes` | boolean | An Office RibbonX custom-UI package declaration, control/callback XML, or direct relationship changes. |
 | `no_office_web_addin_changes` | boolean | An Office Web Add-in task-pane workbook binding, task-pane configuration, web-extension definition, or direct relationship changes. |
+| `no_chart_definition_changes` | boolean | A DrawingML chart binding, chart definition, cached series data, chart-overlay shape, direct relationship, or bounded direct related payload changes. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -283,6 +285,26 @@ over-budget parts remain coverage warnings. Task-pane and web-extension XML
 reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts.
 Worksheet-scoped web-extension markup outside this task-pane chain is not yet
 modeled.
+
+DrawingML charts can change a report's series, axis, title, formatting, cached
+values, or overlay annotations without changing an ordinary worksheet cell.
+FormulaFence follows standard worksheet/chartsheet drawing relationships through
+`c:chart` parts and direct `c:userShapes` overlays. It privately compares chart
+definition material separately from `numCache`, `strCache`, and
+`multiLvlStrCache` material; it also compares overlay XML, relationship
+semantics, and bounded direct related payload hashes. Profiles expose safe
+structural counts only. Formulas, labels, cached values, formatting, overlay
+text, target paths, XML, and payload bytes never enter a profile or diff.
+Writer-chosen relationship IDs and equivalent internal target spellings are
+normalized. A material change emits `FF030`; enable
+`no_chart_definition_changes` to make it `FFP030` in CI. FormulaFence does not
+calculate a series, map chart references into downstream cell impact, render a
+chart, assess visual output, follow external targets, parse media/package
+formats, or interpret `chartEx`. XML reads are bounded to 16 MiB per part, 64
+MiB per workbook, and 512 parts; direct payload hashes are bounded to 32 MiB
+per part, 64 MiB per workbook, and 512 parts. Missing, malformed, orphaned,
+unbound, oversized, or over-budget chart material remains a visible coverage
+warning.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

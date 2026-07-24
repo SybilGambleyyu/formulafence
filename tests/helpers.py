@@ -3358,6 +3358,417 @@ def corrupt_legacy_vml_control_root(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".legacy-vml-control-corrupt.tmp.xlsx")
 
 
+def _chart_fixture_part_names(contents: dict[str, bytes]) -> tuple[str, str, str]:
+    """Return the chart fixture's drawing, chart, and overlay package members."""
+    drawing_member = next(
+        name
+        for name in contents
+        if name.startswith("xl/drawings/drawing")
+        and name.endswith(".xml")
+        and "/_rels/" not in name
+    )
+    chart_member = next(
+        name
+        for name in contents
+        if name.startswith("xl/charts/") and name.endswith(".xml")
+    )
+    overlay_member = "xl/drawings/chartDrawing1.xml"
+    if overlay_member not in contents:
+        raise ValueError("Fixture does not contain a chart overlay part")
+    return drawing_member, chart_member, overlay_member
+
+
+def _relationship_member(member: str) -> str:
+    """Return the OOXML relationship member beside one fixture part."""
+    directory, filename = member.rsplit("/", maxsplit=1)
+    return f"{directory}/_rels/{filename}.rels"
+
+
+def make_chart_definition_model(path: Path) -> Path:
+    """Create a harmless chart package with cache and overlay test material.
+
+    The fixture is only used to prove FormulaFence's static package inspection.
+    It is never opened in an Office application and all private strings and
+    payloads are deliberate redaction sentinels.
+    """
+    make_model(path)
+
+    def add_chart(workbook: Workbook) -> None:
+        inputs = workbook["Inputs"]
+        inputs["A2"] = "January"
+        inputs["A3"] = "February"
+        inputs["A4"] = "March"
+        chart = BarChart()
+        chart.title = "Private baseline chart title"
+        chart.add_data(
+            Reference(inputs, min_col=2, min_row=2, max_row=4),
+            titles_from_data=False,
+        )
+        chart.set_categories(Reference(inputs, min_col=1, min_row=2, max_row=4))
+        inputs.add_chart(chart, "D2")
+
+    rewrite(path, add_chart)
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    chart_namespace = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+    chart_drawing_namespace = (
+        "http://schemas.openxmlformats.org/drawingml/2006/chartDrawing"
+    )
+    drawing_namespace = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member = next(
+            name
+            for name in contents
+            if name.startswith("xl/drawings/drawing")
+            and name.endswith(".xml")
+            and "/_rels/" not in name
+        )
+        chart_member = next(
+            name
+            for name in contents
+            if name.startswith("xl/charts/") and name.endswith(".xml")
+        )
+        chart = ElementTree.fromstring(contents[chart_member])
+        series = next(chart.iter(f"{{{chart_namespace}}}ser"))
+        numeric_reference = next(series.iter(f"{{{chart_namespace}}}numRef"))
+        numeric_cache = ElementTree.SubElement(
+            numeric_reference,
+            f"{{{chart_namespace}}}numCache",
+        )
+        ElementTree.SubElement(
+            numeric_cache,
+            f"{{{chart_namespace}}}ptCount",
+            {"val": "3"},
+        )
+        for index, value in enumerate(("100", "150", "175")):
+            point = ElementTree.SubElement(
+                numeric_cache,
+                f"{{{chart_namespace}}}pt",
+                {"idx": str(index)},
+            )
+            ElementTree.SubElement(point, f"{{{chart_namespace}}}v").text = value
+
+        category = ElementTree.Element(f"{{{chart_namespace}}}cat")
+        string_reference = ElementTree.SubElement(
+            category,
+            f"{{{chart_namespace}}}strRef",
+        )
+        ElementTree.SubElement(
+            string_reference,
+            f"{{{chart_namespace}}}f",
+        ).text = "Inputs!$A$2:$A$4"
+        string_cache = ElementTree.SubElement(
+            string_reference,
+            f"{{{chart_namespace}}}strCache",
+        )
+        ElementTree.SubElement(
+            string_cache,
+            f"{{{chart_namespace}}}ptCount",
+            {"val": "3"},
+        )
+        for index, value in enumerate(("January", "February", "March")):
+            point = ElementTree.SubElement(
+                string_cache,
+                f"{{{chart_namespace}}}pt",
+                {"idx": str(index)},
+            )
+            ElementTree.SubElement(point, f"{{{chart_namespace}}}v").text = value
+        value = next(series.iter(f"{{{chart_namespace}}}val"))
+        series.insert(list(series).index(value), category)
+        ElementTree.SubElement(
+            chart,
+            f"{{{chart_namespace}}}userShapes",
+            {f"{{{document_relationships}}}id": "rIdFenceChartOverlay"},
+        )
+        contents[chart_member] = serialize(chart)
+
+        overlay_member = "xl/drawings/chartDrawing1.xml"
+        overlay = ElementTree.Element(f"{{{chart_drawing_namespace}}}userShapes")
+        anchor = ElementTree.SubElement(
+            overlay,
+            f"{{{chart_drawing_namespace}}}relSizeAnchor",
+        )
+        shape = ElementTree.SubElement(anchor, f"{{{chart_drawing_namespace}}}sp")
+        ElementTree.SubElement(
+            shape,
+            f"{{{chart_drawing_namespace}}}cNvPr",
+            {"id": "1", "name": "Private baseline chart annotation"},
+        )
+        text = ElementTree.SubElement(shape, f"{{{drawing_namespace}}}t")
+        text.text = "Private baseline overlay text"
+        ElementTree.SubElement(
+            shape,
+            f"{{{drawing_namespace}}}blip",
+            {f"{{{document_relationships}}}embed": "rIdFenceChartImage"},
+        )
+        contents[overlay_member] = serialize(overlay)
+        contents["xl/media/private-chart-overlay-baseline.png"] = (
+            b"private baseline chart overlay image"
+        )
+
+        chart_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            chart_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceChartOverlay",
+                "Type": f"{document_relationships}/chartUserShapes",
+                "Target": "../drawings/chartDrawing1.xml",
+            },
+        )
+        contents[_relationship_member(chart_member)] = serialize(chart_relationships)
+
+        overlay_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            overlay_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceChartImage",
+                "Type": f"{document_relationships}/image",
+                "Target": "../media/private-chart-overlay-baseline.png",
+            },
+        )
+        contents[_relationship_member(overlay_member)] = serialize(overlay_relationships)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        override_tag = f"{{{content_types}}}Override"
+        ElementTree.SubElement(
+            types,
+            override_tag,
+            {
+                "PartName": "/xl/drawings/chartDrawing1.xml",
+                "ContentType": (
+                    "application/vnd.openxmlformats-officedocument.drawingml."
+                    "chartshapes+xml"
+                ),
+            },
+        )
+        contents["[Content_Types].xml"] = serialize(types)
+
+        # Keep this fixture's worksheet drawing relationship and its DrawingML
+        # chart binding explicit so relationship-ID normalization has real paths.
+        drawing_relationships_name = _relationship_member(drawing_member)
+        if drawing_relationships_name not in contents:
+            raise ValueError("Fixture does not contain a chart drawing relationship part")
+
+    return _rewrite_archive(path, mutate, ".chart-definition.tmp.xlsx")
+
+
+def change_chart_definition_material(path: Path) -> Path:
+    """Change only private chart, overlay, and related-image material."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    chart_namespace = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+    drawing_namespace = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _drawing_member, chart_member, overlay_member = _chart_fixture_part_names(contents)
+        chart = ElementTree.fromstring(contents[chart_member])
+        formula = next(chart.iter(f"{{{chart_namespace}}}f"))
+        formula.text = "Inputs!$B$3:$B$4"
+        title_text = next(chart.iter(f"{{{drawing_namespace}}}t"))
+        title_text.text = "Private candidate chart title"
+        contents[chart_member] = serialize(chart)
+
+        overlay = ElementTree.fromstring(contents[overlay_member])
+        overlay_text = next(overlay.iter(f"{{{drawing_namespace}}}t"))
+        overlay_text.text = "Private candidate overlay text"
+        contents[overlay_member] = serialize(overlay)
+
+        relationships_name = _relationship_member(overlay_member)
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        image = next(
+            relationship
+            for relationship in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if relationship.get("Id") == "rIdFenceChartImage"
+        )
+        image.set("Target", "../media/private-chart-overlay-candidate.png")
+        contents[relationships_name] = serialize(relationships)
+        contents["xl/media/private-chart-overlay-candidate.png"] = (
+            b"private candidate chart overlay image"
+        )
+
+    return _rewrite_archive(path, mutate, ".chart-definition-change.tmp.xlsx")
+
+
+def change_chart_cached_data(path: Path) -> Path:
+    """Change one chart cache value while leaving its definition intact."""
+    chart_namespace = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _drawing_member, chart_member, _overlay_member = _chart_fixture_part_names(contents)
+        chart = ElementTree.fromstring(contents[chart_member])
+        value = next(chart.iter(f"{{{chart_namespace}}}numCache"))
+        point_value = next(value.iter(f"{{{chart_namespace}}}v"))
+        point_value.text = "999"
+        contents[chart_member] = ElementTree.tostring(
+            chart,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".chart-cache-change.tmp.xlsx")
+
+
+def externalize_chart_overlay_relationship(path: Path) -> Path:
+    """Turn an overlay image relation into a harmless external-target fixture."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _drawing_member, _chart_member, overlay_member = _chart_fixture_part_names(contents)
+        relationships_name = _relationship_member(overlay_member)
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        image = next(
+            relationship
+            for relationship in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if relationship.get("Id") == "rIdFenceChartImage"
+        )
+        image.set("Target", "https://example.invalid/private-chart-overlay.png")
+        image.set("TargetMode", "External")
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".chart-external-target.tmp.xlsx")
+
+
+def renumber_chart_relationships(path: Path) -> Path:
+    """Rewrite chart relationship IDs while retaining the same semantic graph."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    chart_namespace = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+    drawing_namespace = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    spreadsheet = _SPREADSHEETML_NS
+    replacements = {
+        "rId1": "rIdFenceRenumberedChart",
+        "rIdFenceChartOverlay": "rIdFenceRenumberedChartOverlay",
+        "rIdFenceChartImage": "rIdFenceRenumberedChartImage",
+    }
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def replace_ids(root: ElementTree.Element) -> None:
+        for relationship in root.findall(f"{{{package_relationships}}}Relationship"):
+            if replacement := replacements.get(relationship.get("Id")):
+                relationship.set("Id", replacement)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, chart_member, overlay_member = _chart_fixture_part_names(contents)
+        for member in (
+            _relationship_member(drawing_member),
+            _relationship_member(chart_member),
+            _relationship_member(overlay_member),
+        ):
+            relationships = ElementTree.fromstring(contents[member])
+            replace_ids(relationships)
+            contents[member] = serialize(relationships)
+
+        drawing = ElementTree.fromstring(contents[drawing_member])
+        chart_reference = next(drawing.iter(f"{{{chart_namespace}}}chart"))
+        chart_reference.set(
+            f"{{{document_relationships}}}id",
+            replacements["rId1"],
+        )
+        contents[drawing_member] = serialize(drawing)
+
+        chart = ElementTree.fromstring(contents[chart_member])
+        overlay_reference = next(chart.iter(f"{{{chart_namespace}}}userShapes"))
+        overlay_reference.set(
+            f"{{{document_relationships}}}id",
+            replacements["rIdFenceChartOverlay"],
+        )
+        contents[chart_member] = serialize(chart)
+
+        overlay = ElementTree.fromstring(contents[overlay_member])
+        blip = next(overlay.iter(f"{{{drawing_namespace}}}blip"))
+        blip.set(
+            f"{{{document_relationships}}}embed",
+            replacements["rIdFenceChartImage"],
+        )
+        contents[overlay_member] = serialize(overlay)
+
+        worksheet = _inputs_worksheet_root(contents)
+        drawing_reference = worksheet.find(f"{{{spreadsheet}}}drawing")
+        if drawing_reference is not None and drawing_reference.get(
+            f"{{{document_relationships}}}id"
+        ) in replacements:
+            drawing_reference.set(
+                f"{{{document_relationships}}}id",
+                replacements[drawing_reference.get(f"{{{document_relationships}}}id")],
+            )
+        _save_inputs_worksheet(contents, worksheet)
+
+    return _rewrite_archive(path, mutate, ".chart-relationship-renumber.tmp.xlsx")
+
+
+def rewrite_chart_internal_target_spelling(path: Path) -> Path:
+    """Use equivalent relative target spellings across the chart relationship chain."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, chart_member, overlay_member = _chart_fixture_part_names(contents)
+        targets = {
+            _relationship_member("xl/worksheets/sheet1.xml"): "../drawings/./"
+            + drawing_member.rsplit("/", maxsplit=1)[-1],
+            _relationship_member(drawing_member): "../charts/./"
+            + chart_member.rsplit("/", maxsplit=1)[-1],
+            _relationship_member(chart_member): "../drawings/./"
+            + overlay_member.rsplit("/", maxsplit=1)[-1],
+            _relationship_member(overlay_member): "../media/./private-chart-overlay-baseline.png",
+        }
+        for member, target in targets.items():
+            relationships = ElementTree.fromstring(contents[member])
+            relationship = next(
+                relationship
+                for relationship in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if relationship.get("TargetMode", "Internal").casefold() == "internal"
+            )
+            relationship.set("Target", target)
+            contents[member] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".chart-target-spelling.tmp.xlsx")
+
+
+def corrupt_chart_definition_root(path: Path) -> Path:
+    """Replace a chart root with unexpected XML for coverage tests."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _drawing_member, chart_member, _overlay_member = _chart_fixture_part_names(contents)
+        chart = ElementTree.fromstring(contents[chart_member])
+        chart.tag = "notChartSpace"
+        contents[chart_member] = ElementTree.tostring(
+            chart,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".chart-definition-corrupt.tmp.xlsx")
+
+
 def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Path:
     """Create a workbook with operational protection and sparse style controls."""
     workbook = Workbook()

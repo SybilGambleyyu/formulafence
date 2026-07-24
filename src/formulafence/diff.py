@@ -13,6 +13,7 @@ from formulafence.models import (
     CellKey,
     CellSnapshot,
     Change,
+    ChartDefinitionSnapshot,
     ConditionalFormattingExtensionSnapshot,
     ConditionalFormattingSnapshot,
     DataValidationSnapshot,
@@ -1145,6 +1146,44 @@ def _workbook_control_changes(
                 "FF029",
                 "critical",
                 "Worksheet embedded, legacy VML controls, or OLE objects changed.",
+                details=details,
+            )
+        )
+    if before.chart_definitions != after.chart_definitions:
+        old_charts: ChartDefinitionSnapshot = before.chart_definitions
+        new_charts: ChartDefinitionSnapshot = after.chart_definitions
+        details: dict[str, object] = {
+            "before": old_charts.to_dict(),
+            "after": new_charts.to_dict(),
+        }
+        if old_charts.declaration_signature != new_charts.declaration_signature:
+            details["drawing_binding_changed"] = True
+        if old_charts.definition_signature != new_charts.definition_signature:
+            details["chart_definition_material_changed"] = True
+        if old_charts.cached_data_signature != new_charts.cached_data_signature:
+            details["cached_series_material_changed"] = True
+        if old_charts.user_shape_signature != new_charts.user_shape_signature:
+            details["overlay_shape_material_changed"] = True
+        if old_charts.relationship_signature != new_charts.relationship_signature:
+            details["related_part_relationships_changed"] = True
+        if (
+            old_charts.related_part_payload_signature
+            != new_charts.related_part_payload_signature
+        ):
+            details["related_part_payload_material_changed"] = True
+        changes.append(
+            Change(
+                "chart_definitions_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF030",
+                "high",
+                "Chart definition, cached series data, or overlay shape material changed.",
                 details=details,
             )
         )

@@ -20,6 +20,7 @@ _RULE_FIELDS = {
     "no_xlm_macro_sheet_changes",
     "no_ribbon_customization_changes",
     "no_office_web_addin_changes",
+    "no_chart_definition_changes",
     "no_worksheet_embedded_control_changes",
     "no_new_parser_warnings",
     "no_new_unresolved_references",
@@ -73,6 +74,7 @@ class Policy:
     no_xlm_macro_sheet_changes: bool = False
     no_ribbon_customization_changes: bool = False
     no_office_web_addin_changes: bool = False
+    no_chart_definition_changes: bool = False
     no_worksheet_embedded_control_changes: bool = False
     no_new_parser_warnings: bool = False
     no_new_unresolved_references: bool = False
@@ -108,6 +110,7 @@ rules:
   no_xlm_macro_sheet_changes: true
   no_ribbon_customization_changes: true
   no_office_web_addin_changes: true
+  no_chart_definition_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -213,6 +216,9 @@ def parse_policy(data: object) -> Policy:
             rules, "no_ribbon_customization_changes"
         ),
         no_office_web_addin_changes=_boolean_rule(rules, "no_office_web_addin_changes"),
+        no_chart_definition_changes=_boolean_rule(
+            rules, "no_chart_definition_changes"
+        ),
         no_worksheet_embedded_control_changes=_boolean_rule(
             rules, "no_worksheet_embedded_control_changes"
         ),
@@ -507,6 +513,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP024",
                     "high",
                     "Policy forbids changes to Power Query formulas and semantic controls.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_chart_definition_changes:
+        for finding in _rule_triggered(report, "FF030"):
+            violations.append(
+                Finding(
+                    "FFP030",
+                    "high",
+                    "Policy forbids chart definition and presentation-data changes.",
                     details=finding.details,
                 )
             )

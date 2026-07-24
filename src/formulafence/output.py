@@ -109,6 +109,9 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "- **Office Web Add-ins requesting auto-show:** "
             f"{workbook['office_web_addin_auto_show_taskpane_count']}"
         ),
+        f"- **Chart host sheets:** {workbook['chart_host_sheet_count']}",
+        f"- **Chart parts:** {workbook['chart_part_count']}",
+        f"- **Cached chart data points:** {workbook['chart_cached_data_point_count']}",
         (
             "- **Worksheet control-bearing sheets:** "
             f"{workbook['worksheet_embedded_control_sheet_count']}"
@@ -906,6 +909,73 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Add-in identities, store references, properties, bindings, snapshots, and "
             "relationship targets are compared privately and intentionally omitted."
+        )
+    chart_definitions = profile["chart_definitions"]
+    if chart_definitions["present"]:
+        lines.extend(
+            [
+                "",
+                "## Chart definitions and cached presentation data",
+                "",
+                (
+                    "- **Chart host sheets / drawing parts / references:** "
+                    f"{chart_definitions['chart_host_sheet_count']} / "
+                    f"{chart_definitions['chart_drawing_part_count']} / "
+                    f"{chart_definitions['chart_reference_count']}"
+                ),
+                f"- **Chart parts:** {chart_definitions['chart_part_count']}",
+                (
+                    "- **Overlay parts / shapes:** "
+                    f"{chart_definitions['chart_user_shape_part_count']} / "
+                    f"{chart_definitions['chart_user_shape_count']}"
+                ),
+                f"- **Chart-type elements:** {chart_definitions['chart_type_count']}",
+                f"- **Series:** {chart_definitions['series_count']}",
+                f"- **Titles:** {chart_definitions['title_count']}",
+                (
+                    "- **Data references (numeric / string): "
+                    f"{chart_definitions['data_reference_count']} "
+                    f"({chart_definitions['numeric_data_reference_count']} / "
+                    f"{chart_definitions['string_data_reference_count']})"
+                ),
+                (
+                    "- **Literal / cached data points:** "
+                    f"{chart_definitions['literal_data_point_count']} / "
+                    f"{chart_definitions['cached_data_point_count']}"
+                ),
+                (
+                    "- **Pivot / external-data / overlay references:** "
+                    f"{chart_definitions['pivot_source_count']} / "
+                    f"{chart_definitions['external_data_reference_count']} / "
+                    f"{chart_definitions['user_shape_reference_count']}"
+                ),
+                (
+                    "- **Related package relationships:** "
+                    f"{chart_definitions['related_relationship_count']} "
+                    f"({chart_definitions['external_relationship_count']} external)"
+                ),
+                (
+                    "- **Internal direct related parts:** "
+                    f"{chart_definitions['internal_related_part_count']} "
+                    f"({chart_definitions['fingerprinted_related_part_count']} "
+                    "fingerprinted)"
+                ),
+            ]
+        )
+        if chart_definitions["uninspected_related_part_count"]:
+            lines.append(
+                "- **Uninspected direct related parts:** "
+                f"{chart_definitions['uninspected_related_part_count']}"
+            )
+        if chart_definitions["unrecognized_part_count"]:
+            lines.append(
+                "- **Unrecognized or uninspected chart parts/bindings:** "
+                f"{chart_definitions['unrecognized_part_count']}"
+            )
+        lines.append(
+            "Chart formulas, labels, cached values, formatting, overlay text, relationship "
+            "targets, and direct related-part contents are compared privately and intentionally "
+            "omitted."
         )
     worksheet_embedded_controls = profile["worksheet_embedded_controls"]
     if worksheet_embedded_controls["present"]:

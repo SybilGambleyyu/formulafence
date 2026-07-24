@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.25.0/formulafence-0.25.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.26.0/formulafence-0.26.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -65,6 +65,7 @@ rules:
   no_xlm_macro_sheet_changes: true
   no_ribbon_customization_changes: true
   no_office_web_addin_changes: true
+  no_chart_definition_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -102,7 +103,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -331,6 +332,34 @@ outside this task-pane chain is not yet modeled. The package surface follows
 Microsoft's [Taskpane Web Extension File](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/3d04f8ce-65f2-4dc3-bafa-636d0a7e41a1)
 and [Web Extension](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/56fe5a64-dd6d-422c-beac-19d72dd10ade)
 specifications.
+
+FormulaFence also inventories **DrawingML chart definitions and cached
+presentation data**. A worksheet or chartsheet can point to a drawing part,
+which binds a `c:chart` part holding the chart type, series, titles, axes,
+formatting, formulas, and last cached values outside ordinary cells. A chart can
+also point to a `c:userShapes` overlay part whose text or image relationship
+changes what a reader sees. FormulaFence follows the bounded
+worksheet/chartsheet → drawing → chart → overlay chain, compares private chart
+definition and cache material separately, and hashes bounded direct related
+payloads without parsing them. It emits `FF030` for a material change; enable
+`no_chart_definition_changes` for `FFP030`.
+
+Profiles expose only safe counts for host sheets, parts, references, series,
+titles, chart-type elements, cached/literal point counts, pivot/external/overlay
+references, relationships, and inspected versus uninspected direct targets.
+Series formulas, labels, cached values, formatting, overlay text, relationship
+targets, XML, and payload bytes never enter profiles or reports. Writer-chosen
+relationship IDs and equivalent internal target spellings are normalized away.
+Malformed, missing, orphaned, unbound, oversized, or over-budget chart material
+becomes a visible coverage warning. XML reads are bounded to 16 MiB per part,
+64 MiB per workbook, and 512 parts; direct related payload hashes are bounded
+to 32 MiB per part, 64 MiB per workbook, and 512 parts. FormulaFence does not
+calculate a series formula, map chart inputs into the cell-impact graph, render
+a chart, assess its visual truthfulness, follow external targets, parse direct
+media or embedded-package formats, or interpret modern `chartEx` semantics.
+The boundary follows the OOXML [Chart Part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Chart_topic_ID0ELZLM.html), the documented
+[number-reference cache](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.numberreference?view=openxml-3.0.1),
+and the [chart-overlay relationship](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.usershapesreference?view=openxml-2.20.0).
 
 FormulaFence also inventories relationship-backed **worksheet controls, legacy
 VML form controls, and OLE objects**. A worksheet can bind modern `<control>`

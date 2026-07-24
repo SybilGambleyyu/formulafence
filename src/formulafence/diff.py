@@ -24,6 +24,7 @@ from formulafence.models import (
     Finding,
     IgnoredErrorSnapshot,
     NamedSheetViewSnapshot,
+    NumberFormatSnapshot,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
@@ -1429,6 +1430,32 @@ def _workbook_control_changes(
                 "high",
                 "Excel Named Sheet View controls changed; alternate filter or sort views "
                 "may show a different report.",
+                details=details,
+            )
+        )
+    if before.number_format_controls != after.number_format_controls:
+        old_controls: NumberFormatSnapshot = before.number_format_controls
+        new_controls: NumberFormatSnapshot = after.number_format_controls
+        details: dict[str, object] = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.definition_signature != new_controls.definition_signature:
+            details["number_format_definition_material_changed"] = True
+        changes.append(
+            Change(
+                "number_format_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF039",
+                "high",
+                "Cell number-format controls changed; displayed values may be hidden, "
+                "scaled, or reinterpreted.",
                 details=details,
             )
         )

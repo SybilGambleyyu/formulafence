@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.35.0/formulafence-0.35.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.36.0/formulafence-0.36.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -74,6 +74,7 @@ rules:
   no_filter_visibility_changes: true
   no_ignored_error_changes: true
   no_named_sheet_view_changes: true
+  no_number_format_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -583,6 +584,37 @@ full differential-format, future extension, or rich-sort semantics. The boundary
 [`Named Sheet Views` part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/4b4d6448-d997-4ebe-9153-5c2c67d16972),
 [`CT_NsvFilter`](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/e132d9cc-c711-4fb3-aa28-e7356a791b1c),
 and [reconciliation](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/dd6b2cb8-b5b3-43b1-a5bd-dccdd9c0864a)
+definitions.
+
+FormulaFence also inventories **cell number-format controls**. A number format
+can make an unchanged value appear blank (for example, Excel's custom `;;;`
+format), scale it with commas, or render it as a percentage, date, text, or a
+private literal. FormulaFence reads raw `styles.xml` custom `<numFmt>` records,
+base `<cellStyleXfs>`, effective `<cellXfs>` records and their
+`xfId`/`applyNumberFormat` inheritance, plus direct cell `s`, row `s` with
+`customFormat=1`, and worksheet `<cols>/<col style>` assignments. A material
+change emits `FF039`; enable `no_number_format_changes` for `FFP039`.
+
+Profiles expose only counts for default overrides, direct-cell/row/effective
+column assignments, built-in/custom assignments, and malformed controls.
+Format codes, style IDs, and cell/row/column targets never enter profiles,
+Markdown control sections, `FF039` details, or SARIF. Equivalent custom-format
+ID remapping, `applyNumberFormat` Boolean spelling, base-XF inheritance, and
+equivalent effective column-range splitting are normalized. Missing custom
+definitions, invalid style references, invalid/out-of-range targets, conflicting
+definitions, and bounded-parser failures become visible coverage warnings rather
+than silent omissions. FormulaFence compares declarations only: it does not
+render locale-specific output, validate a format code, calculate a value, model
+width/overflow, or cover fonts, fills, borders, alignment, quote prefixes,
+table styles, or arbitrary visual formatting. A column `style` is recorded as
+the OOXML column default for unallocated/new cells; FormulaFence does not claim
+to apply that default retroactively to existing allocated cells. The boundary
+follows Microsoft's [custom number-format guidance](https://support.microsoft.com/en-us/excel/review-guidelines-for-customizing-a-number-format),
+its [hide/display guidance](https://support.microsoft.com/en-us/excel/hide-or-display-cell-values),
+and Open XML's [`numFmt`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_numFmt_topic_ID0EHDH6.html),
+[`cellStyleXfs`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_cellStyleXfs_topic_ID0EXX65.html),
+[`xf`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_xf_topic_ID0E13S6.html),
+and [`col`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_col_topic_ID0ELFQ4.html)
 definitions.
 
 FormulaFence also inventories relationship-backed **worksheet controls, legacy

@@ -5,6 +5,45 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel number-format controls — 2026-07-24
+
+FormulaFence 0.36.0 was validated with controlled raw-OOXML `.xlsx` packages
+containing one built-in direct format, two private direct custom formats
+(including `;;;`), one `customFormat=1` row style, and a two-column raw style
+default. The safe profile records three direct-cell, one row, and two effective
+column assignments; one built-in and five custom assignments; and no raw codes,
+style IDs, or targets. The suite verifies a zero-change self-diff, `FF039` for
+a private-code-only change, `FFP039` under `no_number_format_changes`, and
+`FF039` when only the base `cellXfs[0]` number format changes—without a cell
+value or formula change.
+
+Equivalent custom-format ID reallocation, explicit versus omitted
+`applyNumberFormat`, base-XF inheritance, and equivalent split column-style
+ranges are exercised without a finding. An out-of-bounds column maximum
+produces an explicit parser-coverage warning, `FF010`, and `FF039` rather than
+a silent omission. Format codes, style IDs, and cell/row/column targets are
+verified absent from JSON, Markdown, ordinary reports, and SARIF. The scanner
+compares number-format declarations only; the tests do not assert Excel's
+locale-specific rendering, width/overflow behavior, format-code validity, or
+non-number-format visual styles.
+
+As an independent package-compatibility check, FormulaFence profiled
+XlsxWriter 3.2.9's public
+[`tutorial2.py`](https://github.com/jmcnamara/XlsxWriter/blob/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011/examples/tutorial2.py)
+example at commit `cf3fe78d3eab5e4c7d825d4451af3a60e2a04011`, generated locally
+and not bundled with this repository. The resulting `Expenses02.xlsx` SHA-256
+was `fa1cdb9fab4b703c04b5d79b55c6a9c348e1391ca8dabef4e7412c2f8370e553`.
+FormulaFence found five direct custom-format assignments and no coverage warning.
+Changing only the public example's first money cell to `;;;` produced
+`candidate.xlsx` SHA-256
+`6de8b067a32ee790a2992a5000fbde5498851072fb17976563982775266e014f`;
+the published 0.35.0 wheel (SHA-256
+`0ee611b8fd3c7fe4cc78d9a0c12a2c307fa06d554914b57c0b1dc2024f5401c7`)
+reported `0` changes and no findings, while a fresh 0.36.0 wheel emits exactly
+one `number_format_controls_changed` change and `FF039` (wheel SHA-256
+`407f6d4d19ddab87549cf46fdb18f6785bc8aecd464541d6ab4d8941a32f4f4f`);
+the starter policy exits `1` with `FF039` and `FFP039`.
+
 ## Excel column visibility — 2026-07-25
 
 FormulaFence 0.35.0 was validated with controlled raw-OOXML `.xlsx` packages

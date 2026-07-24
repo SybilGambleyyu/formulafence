@@ -24,6 +24,7 @@ rules:
   no_filter_visibility_changes: true
   no_ignored_error_changes: true
   no_named_sheet_view_changes: true
+  no_number_format_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -89,6 +90,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_filter_visibility_changes` | boolean | A worksheet/Table AutoFilter, stored filter criterion, filter sort state, explicitly hidden/outlined/collapsed row or column, or hidden-by-default sheet setting changes. Criteria, selected values, sort keys/lists, table names, and row/column ranges are compared privately. |
 | `no_ignored_error_changes` | boolean | A standard or Office 2010 extension ignored-error declaration changes a per-range suppression of Excel evaluation, formula-consistency, range-omission, unlocked-formula, empty-reference, list-validation, calculated-column, text-number, or two-digit-year warnings. Targets and exact suppressions are compared privately. |
 | `no_named_sheet_view_changes` | boolean | A relationship-backed Excel Named Sheet View, alternate AutoFilter criterion, sort rule, or reconciled base-filter binding changes. View names, IDs, criteria, ranges, table bindings, and sort keys are compared privately. |
+| `no_number_format_changes` | boolean | An effective default, direct-cell, row, or column number-format control changes. Format codes, style IDs, and cell/row/column targets are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -467,6 +469,27 @@ coverage warnings. FormulaFence does not activate/render a saved view,
 calculate its filtered result, infer formula visibility sensitivity, repair
 metadata, or interpret full differential-format, future extension, or rich-sort
 semantics.
+
+Excel number formats can hide or materially reinterpret a value without changing
+its stored value or formula: `;;;` can make it appear blank, while custom
+sections, scaling commas, dates, percentages, literals, and text placeholders
+can alter what a reviewer sees. FormulaFence reads custom `<numFmt>` definitions,
+base `<cellStyleXfs>`, effective `<cellXfs>` with `xfId` and
+`applyNumberFormat`, direct cell `s`, row `s` where `customFormat=1`, and raw
+`<cols>/<col style>` declarations. A material change emits `FF039`; enable
+`no_number_format_changes` to make it `FFP039` in CI.
+
+Profiles and `FF039` details expose only counts for default overrides, direct
+cell, row, and effective column assignments, built-in/custom assignments, and
+unrecognized controls. Format codes, style indexes, and targets remain private.
+Equivalent custom-format ID remapping, `applyNumberFormat` Boolean spelling,
+base-XF inheritance, and effective column-range splitting are normalized.
+Missing custom codes, invalid IDs/indexes/targets, conflicting definitions, and
+bounded parser failures are explicit coverage warnings. FormulaFence does not
+render or locale-resolve a number format, validate its syntax, calculate values,
+model widths/overflow, or track non-number-format style properties. A raw
+column `style` is compared as a declaration/default for unallocated/new cells;
+it is not treated as a renderer that restyles allocated cells.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

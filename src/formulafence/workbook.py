@@ -54,6 +54,7 @@ from formulafence.models import (
     FilterVisibilitySnapshot,
     IgnoredErrorSnapshot,
     NamedSheetViewSnapshot,
+    NumberFormatSnapshot,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
@@ -489,6 +490,14 @@ class _NamedSheetViewMetadata:
     """Raw modern Named Sheet View evidence retained before reader loss."""
 
     views: NamedSheetViewSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _NumberFormatMetadata:
+    """Raw cell number-format evidence retained before reader normalization."""
+
+    controls: NumberFormatSnapshot
     warnings: tuple[str, ...]
 
 
@@ -15314,6 +15323,534 @@ def _named_sheet_view_metadata(path: Path) -> _NamedSheetViewMetadata:
     return _NamedSheetViewMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_NUMBER_FORMAT_BUILT_IN_MAXIMUM = 163
+_NUMBER_FORMAT_UNSIGNED_INT_MAXIMUM = 4_294_967_295
+_NUMBER_FORMAT_COLUMN_UPDATE_BUDGET = 16_777_216
+_NUMBER_FORMAT_MAX_CODE_LENGTH = 255
+
+
+@dataclass(frozen=True)
+class _NumberFormatStyle:
+    """One effective number format retained only for private comparison."""
+
+    category: str
+    value: str
+
+
+_GENERAL_NUMBER_FORMAT = _NumberFormatStyle("built-in", "0")
+
+
+def _number_format_unrecognized(*parts: object) -> _NumberFormatStyle:
+    """Fingerprint unsupported format material without retaining it in output models."""
+    payload = repr(parts).encode("utf-8", errors="surrogatepass")
+    return _NumberFormatStyle("unrecognized", hashlib.sha256(payload).hexdigest())
+
+
+def _number_format_unsigned_int(value: str | None) -> int | None:
+    """Read one bounded XML unsigned integer with schema whitespace normalized."""
+    if value is None:
+        return None
+    candidate = value.strip()
+    if candidate.isascii() and candidate.isdecimal():
+        # Avoid an unbounded ``int()`` conversion on malformed XML while still
+        # treating schema-valid leading zeroes as the same unsigned integer.
+        significant_digits = candidate.lstrip("0") or "0"
+        if len(significant_digits) > len(str(_NUMBER_FORMAT_UNSIGNED_INT_MAXIMUM)):
+            return None
+        parsed = int(significant_digits)
+        if parsed <= _NUMBER_FORMAT_UNSIGNED_INT_MAXIMUM:
+            return parsed
+    return None
+
+
+def _number_format_boolean(value: str | None, default: bool) -> bool | None:
+    """Read a schema Boolean while distinguishing malformed material from defaults."""
+    if value is None:
+        return default
+    lowered = value.strip().casefold()
+    if lowered in {"1", "true"}:
+        return True
+    if lowered in {"0", "false"}:
+        return False
+    return None
+
+
+def _number_format_column_state_signature(
+    states: list[_NumberFormatStyle],
+    default: _NumberFormatStyle,
+) -> tuple[tuple[int, int, str, str], ...]:
+    """Compress effective column defaults so equivalent range splitting stays quiet."""
+    segments: list[tuple[int, int, str, str]] = []
+    start: int | None = None
+    previous: _NumberFormatStyle | None = None
+    for column in range(1, MAX_EXCEL_COLUMN + 1):
+        current = states[column]
+        if current == default:
+            if start is not None and previous is not None:
+                segments.append((start, column - 1, previous.category, previous.value))
+            start = None
+            previous = None
+            continue
+        if start is None:
+            start = column
+            previous = current
+            continue
+        if current != previous:
+            segments.append((start, column - 1, previous.category, previous.value))
+            start = column
+            previous = current
+    if start is not None and previous is not None:
+        segments.append((start, MAX_EXCEL_COLUMN, previous.category, previous.value))
+    return tuple(segments)
+
+
+def _number_format_metadata(path: Path) -> _NumberFormatMetadata:
+    """Inspect effective cell, row, and column number formats from raw OOXML.
+
+    Number formats can hide or materially reinterpret an unchanged stored value.
+    The scanner resolves reusable style records, custom-ID remapping, inheritance,
+    and ``applyNumberFormat`` before keeping a private signature. Public output
+    contains counts only: codes, style IDs, and report locations never leave the
+    local comparison process.
+    """
+    warnings: set[str] = set()
+    default_snapshot = NumberFormatSnapshot()
+    entries: list[tuple[str, str]] = []
+    issues: dict[str, str] = {}
+    default_format_override_count = 0
+    cell_format_assignment_count = 0
+    row_format_assignment_count = 0
+    column_format_assignment_count = 0
+    built_in_format_assignment_count = 0
+    custom_format_assignment_count = 0
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    def count_style(style: _NumberFormatStyle, amount: int = 1) -> None:
+        nonlocal built_in_format_assignment_count, custom_format_assignment_count
+        if style.category == "built-in":
+            built_in_format_assignment_count += amount
+        elif style.category == "custom":
+            custom_format_assignment_count += amount
+
+    try:
+        with ZipFile(path) as archive:
+            try:
+                styles = _xml_root(archive, "xl/styles.xml")
+            except KeyError:
+                styles = None
+
+            custom_formats: dict[int, _NumberFormatStyle] = {}
+            if styles is not None:
+                if (
+                    _xml_namespace(styles.tag) != _SPREADSHEETML_NS
+                    or _xml_local_name(styles.tag) != "styleSheet"
+                ):
+                    note_issue("style-sheet-root", styles.tag)
+                    styles = None
+
+            if styles is not None:
+                num_fmts_tag = f"{{{_SPREADSHEETML_NS}}}numFmts"
+                num_fmt_tag = f"{{{_SPREADSHEETML_NS}}}numFmt"
+                num_fmt_containers = styles.findall(num_fmts_tag)
+                if len(num_fmt_containers) > 1:
+                    note_issue("multiple-number-format-containers", len(num_fmt_containers))
+                for container_index, container in enumerate(num_fmt_containers):
+                    for format_index, number_format in enumerate(container):
+                        context = f"numFmt:{container_index}:{format_index}"
+                        if number_format.tag != num_fmt_tag:
+                            note_issue(f"{context}:unsupported-child", number_format.tag)
+                            continue
+                        identifier = _number_format_unsigned_int(
+                            number_format.get("numFmtId")
+                        )
+                        code = number_format.get("formatCode")
+                        if identifier is None or code is None:
+                            note_issue(
+                                f"{context}:missing-or-invalid-attributes",
+                                (number_format.get("numFmtId"), code),
+                            )
+                            continue
+                        if len(code) > _NUMBER_FORMAT_MAX_CODE_LENGTH:
+                            note_issue(f"{context}:oversized-code", (identifier, len(code)))
+                            custom_formats[identifier] = _number_format_unrecognized(
+                                "oversized-number-format-code", identifier, len(code)
+                            )
+                            continue
+                        if identifier <= _NUMBER_FORMAT_BUILT_IN_MAXIMUM:
+                            note_issue(f"{context}:built-in-override", (identifier, code))
+                            custom_formats[identifier] = _number_format_unrecognized(
+                                "built-in-number-format-override", identifier, code
+                            )
+                            continue
+                        style = (
+                            _GENERAL_NUMBER_FORMAT
+                            if code.casefold() == "general"
+                            else _NumberFormatStyle("custom", code)
+                        )
+                        existing = custom_formats.get(identifier)
+                        if existing is not None and existing != style:
+                            note_issue(
+                                f"{context}:duplicate-format-id", (identifier, code)
+                            )
+                            custom_formats[identifier] = _number_format_unrecognized(
+                                "duplicate-number-format-id", identifier, existing, code
+                            )
+                            continue
+                        custom_formats[identifier] = style
+
+            def resolve_number_format(
+                identifier: int,
+                *,
+                context: str,
+            ) -> _NumberFormatStyle:
+                if identifier in custom_formats:
+                    return custom_formats[identifier]
+                if identifier <= _NUMBER_FORMAT_BUILT_IN_MAXIMUM:
+                    return _NumberFormatStyle("built-in", str(identifier))
+                note_issue(f"{context}:unknown-custom-format", identifier)
+                return _number_format_unrecognized(
+                    "unknown-custom-number-format", context, identifier
+                )
+
+            def parse_style_index(
+                value: str | None,
+                *,
+                context: str,
+            ) -> int | None:
+                if value is None:
+                    return None
+                parsed = _number_format_unsigned_int(value)
+                if parsed is None:
+                    note_issue(f"{context}:invalid-style-index", value)
+                return parsed
+
+            def resolve_xf(
+                xf: ElementTree.Element,
+                inherited: _NumberFormatStyle,
+                *,
+                context: str,
+            ) -> _NumberFormatStyle:
+                applies = _number_format_boolean(xf.get("applyNumberFormat"), True)
+                if applies is None:
+                    note_issue(
+                        f"{context}:invalid-apply-number-format",
+                        xf.get("applyNumberFormat"),
+                    )
+                    return _number_format_unrecognized(
+                        "invalid-apply-number-format", context, xf.get("applyNumberFormat")
+                    )
+                identifier_value = xf.get("numFmtId")
+                if not applies or identifier_value is None:
+                    return inherited
+                identifier = _number_format_unsigned_int(identifier_value)
+                if identifier is None:
+                    note_issue(f"{context}:invalid-number-format-id", identifier_value)
+                    return _number_format_unrecognized(
+                        "invalid-number-format-id", context, identifier_value
+                    )
+                return resolve_number_format(identifier, context=context)
+
+            base_xfs: list[_NumberFormatStyle] = []
+            effective_xfs: list[_NumberFormatStyle] = []
+            if styles is not None:
+                xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+                cell_style_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellStyleXfs"
+                cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+                base_containers = styles.findall(cell_style_xfs_tag)
+                if len(base_containers) > 1:
+                    note_issue("multiple-cell-style-xf-containers", len(base_containers))
+                for container_index, container in enumerate(base_containers):
+                    for index, xf in enumerate(container):
+                        if xf.tag != xf_tag:
+                            note_issue(
+                                f"base-xf:{container_index}:{index}:unsupported-child", xf.tag
+                            )
+                            continue
+                        base_xfs.append(
+                            resolve_xf(
+                                xf,
+                                _GENERAL_NUMBER_FORMAT,
+                                context=f"base-xf:{container_index}:{index}",
+                            )
+                        )
+                if not base_xfs:
+                    base_xfs.append(_GENERAL_NUMBER_FORMAT)
+
+                cell_containers = styles.findall(cell_xfs_tag)
+                if len(cell_containers) > 1:
+                    note_issue("multiple-cell-xf-containers", len(cell_containers))
+                for container_index, container in enumerate(cell_containers):
+                    for index, xf in enumerate(container):
+                        if xf.tag != xf_tag:
+                            note_issue(
+                                f"cell-xf:{container_index}:{index}:unsupported-child", xf.tag
+                            )
+                            continue
+                        xf_id_value = xf.get("xfId")
+                        inherited = _GENERAL_NUMBER_FORMAT
+                        if xf_id_value is not None:
+                            xf_id = parse_style_index(
+                                xf_id_value,
+                                context=f"cell-xf:{container_index}:{index}:base",
+                            )
+                            if xf_id is None or xf_id >= len(base_xfs):
+                                note_issue(
+                                    f"cell-xf:{container_index}:{index}:unknown-base-style",
+                                    xf_id_value,
+                                )
+                                inherited = _number_format_unrecognized(
+                                    "unknown-number-format-base-style",
+                                    container_index,
+                                    index,
+                                    xf_id_value,
+                                )
+                            else:
+                                inherited = base_xfs[xf_id]
+                        effective_xfs.append(
+                            resolve_xf(
+                                xf,
+                                inherited,
+                                context=f"cell-xf:{container_index}:{index}",
+                            )
+                        )
+            if not effective_xfs:
+                effective_xfs.append(_GENERAL_NUMBER_FORMAT)
+
+            default_style = effective_xfs[0]
+
+            def style_for_assignment(
+                value: str | None,
+                *,
+                context: str,
+            ) -> _NumberFormatStyle | None:
+                index = parse_style_index(value, context=context)
+                if value is None:
+                    return None
+                if index is None or index >= len(effective_xfs):
+                    note_issue(f"{context}:unknown-style", value)
+                    return _number_format_unrecognized(
+                        "unknown-number-format-style", context, value
+                    )
+                return effective_xfs[index]
+
+            if default_style != _GENERAL_NUMBER_FORMAT:
+                default_format_override_count += 1
+                count_style(default_style)
+                entries.append(("default-number-format", repr(default_style)))
+
+            cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+            col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+            sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+            row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+            cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                column_states = [default_style] * (MAX_EXCEL_COLUMN + 1)
+                column_updates = 0
+                column_sets = worksheet.findall(cols_tag)
+                for columns_index, columns in enumerate(column_sets):
+                    for column_index, column in enumerate(columns):
+                        context = f"column:{sheet.casefold()}:{columns_index}:{column_index}"
+                        if column.tag != col_tag:
+                            note_issue(f"{context}:unsupported-child", column.tag)
+                            continue
+                        if column.get("style") is None:
+                            continue
+                        minimum = _number_format_unsigned_int(column.get("min"))
+                        maximum = _number_format_unsigned_int(column.get("max"))
+                        style = style_for_assignment(column.get("style"), context=context)
+                        if (
+                            minimum is None
+                            or maximum is None
+                            or minimum < 1
+                            or maximum < minimum
+                            or maximum > MAX_EXCEL_COLUMN
+                            or style is None
+                        ):
+                            note_issue(
+                                f"{context}:invalid-column-span",
+                                (column.get("min"), column.get("max"), column.get("style")),
+                            )
+                            continue
+                        span = maximum - minimum + 1
+                        if column_updates + span > _NUMBER_FORMAT_COLUMN_UPDATE_BUDGET:
+                            note_issue(f"{context}:column-update-budget", span)
+                            continue
+                        column_states[minimum : maximum + 1] = [style] * span
+                        column_updates += span
+
+                column_signature = _number_format_column_state_signature(
+                    column_states, default_style
+                )
+                if column_signature:
+                    entries.append(
+                        (
+                            f"column-number-formats:{sheet.casefold()}",
+                            repr(column_signature),
+                        )
+                    )
+                    for minimum, maximum, category, _value in column_signature:
+                        amount = maximum - minimum + 1
+                        column_format_assignment_count += amount
+                        if category == "built-in":
+                            built_in_format_assignment_count += amount
+                        elif category == "custom":
+                            custom_format_assignment_count += amount
+
+                raw_rows: list[tuple[int, _NumberFormatStyle]] = []
+                for sheet_data_index, sheet_data in enumerate(worksheet.findall(sheet_data_tag)):
+                    for row_index, row in enumerate(sheet_data):
+                        context = (
+                            f"row:{sheet.casefold()}:{sheet_data_index}:{row_index}"
+                        )
+                        if row.tag != row_tag:
+                            continue
+                        custom_format = _number_format_boolean(
+                            row.get("customFormat"), False
+                        )
+                        if custom_format is None:
+                            note_issue(
+                                f"{context}:invalid-custom-format", row.get("customFormat")
+                            )
+                            continue
+                        if not custom_format:
+                            continue
+                        row_number = _number_format_unsigned_int(row.get("r"))
+                        style = style_for_assignment(row.get("s"), context=context)
+                        if (
+                            row_number is None
+                            or row_number < 1
+                            or row_number > MAX_EXCEL_ROW
+                            or style is None
+                        ):
+                            note_issue(
+                                f"{context}:invalid-row-assignment",
+                                (row.get("r"), row.get("s")),
+                            )
+                            continue
+                        raw_rows.append((row_number, style))
+
+                relevant_rows = {
+                    row_number
+                    for row_number, style in raw_rows
+                    if style != default_style
+                }
+                has_relevant_columns = bool(column_signature)
+                for row_number, style in raw_rows:
+                    if style == default_style and not has_relevant_columns:
+                        continue
+                    entries.append(
+                        (
+                            f"row-number-format:{sheet.casefold()}:{row_number}",
+                            repr(style),
+                        )
+                    )
+                    row_format_assignment_count += 1
+                    count_style(style)
+
+                seen_cells: set[str] = set()
+                for cell in worksheet.iter(cell_tag):
+                    if cell.get("s") is None:
+                        continue
+                    context = f"cell:{sheet.casefold()}"
+                    coordinate = cell.get("r")
+                    style = style_for_assignment(cell.get("s"), context=context)
+                    match = (
+                        re.fullmatch(r"([A-Za-z]+)([1-9][0-9]*)", coordinate)
+                        if coordinate is not None
+                        else None
+                    )
+                    if style is None or match is None:
+                        note_issue(
+                            f"{context}:invalid-cell-assignment", (coordinate, cell.get("s"))
+                        )
+                        continue
+                    column_letters, raw_row_number = match.groups()
+                    try:
+                        column_number = (
+                            column_index_from_string(column_letters)
+                            if len(column_letters) <= 3
+                            else 0
+                        )
+                    except ValueError:
+                        column_number = 0
+                    row_number = _number_format_unsigned_int(raw_row_number)
+                    if row_number is None:
+                        note_issue(
+                            f"{context}:invalid-cell-row", (coordinate, cell.get("s"))
+                        )
+                        continue
+                    if (
+                        column_number < 1
+                        or column_number > MAX_EXCEL_COLUMN
+                        or row_number > MAX_EXCEL_ROW
+                    ):
+                        note_issue(
+                            f"{context}:out-of-bounds-cell", (coordinate, cell.get("s"))
+                        )
+                        continue
+                    canonical_coordinate = coordinate.upper()
+                    if canonical_coordinate in seen_cells:
+                        note_issue(
+                            f"{context}:duplicate-cell", (canonical_coordinate, cell.get("s"))
+                        )
+                    seen_cells.add(canonical_coordinate)
+                    if (
+                        style == default_style
+                        and row_number not in relevant_rows
+                        and column_states[column_number] == default_style
+                    ):
+                        continue
+                    entries.append(
+                        (
+                            f"cell-number-format:{sheet.casefold()}:{canonical_coordinate}",
+                            repr(style),
+                        )
+                    )
+                    cell_format_assignment_count += 1
+                    count_style(style)
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _NumberFormatMetadata(
+            default_snapshot,
+            (
+                "FormulaFence could not inspect cell number-format OOXML "
+                f"({type(error).__name__}); affected display controls were not compared.",
+            ),
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported cell number-format metadata; "
+            "affected display controls have a coverage gap."
+        )
+        entries.extend(
+            (f"number-format-issue:{context}", detail)
+            for context, detail in sorted(issues.items())
+        )
+    snapshot = NumberFormatSnapshot(
+        default_format_override_count=default_format_override_count,
+        cell_format_assignment_count=cell_format_assignment_count,
+        row_format_assignment_count=row_format_assignment_count,
+        column_format_assignment_count=column_format_assignment_count,
+        built_in_format_assignment_count=built_in_format_assignment_count,
+        custom_format_assignment_count=custom_format_assignment_count,
+        unrecognized_number_format_count=len(issues),
+        definition_signature=(
+            _private_external_data_signature(tuple(sorted(entries))) if entries else None
+        ),
+    )
+    return _NumberFormatMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
     """Inspect raw markers that openpyxl intentionally does not expose."""
     dynamic_cells: set[CellKey] = set()
@@ -16207,6 +16744,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     filter_visibility_metadata = _filter_visibility_metadata(source)
     ignored_error_metadata = _ignored_error_metadata(source)
     named_sheet_view_metadata = _named_sheet_view_metadata(source)
+    number_format_metadata = _number_format_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -16244,6 +16782,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(filter_visibility_metadata.warnings)
     parser_warnings.update(ignored_error_metadata.warnings)
     parser_warnings.update(named_sheet_view_metadata.warnings)
+    parser_warnings.update(number_format_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -16465,6 +17004,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         filter_visibility_controls=filter_visibility_metadata.controls,
         ignored_error_controls=ignored_error_metadata.controls,
         named_sheet_views=named_sheet_view_metadata.views,
+        number_format_controls=number_format_metadata.controls,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -16539,6 +17079,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "filter_visibility_controls": snapshot.filter_visibility_controls.profile_dict(),
         "ignored_error_controls": snapshot.ignored_error_controls.profile_dict(),
         "named_sheet_views": snapshot.named_sheet_views.profile_dict(),
+        "number_format_controls": snapshot.number_format_controls.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -16565,6 +17106,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_filter_visibility_controls": snapshot.filter_visibility_controls.present,
             "has_ignored_error_controls": snapshot.ignored_error_controls.present,
             "has_named_sheet_views": snapshot.named_sheet_views.present,
+            "has_number_format_controls": snapshot.number_format_controls.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

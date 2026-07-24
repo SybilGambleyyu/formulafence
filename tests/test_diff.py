@@ -29,6 +29,8 @@ from .helpers import (
     change_legacy_vml_control_controls,
     change_legacy_vml_note,
     change_named_sheet_view_criterion,
+    change_number_format_code,
+    change_number_format_default_style,
     change_office_web_addin_auto_show,
     change_office_web_addin_controls,
     change_pivot_table_definition_material,
@@ -54,6 +56,8 @@ from .helpers import (
     corrupt_ignored_error_control,
     corrupt_legacy_vml_control_root,
     corrupt_named_sheet_view_control,
+    corrupt_number_format_column_control,
+    corrupt_number_format_definition,
     corrupt_office_web_addin_definition_root,
     corrupt_pivot_table_definition_root,
     corrupt_ribbon_customization_root,
@@ -87,6 +91,7 @@ from .helpers import (
     make_named_formula_model,
     make_named_lambda_model,
     make_named_sheet_view_model,
+    make_number_format_model,
     make_office_web_addin_model,
     make_pivot_table_definition_model,
     make_power_pivot_data_model,
@@ -107,6 +112,8 @@ from .helpers import (
     normalize_filter_visibility_control_spelling,
     normalize_ignored_error_control_spelling,
     normalize_named_sheet_view_control_spelling,
+    normalize_number_format_control_spelling,
+    normalize_number_format_inheritance,
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
     overlap_what_if_data_table_outputs,
@@ -4198,6 +4205,156 @@ def test_filter_visibility_free_workbook_has_no_inventory(tmp_path) -> None:
         "filter, sort, or visibility" in warning
         for warning in snapshot.parser_warnings
     )
+
+
+def test_number_format_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_number_format_model(tmp_path / "baseline.xlsx")
+    candidate = make_number_format_model(tmp_path / "candidate.xlsx")
+    change_number_format_code(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "number_format_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["number_format_assignment_count"] == 6
+    assert baseline_snapshot.summary()["number_format_custom_assignment_count"] == 5
+    assert baseline_snapshot.summary()["has_number_format_controls"] is True
+    assert profile["number_format_controls"] == {
+        "present": True,
+        "default_format_override_count": 0,
+        "cell_format_assignment_count": 3,
+        "row_format_assignment_count": 1,
+        "column_format_assignment_count": 2,
+        "built_in_format_assignment_count": 1,
+        "custom_format_assignment_count": 5,
+        "unrecognized_number_format_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Cell number-format controls" in markdown
+    assert change.details["number_format_definition_material_changed"] is True
+    assert "FF039" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-BASELINE-NUMBER-FORMAT",
+        "CANDIDATE-PRIVATE-NUMBER-FORMAT",
+        ";;;",
+        "B2",
+        "D:E",
+        "numFmtId",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_number_format_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_number_format_model(tmp_path / "baseline.xlsx")
+    equivalent = make_number_format_model(tmp_path / "equivalent.xlsx")
+    normalize_number_format_control_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert "number_format_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF039" not in {finding.rule_id for finding in report.findings}
+
+
+def test_number_format_xf_inheritance_and_apply_flag_are_normalized(tmp_path) -> None:
+    baseline = make_number_format_model(tmp_path / "baseline.xlsx")
+    equivalent = make_number_format_model(tmp_path / "equivalent.xlsx")
+    normalize_number_format_inheritance(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert "number_format_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF039" not in {finding.rule_id for finding in report.findings}
+
+
+def test_number_format_default_style_change_is_guarded(tmp_path) -> None:
+    baseline = make_number_format_model(tmp_path / "baseline.xlsx")
+    candidate = make_number_format_model(tmp_path / "candidate.xlsx")
+    change_number_format_default_style(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.number_format_controls.default_format_override_count == 1
+    assert candidate_snapshot.summary()["number_format_assignment_count"] == 6
+    assert "FF039" in {finding.rule_id for finding in report.findings}
+
+
+def test_number_format_malformed_column_control_fails_closed(tmp_path) -> None:
+    baseline = make_number_format_model(tmp_path / "baseline.xlsx")
+    malformed = make_number_format_model(tmp_path / "malformed.xlsx")
+    corrupt_number_format_column_control(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.number_format_controls.unrecognized_number_format_count == 1
+    assert any(
+        "malformed or unsupported cell number-format" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF039"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("16385" not in artifact for artifact in rendered_artifacts)
+
+
+def test_number_format_missing_definition_fails_closed(tmp_path) -> None:
+    baseline = make_number_format_model(tmp_path / "baseline.xlsx")
+    malformed = make_number_format_model(tmp_path / "malformed.xlsx")
+    corrupt_number_format_definition(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.number_format_controls.unrecognized_number_format_count == 1
+    assert any(
+        "malformed or unsupported cell number-format" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF039"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("999" not in artifact for artifact in rendered_artifacts)
+
+
+def test_number_format_free_workbook_has_no_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.number_format_controls.present is False
+    assert snapshot.number_format_controls.cell_format_assignment_count == 0
+    assert not any("number-format" in warning for warning in snapshot.parser_warnings)
 
 
 def test_ignored_error_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:

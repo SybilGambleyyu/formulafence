@@ -1610,6 +1610,54 @@ class NamedSheetViewSnapshot:
 
 
 @dataclass(frozen=True)
+class NumberFormatSnapshot:
+    """Safe aggregate of cell, row, and column number-format controls.
+
+    A number format can change what a reviewer sees without changing a stored
+    value or formula: it can hide a value, scale it, render it as a date or
+    percentage, or suppress text. Format codes and target locations may carry
+    sensitive reporting context, so the private signature retains canonical
+    assignments for comparison while public output exposes structural counts
+    only.
+    """
+
+    default_format_override_count: int = 0
+    cell_format_assignment_count: int = 0
+    row_format_assignment_count: int = 0
+    column_format_assignment_count: int = 0
+    built_in_format_assignment_count: int = 0
+    custom_format_assignment_count: int = 0
+    unrecognized_number_format_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.default_format_override_count
+            or self.cell_format_assignment_count
+            or self.row_format_assignment_count
+            or self.column_format_assignment_count
+            or self.unrecognized_number_format_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural number-format evidence without codes or targets."""
+        return {
+            "present": self.present,
+            "default_format_override_count": self.default_format_override_count,
+            "cell_format_assignment_count": self.cell_format_assignment_count,
+            "row_format_assignment_count": self.row_format_assignment_count,
+            "column_format_assignment_count": self.column_format_assignment_count,
+            "built_in_format_assignment_count": self.built_in_format_assignment_count,
+            "custom_format_assignment_count": self.custom_format_assignment_count,
+            "unrecognized_number_format_count": self.unrecognized_number_format_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -2011,6 +2059,9 @@ class WorkbookSnapshot:
     named_sheet_views: NamedSheetViewSnapshot = field(
         default_factory=NamedSheetViewSnapshot
     )
+    number_format_controls: NumberFormatSnapshot = field(
+        default_factory=NumberFormatSnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -2078,6 +2129,16 @@ class WorkbookSnapshot:
             "named_sheet_view_count": self.named_sheet_views.named_sheet_view_count,
             "named_sheet_view_filter_count": self.named_sheet_views.named_filter_count,
             "has_named_sheet_views": self.named_sheet_views.present,
+            "number_format_assignment_count": (
+                self.number_format_controls.default_format_override_count
+                + self.number_format_controls.cell_format_assignment_count
+                + self.number_format_controls.row_format_assignment_count
+                + self.number_format_controls.column_format_assignment_count
+            ),
+            "number_format_custom_assignment_count": (
+                self.number_format_controls.custom_format_assignment_count
+            ),
+            "has_number_format_controls": self.number_format_controls.present,
             "defined_names": len(self.defined_names),
             "table_count": len(self.tables),
             "data_validation_rules": len(self.data_validations),

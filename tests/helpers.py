@@ -6215,6 +6215,250 @@ def corrupt_filter_visibility_column_control(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".filter-visibility-column-corrupt.tmp.xlsx")
 
 
+def make_number_format_model(path: Path) -> Path:
+    """Create display-only number-format controls with private format codes."""
+    workbook = Workbook()
+    report = workbook.active
+    report.title = "Number Format Report"
+    report["A1"] = "Built-in display"
+    report["A2"] = 1234.5
+    report["A2"].number_format = "0.00"
+    report["B1"] = "Private literal display"
+    report["B2"] = 1234567.89
+    report["B2"].number_format = '"PRIVATE-BASELINE-NUMBER-FORMAT"'
+    report["C1"] = "Hidden display"
+    report["C2"] = 0.125
+    report["C2"].number_format = ";;;"
+    report["D1"] = "Formula without a direct style"
+    report["D2"] = "=B2*C2"
+    report.row_dimensions[4].number_format = '0.0,," M"'
+    report.column_dimensions["D"].number_format = "0.0%"
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        column = next(
+            current
+            for current in worksheet.iter(col_tag)
+            if current.get("min") == "4" and current.get("max") == "4"
+        )
+        # A column style applies to unallocated/new cells. Use a short span so
+        # the raw scanner exercises effective-range canonicalization without
+        # claiming that the existing formula cell adopts the column default.
+        column.set("max", "5")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".number-format.tmp.xlsx")
+
+
+def change_number_format_code(path: Path) -> Path:
+    """Change a private direct-cell format code without touching its value."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        num_fmt_tag = f"{{{_SPREADSHEETML_NS}}}numFmt"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        number_format = next(
+            current
+            for current in styles.iter(num_fmt_tag)
+            if current.get("formatCode") == '"PRIVATE-BASELINE-NUMBER-FORMAT"'
+        )
+        number_format.set("formatCode", '"CANDIDATE-PRIVATE-NUMBER-FORMAT"')
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".number-format-change.tmp.xlsx")
+
+
+def change_number_format_default_style(path: Path) -> Path:
+    """Change the workbook's base cell format without touching cell records."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        cell_xfs = styles.find(cell_xfs_tag)
+        if cell_xfs is None:
+            raise ValueError("Could not find number-format cell-XF fixture")
+        default_xf = next(cell_xfs.iter(xf_tag))
+        default_xf.set("numFmtId", "165")
+        default_xf.set("applyNumberFormat", "true")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".number-format-default-change.tmp.xlsx")
+
+
+def normalize_number_format_control_spelling(path: Path) -> Path:
+    """Renumber custom formats and split an equivalent column-style range."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        num_fmt_tag = f"{{{_SPREADSHEETML_NS}}}numFmt"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        custom_formats = [
+            current
+            for current in styles.iter(num_fmt_tag)
+            if (identifier := current.get("numFmtId")) is not None
+            and int(identifier) >= 164
+        ]
+        remapping = {
+            current.get("numFmtId"): str(246 + index)
+            for index, current in enumerate(custom_formats)
+            if current.get("numFmtId") is not None
+        }
+        for number_format in custom_formats:
+            identifier = number_format.get("numFmtId")
+            if identifier is not None:
+                number_format.set("numFmtId", remapping[identifier])
+        for xf in styles.iter(xf_tag):
+            identifier = xf.get("numFmtId")
+            if identifier in remapping:
+                xf.set("numFmtId", remapping[identifier])
+                xf.set("applyNumberFormat", "true")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        columns = worksheet.find(cols_tag)
+        if columns is None:
+            raise ValueError("Could not find number-format column fixture")
+        column = next(
+            current
+            for current in columns.findall(col_tag)
+            if current.get("min") == "4" and current.get("max") == "5"
+        )
+        attributes = dict(column.attrib)
+        columns.remove(column)
+        for minimum, maximum in (("4", "4"), ("5", "5")):
+            split_attributes = {**attributes, "min": minimum, "max": maximum}
+            ElementTree.SubElement(columns, col_tag, split_attributes)
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".number-format-noise.tmp.xlsx")
+
+
+def normalize_number_format_inheritance(path: Path) -> Path:
+    """Move one direct format into its base XF without changing its effect."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        num_fmt_tag = f"{{{_SPREADSHEETML_NS}}}numFmt"
+        cell_style_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellStyleXfs"
+        cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        custom_format = next(
+            current
+            for current in styles.iter(num_fmt_tag)
+            if current.get("formatCode") == '"PRIVATE-BASELINE-NUMBER-FORMAT"'
+        )
+        identifier = custom_format.get("numFmtId")
+        if identifier is None:
+            raise ValueError("Could not find private number-format identifier")
+        cell_style_xfs = styles.find(cell_style_xfs_tag)
+        cell_xfs = styles.find(cell_xfs_tag)
+        if cell_style_xfs is None or cell_xfs is None:
+            raise ValueError("Could not find number-format XF fixture")
+        ElementTree.SubElement(
+            cell_style_xfs,
+            xf_tag,
+            {
+                "numFmtId": identifier,
+                "fontId": "0",
+                "fillId": "0",
+                "borderId": "0",
+                "applyNumberFormat": "true",
+            },
+        )
+        direct_xf = next(
+            current
+            for current in cell_xfs.findall(xf_tag)
+            if current.get("numFmtId") == identifier
+        )
+        direct_xf.attrib.pop("numFmtId", None)
+        direct_xf.set("xfId", "1")
+        direct_xf.set("applyNumberFormat", "false")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".number-format-inheritance.tmp.xlsx")
+
+
+def corrupt_number_format_column_control(path: Path) -> Path:
+    """Inject an out-of-bounds format-style span to exercise fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        column = next(
+            current
+            for current in worksheet.iter(col_tag)
+            if current.get("min") == "4" and current.get("max") == "5"
+        )
+        column.set("max", "16385")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".number-format-corrupt.tmp.xlsx")
+
+
+def corrupt_number_format_definition(path: Path) -> Path:
+    """Leave a direct custom format pointing at a missing format definition."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        num_fmt_tag = f"{{{_SPREADSHEETML_NS}}}numFmt"
+        cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        number_format = next(
+            current
+            for current in styles.iter(num_fmt_tag)
+            if current.get("formatCode") == '"PRIVATE-BASELINE-NUMBER-FORMAT"'
+        )
+        identifier = number_format.get("numFmtId")
+        cell_xfs = styles.find(cell_xfs_tag)
+        if identifier is None or cell_xfs is None:
+            raise ValueError("Could not find number-format definition fixture")
+        direct_xf = next(
+            current
+            for current in cell_xfs.findall(xf_tag)
+            if current.get("numFmtId") == identifier
+        )
+        direct_xf.set("numFmtId", "999")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".number-format-missing-definition.tmp.xlsx")
+
+
 def make_named_sheet_view_model(path: Path, *, table_owned: bool = False) -> Path:
     """Create modern alternate filter/sort views with private OOXML settings."""
     workbook = Workbook()

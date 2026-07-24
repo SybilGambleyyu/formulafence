@@ -92,6 +92,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['filter_visibility_hidden_row_count']} / "
             f"{workbook['filter_visibility_hidden_column_count']}"
         ),
+        (
+            "- **Cell number-format controls / custom assignments:** "
+            f"{workbook['number_format_assignment_count']} / "
+            f"{workbook['number_format_custom_assignment_count']}"
+        ),
         f"- **XLM macro-sheet parts:** {workbook['xlm_macro_sheet_count']}",
         (
             "- **XLM macro-sheet formula cells:** "
@@ -1326,6 +1331,37 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "View names, IDs, criteria, target ranges, table bindings, and sort keys are "
             "compared privately and intentionally omitted."
+        )
+    number_format_controls = profile["number_format_controls"]
+    if number_format_controls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Cell number-format controls",
+                "",
+                (
+                    "- **Default overrides / direct-cell assignments / row assignments / "
+                    "column assignments:** "
+                    f"{number_format_controls['default_format_override_count']} / "
+                    f"{number_format_controls['cell_format_assignment_count']} / "
+                    f"{number_format_controls['row_format_assignment_count']} / "
+                    f"{number_format_controls['column_format_assignment_count']}"
+                ),
+                (
+                    "- **Built-in / custom format assignments:** "
+                    f"{number_format_controls['built_in_format_assignment_count']} / "
+                    f"{number_format_controls['custom_format_assignment_count']}"
+                ),
+            ]
+        )
+        if number_format_controls["unrecognized_number_format_count"]:
+            lines.append(
+                "- **Unrecognized or malformed number-format controls:** "
+                f"{number_format_controls['unrecognized_number_format_count']}"
+            )
+        lines.append(
+            "Number-format codes, style indexes, and cell/row/column targets are compared "
+            "privately and intentionally omitted."
         )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:

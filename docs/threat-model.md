@@ -173,6 +173,25 @@ review prompt, not proof of an error.
   activate/render a saved view, calculate a filtered result, infer formula
   visibility sensitivity, repair metadata, or interpret future extension/rich-
   sort or full differential-format semantics.
+- Excel number formats can hide or materially reinterpret an unchanged stored
+  value: `;;;` can display it as blank, while custom sections, scaling commas,
+  dates, percentages, literals, and text placeholders can change the review
+  surface. FormulaFence privately resolves custom `<numFmt>` codes, base
+  `<cellStyleXfs>`, effective `<cellXfs>` with `xfId` and
+  `applyNumberFormat`, direct cell `s`, `customFormat=1` row `s`, and raw
+  `<cols>/<col style>` assignments. It emits `FF039`; the
+  `no_number_format_changes` policy rule can block it as `FFP039`. Profiles and
+  `FF039` details expose only counts for default/direct/row/effective-column
+  assignments, built-in/custom classes, and malformed controls—never codes,
+  style IDs, or targets. Equivalent custom-ID remapping, Boolean spelling,
+  base-XF inheritance, and effective column-range splitting are normalized.
+  Missing custom definitions, invalid IDs/indexes/targets, conflicting
+  definitions, and bounded parser failures remain coverage warnings. FormulaFence
+  does not render locale-specific output, validate format syntax, calculate
+  values, model width/overflow, or track fonts/fills/borders/alignment,
+  quote prefixes, table styles, or arbitrary visual formatting. Column styles
+  are compared only as OOXML defaults for unallocated/new cells, not as a claim
+  to restyle allocated cells.
 - Worksheet data-validation controls are inventoried and diffed as compact
   ranges rather than by expanding their target cells. FormulaFence compares the
   validation type, operator, two criteria expressions, blank/dropdown behavior,

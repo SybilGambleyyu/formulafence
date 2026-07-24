@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.36.0 — 2026-07-24
+
+- Inspect raw workbook number-format controls that can change what a reviewer
+  sees without changing a stored cell value or formula: custom `<numFmt>`
+  definitions, base `<cellStyleXfs>`, effective `<cellXfs>`, direct cell `s`,
+  `customFormat=1` row styles, and worksheet `<cols>/<col style>` defaults.
+  Retain format codes, style IDs, and targets only in private signatures;
+  profiles, `FF039`, and SARIF expose structural counts only.
+- Resolve custom-format ID remapping, base-XF inheritance, and
+  `applyNumberFormat`; normalize equivalent custom-ID allocation, Boolean
+  spelling, and effective column-range splitting. Record column styles as
+  defaults for unallocated/new cells rather than claiming to re-render allocated
+  cells.
+- Emit `FF039` for a material number-format-control change and add the
+  fail-closed `no_number_format_changes` policy rule (`FFP039`). Invalid or
+  missing format/style references, conflicting custom definitions, invalid
+  targets, and bounded parser failures become explicit coverage warnings rather
+  than silent omissions. FormulaFence does not render locale-specific output,
+  validate format syntax, calculate values, model width/overflow, or track
+  arbitrary non-number-format visual styling.
+
 ## 0.35.0 — 2026-07-25
 
 - Inspect raw worksheet `<cols>/<col>` visibility declarations for hidden,

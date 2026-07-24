@@ -39,7 +39,8 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 ## Quick start
 
 ```bash
-pip install formulafence
+# Install the pinned public release directly from GitHub.
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.1.1/formulafence-0.1.1-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -47,6 +48,10 @@ formulafence diff baseline.xlsx candidate.xlsx --format markdown
 # Enforce a policy in CI (non-zero when a rule fails)
 formulafence check baseline.xlsx candidate.xlsx --policy formulafence.yml --format sarif --output results.sarif
 ```
+
+FormulaFence is not yet published to PyPI; the direct release URL above avoids
+an ambiguous package-name install. See [GitHub Releases](https://github.com/SybilGambleyyu/formulafence/releases)
+for the current version.
 
 Create `formulafence.yml`:
 

@@ -18,7 +18,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install formulafence
+      - run: >-
+          python -m pip install
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.1.1/formulafence-0.1.1-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

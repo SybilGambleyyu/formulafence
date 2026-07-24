@@ -8,16 +8,18 @@ from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from formulafence.diff import compare_snapshots
-from formulafence.output import profile_to_markdown, report_to_markdown
+from formulafence.output import profile_to_markdown, report_to_markdown, report_to_sarif
 from formulafence.workbook import load_snapshot, profile_snapshot
 
 from .helpers import (
     add_conditional_formatting_databar_extension,
     add_protected_range,
+    change_external_data_refresh_controls,
     change_protected_range,
     make_conditional_formatting_model,
     make_current_row_table_model,
     make_data_validation_model,
+    make_external_data_refresh_model,
     make_implicit_intersection_model,
     make_legacy_array_model,
     make_let_model,
@@ -33,6 +35,7 @@ from .helpers import (
     mark_array_formula_unclassified,
     reorder_conditional_differential_styles,
     rewrite,
+    set_external_data_connection_defaults,
     set_sheet_protection_defaults,
     set_sheet_protection_modern_verifier,
 )
@@ -1394,6 +1397,155 @@ def test_protection_control_changes_cover_workbook_ranges_and_cell_assignments(t
     assert "Changed synthetic range name" not in report_text
     assert "synthetic-security-descriptor" not in report_text
     assert "changed-synthetic-security-descriptor" not in report_text
+
+
+def test_external_data_refresh_controls_are_profiled_and_diffed_privately(tmp_path) -> None:
+    baseline = make_external_data_refresh_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    change_external_data_refresh_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    assert baseline_snapshot.summary()["external_data_connection_count"] == 2
+    assert baseline_snapshot.summary()["external_data_connections_refresh_on_load"] == 1
+    assert baseline_snapshot.summary()["query_table_refresh_control_count"] == 1
+    assert baseline_snapshot.summary()["query_tables_refresh_on_load"] == 1
+    assert baseline_snapshot.summary()["pivot_cache_refresh_control_count"] == 1
+    assert baseline_snapshot.summary()["pivot_caches_refresh_on_load"] == 1
+    assert profile["external_data_refresh_settings"] == {
+        "update_links": "always",
+        "allow_refresh_query": True,
+        "refresh_all_connections": True,
+        "save_external_link_values": False,
+    }
+    assert profile["external_data_connections"][0] == {
+        "id": 1,
+        "source_type": "ole_db",
+        "deleted": False,
+        "refresh_on_load": True,
+        "refresh_interval_minutes": 60,
+        "background": True,
+        "keep_alive": True,
+        "save_data": False,
+        "save_password": True,
+        "has_source_file": True,
+        "has_connection_file": True,
+        "only_use_connection_file": True,
+        "reconnection_method": "always",
+        "credential_method": "stored",
+        "minimum_refreshable_version": 3,
+        "has_single_sign_on_id": True,
+        "awaiting_initial_refresh": True,
+        "has_name": True,
+        "has_description": True,
+        "source_components": ["database", "parameters"],
+        "parameter_count": 1,
+        "parameters_refresh_on_change": 1,
+        "opaque_metadata": {"present": True, "count": 1},
+    }
+    assert profile["query_table_refresh_controls"] == [
+        {
+            "sheet": "Inputs",
+            "connection_id": 1,
+            "refresh_on_load": True,
+            "background_refresh": False,
+            "refresh_disabled": False,
+            "remove_data_on_save": True,
+            "fill_formulas": True,
+            "connection_edit_disabled": True,
+            "growth_behavior": "overwrite_clear",
+            "has_name": True,
+            "has_refresh_metadata": False,
+            "opaque_metadata": {"present": True, "count": 1},
+        }
+    ]
+    assert profile["pivot_cache_refresh_controls"] == [
+        {
+            "cache_id": 7,
+            "source_type": "external",
+            "connection_id": 2,
+            "refresh_on_load": True,
+            "background_query": True,
+            "refresh_enabled": False,
+            "save_data": False,
+            "upgrade_on_refresh": True,
+            "opaque_metadata": {"present": True, "count": 1},
+        }
+    ]
+    assert "## External-data connections" in markdown
+    assert "## Query-table refresh controls" in markdown
+    assert "## Pivot-cache refresh controls" in markdown
+
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change_kinds = {change.kind for change in report.changes}
+    connection_change = next(
+        change
+        for change in report.changes
+        if change.kind == "external_data_connections_changed"
+    )
+    query_table_change = next(
+        change
+        for change in report.changes
+        if change.kind == "query_table_refresh_controls_changed"
+    )
+    pivot_cache_change = next(
+        change
+        for change in report.changes
+        if change.kind == "pivot_cache_refresh_controls_changed"
+    )
+
+    assert {
+        "external_data_refresh_settings_changed",
+        "external_data_connections_changed",
+        "query_table_refresh_controls_changed",
+        "pivot_cache_refresh_controls_changed",
+    } <= change_kinds
+    assert connection_change.details["identity_material_changed"] is True
+    assert connection_change.details["source_configuration_material_changed"] is True
+    assert query_table_change.details["identity_material_changed"] is True
+    assert pivot_cache_change.details["source_configuration_material_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF023"}
+
+    sensitive_values = (
+        "synthetic confidential revenue connection",
+        "changed synthetic confidential revenue connection",
+        "private-baseline-password",
+        "private-candidate-password",
+        "C:/private/synthetic-revenue-source.accdb",
+        "C:/private/changed-synthetic-source.accdb",
+        "synthetic-private-sso-identifier",
+        "changed-synthetic-private-sso-identifier",
+        "synthetic confidential query table",
+        "changed synthetic confidential query table",
+        "synthetic private pivot extension payload",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_external_data_connection_defaults_are_canonical(tmp_path) -> None:
+    baseline = make_external_data_refresh_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    set_external_data_connection_defaults(baseline, explicit=False)
+    set_external_data_connection_defaults(candidate, explicit=True)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert not {
+        change.kind
+        for change in report.changes
+        if change.kind == "external_data_connections_changed"
+    }
+    assert "FF023" not in {finding.rule_id for finding in report.findings}
 
 
 def test_current_row_table_references_trace_only_the_matching_row(tmp_path) -> None:

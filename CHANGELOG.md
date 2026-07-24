@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.0 — 2026-07-24
+
+- Inventory external-data refresh controls directly from OOXML: workbook-wide
+  external-link/refresh flags, data connections, linked query tables, and
+  pivot-cache sources and refresh behavior.
+- Normalize schema defaults and preserve source paths, connection strings,
+  query material, identifiers, names, descriptions, parameter values, cached
+  records, and opaque extension XML as private comparison fingerprints rather
+  than report content.
+- Emit `FF023` for changed external-data connection or refresh controls and add
+  the fail-closed `no_external_data_connection_changes` policy rule (`FFP023`).
+  FormulaFence does not execute connections, refresh data, or parse Power Query
+  M, DDE/OLE links, or full PivotTable layout semantics.
+
 ## 0.16.0 — 2026-07-24
 
 - Inventory operational protection controls directly from OOXML: workbook

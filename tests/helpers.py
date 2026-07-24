@@ -226,6 +226,377 @@ def _save_inputs_worksheet(contents: dict[str, bytes], root: ElementTree.Element
     )
 
 
+def make_external_data_refresh_model(path: Path) -> Path:
+    """Create a raw-OOXML fixture covering every external-data refresh layer."""
+    make_model(path)
+    spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    document_relationships = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    )
+    content_types_namespace = (
+        "http://schemas.openxmlformats.org/package/2006/content-types"
+    )
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_override(
+        root: ElementTree.Element,
+        part_name: str,
+        content_type: str,
+    ) -> None:
+        override_tag = f"{{{content_types_namespace}}}Override"
+        if any(item.get("PartName") == part_name for item in root.findall(override_tag)):
+            return
+        ElementTree.SubElement(
+            root,
+            override_tag,
+            {"PartName": part_name, "ContentType": content_type},
+        )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        workbook_properties = workbook.find(f"{{{spreadsheet}}}workbookPr")
+        if workbook_properties is None:
+            workbook_properties = ElementTree.Element(f"{{{spreadsheet}}}workbookPr")
+            workbook.insert(0, workbook_properties)
+        workbook_properties.attrib.update(
+            {
+                "updateLinks": "always",
+                "allowRefreshQuery": "1",
+                "refreshAllConnections": "1",
+                "saveExternalLinkValues": "0",
+            }
+        )
+        pivot_caches = workbook.find(f"{{{spreadsheet}}}pivotCaches")
+        if pivot_caches is None:
+            pivot_caches = ElementTree.Element(f"{{{spreadsheet}}}pivotCaches")
+            calc_properties = workbook.find(f"{{{spreadsheet}}}calcPr")
+            insertion_index = (
+                list(workbook).index(calc_properties)
+                if calc_properties is not None
+                else len(workbook)
+            )
+            workbook.insert(insertion_index, pivot_caches)
+        ElementTree.SubElement(
+            pivot_caches,
+            f"{{{spreadsheet}}}pivotCache",
+            {"cacheId": "7", f"{{{document_relationships}}}id": "rIdFencePivot"},
+        )
+        contents["xl/workbook.xml"] = serialize(workbook)
+
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        ElementTree.SubElement(
+            workbook_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceConnections",
+                "Type": f"{document_relationships}/connections",
+                "Target": "connections.xml",
+            },
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFencePivot",
+                "Type": f"{document_relationships}/pivotCacheDefinition",
+                "Target": "pivotCache/pivotCacheDefinition1.xml",
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        add_override(
+            content_types,
+            "/xl/connections.xml",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml",
+        )
+        add_override(
+            content_types,
+            "/xl/queryTables/queryTable1.xml",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml",
+        )
+        add_override(
+            content_types,
+            "/xl/pivotCache/pivotCacheDefinition1.xml",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml",
+        )
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+        connection_root = ElementTree.Element(f"{{{spreadsheet}}}connections")
+        database_connection = ElementTree.SubElement(
+            connection_root,
+            f"{{{spreadsheet}}}connection",
+            {
+                "id": "1",
+                "name": "synthetic confidential revenue connection",
+                "description": "synthetic confidential connection description",
+                "type": "5",
+                "refreshedVersion": "6",
+                "minRefreshableVersion": "3",
+                "sourceFile": "C:/private/synthetic-revenue-source.accdb",
+                "odcFile": "https://private.example/synthetic-revenue.odc",
+                "keepAlive": "1",
+                "interval": "60",
+                "savePassword": "1",
+                "new": "1",
+                "onlyUseConnectionFile": "1",
+                "reconnectionMethod": "2",
+                "background": "1",
+                "refreshOnLoad": "1",
+                "saveData": "0",
+                "credentials": "stored",
+                "singleSignOnId": "synthetic-private-sso-identifier",
+            },
+        )
+        ElementTree.SubElement(
+            database_connection,
+            f"{{{spreadsheet}}}dbPr",
+            {
+                "connection": "Provider=synthetic;Password=private-baseline-password",
+                "command": "select * from confidential_revenue",
+                "commandType": "2",
+            },
+        )
+        parameters = ElementTree.SubElement(
+            database_connection,
+            f"{{{spreadsheet}}}parameters",
+            {"count": "1"},
+        )
+        ElementTree.SubElement(
+            parameters,
+            f"{{{spreadsheet}}}parameter",
+            {
+                "name": "synthetic confidential parameter",
+                "parameterType": "cell",
+                "cell": "Inputs!$B$2",
+                "refreshOnChange": "1",
+                "string": "synthetic confidential parameter value",
+            },
+        )
+        connection_extensions = ElementTree.SubElement(
+            database_connection,
+            f"{{{spreadsheet}}}extLst",
+        )
+        ElementTree.SubElement(
+            connection_extensions,
+            f"{{{spreadsheet}}}ext",
+            {"uri": "urn:synthetic:private-connection-extension"},
+        ).text = "synthetic private connection extension payload"
+        web_connection = ElementTree.SubElement(
+            connection_root,
+            f"{{{spreadsheet}}}connection",
+            {
+                "id": "2",
+                "name": "synthetic confidential web connection",
+                "type": "4",
+                "refreshedVersion": "6",
+            },
+        )
+        ElementTree.SubElement(
+            web_connection,
+            f"{{{spreadsheet}}}webPr",
+            {"url": "https://private.example/synthetic-web-query"},
+        )
+        contents["xl/connections.xml"] = serialize(connection_root)
+
+        query_table = ElementTree.Element(
+            f"{{{spreadsheet}}}queryTable",
+            {
+                "name": "synthetic confidential query table",
+                "connectionId": "1",
+                "refreshOnLoad": "1",
+                "backgroundRefresh": "0",
+                "disableRefresh": "0",
+                "removeDataOnSave": "1",
+                "fillFormulas": "1",
+                "disableEdit": "1",
+                "growShrinkType": "overwriteClear",
+            },
+        )
+        query_extensions = ElementTree.SubElement(query_table, f"{{{spreadsheet}}}extLst")
+        ElementTree.SubElement(
+            query_extensions,
+            f"{{{spreadsheet}}}ext",
+            {"uri": "urn:synthetic:private-query-extension"},
+        ).text = "synthetic private query extension payload"
+        contents["xl/queryTables/queryTable1.xml"] = serialize(query_table)
+
+        sheet_relationships = ElementTree.Element(f"{{{package_relationships}}}Relationships")
+        ElementTree.SubElement(
+            sheet_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceQuery",
+                "Type": f"{document_relationships}/queryTable",
+                "Target": "../queryTables/queryTable1.xml",
+            },
+        )
+        contents["xl/worksheets/_rels/sheet1.xml.rels"] = serialize(sheet_relationships)
+
+        pivot_cache_definition = ElementTree.Element(
+            f"{{{spreadsheet}}}pivotCacheDefinition",
+            {
+                "refreshOnLoad": "1",
+                "backgroundQuery": "1",
+                "enableRefresh": "0",
+                "saveData": "0",
+                "upgradeOnRefresh": "1",
+                "refreshedBy": "synthetic confidential refresh identity",
+            },
+        )
+        pivot_source = ElementTree.SubElement(
+            pivot_cache_definition,
+            f"{{{spreadsheet}}}cacheSource",
+            {"type": "external", "connectionId": "2"},
+        )
+        ElementTree.SubElement(
+            pivot_source,
+            f"{{{spreadsheet}}}extLst",
+        ).text = "synthetic private pivot source payload"
+        pivot_extensions = ElementTree.SubElement(
+            pivot_cache_definition,
+            f"{{{spreadsheet}}}extLst",
+        )
+        ElementTree.SubElement(
+            pivot_extensions,
+            f"{{{spreadsheet}}}ext",
+            {"uri": "urn:synthetic:private-pivot-extension"},
+        ).text = "synthetic private pivot extension payload"
+        contents["xl/pivotCache/pivotCacheDefinition1.xml"] = serialize(
+            pivot_cache_definition
+        )
+
+    return _rewrite_archive(path, mutate, ".external-data.tmp.xlsx")
+
+
+def change_external_data_refresh_controls(path: Path) -> Path:
+    """Change safe controls and private source material in the raw fixture."""
+    spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        workbook_properties = workbook.find(f"{{{spreadsheet}}}workbookPr")
+        if workbook_properties is None:
+            raise ValueError("Fixture does not contain workbook properties")
+        workbook_properties.attrib.update(
+            {
+                "updateLinks": "never",
+                "allowRefreshQuery": "0",
+                "refreshAllConnections": "0",
+                "saveExternalLinkValues": "1",
+            }
+        )
+        contents["xl/workbook.xml"] = serialize(workbook)
+
+        connections = ElementTree.fromstring(contents["xl/connections.xml"])
+        connection = connections.find(f"{{{spreadsheet}}}connection")
+        if connection is None:
+            raise ValueError("Fixture does not contain a connection")
+        connection.attrib.update(
+            {
+                "name": "changed synthetic confidential revenue connection",
+                "sourceFile": "C:/private/changed-synthetic-source.accdb",
+                "odcFile": "https://private.example/changed-synthetic.odc",
+                "singleSignOnId": "changed-synthetic-private-sso-identifier",
+                "interval": "15",
+                "refreshOnLoad": "0",
+                "savePassword": "0",
+            }
+        )
+        database_properties = connection.find(f"{{{spreadsheet}}}dbPr")
+        if database_properties is None:
+            raise ValueError("Fixture does not contain database connection properties")
+        database_properties.set(
+            "connection", "Provider=changed;Password=private-candidate-password"
+        )
+        contents["xl/connections.xml"] = serialize(connections)
+
+        query_table = ElementTree.fromstring(contents["xl/queryTables/queryTable1.xml"])
+        query_table.attrib.update(
+            {
+                "name": "changed synthetic confidential query table",
+                "connectionId": "2",
+                "refreshOnLoad": "0",
+                "fillFormulas": "0",
+            }
+        )
+        contents["xl/queryTables/queryTable1.xml"] = serialize(query_table)
+
+        pivot_cache = ElementTree.fromstring(
+            contents["xl/pivotCache/pivotCacheDefinition1.xml"]
+        )
+        pivot_cache.attrib.update(
+            {
+                "refreshOnLoad": "0",
+                "enableRefresh": "1",
+                "saveData": "1",
+            }
+        )
+        pivot_source = pivot_cache.find(f"{{{spreadsheet}}}cacheSource")
+        if pivot_source is None:
+            raise ValueError("Fixture does not contain a pivot-cache source")
+        pivot_source.set("connectionId", "1")
+        contents["xl/pivotCache/pivotCacheDefinition1.xml"] = serialize(pivot_cache)
+
+    return _rewrite_archive(path, mutate, ".external-data-change.tmp.xlsx")
+
+
+def set_external_data_connection_defaults(path: Path, *, explicit: bool) -> Path:
+    """Toggle omitted versus explicit defaults on the fixture's web connection."""
+    spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    defaults = {
+        "keepAlive": "0",
+        "interval": "0",
+        "reconnectionMethod": "1",
+        "minRefreshableVersion": "0",
+        "savePassword": "0",
+        "new": "0",
+        "deleted": "0",
+        "onlyUseConnectionFile": "0",
+        "background": "0",
+        "refreshOnLoad": "0",
+        "saveData": "0",
+        "credentials": "integrated",
+    }
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        connections = ElementTree.fromstring(contents["xl/connections.xml"])
+        connection_tag = f"{{{spreadsheet}}}connection"
+        connection = next(
+            (
+                item
+                for item in connections.findall(connection_tag)
+                if item.get("id") == "2"
+            ),
+            None,
+        )
+        if connection is None:
+            raise ValueError("Fixture does not contain the web connection")
+        for attribute, value in defaults.items():
+            if explicit:
+                connection.set(attribute, value)
+            else:
+                connection.attrib.pop(attribute, None)
+        contents["xl/connections.xml"] = ElementTree.tostring(
+            connections,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".external-data-defaults.tmp.xlsx")
+
+
 def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Path:
     """Create a workbook with operational protection and sparse style controls."""
     workbook = Workbook()

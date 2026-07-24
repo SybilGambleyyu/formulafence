@@ -76,6 +76,27 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "- **Direct cell-protection assignments:** "
             f"{workbook['cell_protection_assignment_count']}"
         ),
+        f"- **External-data connections:** {workbook['external_data_connection_count']}",
+        (
+            "- **Connections refreshing on open:** "
+            f"{workbook['external_data_connections_refresh_on_load']}"
+        ),
+        (
+            "- **Query-table refresh controls:** "
+            f"{workbook['query_table_refresh_control_count']}"
+        ),
+        (
+            "- **Query tables refreshing on open:** "
+            f"{workbook['query_tables_refresh_on_load']}"
+        ),
+        (
+            "- **Pivot-cache refresh controls:** "
+            f"{workbook['pivot_cache_refresh_control_count']}"
+        ),
+        (
+            "- **Pivot caches refreshing on open:** "
+            f"{workbook['pivot_caches_refresh_on_load']}"
+        ),
         f"- **3-D reference formulas:** {workbook['three_d_reference_cells']}",
         f"- **Spill-reference formulas:** {workbook['spill_reference_cells']}",
         (
@@ -392,6 +413,222 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Assignments retain their serialized cell, row, or column scope; "
             "they are not expanded into cells."
+        )
+    external_settings = profile["external_data_refresh_settings"]
+    external_connections = profile["external_data_connections"]
+    query_tables = profile["query_table_refresh_controls"]
+    pivot_caches = profile["pivot_cache_refresh_controls"]
+    has_nondefault_external_settings = external_settings != {
+        "update_links": "user_set",
+        "allow_refresh_query": False,
+        "refresh_all_connections": False,
+        "save_external_link_values": True,
+    }
+    if has_nondefault_external_settings or external_connections or query_tables or pivot_caches:
+        update_links = {
+            "user_set": "user choice",
+            "always": "always",
+            "never": "never",
+            "unrecognized": "unrecognized",
+        }.get(external_settings["update_links"], "unrecognized")
+        lines.extend(
+            [
+                "",
+                "## External-data refresh controls",
+                "",
+                f"- **External-workbook link updates on open:** {update_links}",
+                (
+                    "- **Query-table refresh allowed:** "
+                    + ("yes" if external_settings["allow_refresh_query"] else "no")
+                ),
+                (
+                    "- **Refresh all connections on open:** "
+                    + ("yes" if external_settings["refresh_all_connections"] else "no")
+                ),
+                (
+                    "- **Cache external-workbook values on save:** "
+                    + (
+                        "yes"
+                        if external_settings["save_external_link_values"]
+                        else "no"
+                    )
+                ),
+            ]
+        )
+    if external_connections:
+        lines.extend(
+            [
+                "",
+                "## External-data connections",
+                "",
+                "| Connection | Source | Automatic refresh | Runtime | Data / authentication | "
+                "Source signals |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for connection in external_connections:
+            automatic: list[str] = []
+            if connection["refresh_on_load"]:
+                automatic.append("on open")
+            if connection["refresh_interval_minutes"] is not None:
+                automatic.append(
+                    f"every {connection['refresh_interval_minutes']} min"
+                )
+            if connection["parameters_refresh_on_change"]:
+                automatic.append(
+                    "parameter change "
+                    f"({connection['parameters_refresh_on_change']})"
+                )
+            runtime = ["background" if connection["background"] else "foreground"]
+            if connection["keep_alive"]:
+                runtime.append("keep alive")
+            data_behavior = [
+                "cache data" if connection["save_data"] else "do not cache data",
+                "password saved" if connection["save_password"] else "password not saved",
+                f"credentials: {connection['credential_method']}",
+            ]
+            source_signals: list[str] = []
+            if connection["deleted"]:
+                source_signals.append("deleted")
+            if connection["has_source_file"]:
+                source_signals.append("source file")
+            if connection["has_connection_file"]:
+                source_signals.append("connection file")
+                source_signals.append(
+                    f"reload: {connection['reconnection_method']}"
+                )
+            if connection["only_use_connection_file"]:
+                source_signals.append("connection-file only")
+            if connection["has_single_sign_on_id"]:
+                source_signals.append("SSO id")
+            if connection["awaiting_initial_refresh"]:
+                source_signals.append("initial refresh pending")
+            if connection["source_components"]:
+                source_signals.append(
+                    ", ".join(connection["source_components"])
+                )
+            if connection["parameter_count"]:
+                source_signals.append(
+                    f"{connection['parameter_count']} parameter(s)"
+                )
+            if connection["opaque_metadata"]["present"]:
+                source_signals.append(
+                    f"{connection['opaque_metadata']['count']} unmodelled XML item(s)"
+                )
+            identifier = (
+                f"#{connection['id']}"
+                if connection["id"] is not None
+                else "unknown"
+            )
+            lines.append(
+                "| {identifier} | {source} | {automatic} | {runtime} | {data} | {signals} |".format(
+                    identifier=_markdown_escape(identifier),
+                    source=_markdown_escape(connection["source_type"]),
+                    automatic=_markdown_escape(
+                        "; ".join(automatic) if automatic else "manual"
+                    ),
+                    runtime=_markdown_escape("; ".join(runtime)),
+                    data=_markdown_escape("; ".join(data_behavior)),
+                    signals=_markdown_escape(
+                        "; ".join(source_signals) if source_signals else "none"
+                    ),
+                )
+            )
+        lines.append(
+            "Connection names, descriptions, paths, URLs, commands, parameter values, "
+            "SSO identifiers, and opaque XML are intentionally omitted."
+        )
+    if query_tables:
+        lines.extend(
+            [
+                "",
+                "## Query-table refresh controls",
+                "",
+                "| Sheet | Connection | Automatic refresh | Behavior |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for query_table in query_tables:
+            behavior = [
+                "background" if query_table["background_refresh"] else "foreground",
+                f"growth: {query_table['growth_behavior']}",
+            ]
+            if query_table["refresh_disabled"]:
+                behavior.append("refresh disabled")
+            if query_table["fill_formulas"]:
+                behavior.append("fill adjacent formulas")
+            if query_table["remove_data_on_save"]:
+                behavior.append("remove data on save")
+            if query_table["connection_edit_disabled"]:
+                behavior.append("connection editing disabled")
+            if query_table["has_refresh_metadata"]:
+                behavior.append("refresh metadata")
+            if query_table["opaque_metadata"]["present"]:
+                behavior.append(
+                    f"{query_table['opaque_metadata']['count']} unmodelled XML item(s)"
+                )
+            identifier = (
+                f"#{query_table['connection_id']}"
+                if query_table["connection_id"] is not None
+                else "unknown"
+            )
+            lines.append(
+                "| {sheet} | {identifier} | {automatic} | {behavior} |".format(
+                    sheet=_markdown_escape(query_table["sheet"]),
+                    identifier=_markdown_escape(identifier),
+                    automatic=("on open" if query_table["refresh_on_load"] else "manual"),
+                    behavior=_markdown_escape("; ".join(behavior)),
+                )
+            )
+        lines.append("Query-table names and refreshed data are intentionally omitted.")
+    if pivot_caches:
+        lines.extend(
+            [
+                "",
+                "## Pivot-cache refresh controls",
+                "",
+                "| Cache | Source | Connection | Automatic refresh | Behavior |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for pivot_cache in pivot_caches:
+            behavior = [
+                "background" if pivot_cache["background_query"] else "foreground",
+                (
+                    "refresh enabled"
+                    if pivot_cache["refresh_enabled"]
+                    else "refresh disabled"
+                ),
+                "cache data" if pivot_cache["save_data"] else "do not cache data",
+            ]
+            if pivot_cache["upgrade_on_refresh"]:
+                behavior.append("upgrade on refresh")
+            if pivot_cache["opaque_metadata"]["present"]:
+                behavior.append(
+                    f"{pivot_cache['opaque_metadata']['count']} unmodelled XML item(s)"
+                )
+            cache_identifier = (
+                f"#{pivot_cache['cache_id']}"
+                if pivot_cache["cache_id"] is not None
+                else "unknown"
+            )
+            connection_identifier = (
+                f"#{pivot_cache['connection_id']}"
+                if pivot_cache["connection_id"] is not None
+                else "none"
+            )
+            lines.append(
+                "| {cache} | {source} | {connection} | {automatic} | {behavior} |".format(
+                    cache=_markdown_escape(cache_identifier),
+                    source=_markdown_escape(pivot_cache["source_type"]),
+                    connection=_markdown_escape(connection_identifier),
+                    automatic=("on open" if pivot_cache["refresh_on_load"] else "manual"),
+                    behavior=_markdown_escape("; ".join(behavior)),
+                )
+            )
+        lines.append(
+            "Pivot-cache source details, cached records, and raw extension XML "
+            "are intentionally omitted."
         )
     features = profile["features"]
     if features["external_reference_cells"] or features["broken_reference_cells"]:

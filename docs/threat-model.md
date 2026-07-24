@@ -14,6 +14,9 @@ financial correctness or replace model review.
 - Protection credential material is never emitted: legacy verifiers, modern
   hashes/salts, protected-range names, and security descriptors are compared
   through private fingerprints and reported only as safe presence/change metadata.
+- External-data source material is never emitted: connection names/descriptions,
+  paths, URLs, connection strings, commands, parameter values, SSO identifiers,
+  cached records, and opaque extension XML remain private comparison evidence.
 - It uses sparse cell storage rather than walking every coordinate in a workbook's
   declared used rectangle.
 - Parser warnings from unsupported OOXML extensions are captured in the profile
@@ -109,6 +112,17 @@ review prompt, not proof of an error.
   with `no_protection_changes`. This does **not** establish confidentiality,
   authentication, authorization, file encryption, rights-management behavior,
   or whether Excel's full style cascade makes an individual cell editable.
+- External-data refresh controls are read directly from OOXML: workbook-wide
+  external-link and refresh-on-open flags; connection refresh schedules,
+  background/cache/credential controls, source-kind metadata, connection-file
+  behavior, and parameter-triggered refreshes; linked query-table refresh and
+  growth behavior; and pivot-cache source/refresh settings. Omitted schema
+  defaults are normalized. Names, paths, URLs, connection strings, commands,
+  parameter values, SSO IDs, cached records, and opaque extension XML remain
+  private fingerprints; a material change emits `FF023` and can be blocked with
+  `no_external_data_connection_changes`. FormulaFence does **not** connect,
+  refresh data, establish source trust, inspect Power Query M or DDE/OLE links,
+  or model PivotTable layout semantics.
 - Explicit implicit intersection is inventoried for literal `@` display syntax,
   `@` applied to a function, and persisted `SINGLE()` OOXML. When `SINGLE()`
   has one direct static A1 cell or range argument with an unambiguous
@@ -139,10 +153,10 @@ review prompt, not proof of an error.
   location in the profile, and a newly introduced one emits `FF016`; its graph
   is deliberately omitted rather than partially guessed.
 - It inventories sheet visibility, defined names, calculation settings, the VBA
-  payload, and the protection controls above. It does not yet diff chart
-  definitions, PivotTables, Power Query, ordinary styles beyond direct
-  protection assignments, complete Excel style-cascade results, or every OOXML
-  part.
+  payload, the protection controls above, and limited pivot-cache refresh
+  controls. It does not yet diff chart definitions, PivotTable layout or cached
+  data, Power Query scripts, ordinary styles beyond direct protection
+  assignments, complete Excel style-cascade results, or every OOXML part.
 - The tool preserves Excel formula text and uses a limited A1-reference
   normalizer for peer-pattern detection; it is not an Excel-compatible parser
   or calculation engine.

@@ -17,9 +17,12 @@ from formulafence.models import (
     ConditionalFormattingSnapshot,
     DataValidationSnapshot,
     DiffReport,
+    ExternalDataConnectionSnapshot,
     Finding,
+    PivotCacheRefreshSnapshot,
     ProtectionCredentialSnapshot,
     ProtectionOpaqueMetadataSnapshot,
+    QueryTableRefreshSnapshot,
     WorkbookSnapshot,
 )
 
@@ -274,6 +277,14 @@ def _opaque_protection_metadata_changed(
     return (before.signature if before is not None else None) != (
         after.signature if after is not None else None
     )
+
+
+def _private_external_data_material_changed(
+    before: tuple[str | None, ...],
+    after: tuple[str | None, ...],
+) -> bool:
+    """Compare private source or identity fingerprints without returning them."""
+    return before != after
 
 
 def _workbook_control_changes(
@@ -683,6 +694,159 @@ def _workbook_control_changes(
                 "FF022",
                 "high",
                 f"Direct cell protection assignments changed on worksheet: {sheet}.",
+                details=details,
+            )
+        )
+
+    if before.external_data_refresh_settings != after.external_data_refresh_settings:
+        details = {
+            "before": before.external_data_refresh_settings.to_dict(),
+            "after": after.external_data_refresh_settings.to_dict(),
+        }
+        changes.append(
+            Change(
+                "external_data_refresh_settings_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF023",
+                "high",
+                "Workbook-wide external-data refresh settings changed.",
+                details=details,
+            )
+        )
+
+    if before.external_data_connections != after.external_data_connections:
+        old_connections: tuple[ExternalDataConnectionSnapshot, ...] = (
+            before.external_data_connections
+        )
+        new_connections: tuple[ExternalDataConnectionSnapshot, ...] = (
+            after.external_data_connections
+        )
+        details: dict[str, object] = {
+            "before": [connection.to_dict() for connection in old_connections],
+            "after": [connection.to_dict() for connection in new_connections],
+        }
+        if _private_external_data_material_changed(
+            tuple(connection.identity_signature for connection in old_connections),
+            tuple(connection.identity_signature for connection in new_connections),
+        ):
+            details["identity_material_changed"] = True
+        if _private_external_data_material_changed(
+            tuple(
+                connection.source_configuration_signature
+                for connection in old_connections
+            ),
+            tuple(
+                connection.source_configuration_signature
+                for connection in new_connections
+            ),
+        ):
+            details["source_configuration_material_changed"] = True
+        if _private_external_data_material_changed(
+            tuple(connection.opaque_metadata.signature for connection in old_connections),
+            tuple(connection.opaque_metadata.signature for connection in new_connections),
+        ):
+            details["opaque_metadata_changed"] = True
+        changes.append(
+            Change(
+                "external_data_connections_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF023",
+                "high",
+                "External-data connection controls changed.",
+                details=details,
+            )
+        )
+
+    if before.query_table_refresh_controls != after.query_table_refresh_controls:
+        old_query_tables: tuple[QueryTableRefreshSnapshot, ...] = (
+            before.query_table_refresh_controls
+        )
+        new_query_tables: tuple[QueryTableRefreshSnapshot, ...] = (
+            after.query_table_refresh_controls
+        )
+        details = {
+            "before": [control.to_dict() for control in old_query_tables],
+            "after": [control.to_dict() for control in new_query_tables],
+        }
+        if _private_external_data_material_changed(
+            tuple(control.identity_signature for control in old_query_tables),
+            tuple(control.identity_signature for control in new_query_tables),
+        ):
+            details["identity_material_changed"] = True
+        if _private_external_data_material_changed(
+            tuple(control.opaque_metadata.signature for control in old_query_tables),
+            tuple(control.opaque_metadata.signature for control in new_query_tables),
+        ):
+            details["opaque_metadata_changed"] = True
+        changes.append(
+            Change(
+                "query_table_refresh_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF023",
+                "high",
+                "Query-table refresh controls changed.",
+                details=details,
+            )
+        )
+
+    if before.pivot_cache_refresh_controls != after.pivot_cache_refresh_controls:
+        old_pivot_caches: tuple[PivotCacheRefreshSnapshot, ...] = (
+            before.pivot_cache_refresh_controls
+        )
+        new_pivot_caches: tuple[PivotCacheRefreshSnapshot, ...] = (
+            after.pivot_cache_refresh_controls
+        )
+        details = {
+            "before": [control.to_dict() for control in old_pivot_caches],
+            "after": [control.to_dict() for control in new_pivot_caches],
+        }
+        if _private_external_data_material_changed(
+            tuple(
+                control.source_configuration_signature
+                for control in old_pivot_caches
+            ),
+            tuple(
+                control.source_configuration_signature
+                for control in new_pivot_caches
+            ),
+        ):
+            details["source_configuration_material_changed"] = True
+        if _private_external_data_material_changed(
+            tuple(control.opaque_metadata.signature for control in old_pivot_caches),
+            tuple(control.opaque_metadata.signature for control in new_pivot_caches),
+        ):
+            details["opaque_metadata_changed"] = True
+        changes.append(
+            Change(
+                "pivot_cache_refresh_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF023",
+                "high",
+                "Pivot-cache refresh controls changed.",
                 details=details,
             )
         )

@@ -37,9 +37,14 @@ from formulafence.models import (
     ConditionalFormattingSnapshot,
     DataValidationSnapshot,
     DynamicArrayOutputReference,
+    ExternalDataConnectionSnapshot,
+    ExternalDataOpaqueMetadataSnapshot,
+    ExternalDataRefreshSettingsSnapshot,
+    PivotCacheRefreshSnapshot,
     ProtectedRangeSnapshot,
     ProtectionCredentialSnapshot,
     ProtectionOpaqueMetadataSnapshot,
+    QueryTableRefreshSnapshot,
     RangeDependency,
     SheetProtectionSnapshot,
     SheetSnapshot,
@@ -132,6 +137,27 @@ class _ProtectionMetadata:
 
 
 @dataclass(frozen=True)
+class _ExternalDataMetadata:
+    """Raw OOXML external-data controls omitted by the workbook reader."""
+
+    refresh_settings: ExternalDataRefreshSettingsSnapshot
+    connections: tuple[ExternalDataConnectionSnapshot, ...]
+    query_tables: tuple[QueryTableRefreshSnapshot, ...]
+    pivot_caches: tuple[PivotCacheRefreshSnapshot, ...]
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _PackageRelationship:
+    """One package relationship with an already-safe internal target."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+
+
+@dataclass(frozen=True)
 class _StyleProtection:
     """Effective protection from one cell XF, plus whether it is explicit."""
 
@@ -161,6 +187,38 @@ _CHART_SHEET_PROTECTION_ACTIONS = (
     ("content", "content", False),
     ("objects", "objects", False),
 )
+_EXTERNAL_CONNECTION_TYPES = {
+    1: "odbc",
+    2: "dao",
+    3: "file_database",
+    4: "web_query",
+    5: "ole_db",
+    6: "text",
+    7: "ado_recordset",
+    8: "dsp",
+}
+_EXTERNAL_RECONNECTION_METHODS = {
+    1: "as_required",
+    2: "always",
+    3: "never",
+}
+_EXTERNAL_CREDENTIAL_METHODS = {
+    "integrated": "integrated",
+    "none": "none",
+    "stored": "stored",
+    "prompt": "prompt",
+}
+_QUERY_TABLE_GROWTH_BEHAVIORS = {
+    "insertClear": "insert_clear",
+    "insertDelete": "insert_delete",
+    "overwriteClear": "overwrite_clear",
+}
+_PIVOT_CACHE_SOURCE_TYPES = {
+    "worksheet": "worksheet",
+    "external": "external",
+    "consolidation": "consolidation",
+    "scenario": "scenario",
+}
 
 
 def sha256_file(path: Path) -> str:
@@ -194,32 +252,73 @@ def _xml_root(archive: ZipFile, member: str) -> ElementTree.Element:
 
 def _normalise_package_target(target: str) -> str | None:
     """Turn a workbook relationship target into a safe ZIP member name."""
-    candidate = target.lstrip("/") if target.startswith("/") else posixpath.join("xl", target)
+    return _normalise_part_target("xl/workbook.xml", target)
+
+
+def _normalise_part_target(source_member: str, target: str) -> str | None:
+    """Resolve one internal OOXML relationship target inside the ZIP package."""
+    candidate = (
+        target.lstrip("/")
+        if target.startswith("/")
+        else posixpath.join(posixpath.dirname(source_member), target)
+    )
     normalised = posixpath.normpath(candidate)
     if normalised == ".." or normalised.startswith("../"):
         return None
     return normalised
 
 
+def _relationship_part_path(source_member: str) -> str:
+    """Return the OPC relationship-part member for one package part."""
+    return posixpath.join(
+        posixpath.dirname(source_member),
+        "_rels",
+        f"{posixpath.basename(source_member)}.rels",
+    )
+
+
+def _package_relationships(
+    archive: ZipFile,
+    source_member: str,
+) -> tuple[_PackageRelationship, ...]:
+    """Read package relationships without following external targets."""
+    relationships = _xml_root(archive, _relationship_part_path(source_member))
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    parsed: list[_PackageRelationship] = []
+    for relationship in relationships.findall(relationship_tag):
+        target_mode = relationship.get("TargetMode", "Internal")
+        target = relationship.get("Target")
+        parsed.append(
+            _PackageRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=(
+                    _normalise_part_target(source_member, target)
+                    if target is not None and target_mode.casefold() == "internal"
+                    else None
+                ),
+                target_mode=target_mode,
+            )
+        )
+    return tuple(parsed)
+
+
 def _sheet_xml_parts(archive: ZipFile) -> dict[str, tuple[str, str]]:
     """Map workbook sheet titles to safe OOXML parts and their sheet kind."""
     workbook = _xml_root(archive, "xl/workbook.xml")
-    relationships = _xml_root(archive, "xl/_rels/workbook.xml.rels")
     relationship_targets: dict[str, tuple[str, str]] = {}
-    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
-    for relationship in relationships.findall(relationship_tag):
-        relationship_type = relationship.get("Type", "")
-        relationship_id = relationship.get("Id")
-        target = relationship.get("Target")
-        sheet_type = relationship_type.rsplit("/", maxsplit=1)[-1]
+    for relationship in _package_relationships(archive, "xl/workbook.xml"):
+        sheet_type = relationship.relationship_type.rsplit("/", maxsplit=1)[-1]
         if (
             sheet_type not in {"worksheet", "chartsheet", "dialogsheet"}
-            or not relationship_id
-            or not target
-            or (normalised := _normalise_package_target(target)) is None
+            or not relationship.relationship_id
+            or relationship.target is None
         ):
             continue
-        relationship_targets[relationship_id] = (normalised, sheet_type)
+        relationship_targets[relationship.relationship_id] = (
+            relationship.target,
+            sheet_type,
+        )
 
     sheet_parts: dict[str, tuple[str, str]] = {}
     sheet_tag = f"{{{_SPREADSHEETML_NS}}}sheet"
@@ -1409,6 +1508,990 @@ def _protection_metadata(path: Path) -> _ProtectionMetadata:
     )
 
 
+def _external_data_bool(
+    value: str | None,
+    default: bool,
+    attribute: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> bool:
+    """Read an OOXML external-data boolean while retaining its default."""
+    if value is None:
+        return default
+    lowered = value.casefold()
+    if lowered in {"1", "true", "on"}:
+        return True
+    if lowered in {"0", "false", "off"}:
+        return False
+    warnings.add(
+        "FormulaFence could not interpret an external-data "
+        f"{context} {attribute} boolean; the schema default was used."
+    )
+    return default
+
+
+def _external_data_unsigned_int(
+    element: ElementTree.Element,
+    attribute: str,
+    default: int | None,
+    warnings: set[str],
+    *,
+    context: str,
+    maximum: int = 4_294_967_295,
+) -> int | None:
+    """Read a non-negative OOXML integer without accepting malformed values."""
+    value = element.get(attribute)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        warnings.add(
+            "FormulaFence could not interpret an external-data "
+            f"{context} {attribute} integer; the affected control has a coverage gap."
+        )
+        return default
+    if not 0 <= parsed <= maximum:
+        warnings.add(
+            "FormulaFence found an out-of-range external-data "
+            f"{context} {attribute} integer; the affected control has a coverage gap."
+        )
+        return default
+    return parsed
+
+
+def _external_data_enum(
+    value: str | None,
+    default: str,
+    values: Mapping[str, str],
+    warnings: set[str],
+    *,
+    context: str,
+    attribute: str,
+) -> str:
+    """Normalize a safe OOXML enumeration without exposing invalid values."""
+    if value is None:
+        return default
+    if normalised := values.get(value):
+        return normalised
+    warnings.add(
+        "FormulaFence found an unrecognized external-data "
+        f"{context} {attribute} value; the affected control has a coverage gap."
+    )
+    return "unrecognized"
+
+
+def _private_external_data_signature(
+    entries: tuple[tuple[str, str], ...],
+) -> str | None:
+    """Hash source or identity material without retaining it in output models."""
+    if not entries:
+        return None
+    digest = hashlib.sha256()
+    for name, value in entries:
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(value.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _external_data_opaque_metadata(
+    element: ElementTree.Element,
+    *,
+    known_attributes: frozenset[str],
+    known_children: frozenset[str] = frozenset(),
+) -> ExternalDataOpaqueMetadataSnapshot:
+    """Fingerprint unknown external-data XML without serializing its contents."""
+    entries: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if _xml_local_name(attribute) not in known_attributes:
+            entries.append((f"attribute:{_xml_display_name(attribute)}", value))
+    for child in element:
+        if _xml_local_name(child.tag) in known_children:
+            continue
+        entries.append(
+            (
+                f"child:{_xml_display_name(child.tag)}",
+                repr(_xml_fragment(child).sort_key()),
+            )
+        )
+    entries.sort()
+    return ExternalDataOpaqueMetadataSnapshot(
+        count=len(entries),
+        signature=_private_external_data_signature(tuple(entries)),
+    )
+
+
+def _external_data_workbook_settings(
+    workbook: ElementTree.Element,
+    warnings: set[str],
+) -> ExternalDataRefreshSettingsSnapshot:
+    """Read workbook-wide refresh controls directly from ``workbookPr``."""
+    properties = workbook.find(f"{{{_SPREADSHEETML_NS}}}workbookPr")
+    if properties is None:
+        return ExternalDataRefreshSettingsSnapshot()
+    return ExternalDataRefreshSettingsSnapshot(
+        update_links=_external_data_enum(
+            properties.get("updateLinks"),
+            "user_set",
+            {"userSet": "user_set", "never": "never", "always": "always"},
+            warnings,
+            context="workbook properties",
+            attribute="updateLinks",
+        ),
+        allow_refresh_query=_external_data_bool(
+            properties.get("allowRefreshQuery"),
+            False,
+            "allowRefreshQuery",
+            warnings,
+            context="workbook properties",
+        ),
+        refresh_all_connections=_external_data_bool(
+            properties.get("refreshAllConnections"),
+            False,
+            "refreshAllConnections",
+            warnings,
+            context="workbook properties",
+        ),
+        save_external_link_values=_external_data_bool(
+            properties.get("saveExternalLinkValues"),
+            True,
+            "saveExternalLinkValues",
+            warnings,
+            context="workbook properties",
+        ),
+    )
+
+
+def _connection_source_type(
+    element: ElementTree.Element,
+    warnings: set[str],
+) -> str:
+    """Return the safe source-type label for one connection."""
+    raw_value = element.get("type")
+    if raw_value is None:
+        return "unspecified"
+    source_type = _external_data_unsigned_int(
+        element,
+        "type",
+        None,
+        warnings,
+        context="connection",
+    )
+    if source_type is None:
+        return "unrecognized"
+    if normalised := _EXTERNAL_CONNECTION_TYPES.get(source_type):
+        return normalised
+    warnings.add(
+        "FormulaFence found an unrecognized external-data connection type; "
+        "the affected source has a coverage gap."
+    )
+    return "unrecognized"
+
+
+def _connection_reconnection_method(
+    element: ElementTree.Element,
+    warnings: set[str],
+) -> str:
+    """Normalize a connection-file reload policy without exposing raw values."""
+    raw_value = element.get("reconnectionMethod")
+    if raw_value is None:
+        return "as_required"
+    method = _external_data_unsigned_int(
+        element,
+        "reconnectionMethod",
+        None,
+        warnings,
+        context="connection",
+    )
+    if method is None:
+        return "unrecognized"
+    if normalised := _EXTERNAL_RECONNECTION_METHODS.get(method):
+        return normalised
+    warnings.add(
+        "FormulaFence found an unrecognized external-data connection "
+        "reconnection method; the affected control has a coverage gap."
+    )
+    return "unrecognized"
+
+
+def _connection_identity_signature(element: ElementTree.Element) -> str | None:
+    """Privately retain connection name and description changes."""
+    return _private_external_data_signature(
+        tuple(
+            (attribute, value)
+            for attribute in ("name", "description")
+            if (value := element.get(attribute)) is not None
+        )
+    )
+
+
+def _connection_source_configuration_signature(
+    element: ElementTree.Element,
+) -> str | None:
+    """Privately retain source paths, credentials, and query configuration."""
+    entries: list[tuple[str, str]] = [
+        (attribute, value)
+        for attribute in ("sourceFile", "odcFile", "singleSignOnId")
+        if (value := element.get(attribute)) is not None
+    ]
+    for index, child in enumerate(element):
+        if _xml_local_name(child.tag) not in {
+            "dbPr",
+            "olapPr",
+            "webPr",
+            "textPr",
+            "parameters",
+        }:
+            continue
+        entries.append(
+            (
+                f"child:{index}:{_xml_display_name(child.tag)}",
+                repr(_xml_fragment(child).sort_key()),
+            )
+        )
+    return _private_external_data_signature(tuple(entries))
+
+
+def _connection_snapshot(
+    element: ElementTree.Element,
+    warnings: set[str],
+) -> ExternalDataConnectionSnapshot:
+    """Read one connection while keeping all source material private."""
+    deleted = _external_data_bool(
+        element.get("deleted"),
+        False,
+        "deleted",
+        warnings,
+        context="connection",
+    )
+    if element.get("id") is None and not deleted:
+        warnings.add(
+            "FormulaFence found an external-data connection without its required id; "
+            "the affected connection has a coverage gap."
+        )
+    connection_id = _external_data_unsigned_int(
+        element,
+        "id",
+        None,
+        warnings,
+        context="connection",
+    )
+    interval = _external_data_unsigned_int(
+        element,
+        "interval",
+        0,
+        warnings,
+        context="connection",
+    )
+    parameter_elements = [
+        child for child in element if _xml_local_name(child.tag) == "parameters"
+    ]
+    if len(parameter_elements) > 1:
+        warnings.add(
+            "FormulaFence found multiple external-data parameter containers; "
+            "the affected connection has a coverage gap."
+        )
+    parameter_count = 0
+    parameters_refresh_on_change = 0
+    parameter_tag = f"{{{_SPREADSHEETML_NS}}}parameter"
+    for parameters in parameter_elements:
+        for parameter in parameters.findall(parameter_tag):
+            parameter_count += 1
+            if _external_data_bool(
+                parameter.get("refreshOnChange"),
+                False,
+                "refreshOnChange",
+                warnings,
+                context="connection parameter",
+            ):
+                parameters_refresh_on_change += 1
+    source_components: list[str] = []
+    for element_name, component in (
+        ("dbPr", "database"),
+        ("olapPr", "olap"),
+        ("webPr", "web_query"),
+        ("textPr", "text_import"),
+        ("parameters", "parameters"),
+    ):
+        count = sum(_xml_local_name(child.tag) == element_name for child in element)
+        if count:
+            source_components.append(component)
+        if count > 1:
+            warnings.add(
+                "FormulaFence found repeated external-data connection source metadata; "
+                "the affected connection has a coverage gap."
+            )
+    return ExternalDataConnectionSnapshot(
+        connection_id=connection_id,
+        source_type=_connection_source_type(element, warnings),
+        deleted=deleted,
+        refresh_on_load=_external_data_bool(
+            element.get("refreshOnLoad"),
+            False,
+            "refreshOnLoad",
+            warnings,
+            context="connection",
+        ),
+        refresh_interval_minutes=interval if interval else None,
+        background=_external_data_bool(
+            element.get("background"),
+            False,
+            "background",
+            warnings,
+            context="connection",
+        ),
+        keep_alive=_external_data_bool(
+            element.get("keepAlive"),
+            False,
+            "keepAlive",
+            warnings,
+            context="connection",
+        ),
+        save_data=_external_data_bool(
+            element.get("saveData"),
+            False,
+            "saveData",
+            warnings,
+            context="connection",
+        ),
+        save_password=_external_data_bool(
+            element.get("savePassword"),
+            False,
+            "savePassword",
+            warnings,
+            context="connection",
+        ),
+        has_source_file=element.get("sourceFile") is not None,
+        has_connection_file=element.get("odcFile") is not None,
+        only_use_connection_file=_external_data_bool(
+            element.get("onlyUseConnectionFile"),
+            False,
+            "onlyUseConnectionFile",
+            warnings,
+            context="connection",
+        ),
+        reconnection_method=_connection_reconnection_method(element, warnings),
+        credential_method=_external_data_enum(
+            element.get("credentials"),
+            "integrated",
+            _EXTERNAL_CREDENTIAL_METHODS,
+            warnings,
+            context="connection",
+            attribute="credentials",
+        ),
+        minimum_refreshable_version=(
+            _external_data_unsigned_int(
+                element,
+                "minRefreshableVersion",
+                0,
+                warnings,
+                context="connection",
+                maximum=255,
+            )
+            or 0
+        ),
+        has_single_sign_on_id=element.get("singleSignOnId") is not None,
+        awaiting_initial_refresh=_external_data_bool(
+            element.get("new"),
+            False,
+            "new",
+            warnings,
+            context="connection",
+        ),
+        has_name=element.get("name") is not None,
+        has_description=element.get("description") is not None,
+        source_components=tuple(source_components),
+        parameter_count=parameter_count,
+        parameters_refresh_on_change=parameters_refresh_on_change,
+        identity_signature=_connection_identity_signature(element),
+        source_configuration_signature=_connection_source_configuration_signature(element),
+        opaque_metadata=_external_data_opaque_metadata(
+            element,
+            known_attributes=frozenset(
+                {
+                    "id",
+                    "sourceFile",
+                    "odcFile",
+                    "keepAlive",
+                    "interval",
+                    "name",
+                    "description",
+                    "type",
+                    "reconnectionMethod",
+                    "refreshedVersion",
+                    "minRefreshableVersion",
+                    "savePassword",
+                    "new",
+                    "deleted",
+                    "onlyUseConnectionFile",
+                    "background",
+                    "refreshOnLoad",
+                    "saveData",
+                    "credentials",
+                    "singleSignOnId",
+                }
+            ),
+            known_children=frozenset(
+                {"dbPr", "olapPr", "webPr", "textPr", "parameters"}
+            ),
+        ),
+    )
+
+
+def _external_data_part_root(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> ElementTree.Element | None:
+    """Read one external-data part without allowing a bad sibling to hide all controls."""
+    try:
+        return _xml_root(archive, member)
+    except (KeyError, ElementTree.ParseError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} OOXML ({type(error).__name__}); the affected controls were not compared."
+        )
+        return None
+
+
+def _external_data_part_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> tuple[_PackageRelationship, ...]:
+    """Read relationships for one external-data owner part safely."""
+    try:
+        return _package_relationships(archive, source_member)
+    except (KeyError, ElementTree.ParseError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships ({type(error).__name__}); "
+            "the affected controls were not compared."
+        )
+        return ()
+
+
+def _connection_snapshots(
+    archive: ZipFile,
+    relationships: tuple[_PackageRelationship, ...],
+    warnings: set[str],
+) -> tuple[ExternalDataConnectionSnapshot, ...]:
+    """Read every workbook-connected ``connections`` part safely."""
+    connection_parts = [
+        relationship
+        for relationship in relationships
+        if relationship.relationship_type.rsplit("/", maxsplit=1)[-1] == "connections"
+    ]
+    if len(connection_parts) > 1:
+        warnings.add(
+            "FormulaFence found multiple external-data Connections parts; "
+            "the workbook has a coverage gap."
+        )
+    snapshots: list[ExternalDataConnectionSnapshot] = []
+    connection_tag = f"{{{_SPREADSHEETML_NS}}}connection"
+    for relationship in connection_parts:
+        if relationship.target is None:
+            warnings.add(
+                "FormulaFence found a Connections relationship without a safe internal target; "
+                "the affected controls were not compared."
+            )
+            continue
+        root = _external_data_part_root(
+            archive,
+            relationship.target,
+            warnings,
+            context="Connections",
+        )
+        if root is None:
+            continue
+        if (
+            _xml_local_name(root.tag) != "connections"
+            or _xml_namespace(root.tag) != _SPREADSHEETML_NS
+        ):
+            warnings.add(
+                "FormulaFence found a workbook Connections part with an unexpected root; "
+                "the affected controls were not compared."
+            )
+            continue
+        if root.attrib or any(
+            _xml_local_name(child.tag) != "connection" for child in root
+        ):
+            warnings.add(
+                "FormulaFence found unmodelled Connections-container metadata; "
+                "the affected controls have a coverage gap."
+            )
+        snapshots.extend(
+            _connection_snapshot(connection, warnings)
+            for connection in root.findall(connection_tag)
+        )
+    identifiers = [
+        snapshot.connection_id
+        for snapshot in snapshots
+        if snapshot.connection_id is not None
+    ]
+    if len(identifiers) != len(set(identifiers)):
+        warnings.add(
+            "FormulaFence found duplicate external-data connection ids; "
+            "the affected controls have a coverage gap."
+        )
+    return tuple(sorted(snapshots, key=ExternalDataConnectionSnapshot.sort_key))
+
+
+def _query_table_snapshot(
+    sheet: str,
+    element: ElementTree.Element,
+    warnings: set[str],
+) -> QueryTableRefreshSnapshot:
+    """Read query-table refresh behavior without names or result metadata."""
+    if element.get("connectionId") is None:
+        warnings.add(
+            "FormulaFence found a query table without its required connection id; "
+            "the affected control has a coverage gap."
+        )
+    connection_id = _external_data_unsigned_int(
+        element,
+        "connectionId",
+        None,
+        warnings,
+        context="query table",
+    )
+    return QueryTableRefreshSnapshot(
+        sheet=sheet,
+        connection_id=connection_id,
+        refresh_on_load=_external_data_bool(
+            element.get("refreshOnLoad"),
+            False,
+            "refreshOnLoad",
+            warnings,
+            context="query table",
+        ),
+        background_refresh=_external_data_bool(
+            element.get("backgroundRefresh"),
+            True,
+            "backgroundRefresh",
+            warnings,
+            context="query table",
+        ),
+        refresh_disabled=_external_data_bool(
+            element.get("disableRefresh"),
+            False,
+            "disableRefresh",
+            warnings,
+            context="query table",
+        ),
+        remove_data_on_save=_external_data_bool(
+            element.get("removeDataOnSave"),
+            False,
+            "removeDataOnSave",
+            warnings,
+            context="query table",
+        ),
+        fill_formulas=_external_data_bool(
+            element.get("fillFormulas"),
+            False,
+            "fillFormulas",
+            warnings,
+            context="query table",
+        ),
+        connection_edit_disabled=_external_data_bool(
+            element.get("disableEdit"),
+            False,
+            "disableEdit",
+            warnings,
+            context="query table",
+        ),
+        growth_behavior=_external_data_enum(
+            element.get("growShrinkType"),
+            "insert_delete",
+            _QUERY_TABLE_GROWTH_BEHAVIORS,
+            warnings,
+            context="query table",
+            attribute="growShrinkType",
+        ),
+        has_name=element.get("name") is not None,
+        has_refresh_metadata=any(
+            _xml_local_name(child.tag) == "queryTableRefresh" for child in element
+        ),
+        identity_signature=_private_external_data_signature(
+            (("name", element.get("name")),)
+            if element.get("name") is not None
+            else ()
+        ),
+        opaque_metadata=_external_data_opaque_metadata(
+            element,
+            known_attributes=frozenset(
+                {
+                    "name",
+                    "headers",
+                    "rowNumbers",
+                    "disableRefresh",
+                    "backgroundRefresh",
+                    "firstBackgroundRefresh",
+                    "refreshOnLoad",
+                    "growShrinkType",
+                    "fillFormulas",
+                    "removeDataOnSave",
+                    "disableEdit",
+                    "preserveFormatting",
+                    "adjustColumnWidth",
+                    "intermediate",
+                    "connectionId",
+                    "autoFormatId",
+                    "applyNumberFormats",
+                    "applyBorderFormats",
+                    "applyFontFormats",
+                    "applyPatternFormats",
+                    "applyAlignmentFormats",
+                    "applyWidthHeightFormats",
+                }
+            ),
+            known_children=frozenset({"queryTableRefresh"}),
+        ),
+    )
+
+
+def _query_table_refresh_snapshots(
+    archive: ZipFile,
+    sheet_parts: Mapping[str, tuple[str, str]],
+    warnings: set[str],
+) -> tuple[QueryTableRefreshSnapshot, ...]:
+    """Read query-table parts linked from normal worksheet OOXML."""
+    snapshots: list[QueryTableRefreshSnapshot] = []
+    seen_parts: set[tuple[str, str]] = set()
+    for sheet, (sheet_member, sheet_type) in sheet_parts.items():
+        if sheet_type != "worksheet":
+            continue
+        relationships_member = _relationship_part_path(sheet_member)
+        if relationships_member not in archive.namelist():
+            continue
+        relationships = _external_data_part_relationships(
+            archive,
+            sheet_member,
+            warnings,
+            context="worksheet query-table",
+        )
+        for relationship in relationships:
+            if relationship.relationship_type.rsplit("/", maxsplit=1)[-1] != "queryTable":
+                continue
+            if relationship.target is None:
+                warnings.add(
+                    "FormulaFence found a query-table relationship without a safe internal target; "
+                    "the affected controls were not compared."
+                )
+                continue
+            part_key = (sheet, relationship.target)
+            if part_key in seen_parts:
+                continue
+            seen_parts.add(part_key)
+            root = _external_data_part_root(
+                archive,
+                relationship.target,
+                warnings,
+                context="query-table",
+            )
+            if root is None:
+                continue
+            if (
+                _xml_local_name(root.tag) != "queryTable"
+                or _xml_namespace(root.tag) != _SPREADSHEETML_NS
+            ):
+                warnings.add(
+                    "FormulaFence found a query-table part with an unexpected root; "
+                    "the affected controls were not compared."
+                )
+                continue
+            snapshots.append(_query_table_snapshot(sheet, root, warnings))
+    return tuple(sorted(snapshots, key=QueryTableRefreshSnapshot.sort_key))
+
+
+def _pivot_cache_source_type(
+    cache_source: ElementTree.Element,
+    warnings: set[str],
+) -> str:
+    """Normalize a pivot cache source type without exposing source values."""
+    source_type = cache_source.get("type")
+    if source_type is None:
+        warnings.add(
+            "FormulaFence found a pivot cache source without its required type; "
+            "the affected control has a coverage gap."
+        )
+        return "unrecognized"
+    return _external_data_enum(
+        source_type,
+        "unrecognized",
+        _PIVOT_CACHE_SOURCE_TYPES,
+        warnings,
+        context="pivot cache source",
+        attribute="type",
+    )
+
+
+def _pivot_cache_snapshot(
+    cache_id: int | None,
+    element: ElementTree.Element,
+    warnings: set[str],
+) -> PivotCacheRefreshSnapshot:
+    """Read one pivot-cache source and refresh setting set safely."""
+    cache_source = element.find(f"{{{_SPREADSHEETML_NS}}}cacheSource")
+    if cache_source is None:
+        warnings.add(
+            "FormulaFence found a pivot cache without a source definition; "
+            "the affected control has a coverage gap."
+        )
+        source_type = "unrecognized"
+        connection_id = None
+        source_configuration_signature = None
+    else:
+        source_type = _pivot_cache_source_type(cache_source, warnings)
+        if source_type == "external" and cache_source.get("connectionId") is None:
+            warnings.add(
+                "FormulaFence found an external pivot cache without a connection id; "
+                "the affected control has a coverage gap."
+            )
+        connection_id = _external_data_unsigned_int(
+            cache_source,
+            "connectionId",
+            None,
+            warnings,
+            context="pivot cache source",
+        )
+        source_configuration_signature = _private_external_data_signature(
+            (("cacheSource", repr(_xml_fragment(cache_source).sort_key())),)
+        )
+    return PivotCacheRefreshSnapshot(
+        cache_id=cache_id,
+        source_type=source_type,
+        connection_id=connection_id,
+        refresh_on_load=_external_data_bool(
+            element.get("refreshOnLoad"),
+            False,
+            "refreshOnLoad",
+            warnings,
+            context="pivot cache",
+        ),
+        background_query=_external_data_bool(
+            element.get("backgroundQuery"),
+            False,
+            "backgroundQuery",
+            warnings,
+            context="pivot cache",
+        ),
+        refresh_enabled=_external_data_bool(
+            element.get("enableRefresh"),
+            True,
+            "enableRefresh",
+            warnings,
+            context="pivot cache",
+        ),
+        save_data=_external_data_bool(
+            element.get("saveData"),
+            True,
+            "saveData",
+            warnings,
+            context="pivot cache",
+        ),
+        upgrade_on_refresh=_external_data_bool(
+            element.get("upgradeOnRefresh"),
+            False,
+            "upgradeOnRefresh",
+            warnings,
+            context="pivot cache",
+        ),
+        source_configuration_signature=source_configuration_signature,
+        opaque_metadata=_external_data_opaque_metadata(
+            element,
+            known_attributes=frozenset(
+                {
+                    "invalid",
+                    "saveData",
+                    "refreshOnLoad",
+                    "optimizeMemory",
+                    "enableRefresh",
+                    "refreshedBy",
+                    "refreshedDate",
+                    "backgroundQuery",
+                    "missingItemsLimit",
+                    "createdVersion",
+                    "refreshedVersion",
+                    "minRefreshableVersion",
+                    "recordCount",
+                    "upgradeOnRefresh",
+                    "tupleCache",
+                    "supportSubquery",
+                    "supportAdvancedDrill",
+                    "id",
+                }
+            ),
+            known_children=frozenset(
+                {
+                    "cacheSource",
+                    "cacheFields",
+                    "cacheHierarchies",
+                    "kpis",
+                    "tupleCache",
+                    "calculatedItems",
+                    "calculatedMembers",
+                    "dimensions",
+                    "measureGroups",
+                    "maps",
+                }
+            ),
+        ),
+    )
+
+
+def _pivot_cache_refresh_snapshots(
+    archive: ZipFile,
+    workbook: ElementTree.Element,
+    relationships: tuple[_PackageRelationship, ...],
+    warnings: set[str],
+) -> tuple[PivotCacheRefreshSnapshot, ...]:
+    """Read pivot-cache refresh controls linked from the workbook."""
+    relationship_targets = {
+        relationship.relationship_id: relationship.target
+        for relationship in relationships
+        if relationship.relationship_id
+        and relationship.relationship_type.rsplit("/", maxsplit=1)[-1]
+        == "pivotCacheDefinition"
+    }
+    cache_container = workbook.find(f"{{{_SPREADSHEETML_NS}}}pivotCaches")
+    if cache_container is None:
+        return ()
+    cache_tag = f"{{{_SPREADSHEETML_NS}}}pivotCache"
+    relationship_id_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    snapshots: list[PivotCacheRefreshSnapshot] = []
+    for cache in cache_container.findall(cache_tag):
+        if cache.get("cacheId") is None:
+            warnings.add(
+                "FormulaFence found a pivot-cache declaration without its required cache id; "
+                "the affected control has a coverage gap."
+            )
+        cache_id = _external_data_unsigned_int(
+            cache,
+            "cacheId",
+            None,
+            warnings,
+            context="pivot-cache declaration",
+        )
+        relationship_id = cache.get(relationship_id_attribute)
+        if not relationship_id or relationship_id not in relationship_targets:
+            warnings.add(
+                "FormulaFence could not locate a pivot-cache definition relationship; "
+                "the affected controls were not compared."
+            )
+            continue
+        target = relationship_targets[relationship_id]
+        if target is None:
+            warnings.add(
+                "FormulaFence found a pivot-cache definition without a safe internal target; "
+                "the affected controls were not compared."
+            )
+            continue
+        root = _external_data_part_root(
+            archive,
+            target,
+            warnings,
+            context="pivot-cache definition",
+        )
+        if root is None:
+            continue
+        if (
+            _xml_local_name(root.tag) != "pivotCacheDefinition"
+            or _xml_namespace(root.tag) != _SPREADSHEETML_NS
+        ):
+            warnings.add(
+                "FormulaFence found a pivot-cache definition with an unexpected root; "
+                "the affected controls were not compared."
+            )
+            continue
+        snapshots.append(_pivot_cache_snapshot(cache_id, root, warnings))
+    identifiers = [snapshot.cache_id for snapshot in snapshots if snapshot.cache_id is not None]
+    if len(identifiers) != len(set(identifiers)):
+        warnings.add(
+            "FormulaFence found duplicate pivot-cache ids; "
+            "the affected controls have a coverage gap."
+        )
+    return tuple(sorted(snapshots, key=PivotCacheRefreshSnapshot.sort_key))
+
+
+def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
+    """Read external-data refresh controls before the workbook reader drops them."""
+    warnings: set[str] = set()
+    default_settings = ExternalDataRefreshSettingsSnapshot()
+    try:
+        with ZipFile(path) as archive:
+            workbook = _external_data_part_root(
+                archive,
+                "xl/workbook.xml",
+                warnings,
+                context="workbook",
+            )
+            if workbook is None:
+                return _ExternalDataMetadata(
+                    refresh_settings=default_settings,
+                    connections=(),
+                    query_tables=(),
+                    pivot_caches=(),
+                    warnings=tuple(sorted(warnings)),
+                )
+            refresh_settings = _external_data_workbook_settings(workbook, warnings)
+            workbook_relationships = _external_data_part_relationships(
+                archive,
+                "xl/workbook.xml",
+                warnings,
+                context="workbook",
+            )
+            connections = _connection_snapshots(
+                archive,
+                workbook_relationships,
+                warnings,
+            )
+            try:
+                sheet_parts = _sheet_xml_parts(archive)
+            except (KeyError, ElementTree.ParseError, ValueError) as error:
+                warnings.add(
+                    "FormulaFence could not map worksheet OOXML for query-table inspection "
+                    f"({type(error).__name__}); query-table controls were not compared."
+                )
+                sheet_parts = {}
+            query_tables = _query_table_refresh_snapshots(
+                archive,
+                sheet_parts,
+                warnings,
+            )
+            pivot_caches = _pivot_cache_refresh_snapshots(
+                archive,
+                workbook,
+                workbook_relationships,
+                warnings,
+            )
+    except (BadZipFile, OSError, ValueError) as error:
+        return _ExternalDataMetadata(
+            refresh_settings=default_settings,
+            connections=(),
+            query_tables=(),
+            pivot_caches=(),
+            warnings=(
+                "FormulaFence could not inspect external-data OOXML "
+                f"({type(error).__name__}); external-data controls were not compared.",
+            ),
+        )
+    return _ExternalDataMetadata(
+        refresh_settings=refresh_settings,
+        connections=connections,
+        query_tables=query_tables,
+        pivot_caches=pivot_caches,
+        warnings=tuple(sorted(warnings)),
+    )
+
+
 def _dynamic_metadata_indexes(archive: ZipFile) -> set[int]:
     """Return the one-based cell-metadata indexes marked as dynamic arrays."""
     try:
@@ -2351,6 +3434,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(conditional_formatting_metadata.warnings)
     protection_metadata = _protection_metadata(source)
     parser_warnings.update(protection_metadata.warnings)
+    external_data_metadata = _external_data_metadata(source)
+    parser_warnings.update(external_data_metadata.warnings)
 
     sheets: dict[str, SheetSnapshot] = {}
     cells: dict[CellKey, CellSnapshot] = {}
@@ -2525,6 +3610,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         protected_ranges=protection_metadata.protected_ranges,
         cell_protection_default=protection_metadata.cell_protection_default,
         cell_protection_assignments=protection_metadata.cell_protection_assignments,
+        external_data_refresh_settings=external_data_metadata.refresh_settings,
+        external_data_connections=external_data_metadata.connections,
+        query_table_refresh_controls=external_data_metadata.query_tables,
+        pivot_cache_refresh_controls=external_data_metadata.pivot_caches,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),
@@ -2573,6 +3662,16 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "cell_protection_assignments": [
             assignment.profile_dict()
             for assignment in snapshot.cell_protection_assignments
+        ],
+        "external_data_refresh_settings": snapshot.external_data_refresh_settings.to_dict(),
+        "external_data_connections": [
+            connection.profile_dict() for connection in snapshot.external_data_connections
+        ],
+        "query_table_refresh_controls": [
+            control.profile_dict() for control in snapshot.query_table_refresh_controls
+        ],
+        "pivot_cache_refresh_controls": [
+            control.profile_dict() for control in snapshot.pivot_cache_refresh_controls
         ],
         "defined_names": sorted(snapshot.defined_names),
         "calculation_settings": snapshot.calculation_settings,

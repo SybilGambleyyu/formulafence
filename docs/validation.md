@@ -333,6 +333,34 @@ Markdown, or SARIF artifacts. This validates comparison and data-minimisation
 behavior, not Excel authentication, file encryption, rights management, or the
 complete style-cascade result.
 
+## External-data refresh controls and redaction — 2026-07-24
+
+FormulaFence 0.17.0 was profiled against Mullins Lab's public
+[external-data workbook](https://github.com/MullinsLab/excel-external-data),
+downloaded only for local compatibility validation and not bundled with the
+project. The downloaded `external-data-blank.xlsx` had SHA-256
+`b194aa281d64f1b5cf7f953a328adca211d67245c6b2d0fe64b5245c352a7b68`.
+
+The file carries an OOXML Connections part and a linked QueryTable part that the
+previous inventory did not expose. FormulaFence reported one text-import
+connection and one linked query-table control, including their safe refresh,
+background, cache, and growth behavior metadata. It did not emit the
+connection's name or source filename. The existing workbook-reader warning for
+an unsupported extension remained visible as a coverage note rather than being
+silently discarded.
+
+Controlled raw-OOXML fixtures then covered workbook-wide refresh flags; OLE DB
+and web connections; refresh-on-open, periodic, background, password/cache,
+connection-file, SSO-presence, and parameter-change controls; a linked query
+table; and an external pivot cache. Explicit and omitted connection defaults
+compared equal. Changing source material, an identity, a refresh setting, or a
+linked control emitted `FF023`; the policy emitted `FFP023`. Redaction tests
+placed synthetic paths, URLs, passwords, connection strings, commands, names,
+parameter values, SSO IDs, and extension payloads in the raw package, then
+verified that none appeared in JSON, Markdown, or SARIF. This validates static
+control comparison and data minimisation—not a live refresh, source trust, or
+returned data correctness.
+
 ## Public structured-reference example — 2026-07-24
 
 FormulaFence 0.6.0 was also profiled against the public

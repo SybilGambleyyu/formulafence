@@ -593,6 +593,207 @@ class CellProtectionAssignmentSnapshot:
 
 
 @dataclass(frozen=True)
+class ExternalDataOpaqueMetadataSnapshot:
+    """Private comparison evidence for unmodelled external-data XML."""
+
+    count: int = 0
+    signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return self.count > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return only the existence and amount of opaque metadata."""
+        return {
+            "present": self.present,
+            "count": self.count,
+        }
+
+
+@dataclass(frozen=True)
+class ExternalDataRefreshSettingsSnapshot:
+    """Workbook-wide controls that can cause external data to refresh."""
+
+    update_links: str = "user_set"
+    allow_refresh_query: bool = False
+    refresh_all_connections: bool = False
+    save_external_link_values: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe, reviewable workbook-wide external-data settings."""
+        return {
+            "update_links": self.update_links,
+            "allow_refresh_query": self.allow_refresh_query,
+            "refresh_all_connections": self.refresh_all_connections,
+            "save_external_link_values": self.save_external_link_values,
+        }
+
+
+@dataclass(frozen=True)
+class ExternalDataConnectionSnapshot:
+    """One OOXML external-data connection without its source material."""
+
+    connection_id: int | None
+    source_type: str
+    deleted: bool = False
+    refresh_on_load: bool = False
+    refresh_interval_minutes: int | None = None
+    background: bool = False
+    keep_alive: bool = False
+    save_data: bool = False
+    save_password: bool = False
+    has_source_file: bool = False
+    has_connection_file: bool = False
+    only_use_connection_file: bool = False
+    reconnection_method: str = "as_required"
+    credential_method: str = "integrated"
+    minimum_refreshable_version: int = 0
+    has_single_sign_on_id: bool = False
+    awaiting_initial_refresh: bool = False
+    has_name: bool = False
+    has_description: bool = False
+    source_components: tuple[str, ...] = ()
+    parameter_count: int = 0
+    parameters_refresh_on_change: int = 0
+    identity_signature: str | None = field(default=None, repr=False)
+    source_configuration_signature: str | None = field(default=None, repr=False)
+    opaque_metadata: ExternalDataOpaqueMetadataSnapshot = field(
+        default_factory=ExternalDataOpaqueMetadataSnapshot
+    )
+
+    def sort_key(self) -> tuple[object, ...]:
+        return (
+            self.connection_id is None,
+            self.connection_id if self.connection_id is not None else -1,
+            self.identity_signature or "",
+            self.source_configuration_signature or "",
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe connection controls without source strings or credentials."""
+        return {
+            "id": self.connection_id,
+            "source_type": self.source_type,
+            "deleted": self.deleted,
+            "refresh_on_load": self.refresh_on_load,
+            "refresh_interval_minutes": self.refresh_interval_minutes,
+            "background": self.background,
+            "keep_alive": self.keep_alive,
+            "save_data": self.save_data,
+            "save_password": self.save_password,
+            "has_source_file": self.has_source_file,
+            "has_connection_file": self.has_connection_file,
+            "only_use_connection_file": self.only_use_connection_file,
+            "reconnection_method": self.reconnection_method,
+            "credential_method": self.credential_method,
+            "minimum_refreshable_version": self.minimum_refreshable_version,
+            "has_single_sign_on_id": self.has_single_sign_on_id,
+            "awaiting_initial_refresh": self.awaiting_initial_refresh,
+            "has_name": self.has_name,
+            "has_description": self.has_description,
+            "source_components": list(self.source_components),
+            "parameter_count": self.parameter_count,
+            "parameters_refresh_on_change": self.parameters_refresh_on_change,
+            "opaque_metadata": self.opaque_metadata.to_dict(),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
+class QueryTableRefreshSnapshot:
+    """One query-table refresh control set, tied to its worksheet safely."""
+
+    sheet: str
+    connection_id: int | None
+    refresh_on_load: bool = False
+    background_refresh: bool = True
+    refresh_disabled: bool = False
+    remove_data_on_save: bool = False
+    fill_formulas: bool = False
+    connection_edit_disabled: bool = False
+    growth_behavior: str = "insert_delete"
+    has_name: bool = False
+    has_refresh_metadata: bool = False
+    identity_signature: str | None = field(default=None, repr=False)
+    opaque_metadata: ExternalDataOpaqueMetadataSnapshot = field(
+        default_factory=ExternalDataOpaqueMetadataSnapshot
+    )
+
+    def sort_key(self) -> tuple[object, ...]:
+        return (
+            self.sheet.casefold(),
+            self.connection_id is None,
+            self.connection_id if self.connection_id is not None else -1,
+            self.identity_signature or "",
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe query-table behavior without query names or data."""
+        return {
+            "sheet": self.sheet,
+            "connection_id": self.connection_id,
+            "refresh_on_load": self.refresh_on_load,
+            "background_refresh": self.background_refresh,
+            "refresh_disabled": self.refresh_disabled,
+            "remove_data_on_save": self.remove_data_on_save,
+            "fill_formulas": self.fill_formulas,
+            "connection_edit_disabled": self.connection_edit_disabled,
+            "growth_behavior": self.growth_behavior,
+            "has_name": self.has_name,
+            "has_refresh_metadata": self.has_refresh_metadata,
+            "opaque_metadata": self.opaque_metadata.to_dict(),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
+class PivotCacheRefreshSnapshot:
+    """One pivot-cache source and refresh control set without cached data."""
+
+    cache_id: int | None
+    source_type: str
+    connection_id: int | None = None
+    refresh_on_load: bool = False
+    background_query: bool = False
+    refresh_enabled: bool = True
+    save_data: bool = True
+    upgrade_on_refresh: bool = False
+    source_configuration_signature: str | None = field(default=None, repr=False)
+    opaque_metadata: ExternalDataOpaqueMetadataSnapshot = field(
+        default_factory=ExternalDataOpaqueMetadataSnapshot
+    )
+
+    def sort_key(self) -> tuple[object, ...]:
+        return (
+            self.cache_id is None,
+            self.cache_id if self.cache_id is not None else -1,
+            self.source_configuration_signature or "",
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe pivot-cache controls without source or cache contents."""
+        return {
+            "cache_id": self.cache_id,
+            "source_type": self.source_type,
+            "connection_id": self.connection_id,
+            "refresh_on_load": self.refresh_on_load,
+            "background_query": self.background_query,
+            "refresh_enabled": self.refresh_enabled,
+            "save_data": self.save_data,
+            "upgrade_on_refresh": self.upgrade_on_refresh,
+            "opaque_metadata": self.opaque_metadata.to_dict(),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class RangeDependency:
     """A range used by a formula, stored without expanding large Excel ranges."""
 
@@ -782,6 +983,12 @@ class WorkbookSnapshot:
     protected_ranges: tuple[ProtectedRangeSnapshot, ...] = ()
     cell_protection_default: CellProtectionDefaultSnapshot | None = None
     cell_protection_assignments: tuple[CellProtectionAssignmentSnapshot, ...] = ()
+    external_data_refresh_settings: ExternalDataRefreshSettingsSnapshot = field(
+        default_factory=ExternalDataRefreshSettingsSnapshot
+    )
+    external_data_connections: tuple[ExternalDataConnectionSnapshot, ...] = ()
+    query_table_refresh_controls: tuple[QueryTableRefreshSnapshot, ...] = ()
+    pivot_cache_refresh_controls: tuple[PivotCacheRefreshSnapshot, ...] = ()
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     spill_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -843,6 +1050,25 @@ class WorkbookSnapshot:
             ),
             "cell_protection_assignment_count": len(
                 self.cell_protection_assignments
+            ),
+            "external_data_connection_count": len(self.external_data_connections),
+            "external_data_connections_refresh_on_load": sum(
+                connection.refresh_on_load
+                for connection in self.external_data_connections
+            ),
+            "query_table_refresh_control_count": len(
+                self.query_table_refresh_controls
+            ),
+            "query_tables_refresh_on_load": sum(
+                control.refresh_on_load
+                for control in self.query_table_refresh_controls
+            ),
+            "pivot_cache_refresh_control_count": len(
+                self.pivot_cache_refresh_controls
+            ),
+            "pivot_caches_refresh_on_load": sum(
+                control.refresh_on_load
+                for control in self.pivot_cache_refresh_controls
             ),
             "has_vba": self.macro_hash is not None,
             "external_reference_cells": len(self.external_references),

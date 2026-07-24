@@ -24,6 +24,7 @@ rules:
   no_data_validation_changes: true
   no_conditional_formatting_changes: true
   no_protection_changes: true
+  no_external_data_connection_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
   max_changed_formulas: 20
@@ -73,6 +74,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_data_validation_changes` | boolean | A worksheet data-validation control changes, including its target ranges, criteria, blank/dropdown behavior, prompts, error alert, or global prompt-disable setting. |
 | `no_conditional_formatting_changes` | boolean | A worksheet conditional-formatting control changes, including its precedence, target ranges, criteria, flags, visual style, or retained OOXML extension fragment. |
 | `no_protection_changes` | boolean | A workbook, worksheet, dialog-sheet, chart-sheet, protected-range, or direct cell/row/column protection control changes. |
+| `no_external_data_connection_changes` | boolean | A workbook-wide external-data refresh flag, connection, linked query-table refresh control, or pivot-cache source/refresh control changes. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
@@ -190,6 +192,21 @@ workbook/worksheet protection is an operational Excel control, and
 FormulaFence does not determine whether an actor can edit a workbook or fully
 recreate Excel's style-precedence rendering. File encryption and rights
 management remain outside scope.
+
+FormulaFence separately inventories **external-data refresh controls** from raw
+OOXML because a workbook can change inputs by refreshing a connection without a
+normal formula edit. It compares workbook `updateLinks`, `allowRefreshQuery`,
+`refreshAllConnections`, and `saveExternalLinkValues`; connection refresh,
+cache, credential, source-kind, connection-file, and parameter-refresh flags;
+linked query-table refresh and growth behavior; and pivot-cache source and
+refresh settings. Omitted schema defaults compare equal to their explicit
+spelling. Connection names/descriptions, paths, URLs, connection strings,
+commands, parameter values, SSO IDs, cached records, and opaque extension XML
+never appear in profiles or reports; private fingerprints still expose material
+source or identity changes. Any such control change emits `FF023`; enable
+`no_external_data_connection_changes` to make it `FFP023` in CI. FormulaFence
+does not execute a connection, refresh workbook data, determine source trust,
+or inspect Power Query M, DDE/OLE links, or PivotTable layout semantics.
 
 When a formula cannot be tokenized at all, FormulaFence records its location in
 the profile and emits `FF016` for a new instance. Enable

@@ -8,8 +8,10 @@ from formulafence.policy import evaluate_policy, parse_policy
 from formulafence.workbook import load_snapshot
 
 from .helpers import (
+    change_external_data_refresh_controls,
     make_conditional_formatting_model,
     make_data_validation_model,
+    make_external_data_refresh_model,
     make_legacy_array_model,
     make_model,
     make_protection_model,
@@ -221,6 +223,19 @@ def test_policy_can_block_protection_control_changes(tmp_path) -> None:
     policy = parse_policy({"version": 1, "rules": {"no_protection_changes": True}})
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP022"}
+
+
+def test_policy_can_block_external_data_connection_changes(tmp_path) -> None:
+    baseline = make_external_data_refresh_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    change_external_data_refresh_controls(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_external_data_connection_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP023"}
 
 
 def test_policy_can_block_three_d_reference_scope_changes(tmp_path) -> None:

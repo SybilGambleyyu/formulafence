@@ -60,6 +60,26 @@ re-profiled after the change with the same 4,228 formula cells, 36 `INDIRECT`
 cells, zero unresolved formula-reference cells, and one parser warning. This
 is a graph-coverage validation, not a claim to calculate Excel results.
 
+## LET and inline LAMBDA scope — 2026-07-24
+
+FormulaFence 0.8.0 distinguishes formula-local variables from workbook names.
+[Microsoft documents that `LET` names apply only within the function's
+scope](https://support.microsoft.com/en-us/excel/functions/let-function) and
+that [LAMBDA parameters apply to its final calculation](https://support.microsoft.com/en-us/excel/functions/lambda-function).
+The parser now follows those scopes without evaluating formulas, including
+nested `LAMBDA` expressions inside higher-order functions.
+
+The controlled fixture used `=LET(rate,Inputs!B2,amount,Inputs!B3,amount*(1-rate))`.
+It produced real edges from both inputs to the calculation and zero unresolved
+tokens; changing the rate reached both that calculation and its dashboard
+output. Unit coverage also reproduces Microsoft's `LET` example, nested
+shadowing, an inline LAMBDA call, and `REDUCE(...,LAMBDA(...))`. The public
+Foresight workbooks contain no `LET` or `LAMBDA` formulas, so they remain a
+compatibility regression check rather than evidence for the new syntax.
+
+This is lexical static inspection, not an Excel evaluator. Spilled ranges and
+named LAMBDA/custom-function calls remain explicit limits.
+
 ## Public structured-reference example — 2026-07-24
 
 FormulaFence 0.6.0 was also profiled against the public

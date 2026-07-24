@@ -47,6 +47,10 @@ review prompt, not proof of an error.
   always be statically resolved. FormulaFence flags newly introduced unresolved
   tokens and `INDIRECT`/`OFFSET` use, but does not fabricate dependencies for
   them.
+- Ordinary lexical names inside inline `LET` expressions and `LAMBDA` bodies
+  are not workbook references and are excluded from unresolved-token reporting;
+  FormulaFence still traces the static dependencies around them. Spilled-range
+  behavior and named LAMBDA/custom-function calls remain outside this subset.
 - Static internal 3-D A1 references such as `Jan:Mar!B2:B10` are expanded over
   every worksheet in the endpoint tab span. FormulaFence compares the resolved
   span when the same 3-D formula survives a workbook change, because moving,

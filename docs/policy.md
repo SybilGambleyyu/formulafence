@@ -82,6 +82,12 @@ dynamic, 3-D, or tokenizer-unsupported formula-defined names; header/total-row
 current-row syntax; exotic bracket escapes; and dynamic address construction—
 where FormulaFence intentionally does not guess at dependencies.
 
+Within a formula, ordinary `LET` bindings and inline `LAMBDA` parameters are
+treated as lexical local names rather than unresolved workbook names. This
+preserves the static dependencies in their value expressions and bodies,
+including nested lambdas in higher-order Excel functions. Spilled ranges and
+named LAMBDA/custom-function calls remain outside this static subset.
+
 Static internal 3-D A1 references such as `Jan:Mar!B2:B10` are expanded across
 every tab between their endpoints in workbook order. FormulaFence records the
 cells that use them in a profile. If sheet insertion, removal, or movement

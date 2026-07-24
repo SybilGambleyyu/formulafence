@@ -55,6 +55,78 @@ def test_formula_inspection_marks_tokenization_failures() -> None:
     assert inspection.tokenization_failed is True
 
 
+def test_formula_inspection_respects_let_lexical_scope() -> None:
+    inspection = inspect_formula(
+        "=LET(rate,ExistingRate,LET(rate,Inputs!B3,rate)+rate+UnknownMetric)",
+        {
+            "existingrate": (
+                ParsedReference("Inputs", 2, 2, 2, 2, raw="ExistingRate"),
+            )
+        },
+    )
+
+    assert inspection.references == (
+        ParsedReference("Inputs", 2, 2, 2, 2, raw="ExistingRate"),
+        ParsedReference("Inputs", 2, 3, 2, 3, raw="Inputs!B3"),
+    )
+    assert inspection.unresolved_range_tokens == ("UnknownMetric",)
+
+
+def test_formula_inspection_handles_microsoft_let_example_without_false_gaps() -> None:
+    inspection = inspect_formula(
+        '=LET(filterCriteria,"Fred",filteredRange,FILTER(A2:D8,A2:A8=filterCriteria),'
+        'IF(ISBLANK(filteredRange),"-",filteredRange))'
+    )
+
+    assert inspection.references == (
+        ParsedReference(None, 1, 2, 4, 8, raw="A2:D8"),
+        ParsedReference(None, 1, 2, 1, 8, raw="A2:A8"),
+    )
+    assert inspection.unresolved_range_tokens == ()
+
+
+def test_formula_inspection_does_not_shadow_a_let_value_before_its_binding() -> None:
+    inspection = inspect_formula(
+        "=LET(rate,rate+Inputs!B2,rate*2)",
+        {"rate": (ParsedReference("Inputs", 2, 3, 2, 3, raw="rate"),)},
+    )
+
+    assert inspection.references == (
+        ParsedReference("Inputs", 2, 3, 2, 3, raw="rate"),
+        ParsedReference("Inputs", 2, 2, 2, 2, raw="Inputs!B2"),
+    )
+    assert inspection.unresolved_range_tokens == ()
+
+
+def test_formula_inspection_respects_inline_lambda_parameters() -> None:
+    lambda_call = inspect_formula("=LAMBDA(rate,rate*Inputs!B2)(Inputs!B3)")
+    reduce_call = inspect_formula(
+        "=REDUCE(0,Inputs!B2:B3,LAMBDA(acc,value,acc+value))"
+    )
+    namespaced_let = inspect_formula("=_xlfn.LET(rate,Inputs!B2,rate*2)")
+
+    assert lambda_call.references == (
+        ParsedReference("Inputs", 2, 2, 2, 2, raw="Inputs!B2"),
+        ParsedReference("Inputs", 2, 3, 2, 3, raw="Inputs!B3"),
+    )
+    assert lambda_call.unresolved_range_tokens == ()
+    assert reduce_call.references == (
+        ParsedReference("Inputs", 2, 2, 2, 3, raw="Inputs!B2:B3"),
+    )
+    assert reduce_call.unresolved_range_tokens == ()
+    assert namespaced_let.unresolved_range_tokens == ()
+
+
+def test_formula_inspection_never_treats_a_cell_reference_as_a_local_variable() -> None:
+    inspection = inspect_formula("=LET(A1,Inputs!B2,A1)")
+
+    assert [reference.raw for reference in inspection.references] == [
+        "A1",
+        "Inputs!B2",
+        "A1",
+    ]
+
+
 def test_formula_inspection_resolves_static_structured_table_references() -> None:
     sales = StructuredTable(
         name="Sales",

@@ -119,12 +119,35 @@ def make_named_formula_model(path: Path) -> Path:
 
     workbook.defined_names.add(DefinedName("TaxRate", attr_text="=Inputs!$B$2"))
     workbook.defined_names.add(
-        DefinedName("DiscountedValue", attr_text="=Inputs!$B$3*(1-TaxRate)")
+        DefinedName(
+            "DiscountedValue",
+            attr_text="=LET(rate,TaxRate,amount,Inputs!$B$3,amount*(1-rate))",
+        )
     )
     workbook.defined_names.add(DefinedName("StaticRate", attr_text="=0.05"))
     workbook.defined_names.add(
         DefinedName("LocalMetric", attr_text="=Inputs!$B$4*2", localSheetId=1)
     )
+    workbook.save(path)
+    return path
+
+
+def make_let_model(path: Path) -> Path:
+    """Create a model whose calculation uses lexical LET variables."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "LET inputs"
+    inputs["B2"] = 0.1
+    inputs["B3"] = 100
+
+    model = workbook.create_sheet("Model")
+    model["A1"] = "LET calculation"
+    model["B2"] = "=LET(rate,Inputs!B2,amount,Inputs!B3,amount*(1-rate))"
+
+    dashboard = workbook.create_sheet("Dashboard")
+    dashboard["A1"] = "LET output"
+    dashboard["B2"] = "=Model!B2"
     workbook.save(path)
     return path
 

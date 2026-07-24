@@ -10,6 +10,7 @@ from formulafence.workbook import load_snapshot, profile_snapshot
 
 from .helpers import (
     make_current_row_table_model,
+    make_let_model,
     make_model,
     make_named_formula_model,
     make_table_model,
@@ -192,6 +193,22 @@ def test_formula_defined_names_expand_supported_static_table_references(tmp_path
         ("Report", "B3"),
         ("Report", "C2"),
     }
+
+
+def test_let_variables_do_not_hide_static_dependency_paths(tmp_path) -> None:
+    baseline = make_let_model(tmp_path / "baseline.xlsx")
+    candidate = make_let_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Inputs"]["B2"], "value", 0.2))
+
+    snapshot = load_snapshot(baseline)
+    assert snapshot.unresolved_reference_tokens == {}
+    assert snapshot.direct_dependents(("Inputs", "B2")) == {("Model", "B2")}
+    assert snapshot.direct_dependents(("Inputs", "B3")) == {("Model", "B2")}
+
+    report = compare_snapshots(snapshot, load_snapshot(candidate))
+    change = next(change for change in report.changes if change.location == ("Inputs", "B2"))
+
+    assert change.impacted_cells == (("Dashboard", "B2"), ("Model", "B2"))
 
 
 def test_diff_surfaces_new_static_coverage_gaps(tmp_path) -> None:

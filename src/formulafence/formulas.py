@@ -22,6 +22,12 @@ _CELL_REFERENCE = re.compile(
     r"(?P<row_absolute>\$?)(?P<row>[1-9][0-9]*)(?![A-Z0-9_])",
     re.IGNORECASE,
 )
+_LOCAL_IDENTIFIER = re.compile(r"[A-Z_][A-Z0-9_]*", re.IGNORECASE)
+_A1_LOCAL_IDENTIFIER_CONFLICT = re.compile(r"[A-Z]{1,3}[1-9][0-9]*", re.IGNORECASE)
+_R1C1_LOCAL_IDENTIFIER_CONFLICT = re.compile(
+    r"R[1-9][0-9]*C[1-9][0-9]*", re.IGNORECASE
+)
+_GROUP_TOKEN_TYPES = {"FUNC", "PAREN", "ARRAY"}
 
 
 @dataclass(frozen=True)
@@ -657,6 +663,186 @@ def resolve_structured_reference(
     return tuple(dict.fromkeys(references))
 
 
+def _is_group_open(token: object) -> bool:
+    """Return whether an openpyxl token starts a nested expression group."""
+    return (
+        getattr(token, "type", None) in _GROUP_TOKEN_TYPES
+        and getattr(token, "subtype", None) == "OPEN"
+    )
+
+
+def _is_group_close(token: object) -> bool:
+    """Return whether an openpyxl token ends a nested expression group."""
+    return (
+        getattr(token, "type", None) in _GROUP_TOKEN_TYPES
+        and getattr(token, "subtype", None) == "CLOSE"
+    )
+
+
+def _matching_group_close(tokens: Sequence[object], opening: int, end: int) -> int | None:
+    """Find a matching formula-token group close without parsing Excel values."""
+    depth = 0
+    for position in range(opening, end):
+        if _is_group_open(tokens[position]):
+            depth += 1
+        elif _is_group_close(tokens[position]):
+            depth -= 1
+            if depth == 0:
+                return position
+    return None
+
+
+def _function_argument_spans(
+    tokens: Sequence[object], start: int, end: int
+) -> tuple[tuple[int, int], ...]:
+    """Split one function body into top-level comma-separated token spans."""
+    spans: list[tuple[int, int]] = []
+    argument_start = start
+    depth = 0
+    for position in range(start, end):
+        token = tokens[position]
+        if _is_group_open(token):
+            depth += 1
+        elif _is_group_close(token):
+            depth -= 1
+        elif (
+            depth == 0
+            and getattr(token, "type", None) == "SEP"
+            and getattr(token, "subtype", None) == "ARG"
+        ):
+            spans.append((argument_start, position))
+            argument_start = position + 1
+    spans.append((argument_start, end))
+    return tuple(spans)
+
+
+def _simple_local_identifier(
+    tokens: Sequence[object], start: int, end: int
+) -> tuple[int, str] | None:
+    """Return one conservative LET/LAMBDA identifier declaration token."""
+    meaningful = [
+        position
+        for position in range(start, end)
+        if getattr(tokens[position], "type", None) != "WSPACE"
+    ]
+    if len(meaningful) != 1:
+        return None
+    position = meaningful[0]
+    token = tokens[position]
+    if not (
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "RANGE"
+    ):
+        return None
+    value = str(getattr(token, "value", "")).strip()
+    if not _LOCAL_IDENTIFIER.fullmatch(value):
+        return None
+    if (
+        value.casefold() in {"r", "c"}
+        or _A1_LOCAL_IDENTIFIER_CONFLICT.fullmatch(value)
+        or _R1C1_LOCAL_IDENTIFIER_CONFLICT.fullmatch(value)
+    ):
+        return None
+    return position, value.casefold()
+
+
+def _function_name(token: object) -> str:
+    """Normalize function names, including Excel's OOXML namespace prefixes."""
+    value = str(getattr(token, "value", "")).rstrip("(").strip().upper()
+    return value.rsplit(".", 1)[-1]
+
+
+def _local_variable_token_indexes(tokens: Sequence[object]) -> set[int]:
+    """Find LET/LAMBDA declarations and lexical uses masquerading as ranges.
+
+    openpyxl's tokenizer correctly preserves the argument structure but labels
+    Excel's local names as ``OPERAND/RANGE``. This walk is deliberately narrow:
+    malformed declarations fall back to ordinary inspection, where their tokens
+    remain visible as unresolved rather than being suppressed.
+    """
+    local_indexes: set[int] = set()
+
+    def visit(start: int, end: int, scope: frozenset[str]) -> None:
+        position = start
+        while position < end:
+            token = tokens[position]
+            if _is_group_open(token):
+                closing = _matching_group_close(tokens, position, end)
+                if closing is None:
+                    position += 1
+                    continue
+                body_start = position + 1
+                if getattr(token, "type", None) == "FUNC":
+                    arguments = _function_argument_spans(tokens, body_start, closing)
+                    name = _function_name(token)
+                    if name == "LET":
+                        visit_let(arguments, scope)
+                    elif name == "LAMBDA":
+                        visit_lambda(arguments, scope)
+                    else:
+                        visit(body_start, closing, scope)
+                else:
+                    visit(body_start, closing, scope)
+                position = closing + 1
+                continue
+            if (
+                getattr(token, "type", None) == "OPERAND"
+                and getattr(token, "subtype", None) == "RANGE"
+                and reference_lookup_key(str(getattr(token, "value", ""))) in scope
+            ):
+                local_indexes.add(position)
+            position += 1
+
+    def visit_let(arguments: Sequence[tuple[int, int]], scope: frozenset[str]) -> None:
+        if len(arguments) < 3 or len(arguments) % 2 == 0:
+            for start, end in arguments:
+                visit(start, end, scope)
+            return
+        declarations: list[tuple[int, str]] = []
+        for start, end in arguments[:-1:2]:
+            declaration = _simple_local_identifier(tokens, start, end)
+            if declaration is None:
+                for fallback_start, fallback_end in arguments:
+                    visit(fallback_start, fallback_end, scope)
+                return
+            declarations.append(declaration)
+
+        active_scope = set(scope)
+        for pair_index, (declaration_index, identifier) in enumerate(declarations):
+            local_indexes.add(declaration_index)
+            value_start, value_end = arguments[pair_index * 2 + 1]
+            visit(value_start, value_end, frozenset(active_scope))
+            active_scope.add(identifier)
+        final_start, final_end = arguments[-1]
+        visit(final_start, final_end, frozenset(active_scope))
+
+    def visit_lambda(arguments: Sequence[tuple[int, int]], scope: frozenset[str]) -> None:
+        if len(arguments) < 2:
+            for start, end in arguments:
+                visit(start, end, scope)
+            return
+        declarations: list[tuple[int, str]] = []
+        for start, end in arguments[:-1]:
+            declaration = _simple_local_identifier(tokens, start, end)
+            if declaration is None:
+                for fallback_start, fallback_end in arguments:
+                    visit(fallback_start, fallback_end, scope)
+                return
+            declarations.append(declaration)
+        local_scope = set(scope)
+        for declaration_index, identifier in declarations:
+            local_indexes.add(declaration_index)
+            local_scope.add(identifier)
+        body_start, body_end = arguments[-1]
+        visit(body_start, body_end, frozenset(local_scope))
+
+    try:
+        visit(0, len(tokens), frozenset())
+    except Exception:  # pragma: no cover - conservative fallback for unknown token shapes
+        return set()
+    return local_indexes
+
+
 def inspect_formula(
     formula: str,
     named_references: Mapping[str, Sequence[ParsedReference]] | None = None,
@@ -682,8 +868,11 @@ def inspect_formula(
     unresolved_range_tokens: list[str] = []
     dynamic_reference_functions: list[str] = []
     three_d_reference_tokens: list[str] = []
-    for token in tokens:
+    local_variable_indexes = _local_variable_token_indexes(tokens)
+    for position, token in enumerate(tokens):
         if token.type == "OPERAND" and token.subtype == "RANGE":
+            if position in local_variable_indexes:
+                continue
             reference = parse_reference_token(token.value)
             if reference is not None:
                 references.append(reference)

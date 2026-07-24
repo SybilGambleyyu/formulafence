@@ -45,6 +45,7 @@ from formulafence.models import (
     ExternalDataOpaqueMetadataSnapshot,
     ExternalDataRefreshSettingsSnapshot,
     ExternalLinkPackageSnapshot,
+    OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PowerQueryPermissionControlsSnapshot,
     PowerQuerySnapshot,
@@ -136,6 +137,25 @@ _RIBBON_CUSTOM_UI_RELATIONSHIPS = {
     "http://schemas.microsoft.com/office/2006/relationships/ui/extensibility": "2007",
     "http://schemas.microsoft.com/office/2007/relationships/ui/extensibility": "2010",
 }
+_WEB_EXTENSION_TASKPANES_PART_PATTERN = re.compile(
+    r"^xl/webextensions/taskpanes(?:\d+)?\.xml$", re.IGNORECASE
+)
+_WEB_EXTENSION_PART_PATTERN = re.compile(
+    r"^xl/webextensions/webextension(?:\d+)?\.xml$", re.IGNORECASE
+)
+_WEB_EXTENSION_MAX_PART_BYTES = 16 * 1024 * 1024
+_WEB_EXTENSION_TOTAL_MAX_BYTES = 32 * 1024 * 1024
+_WEB_EXTENSION_TOTAL_MAX_COUNT = 64
+_WEB_EXTENSION_TASKPANES_NS = (
+    "http://schemas.microsoft.com/office/webextensions/taskpanes/2010/11"
+)
+_WEB_EXTENSION_NS = "http://schemas.microsoft.com/office/webextensions/webextension/2010/11"
+_WEB_EXTENSION_TASKPANES_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2011/relationships/webextensiontaskpanes"
+)
+_WEB_EXTENSION_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2011/relationships/webextension"
+)
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 
 
@@ -214,6 +234,14 @@ class _RibbonCustomizationMetadata:
 
 
 @dataclass(frozen=True)
+class _OfficeWebAddinMetadata:
+    """Raw Office Web Add-in task-pane evidence outside the workbook reader."""
+
+    addins: OfficeWebAddinSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _XlmRawRelationship:
     """One private package relationship, including the original target material."""
 
@@ -257,12 +285,42 @@ class _RibbonRawRelationship:
         )
 
 
+@dataclass(frozen=True)
+class _OfficeWebAddinRawRelationship:
+    """One private Office Web Add-in relationship and canonical target."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return relationship semantics while ignoring arbitrary identifiers."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        return (
+            self.relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
 @dataclass
 class _RibbonCustomizationBudget:
     """Bound total custom-UI bytes read across one RibbonX package scan."""
 
     remaining_bytes: int = _RIBBON_CUSTOM_UI_TOTAL_MAX_BYTES
     remaining_parts: int = _RIBBON_CUSTOM_UI_TOTAL_MAX_COUNT
+
+
+@dataclass
+class _OfficeWebAddinBudget:
+    """Bound total task-pane and web-extension XML bytes in one package scan."""
+
+    remaining_bytes: int = _WEB_EXTENSION_TOTAL_MAX_BYTES
+    remaining_parts: int = _WEB_EXTENSION_TOTAL_MAX_COUNT
 
 
 @dataclass
@@ -313,6 +371,42 @@ class _RibbonPartInspection:
     action_callback_count: int = 0
     image_relationship_count: int = 0
     external_relationship_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _OfficeWebAddinTaskpaneInspection:
+    """Private parsed state for one Office Web Add-in task-pane part."""
+
+    member: str
+    taskpane_count: int = 0
+    visible_taskpane_count: int = 0
+    locked_taskpane_count: int = 0
+    web_extension_reference_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    declared_web_extension_members: tuple[str, ...] = ()
+    unresolved_binding_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _OfficeWebAddinExtensionInspection:
+    """Private parsed state for one Office Web Add-in definition part."""
+
+    member: str
+    auto_show_taskpane_count: int = 0
+    store_reference_count: int = 0
+    alternate_reference_count: int = 0
+    binding_count: int = 0
+    snapshot_reference_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    unresolved_snapshot_reference_count: int = 0
     inspected: bool = False
     definition_signature: str | None = None
     relationship_signature: str | None = None
@@ -5479,6 +5573,826 @@ def _ribbon_customization_metadata(path: Path) -> _RibbonCustomizationMetadata:
     return _RibbonCustomizationMetadata(snapshot, tuple(sorted(warnings)))
 
 
+def _office_web_addin_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+    missing_is_warning: bool = False,
+) -> tuple[_OfficeWebAddinRawRelationship, ...]:
+    """Read task-pane relationships without opening any package target."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        if missing_is_warning:
+            warnings.add(
+                "FormulaFence could not locate "
+                f"{context} relationships while inspecting Office Web Add-ins; "
+                "affected controls may be incomplete."
+            )
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for Office Web Add-ins ({type(error).__name__}); "
+            "affected controls were not compared."
+        )
+        return ()
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting Office Web Add-ins; "
+            "affected controls were not compared."
+        )
+        return ()
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_OfficeWebAddinRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _OfficeWebAddinRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting Office Web "
+            "Add-ins; affected controls may be incomplete."
+        )
+    return tuple(relationships)
+
+
+def _office_web_addin_relationship_signature(
+    relationships: tuple[_OfficeWebAddinRawRelationship, ...],
+) -> str | None:
+    """Fingerprint relationship semantics without writer-chosen identifiers."""
+    material = sorted(relationship.semantic_key() for relationship in relationships)
+    return _private_external_data_signature(
+        tuple(
+            (f"relationship:{index}", repr(relationship))
+            for index, relationship in enumerate(material)
+        )
+    )
+
+
+def _office_web_addin_relationship_semantics(
+    relationships: tuple[_OfficeWebAddinRawRelationship, ...],
+    warnings: set[str],
+    *,
+    context: str,
+) -> dict[str, tuple[str, str, str]]:
+    """Map relationship IDs to stable private semantics for XML canonicalization."""
+    relationships_by_id: dict[str, list[_OfficeWebAddinRawRelationship]] = defaultdict(
+        list
+    )
+    for relationship in relationships:
+        if relationship.relationship_id:
+            relationships_by_id[relationship.relationship_id].append(relationship)
+        else:
+            warnings.add(
+                "FormulaFence found an Office Web Add-in "
+                f"{context} relationship without an id; affected controls have a coverage gap."
+            )
+
+    semantics_by_id: dict[str, tuple[str, str, str]] = {}
+    for relationship_id, matches in relationships_by_id.items():
+        semantics = sorted(match.semantic_key() for match in matches)
+        if len(matches) > 1:
+            warnings.add(
+                "FormulaFence found duplicate Office Web Add-in "
+                f"{context} relationship ids; affected controls have a coverage gap."
+            )
+        semantics_by_id[relationship_id] = semantics[0]
+    return semantics_by_id
+
+
+def _office_web_addin_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+) -> tuple[object, ...]:
+    """Canonicalize Web Add-in XML while resolving relationship-ID churn privately."""
+    relationship_attributes = {
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}embed",
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}link",
+    }
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if attribute in relationship_attributes:
+            relationship = relationship_semantics.get(value)
+            resolved = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+        else:
+            attributes.append((_xml_display_name(attribute), value))
+    children = tuple(
+        _office_web_addin_fragment(child, relationship_semantics) for child in element
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+    )
+
+
+def _office_web_addin_boolean(
+    value: str | None,
+    default: bool,
+    warnings: set[str],
+    *,
+    context: str,
+    attribute: str,
+) -> bool:
+    """Parse an OOXML boolean while preserving malformed material privately."""
+    if value is None:
+        return default
+    normalized = value.strip().casefold()
+    if normalized in {"1", "true"}:
+        return True
+    if normalized in {"0", "false"}:
+        return False
+    warnings.add(
+        "FormulaFence found an unrecognized Office Web Add-in "
+        f"{context} {attribute} value; affected controls have a coverage gap."
+    )
+    return default
+
+
+def _office_web_addin_taskpane_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _OfficeWebAddinBudget,
+) -> _OfficeWebAddinTaskpaneInspection:
+    """Fingerprint one bounded task-pane part and its extension bindings privately."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded Office Web Add-in part count budget; "
+            "the affected controls have a coverage gap."
+        )
+        return _OfficeWebAddinTaskpaneInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (("part-count-budget-exhausted", member),)
+            ),
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate an Office Web Add-in task-pane package part; "
+            "the affected controls were not compared."
+        )
+        return _OfficeWebAddinTaskpaneInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (("missing-member", member),)
+            ),
+        )
+    if info.file_size > _WEB_EXTENSION_MAX_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized Office Web Add-in package part; "
+            "the affected controls have a coverage gap."
+        )
+        return _OfficeWebAddinTaskpaneInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            ),
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded Office Web Add-in part read budget; "
+            "the affected controls have a coverage gap."
+        )
+        return _OfficeWebAddinTaskpaneInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (
+                    ("read-budget-exhausted", member),
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            ),
+        )
+    budget.remaining_bytes -= info.file_size
+    payload: bytes | None = None
+    try:
+        payload = archive.read(member)
+        root = _xml_root_from_payload(payload)
+    except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect an Office Web Add-in task-pane XML part "
+            f"({type(error).__name__}); the affected controls were not compared."
+        )
+        signature = (
+            _private_payload_signature(payload)
+            if payload is not None
+            else _private_external_data_signature(
+                (
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            )
+        )
+        return _OfficeWebAddinTaskpaneInspection(
+            member=member,
+            definition_signature=signature,
+        )
+
+    if (
+        _xml_local_name(root.tag) != "taskpanes"
+        or _xml_namespace(root.tag) != _WEB_EXTENSION_TASKPANES_NS
+    ):
+        warnings.add(
+            "FormulaFence found an Office Web Add-in task-pane part with an unexpected "
+            "root; the affected controls were not compared."
+        )
+        return _OfficeWebAddinTaskpaneInspection(
+            member=member,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    relationships = _office_web_addin_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="task-pane",
+    )
+    relationship_semantics = _office_web_addin_relationship_semantics(
+        relationships,
+        warnings,
+        context="task-pane",
+    )
+    taskpane_tag = f"{{{_WEB_EXTENSION_TASKPANES_NS}}}taskpane"
+    web_extension_ref_tags = {
+        f"{{{_WEB_EXTENSION_TASKPANES_NS}}}webextensionref",
+        f"{{{_WEB_EXTENSION_TASKPANES_NS}}}webextension",
+    }
+    relationship_id_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    taskpanes = root.findall(taskpane_tag)
+    if len(taskpanes) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled XML in an Office Web Add-in task-pane part; "
+            "affected controls may be incomplete."
+        )
+
+    declared_web_extension_members: set[str] = set()
+    referenced_relationship_ids: set[str] = set()
+    unresolved_binding_count = 0
+    visible_taskpane_count = 0
+    locked_taskpane_count = 0
+    web_extension_reference_count = 0
+    for taskpane in taskpanes:
+        visible_taskpane_count += _office_web_addin_boolean(
+            taskpane.get("visibility"),
+            False,
+            warnings,
+            context="task-pane",
+            attribute="visibility",
+        )
+        locked_taskpane_count += _office_web_addin_boolean(
+            taskpane.get("locked"),
+            False,
+            warnings,
+            context="task-pane",
+            attribute="locked",
+        )
+        references = [
+            child for child in taskpane if child.tag in web_extension_ref_tags
+        ]
+        web_extension_reference_count += len(references)
+        if not references:
+            warnings.add(
+                "FormulaFence found an Office Web Add-in task-pane without a web-extension "
+                "reference; affected controls have a coverage gap."
+            )
+            unresolved_binding_count += 1
+        for reference in references:
+            relationship_id = reference.get(relationship_id_attribute)
+            if not relationship_id:
+                warnings.add(
+                    "FormulaFence found an Office Web Add-in task-pane reference without a "
+                    "relationship id; affected controls have a coverage gap."
+                )
+                unresolved_binding_count += 1
+                continue
+            referenced_relationship_ids.add(relationship_id)
+            semantic = relationship_semantics.get(relationship_id)
+            if semantic is None:
+                warnings.add(
+                    "FormulaFence found an Office Web Add-in task-pane reference without a "
+                    "matching relationship; affected controls have a coverage gap."
+                )
+                unresolved_binding_count += 1
+                continue
+            if semantic[0] != _WEB_EXTENSION_RELATIONSHIP:
+                warnings.add(
+                    "FormulaFence found an Office Web Add-in task-pane reference with an "
+                    "unexpected relationship type; affected controls have a coverage gap."
+                )
+                unresolved_binding_count += 1
+                continue
+            relationship = next(
+                (
+                    candidate
+                    for candidate in relationships
+                    if candidate.relationship_id == relationship_id
+                    and candidate.semantic_key() == semantic
+                ),
+                None,
+            )
+            if relationship is None or relationship.safe_target is None:
+                warnings.add(
+                    "FormulaFence found an Office Web Add-in task-pane reference without a "
+                    "safe internal extension target; affected controls were not compared."
+                )
+                unresolved_binding_count += 1
+                continue
+            declared_web_extension_members.add(relationship.safe_target)
+
+    for relationship in relationships:
+        if relationship.relationship_type != _WEB_EXTENSION_RELATIONSHIP:
+            continue
+        if relationship.safe_target is None:
+            warnings.add(
+                "FormulaFence found an Office Web Add-in extension relationship without a "
+                "safe internal target; affected controls were not compared."
+            )
+            unresolved_binding_count += 1
+            continue
+        declared_web_extension_members.add(relationship.safe_target)
+        if (
+            relationship.relationship_id is None
+            or relationship.relationship_id not in referenced_relationship_ids
+        ):
+            warnings.add(
+                "FormulaFence found an Office Web Add-in extension relationship not bound "
+                "by a task pane; affected controls have a coverage gap."
+            )
+            unresolved_binding_count += 1
+
+    try:
+        definition_signature = _private_external_data_signature(
+            (
+                (
+                    "taskpanes",
+                    repr(_office_web_addin_fragment(root, relationship_semantics)),
+                ),
+            )
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested Office Web Add-in "
+            "task-pane part; the affected controls were not compared."
+        )
+        definition_signature = _private_payload_signature(payload)
+        inspected = False
+    else:
+        inspected = True
+    return _OfficeWebAddinTaskpaneInspection(
+        member=member,
+        taskpane_count=len(taskpanes),
+        visible_taskpane_count=visible_taskpane_count,
+        locked_taskpane_count=locked_taskpane_count,
+        web_extension_reference_count=web_extension_reference_count,
+        related_relationship_count=len(relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in relationships
+        ),
+        declared_web_extension_members=tuple(
+            sorted(declared_web_extension_members, key=str.casefold)
+        ),
+        unresolved_binding_count=unresolved_binding_count,
+        inspected=inspected,
+        definition_signature=definition_signature,
+        relationship_signature=_office_web_addin_relationship_signature(relationships),
+    )
+
+
+def _office_web_addin_extension_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _OfficeWebAddinBudget,
+) -> _OfficeWebAddinExtensionInspection:
+    """Fingerprint one bounded Office Web Add-in definition part privately."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded Office Web Add-in part count budget; "
+            "the affected controls have a coverage gap."
+        )
+        return _OfficeWebAddinExtensionInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (("part-count-budget-exhausted", member),)
+            ),
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate an Office Web Add-in definition package part; "
+            "the affected controls were not compared."
+        )
+        return _OfficeWebAddinExtensionInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (("missing-member", member),)
+            ),
+        )
+    if info.file_size > _WEB_EXTENSION_MAX_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized Office Web Add-in package part; "
+            "the affected controls have a coverage gap."
+        )
+        return _OfficeWebAddinExtensionInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            ),
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded Office Web Add-in part read budget; "
+            "the affected controls have a coverage gap."
+        )
+        return _OfficeWebAddinExtensionInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (
+                    ("read-budget-exhausted", member),
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            ),
+        )
+    budget.remaining_bytes -= info.file_size
+    payload: bytes | None = None
+    try:
+        payload = archive.read(member)
+        root = _xml_root_from_payload(payload)
+    except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect an Office Web Add-in definition XML part "
+            f"({type(error).__name__}); the affected controls were not compared."
+        )
+        signature = (
+            _private_payload_signature(payload)
+            if payload is not None
+            else _private_external_data_signature(
+                (
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            )
+        )
+        return _OfficeWebAddinExtensionInspection(
+            member=member,
+            definition_signature=signature,
+        )
+
+    if (
+        _xml_local_name(root.tag) != "webextension"
+        or _xml_namespace(root.tag) != _WEB_EXTENSION_NS
+    ):
+        warnings.add(
+            "FormulaFence found an Office Web Add-in definition part with an unexpected "
+            "root; the affected controls were not compared."
+        )
+        return _OfficeWebAddinExtensionInspection(
+            member=member,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    relationships = _office_web_addin_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="definition",
+    )
+    relationship_semantics = _office_web_addin_relationship_semantics(
+        relationships,
+        warnings,
+        context="definition",
+    )
+    property_tag = f"{{{_WEB_EXTENSION_NS}}}property"
+    reference_tag = f"{{{_WEB_EXTENSION_NS}}}reference"
+    alternate_references_tag = f"{{{_WEB_EXTENSION_NS}}}alternateReferences"
+    alternate_reference_tags = {
+        reference_tag,
+        f"{{{_WEB_EXTENSION_NS}}}alternateReference",
+    }
+    binding_tag = f"{{{_WEB_EXTENSION_NS}}}binding"
+    snapshot_tag = f"{{{_WEB_EXTENSION_NS}}}snapshot"
+    embedded_relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}embed"
+
+    auto_show_taskpane_count = 0
+    for property_element in root.iter(property_tag):
+        if property_element.get("name") != "Office.AutoShowTaskpaneWithDocument":
+            continue
+        auto_show_taskpane_count += _office_web_addin_boolean(
+            property_element.get("value"),
+            False,
+            warnings,
+            context="definition property",
+            attribute="value",
+        )
+    snapshot_reference_count = 0
+    unresolved_snapshot_reference_count = 0
+    for snapshot in root.iter(snapshot_tag):
+        relationship_id = snapshot.get(embedded_relationship_attribute)
+        if relationship_id is None:
+            continue
+        snapshot_reference_count += 1
+        if relationship_id not in relationship_semantics:
+            warnings.add(
+                "FormulaFence found an Office Web Add-in snapshot reference without a "
+                "matching relationship; affected controls have a coverage gap."
+            )
+            unresolved_snapshot_reference_count += 1
+
+    try:
+        definition_signature = _private_external_data_signature(
+            (
+                (
+                    "webextension",
+                    repr(_office_web_addin_fragment(root, relationship_semantics)),
+                ),
+            )
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested Office Web Add-in "
+            "definition part; the affected controls were not compared."
+        )
+        definition_signature = _private_payload_signature(payload)
+        inspected = False
+    else:
+        inspected = True
+    return _OfficeWebAddinExtensionInspection(
+        member=member,
+        auto_show_taskpane_count=auto_show_taskpane_count,
+        store_reference_count=len(root.findall(reference_tag)),
+        alternate_reference_count=sum(
+            1
+            for container in root.iter(alternate_references_tag)
+            for child in container
+            if child.tag in alternate_reference_tags
+        ),
+        binding_count=sum(1 for _ in root.iter(binding_tag)),
+        snapshot_reference_count=snapshot_reference_count,
+        related_relationship_count=len(relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in relationships
+        ),
+        unresolved_snapshot_reference_count=unresolved_snapshot_reference_count,
+        inspected=inspected,
+        definition_signature=definition_signature,
+        relationship_signature=_office_web_addin_relationship_signature(relationships),
+    )
+
+
+def _office_web_addin_metadata(path: Path) -> _OfficeWebAddinMetadata:
+    """Inspect task-pane Office Web Add-ins before the workbook reader omits them."""
+    warnings: set[str] = set()
+    default = OfficeWebAddinSnapshot()
+    try:
+        with ZipFile(path) as archive:
+            budget = _OfficeWebAddinBudget()
+            workbook_relationships = _office_web_addin_raw_relationships(
+                archive,
+                "xl/workbook.xml",
+                warnings,
+                context="workbook",
+                missing_is_warning=True,
+            )
+            taskpane_relationships = tuple(
+                relationship
+                for relationship in workbook_relationships
+                if relationship.relationship_type == _WEB_EXTENSION_TASKPANES_RELATIONSHIP
+            )
+            candidate_taskpane_members: dict[str, set[str]] = defaultdict(set)
+            declaration_entries: list[tuple[str, str]] = []
+            declared_taskpane_members: set[str] = set()
+            unresolved_declaration_count = 0
+            relationship_ids: set[str] = set()
+            for relationship in taskpane_relationships:
+                declaration_entries.append(
+                    ("workbook-relationship", repr(relationship.semantic_key()))
+                )
+                if relationship.relationship_id is None:
+                    warnings.add(
+                        "FormulaFence found an Office Web Add-in workbook relationship without "
+                        "an id; affected controls have a coverage gap."
+                    )
+                elif relationship.relationship_id in relationship_ids:
+                    warnings.add(
+                        "FormulaFence found duplicate Office Web Add-in workbook relationship "
+                        "ids; affected controls have a coverage gap."
+                    )
+                relationship_ids.add(relationship.relationship_id or "")
+                if relationship.safe_target is None:
+                    warnings.add(
+                        "FormulaFence found an Office Web Add-in workbook relationship without "
+                        "a safe internal task-pane target; affected controls were not compared."
+                    )
+                    unresolved_declaration_count += 1
+                    continue
+                candidate_taskpane_members[relationship.safe_target].add("workbook")
+                declared_taskpane_members.add(relationship.safe_target)
+
+            discovered_taskpane_members = {
+                entry.filename
+                for entry in archive.infolist()
+                if _WEB_EXTENSION_TASKPANES_PART_PATTERN.fullmatch(entry.filename)
+            }
+            for member in discovered_taskpane_members:
+                candidate_taskpane_members.setdefault(member, set())
+                if member not in declared_taskpane_members:
+                    warnings.add(
+                        "FormulaFence found an Office Web Add-in task-pane package part not "
+                        "declared by the workbook; affected controls have a coverage gap."
+                    )
+
+            taskpane_inspections: list[_OfficeWebAddinTaskpaneInspection] = []
+            unrecognized_members: set[str] = set()
+            unresolved_binding_count = unresolved_declaration_count
+            candidate_web_extension_members: dict[str, set[str]] = defaultdict(set)
+            declared_web_extension_members: set[str] = set()
+            for member in sorted(candidate_taskpane_members, key=str.casefold):
+                sources = candidate_taskpane_members[member]
+                declaration_entries.append(
+                    ("taskpane-part", repr((member, tuple(sorted(sources)))))
+                )
+                inspection = _office_web_addin_taskpane_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                taskpane_inspections.append(inspection)
+                if not inspection.inspected:
+                    unrecognized_members.add(member)
+                    continue
+                unresolved_binding_count += inspection.unresolved_binding_count
+                for web_extension_member in inspection.declared_web_extension_members:
+                    candidate_web_extension_members[web_extension_member].add(member)
+                    declared_web_extension_members.add(web_extension_member)
+
+            discovered_web_extension_members = {
+                entry.filename
+                for entry in archive.infolist()
+                if _WEB_EXTENSION_PART_PATTERN.fullmatch(entry.filename)
+            }
+            for member in discovered_web_extension_members:
+                candidate_web_extension_members.setdefault(member, set())
+                if member not in declared_web_extension_members:
+                    warnings.add(
+                        "FormulaFence found an Office Web Add-in definition package part not "
+                        "declared by a task pane; affected controls have a coverage gap."
+                    )
+
+            extension_inspections: list[_OfficeWebAddinExtensionInspection] = []
+            for member in sorted(candidate_web_extension_members, key=str.casefold):
+                sources = candidate_web_extension_members[member]
+                declaration_entries.append(
+                    ("web-extension-part", repr((member, tuple(sorted(sources)))))
+                )
+                inspection = _office_web_addin_extension_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                extension_inspections.append(inspection)
+                if not inspection.inspected:
+                    unrecognized_members.add(member)
+                    continue
+                unresolved_binding_count += inspection.unresolved_snapshot_reference_count
+
+            def aggregate_signature(
+                inspections: list[object], attribute: str
+            ) -> str | None:
+                material = sorted(
+                    (inspection.member, value)
+                    for inspection in inspections
+                    if (value := getattr(inspection, attribute)) is not None
+                )
+                return _private_external_data_signature(tuple(material))
+
+            declaration_entries.sort()
+            all_inspections: list[object] = [
+                *taskpane_inspections,
+                *extension_inspections,
+            ]
+            snapshot = OfficeWebAddinSnapshot(
+                declared_taskpane_part_count=len(taskpane_relationships),
+                taskpane_part_count=len(candidate_taskpane_members),
+                web_extension_part_count=len(candidate_web_extension_members),
+                unrecognized_part_count=(
+                    len(unrecognized_members) + unresolved_binding_count
+                ),
+                taskpane_count=sum(
+                    inspection.taskpane_count for inspection in taskpane_inspections
+                ),
+                visible_taskpane_count=sum(
+                    inspection.visible_taskpane_count for inspection in taskpane_inspections
+                ),
+                locked_taskpane_count=sum(
+                    inspection.locked_taskpane_count for inspection in taskpane_inspections
+                ),
+                web_extension_reference_count=sum(
+                    inspection.web_extension_reference_count
+                    for inspection in taskpane_inspections
+                ),
+                auto_show_taskpane_count=sum(
+                    inspection.auto_show_taskpane_count
+                    for inspection in extension_inspections
+                ),
+                store_reference_count=sum(
+                    inspection.store_reference_count for inspection in extension_inspections
+                ),
+                alternate_reference_count=sum(
+                    inspection.alternate_reference_count
+                    for inspection in extension_inspections
+                ),
+                binding_count=sum(
+                    inspection.binding_count for inspection in extension_inspections
+                ),
+                snapshot_reference_count=sum(
+                    inspection.snapshot_reference_count
+                    for inspection in extension_inspections
+                ),
+                related_relationship_count=sum(
+                    inspection.related_relationship_count for inspection in all_inspections
+                ),
+                external_relationship_count=sum(
+                    inspection.external_relationship_count for inspection in all_inspections
+                ),
+                declaration_signature=_private_external_data_signature(
+                    tuple(declaration_entries)
+                ),
+                taskpane_signature=aggregate_signature(
+                    taskpane_inspections, "definition_signature"
+                ),
+                web_extension_signature=aggregate_signature(
+                    extension_inspections, "definition_signature"
+                ),
+                relationship_signature=aggregate_signature(
+                    all_inspections, "relationship_signature"
+                ),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _OfficeWebAddinMetadata(
+            default,
+            (
+                "FormulaFence could not inspect Office Web Add-in task-pane OOXML "
+                f"({type(error).__name__}); affected controls were not compared.",
+            ),
+        )
+    return _OfficeWebAddinMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _dynamic_metadata_indexes(archive: ZipFile) -> set[int]:
     """Return the one-based cell-metadata indexes marked as dynamic arrays."""
     try:
@@ -6385,6 +7299,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
 
     xlm_macro_metadata = _xlm_macro_metadata(source)
     ribbon_customization_metadata = _ribbon_customization_metadata(source)
+    office_web_addin_metadata = _office_web_addin_metadata(source)
     try:
         with warnings.catch_warnings(record=True) as caught_warnings:
             warnings.simplefilter("always")
@@ -6401,6 +7316,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings = {str(warning.message) for warning in caught_warnings}
     parser_warnings.update(xlm_macro_metadata.warnings)
     parser_warnings.update(ribbon_customization_metadata.warnings)
+    parser_warnings.update(office_web_addin_metadata.warnings)
     has_array_formulas = any(
         _is_array_formula(cell)
         for worksheet in workbook.worksheets
@@ -6608,6 +7524,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         external_link_packages=external_data_metadata.external_link_packages,
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         ribbon_customization=ribbon_customization_metadata.customization,
+        office_web_addins=office_web_addin_metadata.addins,
         power_query=external_data_metadata.power_query,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
@@ -6671,6 +7588,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "external_link_packages": snapshot.external_link_packages.profile_dict(),
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
+        "office_web_addins": snapshot.office_web_addins.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
         "defined_names": sorted(snapshot.defined_names),
         "calculation_settings": snapshot.calculation_settings,
@@ -6686,6 +7604,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_vba": snapshot.macro_hash is not None,
             "has_xlm_macro_sheets": snapshot.xlm_macro_sheets.present,
             "has_ribbon_customization": snapshot.ribbon_customization.present,
+            "has_office_web_addins": snapshot.office_web_addins.present,
             "parser_warnings": list(snapshot.parser_warnings),
             "unresolved_reference_cells": [
                 {

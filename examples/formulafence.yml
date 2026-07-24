@@ -6,6 +6,7 @@ rules:
   no_macro_changes: true
   no_xlm_macro_sheet_changes: true
   no_ribbon_customization_changes: true
+  no_office_web_addin_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true

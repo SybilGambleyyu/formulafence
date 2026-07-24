@@ -98,6 +98,18 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['ribbon_callback_attribute_count']}"
         ),
         (
+            "- **Office Web Add-in task-pane parts:** "
+            f"{workbook['office_web_addin_taskpane_part_count']}"
+        ),
+        (
+            "- **Office Web Add-in definition parts:** "
+            f"{workbook['office_web_addin_web_extension_part_count']}"
+        ),
+        (
+            "- **Office Web Add-ins requesting auto-show:** "
+            f"{workbook['office_web_addin_auto_show_taskpane_count']}"
+        ),
+        (
             "- **Connections refreshing on open:** "
             f"{workbook['external_data_connections_refresh_on_load']}"
         ),
@@ -812,6 +824,68 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Ribbon XML, control names and labels, callback names, and image targets are "
             "compared privately and intentionally omitted."
+        )
+    office_web_addins = profile["office_web_addins"]
+    if office_web_addins["present"]:
+        lines.extend(
+            [
+                "",
+                "## Office Web Add-in task panes",
+                "",
+                (
+                    "- **Workbook task-pane declarations:** "
+                    f"{office_web_addins['declared_taskpane_part_count']}"
+                ),
+                (
+                    "- **Task-pane parts:** "
+                    f"{office_web_addins['taskpane_part_count']}"
+                ),
+                (
+                    "- **Web-extension definition parts:** "
+                    f"{office_web_addins['web_extension_part_count']}"
+                ),
+                f"- **Task panes:** {office_web_addins['taskpane_count']}",
+                (
+                    "- **Visible task panes:** "
+                    f"{office_web_addins['visible_taskpane_count']}"
+                ),
+                (
+                    "- **Locked task panes:** "
+                    f"{office_web_addins['locked_taskpane_count']}"
+                ),
+                (
+                    "- **Task-pane web-extension references:** "
+                    f"{office_web_addins['web_extension_reference_count']}"
+                ),
+                (
+                    "- **Auto-show task-pane requests:** "
+                    f"{office_web_addins['auto_show_taskpane_count']}"
+                ),
+                (
+                    "- **Store references:** "
+                    f"{office_web_addins['store_reference_count']} "
+                    f"({office_web_addins['alternate_reference_count']} alternate)"
+                ),
+                f"- **Bindings:** {office_web_addins['binding_count']}",
+                (
+                    "- **Snapshot relationships:** "
+                    f"{office_web_addins['snapshot_reference_count']}"
+                ),
+                (
+                    "- **Related package relationships:** "
+                    f"{office_web_addins['related_relationship_count']} "
+                    f"({office_web_addins['external_relationship_count']} external)"
+                ),
+            ]
+        )
+        if office_web_addins["unrecognized_part_count"]:
+            lines.append(
+                "- **Unrecognized or uninspected parts/bindings:** "
+                f"{office_web_addins['unrecognized_part_count']}"
+            )
+        lines.append(
+            "Add-in identities, store references, properties, bindings, snapshots, and "
+            "relationship targets are compared privately and intentionally omitted."
         )
     power_query = profile["power_query"]
     if power_query["present"]:

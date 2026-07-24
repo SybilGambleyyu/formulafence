@@ -362,6 +362,40 @@ that none entered JSON, Markdown, or SARIF. This validates static comparison
 and redaction—not M execution, connection refresh, source trust, or returned
 data correctness.
 
+## Office Web Add-in task-pane controls and redaction — 2026-07-24
+
+FormulaFence 0.23.0 was validated with controlled raw-OOXML `.xlsx` packages
+following the documented workbook-to-task-pane-to-web-extension chain:
+`xl/_rels/workbook.xml.rels` declared `taskpanes.xml`, the task-pane part bound
+one `webextension` definition, and the definition included a store reference,
+alternate reference, private property, binding, snapshot relationship, and
+`Office.AutoShowTaskpaneWithDocument=true`. The fixture was never opened in
+Office, and FormulaFence only read its bounded package XML before the ordinary
+workbook reader loaded the file.
+
+Changing **only** the auto-show property emitted `FF028` with a private
+`web_extension_definition_material_changed` flag even though the workbook's
+cells, VBA payload, RibbonX surface, and task-pane counts were otherwise
+unchanged. Synthetic add-in IDs, store references, property values, binding
+values, XML, snapshot target, and external relationship endpoint were verified
+absent from JSON, Markdown, and SARIF output. The
+`no_office_web_addin_changes` policy produced `FFP028`.
+
+The controlled suite also covered task-pane configuration and direct
+relationship changes, relationship-ID-only rewrites, and equivalent internal
+target spellings. Identifier and spelling rewrites produced no Web Add-in
+finding; changed task-pane configuration or a snapshot relationship emitted
+`FF028`. An unexpected definition root and deliberately lowered per-part,
+aggregate-byte, and part-count limits each surfaced an explicit coverage
+warning and remained diff-visible. Production task-pane and web-extension XML
+reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts. This
+validates static comparison and data minimisation—not add-in installation,
+manifest retrieval, Office.js execution, task-pane rendering, source trust, or
+worksheet-scoped Web Add-in markup. The fixture shape follows Microsoft's
+[Taskpane Web Extension File](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/3d04f8ce-65f2-4dc3-bafa-636d0a7e41a1),
+[Web Extension](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/56fe5a64-dd6d-422c-beac-19d72dd10ade),
+and [automatic task-pane sample](https://learn.microsoft.com/en-us/samples/officedev/office-add-in-samples/excel-add-in-create-spreadsheet-from-web-page/).
+
 ## Office RibbonX custom UI controls and redaction — 2026-07-24
 
 FormulaFence 0.22.0 was validated with controlled raw-OOXML `.xlsx` packages

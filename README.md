@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.22.0/formulafence-0.22.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.23.0/formulafence-0.23.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -64,6 +64,7 @@ rules:
   no_macro_changes: true
   no_xlm_macro_sheet_changes: true
   no_ribbon_customization_changes: true
+  no_office_web_addin_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
@@ -100,7 +101,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -308,6 +309,27 @@ and [Ribbon and Backstage Customizations
 part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-customui2/452a58ae-cb0a-4926-83f8-fb1cbaa6114c)
 specifications; its `onLoad`, `loadImage`, and `onAction` callback surface is
 documented in the [Custom UI schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-customui2/a232628d-f6fb-4630-a463-459989a68e7a).
+
+FormulaFence separately inventories document-linked **Office Web Add-in task
+panes**. A workbook can declare a task-pane part, bind it to a web-extension
+definition, and request `Office.AutoShowTaskpaneWithDocument` even though no
+ordinary cell, VBA payload, or RibbonX control changes. FormulaFence follows
+the bounded package chain from the workbook relationship through
+`taskpanes.xml` and its direct `webextension*.xml` definitions. It compares
+task-pane configuration, visible/locked state, add-in references, auto-show
+properties, bindings, snapshots, and direct relationship semantics privately;
+profiles expose only safe counts. A material change emits `FF028`; enable
+`no_office_web_addin_changes` for `FFP028`. Add-in IDs, store references,
+property values, binding values, snapshot data, XML, and relationship targets
+never enter profiles or reports. FormulaFence does not install, load, execute,
+or fetch an add-in or manifest, and it never follows an external relationship.
+Task-pane and web-extension XML reads are bounded to 16 MiB per part, 32 MiB
+per workbook, and 64 parts; malformed, unbound, oversized, or over-budget
+parts remain explicit coverage warnings. Worksheet-scoped web-extension markup
+outside this task-pane chain is not yet modeled. The package surface follows
+Microsoft's [Taskpane Web Extension File](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/3d04f8ce-65f2-4dc3-bafa-636d0a7e41a1)
+and [Web Extension](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/56fe5a64-dd6d-422c-beac-19d72dd10ade)
+specifications.
 
 FormulaFence also inventories **Power Query Data Mashup** custom XML parts.
 It reads the documented length-prefixed container, fingerprints the embedded

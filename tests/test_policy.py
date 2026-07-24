@@ -10,6 +10,7 @@ from formulafence.workbook import load_snapshot
 from .helpers import (
     change_external_data_refresh_controls,
     change_external_link_package_controls,
+    change_office_web_addin_auto_show,
     change_power_query_controls,
     change_ribbon_customization_callback,
     change_xlm_macro_sheet_controls,
@@ -19,6 +20,7 @@ from .helpers import (
     make_external_link_package_model,
     make_legacy_array_model,
     make_model,
+    make_office_web_addin_model,
     make_power_query_model,
     make_protection_model,
     make_ribbon_customization_model,
@@ -283,6 +285,19 @@ def test_policy_can_block_ribbon_customization_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP027"}
+
+
+def test_policy_can_block_office_web_addin_changes(tmp_path) -> None:
+    baseline = make_office_web_addin_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    change_office_web_addin_auto_show(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_office_web_addin_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP028"}
 
 
 def test_policy_can_block_power_query_changes(tmp_path) -> None:

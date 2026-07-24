@@ -19,6 +19,7 @@ _RULE_FIELDS = {
     "no_macro_changes",
     "no_xlm_macro_sheet_changes",
     "no_ribbon_customization_changes",
+    "no_office_web_addin_changes",
     "no_new_parser_warnings",
     "no_new_unresolved_references",
     "no_new_dynamic_references",
@@ -70,6 +71,7 @@ class Policy:
     no_macro_changes: bool = False
     no_xlm_macro_sheet_changes: bool = False
     no_ribbon_customization_changes: bool = False
+    no_office_web_addin_changes: bool = False
     no_new_parser_warnings: bool = False
     no_new_unresolved_references: bool = False
     no_new_dynamic_references: bool = False
@@ -103,6 +105,7 @@ rules:
   no_macro_changes: true
   no_xlm_macro_sheet_changes: true
   no_ribbon_customization_changes: true
+  no_office_web_addin_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
@@ -206,6 +209,7 @@ def parse_policy(data: object) -> Policy:
         no_ribbon_customization_changes=_boolean_rule(
             rules, "no_ribbon_customization_changes"
         ),
+        no_office_web_addin_changes=_boolean_rule(rules, "no_office_web_addin_changes"),
         no_new_parser_warnings=_boolean_rule(rules, "no_new_parser_warnings"),
         no_new_unresolved_references=_boolean_rule(rules, "no_new_unresolved_references"),
         no_new_dynamic_references=_boolean_rule(rules, "no_new_dynamic_references"),
@@ -317,6 +321,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP027",
                     "critical",
                     "Policy forbids changes to Office RibbonX customization.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_office_web_addin_changes:
+        for finding in _rule_triggered(report, "FF028"):
+            violations.append(
+                Finding(
+                    "FFP028",
+                    "critical",
+                    "Policy forbids changes to Office Web Add-in task panes.",
                     details=finding.details,
                 )
             )

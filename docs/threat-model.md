@@ -10,9 +10,10 @@ financial correctness or replace model review.
   network requests.
 - It loads formulas as text with `data_only=False`; it does not calculate them.
 - It never executes VBA, XLM macro sheets, RibbonX callbacks, DDE, external
-  links, Power Query, or add-in code.
-- VBA payloads, XLM macro-sheet source material, and RibbonX control/callback
-  material are compared through private fingerprints only.
+  links, Power Query, or Office Web Add-in code.
+- VBA payloads, XLM macro-sheet source material, RibbonX control/callback
+  material, and Office Web Add-in task-pane material are compared through
+  private fingerprints only.
 - Protection credential material is never emitted: legacy verifiers, modern
   hashes/salts, protected-range names, and security descriptors are compared
   through private fingerprints and reported only as safe presence/change metadata.
@@ -161,6 +162,22 @@ review prompt, not proof of an error.
   otherwise unrecognized parts remain visible parser-coverage warnings.
   Custom-UI XML reads are bounded to 16 MiB per part, 32 MiB per workbook, and
   eight parts.
+- Office Web Add-in task panes are read directly from the documented workbook
+  task-pane relationship, `taskpanes.xml` parts, their direct
+  task-pane-to-extension bindings, and direct `webextension*.xml` definitions
+  before the workbook reader can omit them. FormulaFence privately fingerprints
+  task-pane configuration, add-in references, auto-show properties, bindings,
+  snapshots, and direct relationship semantics while reporting only safe
+  structural counts. Add-in identities, store references, property/binding
+  values, XML, snapshots, and relationship targets remain private. A material
+  change emits `FF028` and can be blocked with
+  `no_office_web_addin_changes`. FormulaFence does **not** install, load,
+  execute, or fetch an add-in or manifest, and it never follows external
+  relationships. Missing, oversized, malformed, unbound, or over-budget parts
+  remain visible parser-coverage warnings. Task-pane and web-extension XML
+  reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts.
+  Worksheet-scoped web-extension markup outside this task-pane chain is not
+  yet modeled.
 - Power Query Data Mashup custom XML is inspected without serializing its M
   formulas or data/source material. FormulaFence privately compares the
   `Section1.m` formula document, logical package content, stable query metadata,
@@ -201,13 +218,13 @@ review prompt, not proof of an error.
   location in the profile, and a newly introduced one emits `FF016`; its graph
   is deliberately omitted rather than partially guessed.
 - It inventories sheet visibility, defined names, calculation settings, the VBA
-  payload, XLM macro-sheet packages, RibbonX custom UI packages, the protection
-  controls above, external-data refresh controls, external-link packages, and
-  private Power Query definition material. It does not yet diff chart
-  definitions, PivotTable layout or cached data, Ribbon image payloads, Power
-  Query runtime behavior or returned data, ordinary styles beyond direct
-  protection assignments, complete Excel style-cascade results, or every OOXML
-  part.
+  payload, XLM macro-sheet packages, RibbonX custom UI packages, Office Web
+  Add-in task-pane packages, the protection controls above, external-data
+  refresh controls, external-link packages, and private Power Query definition
+  material. It does not yet diff chart definitions, PivotTable layout or cached
+  data, Ribbon image payloads, worksheet-scoped Web Add-in markup, Power Query
+  runtime behavior or returned data, ordinary styles beyond direct protection
+  assignments, complete Excel style-cascade results, or every OOXML part.
 - The tool preserves Excel formula text and uses a limited A1-reference
   normalizer for peer-pattern detection; it is not an Excel-compatible parser
   or calculation engine.

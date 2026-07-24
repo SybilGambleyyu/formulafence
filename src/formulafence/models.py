@@ -967,6 +967,69 @@ class RibbonCustomizationSnapshot:
 
 
 @dataclass(frozen=True)
+class OfficeWebAddinSnapshot:
+    """Safe aggregate of document-linked Office Web Add-in task panes.
+
+    OOXML task-pane parts can bind a workbook to an installed Office Web
+    Add-in and request auto-show behavior. Private signatures retain the
+    add-in reference, property, binding, and relationship material needed for
+    comparison; ``to_dict`` intentionally exposes only structural counts.
+    """
+
+    declared_taskpane_part_count: int = 0
+    taskpane_part_count: int = 0
+    web_extension_part_count: int = 0
+    unrecognized_part_count: int = 0
+    taskpane_count: int = 0
+    visible_taskpane_count: int = 0
+    locked_taskpane_count: int = 0
+    web_extension_reference_count: int = 0
+    auto_show_taskpane_count: int = 0
+    store_reference_count: int = 0
+    alternate_reference_count: int = 0
+    binding_count: int = 0
+    snapshot_reference_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    taskpane_signature: str | None = field(default=None, repr=False)
+    web_extension_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.declared_taskpane_part_count
+            or self.taskpane_part_count
+            or self.web_extension_part_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return task-pane inventory without add-in identities or endpoints."""
+        return {
+            "present": self.present,
+            "declared_taskpane_part_count": self.declared_taskpane_part_count,
+            "taskpane_part_count": self.taskpane_part_count,
+            "web_extension_part_count": self.web_extension_part_count,
+            "unrecognized_part_count": self.unrecognized_part_count,
+            "taskpane_count": self.taskpane_count,
+            "visible_taskpane_count": self.visible_taskpane_count,
+            "locked_taskpane_count": self.locked_taskpane_count,
+            "web_extension_reference_count": self.web_extension_reference_count,
+            "auto_show_taskpane_count": self.auto_show_taskpane_count,
+            "store_reference_count": self.store_reference_count,
+            "alternate_reference_count": self.alternate_reference_count,
+            "binding_count": self.binding_count,
+            "snapshot_reference_count": self.snapshot_reference_count,
+            "related_relationship_count": self.related_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class PowerQueryPermissionControlsSnapshot:
     """Safe aggregate controls from Data Mashup permission documents."""
 
@@ -1244,6 +1307,9 @@ class WorkbookSnapshot:
     ribbon_customization: RibbonCustomizationSnapshot = field(
         default_factory=RibbonCustomizationSnapshot
     )
+    office_web_addins: OfficeWebAddinSnapshot = field(
+        default_factory=OfficeWebAddinSnapshot
+    )
     power_query: PowerQuerySnapshot = field(default_factory=PowerQuerySnapshot)
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -1341,6 +1407,16 @@ class WorkbookSnapshot:
                 self.ribbon_customization.callback_attribute_count
             ),
             "has_ribbon_customization": self.ribbon_customization.present,
+            "office_web_addin_taskpane_part_count": (
+                self.office_web_addins.taskpane_part_count
+            ),
+            "office_web_addin_web_extension_part_count": (
+                self.office_web_addins.web_extension_part_count
+            ),
+            "office_web_addin_auto_show_taskpane_count": (
+                self.office_web_addins.auto_show_taskpane_count
+            ),
+            "has_office_web_addins": self.office_web_addins.present,
             "power_query_mashup_count": self.power_query.mashup_count,
             "power_query_formula_document_count": self.power_query.formula_document_count,
             "power_query_metadata_item_count": self.power_query.metadata_item_count,

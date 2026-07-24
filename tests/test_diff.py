@@ -17,6 +17,8 @@ from .helpers import (
     add_protected_range,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
+    change_office_web_addin_auto_show,
+    change_office_web_addin_controls,
     change_power_query_controls,
     change_power_query_refresh_noise,
     change_protected_range,
@@ -24,6 +26,7 @@ from .helpers import (
     change_ribbon_customization_controls,
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
+    corrupt_office_web_addin_definition_root,
     corrupt_ribbon_customization_root,
     corrupt_xlm_macro_sheet_root,
     duplicate_external_link_definition,
@@ -39,6 +42,7 @@ from .helpers import (
     make_model,
     make_named_formula_model,
     make_named_lambda_model,
+    make_office_web_addin_model,
     make_power_query_model,
     make_protection_model,
     make_ribbon_customization_model,
@@ -52,10 +56,12 @@ from .helpers import (
     rebind_external_link_declaration,
     remove_xlm_macro_sheet_related_part_payload,
     renumber_external_link_declaration_relationships,
+    renumber_office_web_addin_relationships,
     renumber_ribbon_customization_relationships,
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
     rewrite,
+    rewrite_office_web_addin_internal_target_spelling,
     rewrite_ribbon_customization_internal_target_spelling,
     rewrite_xlm_macro_sheet_internal_target_spelling,
     set_external_data_connection_defaults,
@@ -2155,6 +2161,210 @@ def test_malformed_ribbon_customization_parts_fail_closed(tmp_path) -> None:
     )
     assert "ribbon_customization_changed" in {change.kind for change in report.changes}
     assert "FF027" in {finding.rule_id for finding in report.findings}
+
+
+def test_office_web_addin_auto_show_changes_are_profiled_and_diffed_privately(
+    tmp_path,
+) -> None:
+    baseline = make_office_web_addin_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    change_office_web_addin_auto_show(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    addin_change = next(
+        change for change in report.changes if change.kind == "office_web_addins_changed"
+    )
+
+    assert baseline_snapshot.summary()["has_office_web_addins"] is True
+    assert baseline_snapshot.summary()["office_web_addin_taskpane_part_count"] == 1
+    assert baseline_snapshot.summary()["office_web_addin_auto_show_taskpane_count"] == 1
+    assert profile["office_web_addins"] == {
+        "present": True,
+        "declared_taskpane_part_count": 1,
+        "taskpane_part_count": 1,
+        "web_extension_part_count": 1,
+        "unrecognized_part_count": 0,
+        "taskpane_count": 1,
+        "visible_taskpane_count": 1,
+        "locked_taskpane_count": 1,
+        "web_extension_reference_count": 1,
+        "auto_show_taskpane_count": 1,
+        "store_reference_count": 1,
+        "alternate_reference_count": 1,
+        "binding_count": 1,
+        "snapshot_reference_count": 1,
+        "related_relationship_count": 3,
+        "external_relationship_count": 1,
+    }
+    assert "## Office Web Add-in task panes" in markdown
+    assert "**Auto-show task-pane requests:** 1" in markdown
+    assert addin_change.details["web_extension_definition_material_changed"] is True
+    assert "workbook_binding_changed" not in addin_change.details
+    assert "taskpane_configuration_material_changed" not in addin_change.details
+    assert "related_part_relationships_changed" not in addin_change.details
+    assert {finding.rule_id for finding in report.findings} >= {"FF028"}
+
+    sensitive_values = (
+        "PrivateBaselineAddin",
+        "PrivateFallbackAddin",
+        "private-baseline-manifest.xml",
+        "private-fallback-manifest.xml",
+        "PrivateBaselineBinding",
+        "PrivateBaselineTable",
+        "private baseline behavior",
+        "private.example.invalid",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_office_web_addin_schema_reference_element_is_detected(tmp_path) -> None:
+    workbook = make_office_web_addin_model(
+        tmp_path / "schema-reference.xlsx",
+        taskpane_reference_element="webextensionref",
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.office_web_addins.web_extension_reference_count == 1
+    assert snapshot.office_web_addins.alternate_reference_count == 1
+    assert snapshot.parser_warnings == ()
+
+
+def test_office_web_addin_package_addition_is_critical(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    addin_change = next(
+        change for change in report.changes if change.kind == "office_web_addins_changed"
+    )
+
+    assert addin_change.details["before"]["present"] is False
+    assert addin_change.details["after"]["present"] is True
+    assert addin_change.details["workbook_binding_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF028"}
+
+
+def test_office_web_addin_taskpane_and_relationship_changes_are_guarded_privately(
+    tmp_path,
+) -> None:
+    baseline = make_office_web_addin_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    change_office_web_addin_controls(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    addin_change = next(
+        change for change in report.changes if change.kind == "office_web_addins_changed"
+    )
+
+    assert addin_change.details["taskpane_configuration_material_changed"] is True
+    assert addin_change.details["related_part_relationships_changed"] is True
+    assert addin_change.details["web_extension_definition_material_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF028"}
+
+
+def test_office_web_addin_relationship_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_office_web_addin_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    renumber_office_web_addin_relationships(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "office_web_addins_changed" not in {change.kind for change in report.changes}
+    assert "FF028" not in {finding.rule_id for finding in report.findings}
+
+
+def test_office_web_addin_equivalent_target_spellings_are_ignored(tmp_path) -> None:
+    baseline = make_office_web_addin_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    rewrite_office_web_addin_internal_target_spelling(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "office_web_addins_changed" not in {change.kind for change in report.changes}
+    assert "FF028" not in {finding.rule_id for finding in report.findings}
+
+
+def test_oversized_office_web_addin_parts_remain_covered(tmp_path, monkeypatch) -> None:
+    baseline = make_office_web_addin_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    change_office_web_addin_auto_show(candidate)
+    monkeypatch.setattr("formulafence.workbook._WEB_EXTENSION_MAX_PART_BYTES", 1)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+
+    assert baseline_snapshot.office_web_addins.unrecognized_part_count >= 1
+    assert any(
+        "oversized Office Web Add-in package part" in warning
+        for warning in baseline_snapshot.parser_warnings
+    )
+    assert "FF028" in {finding.rule_id for finding in report.findings}
+
+
+def test_office_web_addin_part_count_budget_remains_covered(tmp_path, monkeypatch) -> None:
+    workbook = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._OfficeWebAddinBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_OfficeWebAddinBudget",
+        lambda: budget_type(remaining_parts=0),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.office_web_addins.unrecognized_part_count >= 1
+    assert any(
+        "Office Web Add-in part count budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_office_web_addin_byte_budget_remains_covered(tmp_path, monkeypatch) -> None:
+    workbook = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._OfficeWebAddinBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_OfficeWebAddinBudget",
+        lambda: budget_type(remaining_bytes=1),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.office_web_addins.unrecognized_part_count >= 1
+    assert any(
+        "Office Web Add-in part read budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_malformed_office_web_addin_parts_fail_closed(tmp_path) -> None:
+    baseline = make_office_web_addin_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    corrupt_office_web_addin_definition_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.office_web_addins.unrecognized_part_count >= 1
+    assert any(
+        "Office Web Add-in definition part with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "office_web_addins_changed" in {change.kind for change in report.changes}
+    assert "FF028" in {finding.rule_id for finding in report.findings}
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

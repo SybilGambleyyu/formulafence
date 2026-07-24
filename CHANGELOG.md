@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.23.0 — 2026-07-24
+
+- Inspect document-linked Office Web Add-in task-pane packages directly from
+  their workbook declarations, through task-pane bindings and direct
+  web-extension definitions. Private fingerprints retain task-pane
+  configuration, add-in references, auto-show properties, bindings, snapshots,
+  and relationship material without serializing add-in IDs, store references,
+  property/binding values, XML, snapshot data, or relationship targets.
+- Emit `FF028` for Office Web Add-in task-pane workbook bindings,
+  configuration, definitions, or relationships and add the fail-closed
+  `no_office_web_addin_changes` policy rule (`FFP028`). Writer-chosen
+  relationship IDs and equivalent internal target spellings are normalized
+  away, while malformed, oversized, unbound, or otherwise unrecognized parts
+  remain visible coverage warnings. Task-pane and web-extension XML reads are
+  bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts. FormulaFence
+  never installs, loads, executes, or fetches an add-in or manifest, follows an
+  external target, or models worksheet-scoped Web Add-in markup outside this
+  task-pane chain.
+
 ## 0.22.0 — 2026-07-24
 
 - Inspect Office RibbonX custom-UI package parts directly from their root

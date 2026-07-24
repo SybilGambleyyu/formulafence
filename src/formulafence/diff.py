@@ -20,6 +20,7 @@ from formulafence.models import (
     ExternalDataConnectionSnapshot,
     ExternalLinkPackageSnapshot,
     Finding,
+    OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PowerQuerySnapshot,
     ProtectionCredentialSnapshot,
@@ -1055,6 +1056,37 @@ def _workbook_control_changes(
                 "FF027",
                 "critical",
                 "Office RibbonX customization controls changed.",
+                details=details,
+            )
+        )
+    if before.office_web_addins != after.office_web_addins:
+        old_addins: OfficeWebAddinSnapshot = before.office_web_addins
+        new_addins: OfficeWebAddinSnapshot = after.office_web_addins
+        details = {
+            "before": old_addins.to_dict(),
+            "after": new_addins.to_dict(),
+        }
+        if old_addins.declaration_signature != new_addins.declaration_signature:
+            details["workbook_binding_changed"] = True
+        if old_addins.taskpane_signature != new_addins.taskpane_signature:
+            details["taskpane_configuration_material_changed"] = True
+        if old_addins.web_extension_signature != new_addins.web_extension_signature:
+            details["web_extension_definition_material_changed"] = True
+        if old_addins.relationship_signature != new_addins.relationship_signature:
+            details["related_part_relationships_changed"] = True
+        changes.append(
+            Change(
+                "office_web_addins_changed",
+                None,
+                "critical",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF028",
+                "critical",
+                "Office Web Add-in task-pane controls changed.",
                 details=details,
             )
         )

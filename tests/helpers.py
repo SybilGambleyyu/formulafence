@@ -2015,6 +2015,464 @@ def corrupt_ribbon_customization_root(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".ribbon-customization-corrupt.tmp.xlsx")
 
 
+def make_office_web_addin_model(
+    path: Path,
+    *,
+    taskpane_reference_element: str = "webextension",
+) -> Path:
+    """Create a harmless Office Web Add-in task-pane package fixture.
+
+    The synthetic extension is never opened by Office. FormulaFence only reads
+    its bounded OOXML task-pane and web-extension parts before the workbook
+    reader can omit them.
+    """
+    if taskpane_reference_element not in {"webextension", "webextensionref"}:
+        raise ValueError("Unsupported task-pane web-extension reference element")
+    make_model(path)
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    document_relationships = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    )
+    taskpanes_namespace = (
+        "http://schemas.microsoft.com/office/webextensions/taskpanes/2010/11"
+    )
+    web_extension_namespace = (
+        "http://schemas.microsoft.com/office/webextensions/webextension/2010/11"
+    )
+    taskpane_relationship = (
+        "http://schemas.microsoft.com/office/2011/relationships/webextensiontaskpanes"
+    )
+    web_extension_relationship = (
+        "http://schemas.microsoft.com/office/2011/relationships/webextension"
+    )
+    image_relationship = f"{document_relationships}/image"
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceWebTaskpanes",
+                "Type": taskpane_relationship,
+                "Target": "webextensions/taskpanes.xml",
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        for member, content_type in (
+            (
+                "/xl/webextensions/taskpanes.xml",
+                "application/vnd.ms-office.webextensiontaskpanes+xml",
+            ),
+            (
+                "/xl/webextensions/webextension1.xml",
+                "application/vnd.ms-office.webextension+xml",
+            ),
+        ):
+            ElementTree.SubElement(
+                types,
+                f"{{{content_types}}}Override",
+                {"PartName": member, "ContentType": content_type},
+            )
+        contents["[Content_Types].xml"] = serialize(types)
+
+        taskpanes = ElementTree.Element(f"{{{taskpanes_namespace}}}taskpanes")
+        taskpane = ElementTree.SubElement(
+            taskpanes,
+            f"{{{taskpanes_namespace}}}taskpane",
+            {
+                "dockstate": "right",
+                "visibility": "1",
+                "width": "350",
+                "row": "4",
+                "locked": "1",
+            },
+        )
+        ElementTree.SubElement(
+            taskpane,
+            f"{{{taskpanes_namespace}}}{taskpane_reference_element}",
+            {f"{{{document_relationships}}}id": "rIdFenceTaskpaneExtension"},
+        )
+        contents["xl/webextensions/taskpanes.xml"] = serialize(taskpanes)
+
+        taskpane_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            taskpane_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceTaskpaneExtension",
+                "Type": web_extension_relationship,
+                "Target": "webextension1.xml",
+            },
+        )
+        contents["xl/webextensions/_rels/taskpanes.xml.rels"] = serialize(
+            taskpane_relationships
+        )
+
+        web_extension = ElementTree.Element(
+            f"{{{web_extension_namespace}}}webextension",
+            {"id": "{11111111-1111-1111-1111-111111111111}"},
+        )
+        ElementTree.SubElement(
+            web_extension,
+            f"{{{web_extension_namespace}}}reference",
+            {
+                "id": "PrivateBaselineAddin",
+                "version": "1.0.0.0",
+                "store": "private-baseline-manifest.xml",
+                "storeType": "Filesystem",
+            },
+        )
+        alternate_references = ElementTree.SubElement(
+            web_extension,
+            f"{{{web_extension_namespace}}}alternateReferences",
+        )
+        ElementTree.SubElement(
+            alternate_references,
+            f"{{{web_extension_namespace}}}reference",
+            {
+                "id": "PrivateFallbackAddin",
+                "version": "1.0.0.0",
+                "store": "private-fallback-manifest.xml",
+                "storeType": "Filesystem",
+            },
+        )
+        properties = ElementTree.SubElement(
+            web_extension,
+            f"{{{web_extension_namespace}}}properties",
+        )
+        ElementTree.SubElement(
+            properties,
+            f"{{{web_extension_namespace}}}property",
+            {"name": "Office.AutoShowTaskpaneWithDocument", "value": "true"},
+        )
+        ElementTree.SubElement(
+            properties,
+            f"{{{web_extension_namespace}}}property",
+            {"name": "PrivateAddinBehavior", "value": "private baseline behavior"},
+        )
+        bindings = ElementTree.SubElement(
+            web_extension,
+            f"{{{web_extension_namespace}}}bindings",
+        )
+        ElementTree.SubElement(
+            bindings,
+            f"{{{web_extension_namespace}}}binding",
+            {
+                "id": "PrivateBaselineBinding",
+                "type": "table",
+                "appref": "PrivateBaselineTable",
+            },
+        )
+        ElementTree.SubElement(
+            web_extension,
+            f"{{{web_extension_namespace}}}snapshot",
+            {f"{{{document_relationships}}}embed": "rIdFenceSnapshot"},
+        )
+        contents["xl/webextensions/webextension1.xml"] = serialize(web_extension)
+
+        extension_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            extension_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceSnapshot",
+                "Type": image_relationship,
+                "Target": "snapshots/private-baseline.png",
+            },
+        )
+        ElementTree.SubElement(
+            extension_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceExternalPreview",
+                "Type": image_relationship,
+                "Target": "https://private.example.invalid/addin-preview.png",
+                "TargetMode": "External",
+            },
+        )
+        contents["xl/webextensions/_rels/webextension1.xml.rels"] = serialize(
+            extension_relationships
+        )
+        contents["xl/webextensions/snapshots/private-baseline.png"] = (
+            b"private baseline add-in snapshot"
+        )
+
+    return _rewrite_archive(path, mutate, ".office-web-addin.tmp.xlsx")
+
+
+def change_office_web_addin_auto_show(path: Path) -> Path:
+    """Disable only the synthetic document auto-show request."""
+    web_extension_namespace = (
+        "http://schemas.microsoft.com/office/webextensions/webextension/2010/11"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        web_extension = ElementTree.fromstring(
+            contents["xl/webextensions/webextension1.xml"]
+        )
+        auto_show = next(
+            (
+                property_element
+                for property_element in web_extension.iter(
+                    f"{{{web_extension_namespace}}}property"
+                )
+                if property_element.get("name")
+                == "Office.AutoShowTaskpaneWithDocument"
+            ),
+            None,
+        )
+        if auto_show is None:
+            raise ValueError("Fixture does not contain an auto-show property")
+        auto_show.set("value", "false")
+        contents["xl/webextensions/webextension1.xml"] = ElementTree.tostring(
+            web_extension,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".office-web-addin-autoshow.tmp.xlsx")
+
+
+def change_office_web_addin_controls(path: Path) -> Path:
+    """Change private task-pane configuration and a snapshot relationship target."""
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    taskpanes_namespace = (
+        "http://schemas.microsoft.com/office/webextensions/taskpanes/2010/11"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        taskpanes = ElementTree.fromstring(contents["xl/webextensions/taskpanes.xml"])
+        taskpane = taskpanes.find(f"{{{taskpanes_namespace}}}taskpane")
+        if taskpane is None:
+            raise ValueError("Fixture does not contain a task pane")
+        taskpane.set("visibility", "0")
+        taskpane.set("width", "475")
+        contents["xl/webextensions/taskpanes.xml"] = ElementTree.tostring(
+            taskpanes,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships_name = "xl/webextensions/_rels/webextension1.xml.rels"
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        snapshot_relationship = next(
+            (
+                relationship
+                for relationship in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if relationship.get("Id") == "rIdFenceSnapshot"
+            ),
+            None,
+        )
+        if snapshot_relationship is None:
+            raise ValueError("Fixture does not contain a snapshot relationship")
+        snapshot_relationship.set("Target", "snapshots/private-candidate.png")
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["xl/webextensions/snapshots/private-candidate.png"] = (
+            b"private candidate add-in snapshot"
+        )
+
+    return _rewrite_archive(path, mutate, ".office-web-addin-change.tmp.xlsx")
+
+
+def renumber_office_web_addin_relationships(path: Path) -> Path:
+    """Rewrite task-pane relationship IDs while preserving semantic bindings."""
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    document_relationships = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    )
+    taskpanes_namespace = (
+        "http://schemas.microsoft.com/office/webextensions/taskpanes/2010/11"
+    )
+    web_extension_namespace = (
+        "http://schemas.microsoft.com/office/webextensions/webextension/2010/11"
+    )
+    replacements = {
+        "rIdFenceWebTaskpanes": "rIdFenceRenumberedWebTaskpanes",
+        "rIdFenceTaskpaneExtension": "rIdFenceRenumberedTaskpaneExtension",
+        "rIdFenceSnapshot": "rIdFenceRenumberedSnapshot",
+    }
+
+    def replace_relationship_ids(root: ElementTree.Element) -> None:
+        for relationship in root.findall(f"{{{package_relationships}}}Relationship"):
+            if replacement := replacements.get(relationship.get("Id")):
+                relationship.set("Id", replacement)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        for member in (
+            "xl/_rels/workbook.xml.rels",
+            "xl/webextensions/_rels/taskpanes.xml.rels",
+            "xl/webextensions/_rels/webextension1.xml.rels",
+        ):
+            relationships = ElementTree.fromstring(contents[member])
+            replace_relationship_ids(relationships)
+            contents[member] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+        taskpanes = ElementTree.fromstring(contents["xl/webextensions/taskpanes.xml"])
+        for reference in taskpanes.iter():
+            if reference.tag not in {
+                f"{{{taskpanes_namespace}}}webextension",
+                f"{{{taskpanes_namespace}}}webextensionref",
+            }:
+                continue
+            if replacement := replacements.get(
+                reference.get(f"{{{document_relationships}}}id")
+            ):
+                reference.set(f"{{{document_relationships}}}id", replacement)
+        contents["xl/webextensions/taskpanes.xml"] = ElementTree.tostring(
+            taskpanes,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        web_extension = ElementTree.fromstring(
+            contents["xl/webextensions/webextension1.xml"]
+        )
+        for snapshot in web_extension.iter(f"{{{web_extension_namespace}}}snapshot"):
+            if replacement := replacements.get(
+                snapshot.get(f"{{{document_relationships}}}embed")
+            ):
+                snapshot.set(f"{{{document_relationships}}}embed", replacement)
+        contents["xl/webextensions/webextension1.xml"] = ElementTree.tostring(
+            web_extension,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".office-web-addin-renumber.tmp.xlsx")
+
+
+def rewrite_office_web_addin_internal_target_spelling(path: Path) -> Path:
+    """Use equivalent relative target spellings in the Office Web Add-in chain."""
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook_relationships_name = "xl/_rels/workbook.xml.rels"
+        workbook_relationships = ElementTree.fromstring(
+            contents[workbook_relationships_name]
+        )
+        taskpane_relationship = next(
+            (
+                relationship
+                for relationship in workbook_relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if relationship.get("Id") == "rIdFenceWebTaskpanes"
+            ),
+            None,
+        )
+        if taskpane_relationship is None:
+            raise ValueError("Fixture does not contain a workbook task-pane relationship")
+        taskpane_relationship.set(
+            "Target", "./webextensions/../webextensions/taskpanes.xml"
+        )
+        contents[workbook_relationships_name] = ElementTree.tostring(
+            workbook_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        taskpane_relationships_name = "xl/webextensions/_rels/taskpanes.xml.rels"
+        taskpane_relationships = ElementTree.fromstring(
+            contents[taskpane_relationships_name]
+        )
+        extension_relationship = next(
+            (
+                relationship
+                for relationship in taskpane_relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if relationship.get("Id") == "rIdFenceTaskpaneExtension"
+            ),
+            None,
+        )
+        if extension_relationship is None:
+            raise ValueError("Fixture does not contain a task-pane extension relationship")
+        extension_relationship.set("Target", "./webextension1.xml")
+        contents[taskpane_relationships_name] = ElementTree.tostring(
+            taskpane_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        extension_relationships_name = "xl/webextensions/_rels/webextension1.xml.rels"
+        extension_relationships = ElementTree.fromstring(
+            contents[extension_relationships_name]
+        )
+        snapshot_relationship = next(
+            (
+                relationship
+                for relationship in extension_relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if relationship.get("Id") == "rIdFenceSnapshot"
+            ),
+            None,
+        )
+        if snapshot_relationship is None:
+            raise ValueError("Fixture does not contain a snapshot relationship")
+        snapshot_relationship.set(
+            "Target", "./snapshots/../snapshots/private-baseline.png"
+        )
+        contents[extension_relationships_name] = ElementTree.tostring(
+            extension_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".office-web-addin-target.tmp.xlsx")
+
+
+def corrupt_office_web_addin_definition_root(path: Path) -> Path:
+    """Replace the extension root with an unexpected element for coverage tests."""
+    web_extension_namespace = (
+        "http://schemas.microsoft.com/office/webextensions/webextension/2010/11"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        web_extension = ElementTree.fromstring(
+            contents["xl/webextensions/webextension1.xml"]
+        )
+        web_extension.tag = f"{{{web_extension_namespace}}}notWebExtension"
+        contents["xl/webextensions/webextension1.xml"] = ElementTree.tostring(
+            web_extension,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".office-web-addin-corrupt.tmp.xlsx")
+
+
 def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Path:
     """Create a workbook with operational protection and sparse style controls."""
     workbook = Workbook()

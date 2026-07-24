@@ -30,6 +30,19 @@ _R1C1_LOCAL_IDENTIFIER_CONFLICT = re.compile(
 _SERIALIZED_LOCAL_PREFIXES = ("_xlpm.", "_xlop.")
 _GROUP_TOKEN_TYPES = {"FUNC", "PAREN", "ARRAY"}
 _WHITESPACE_TOKEN_TYPES = {"WSPACE", "WHITE-SPACE"}
+_SPILL_REFERENCE_FUNCTION = "ANCHORARRAY"
+# ``#`` is not understood by openpyxl's tokenizer, even though it is Excel's
+# display syntax for a spilled-array reference. Keep the accepted grammar
+# intentionally narrow: one internal A1 anchor, optionally sheet-qualified.
+# External, 3-D, range, named, malformed, and implicit-intersection variants
+# remain tokenizer coverage limits instead of being rewritten into a guess.
+_LITERAL_SPILL_REFERENCE = re.compile(
+    r"(?<![A-Z0-9_.'\"!:@$\[\]])"
+    r"(?P<reference>(?:(?:'(?:[^']|'')*'|[A-Z0-9_.]+)!)?"
+    r"\$?[A-Z]{1,3}\$?[1-9][0-9]*)"
+    r"#(?=$|[ \t\r\n,;)}+\-*/^&=<>%])",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +74,7 @@ class FormulaInspection:
     dynamic_reference_functions: tuple[str, ...]
     three_d_reference_tokens: tuple[str, ...] = ()
     tokenization_failed: bool = False
+    spill_reference_tokens: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -152,9 +166,8 @@ def formula_fingerprint(formula: str, origin: str) -> str:
     openpyxl's tokenizer and only rewrites A1 references in `OPERAND/RANGE`
     tokens, leaving literals and function arguments untouched.
     """
-    try:
-        tokens = Tokenizer(formula).items
-    except Exception:  # pragma: no cover - defensive against malformed formulas
+    tokens, _ = _tokenize_formula(formula, preserve_literal_spill_operator=True)
+    if tokens is None:  # pragma: no cover - defensive against malformed formulas
         return formula.strip()
 
     parts: list[str] = []
@@ -199,6 +212,79 @@ def parse_reference_token(value: str) -> ParsedReference | None:
         max_row,
         value,
     )
+
+
+def _mask_double_quoted_strings(value: str) -> str:
+    """Blank formula strings while preserving offsets for token-safe matching."""
+    masked = list(value)
+    in_string = False
+    position = 0
+    while position < len(value):
+        character = value[position]
+        if not in_string:
+            if character == '"':
+                masked[position] = " "
+                in_string = True
+            position += 1
+            continue
+
+        masked[position] = " "
+        if character == '"':
+            if position + 1 < len(value) and value[position + 1] == '"':
+                masked[position + 1] = " "
+                position += 2
+                continue
+            in_string = False
+        position += 1
+    return "".join(masked)
+
+
+def _rewrite_literal_spill_references(
+    formula: str, *, preserve_operator: bool = False
+) -> tuple[str, tuple[str, ...]]:
+    """Remove only static ``A1#`` operators so openpyxl can inspect the anchor.
+
+    The graph edge is deliberately to the formula's anchor cell, not to an
+    invented fixed spill extent. The caller retains the original spill token in
+    ``FormulaInspection`` so profiles and policy can make the remaining dynamic
+    shape and blocker behavior visible.
+    """
+    masked_formula = _mask_double_quoted_strings(formula)
+    parts: list[str] = []
+    literal_spill_tokens: list[str] = []
+    cursor = 0
+    for match in _LITERAL_SPILL_REFERENCE.finditer(masked_formula):
+        reference = formula[match.start("reference") : match.end("reference")]
+        if parse_reference_token(reference) is None:
+            continue
+        parts.append(formula[cursor : match.start()])
+        if preserve_operator:
+            # Keep a spill reference distinct from an ordinary direct cell in
+            # formula fingerprints while still giving the underlying tokenizer
+            # a grammar it understands. This is equivalent to the OOXML-style
+            # ANCHORARRAY representation documented by XlsxWriter.
+            parts.append(f"{_SPILL_REFERENCE_FUNCTION}({reference})")
+        else:
+            parts.append(reference)
+        cursor = match.end()
+        literal_spill_tokens.append(formula[match.start() : match.end()])
+    if not literal_spill_tokens:
+        return formula, ()
+    parts.append(formula[cursor:])
+    return "".join(parts), tuple(dict.fromkeys(literal_spill_tokens))
+
+
+def _tokenize_formula(
+    formula: str, *, preserve_literal_spill_operator: bool = False
+) -> tuple[tuple[object, ...] | None, tuple[str, ...]]:
+    """Tokenize a formula after a narrow, non-evaluating spill compatibility pass."""
+    tokenizer_formula, literal_spill_tokens = _rewrite_literal_spill_references(
+        formula, preserve_operator=preserve_literal_spill_operator
+    )
+    try:
+        return tuple(Tokenizer(tokenizer_formula).items), literal_spill_tokens
+    except Exception:
+        return None, literal_spill_tokens
 
 
 def resolve_3d_reference(
@@ -801,9 +887,8 @@ def lambda_parameter_count(formula: str) -> int | None:
     contain a lambda, malformed parameter lists, and trailing invocations so a
     caller cannot mistake an arbitrary defined formula for a custom function.
     """
-    try:
-        tokens = Tokenizer(formula).items
-    except Exception:
+    tokens, _ = _tokenize_formula(formula)
+    if tokens is None:
         return None
     meaningful = [
         position
@@ -963,10 +1048,15 @@ def inspect_formula(
     named-function value records a known LAMBDA whose definition is not safe to
     expand, so its call remains a visible coverage gap.
     """
-    try:
-        tokens = Tokenizer(formula).items
-    except Exception:
-        return FormulaInspection((), (), (), tokenization_failed=True)
+    tokens, literal_spill_tokens = _tokenize_formula(formula)
+    if tokens is None:
+        return FormulaInspection(
+            (),
+            (),
+            (),
+            tokenization_failed=True,
+            spill_reference_tokens=literal_spill_tokens,
+        )
     resolved_names = named_references or {}
     resolved_named_functions = named_function_references or {}
     resolved_tables = structured_tables or {}
@@ -974,6 +1064,7 @@ def inspect_formula(
     unresolved_range_tokens: list[str] = []
     dynamic_reference_functions: list[str] = []
     three_d_reference_tokens: list[str] = []
+    spill_reference_tokens: list[str] = list(literal_spill_tokens)
     local_variable_indexes = _local_variable_token_indexes(tokens)
     for position, token in enumerate(tokens):
         if token.type == "OPERAND" and token.subtype == "RANGE":
@@ -1011,11 +1102,14 @@ def inspect_formula(
             function_name = _function_name(token)
             if function_name in _DYNAMIC_REFERENCE_FUNCTIONS:
                 dynamic_reference_functions.append(function_name)
+            if function_name == _SPILL_REFERENCE_FUNCTION:
+                spill_reference_tokens.append(token.value.rstrip("(").strip())
     return FormulaInspection(
         references=tuple(references),
         unresolved_range_tokens=tuple(dict.fromkeys(unresolved_range_tokens)),
         dynamic_reference_functions=tuple(dict.fromkeys(dynamic_reference_functions)),
         three_d_reference_tokens=tuple(dict.fromkeys(three_d_reference_tokens)),
+        spill_reference_tokens=tuple(dict.fromkeys(spill_reference_tokens)),
     )
 
 

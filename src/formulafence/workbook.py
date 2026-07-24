@@ -396,6 +396,7 @@ def _named_reference_maps(
                 or inspection.tokenization_failed
                 or inspection.dynamic_reference_functions
                 or inspection.three_d_reference_tokens
+                or inspection.spill_reference_tokens
             )
             if can_expand:
                 for token in inspection.unresolved_range_tokens:
@@ -416,6 +417,7 @@ def _named_reference_maps(
                     or inspection.tokenization_failed
                     or inspection.dynamic_reference_functions
                     or inspection.three_d_reference_tokens
+                    or inspection.spill_reference_tokens
                     or any(
                         reference.is_external or reference.sheet is None
                         for reference in inspection.references
@@ -610,6 +612,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = {}
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
+    spill_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
+    tokenization_failure_cells: set[CellKey] = set()
     tables = _table_snapshots(workbook)
     structured_tables = _structured_table_map(tables)
     sheet_order = tuple(worksheet.title for worksheet in workbook.worksheets)
@@ -659,12 +663,16 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             )
             if inspection.unresolved_range_tokens:
                 unresolved_reference_tokens[snapshot.location] = inspection.unresolved_range_tokens
+            if inspection.tokenization_failed:
+                tokenization_failure_cells.add(snapshot.location)
             if inspection.dynamic_reference_functions:
                 dynamic_reference_functions[snapshot.location] = (
                     inspection.dynamic_reference_functions
                 )
             if inspection.three_d_reference_tokens:
                 three_d_reference_tokens[snapshot.location] = inspection.three_d_reference_tokens
+            if inspection.spill_reference_tokens:
+                spill_reference_tokens[snapshot.location] = inspection.spill_reference_tokens
             for reference in inspection.references:
                 if reference.is_external:
                     external_references.add(snapshot.location)
@@ -716,6 +724,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         unresolved_reference_tokens=unresolved_reference_tokens,
         dynamic_reference_functions=dynamic_reference_functions,
         three_d_reference_tokens=three_d_reference_tokens,
+        spill_reference_tokens=spill_reference_tokens,
+        tokenization_failure_cells=tokenization_failure_cells,
         tables=tables,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
@@ -768,6 +778,17 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
                     "tokens": list(tokens),
                 }
                 for location, tokens in sorted(snapshot.three_d_reference_tokens.items())
+            ],
+            "spill_reference_cells": [
+                {
+                    "location": display_location(location),
+                    "tokens": list(tokens),
+                }
+                for location, tokens in sorted(snapshot.spill_reference_tokens.items())
+            ],
+            "tokenization_failure_cells": [
+                display_location(location)
+                for location in sorted(snapshot.tokenization_failure_cells)
             ],
         },
     }

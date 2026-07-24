@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.9.0/formulafence-0.9.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.10.0/formulafence-0.10.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -65,6 +65,8 @@ rules:
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
+  no_new_spill_references: true
+  no_new_tokenization_failures: true
   no_table_definition_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -89,7 +91,7 @@ allowed_changes:
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
-| Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), and dynamic-reference functions (`INDIRECT`/`OFFSET`) |
+| Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
 | CI output | Deterministic JSON, reviewer-friendly Markdown, and SARIF |
 
@@ -127,6 +129,18 @@ edges. The implementation follows Excel's documented
 [LET scope](https://support.microsoft.com/en-us/excel/functions/let-function)
 and [LAMBDA parameter syntax](https://support.microsoft.com/en-us/excel/functions/lambda-function).
 
+FormulaFence traces the static anchor behind a direct internal spilled-array
+reference such as `=SUM(Inputs!B2#)`, including Excel-compatible OOXML spelling
+such as `=SUM(_xlfn.ANCHORARRAY(Inputs!B2))`. That creates an edge from the
+anchor cell to the consumer, so changes to the anchor formula and its statically
+visible inputs reach the consumer. Profiles retain every spill token, and a
+diff emits `FF015`; `no_new_spill_references` can make new instances a CI
+failure. FormulaFence does not invent the spill extent or a dependency on every
+possible blocking cell. External, 3-D, range, named, implicit-intersection, and
+malformed spill forms remain explicit coverage limits. A formula-defined name
+that contains a spill reference also remains unresolved at its call site rather
+than hiding that dynamic boundary behind a static name edge.
+
 FormulaFence also follows a call to a workbook- or worksheet-local defined name
 when its complete definition is one statically resolvable `LAMBDA` expression.
 For `=ToCelsius(A2)`, the caller keeps its explicit `A2` edge and gains the
@@ -136,9 +150,14 @@ recognizes both human-authored formulas and the `_xlfn.LAMBDA` / `_xlpm.` /
 `_xlop.` OOXML spelling produced by Excel-compatible writers. Definition scope
 and worksheet-local precedence are preserved. Relative, cyclic, external,
 dynamic, 3-D, tokenizer-unsupported, or otherwise non-static LAMBDAs remain a
-visible unresolved reference at each call site. Spilled ranges and arbitrary
-VBA, add-in, or other custom functions remain coverage limits rather than
-inferred dependencies.
+visible unresolved reference at each call site. Spill extents and blockers,
+plus arbitrary VBA, add-in, or other custom functions, remain coverage limits
+rather than inferred dependencies.
+
+If the underlying formula tokenizer cannot inspect a formula at all,
+FormulaFence records the affected cell in the profile and reports `FF016` when
+it is newly introduced. `no_new_tokenization_failures` turns that condition
+into a CI failure instead of silently omitting its dependency graph.
 
 FormulaFence also expands internal static 3-D A1 references such as
 `Jan:Mar!B2:B10` over every worksheet tab between the named endpoints. Profiles

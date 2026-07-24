@@ -20,6 +20,8 @@ _RULE_FIELDS = {
     "no_new_parser_warnings",
     "no_new_unresolved_references",
     "no_new_dynamic_references",
+    "no_new_spill_references",
+    "no_new_tokenization_failures",
     "no_table_definition_changes",
     "no_3d_reference_scope_changes",
     "no_sheet_visibility_changes",
@@ -58,6 +60,8 @@ class Policy:
     no_new_parser_warnings: bool = False
     no_new_unresolved_references: bool = False
     no_new_dynamic_references: bool = False
+    no_new_spill_references: bool = False
+    no_new_tokenization_failures: bool = False
     no_table_definition_changes: bool = False
     no_3d_reference_scope_changes: bool = False
     no_sheet_visibility_changes: bool = False
@@ -78,6 +82,8 @@ rules:
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
+  no_new_spill_references: true
+  no_new_tokenization_failures: true
   no_table_definition_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -166,6 +172,10 @@ def parse_policy(data: object) -> Policy:
         no_new_parser_warnings=_boolean_rule(rules, "no_new_parser_warnings"),
         no_new_unresolved_references=_boolean_rule(rules, "no_new_unresolved_references"),
         no_new_dynamic_references=_boolean_rule(rules, "no_new_dynamic_references"),
+        no_new_spill_references=_boolean_rule(rules, "no_new_spill_references"),
+        no_new_tokenization_failures=_boolean_rule(
+            rules, "no_new_tokenization_failures"
+        ),
         no_table_definition_changes=_boolean_rule(rules, "no_table_definition_changes"),
         no_3d_reference_scope_changes=_boolean_rule(
             rules, "no_3d_reference_scope_changes"
@@ -260,6 +270,28 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP012",
                     "high",
                     "Policy forbids new dynamic reference functions.",
+                    finding.location,
+                    details=finding.details,
+                )
+            )
+    if policy.no_new_spill_references:
+        for finding in _rule_triggered(report, "FF015"):
+            violations.append(
+                Finding(
+                    "FFP015",
+                    "high",
+                    "Policy forbids new dynamic-array spill references.",
+                    finding.location,
+                    details=finding.details,
+                )
+            )
+    if policy.no_new_tokenization_failures:
+        for finding in _rule_triggered(report, "FF016"):
+            violations.append(
+                Finding(
+                    "FFP016",
+                    "high",
+                    "Policy forbids formulas that FormulaFence cannot tokenize.",
                     finding.location,
                     details=finding.details,
                 )

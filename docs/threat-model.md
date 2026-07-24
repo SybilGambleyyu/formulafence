@@ -43,18 +43,25 @@ review prompt, not proof of an error.
   formula cell itself to be in that table. Header/total-row, cross-sheet,
   ambiguous, and complex bracket-escape table syntax, `INDIRECT`, `OFFSET`,
   relative/cyclic/external/3-D/tokenizer-unsupported formula-defined names,
-  dynamic array behavior, cube functions, add-ins, and custom functions cannot
-  always be statically resolved. FormulaFence flags newly introduced unresolved
-  tokens and `INDIRECT`/`OFFSET` use, but does not fabricate dependencies for
-  them.
+  cube functions, add-ins, and custom functions cannot always be statically
+  resolved. FormulaFence flags newly introduced unresolved tokens and
+  `INDIRECT`/`OFFSET` use, but does not fabricate dependencies for them.
+- A direct internal A1 spilled-array anchor such as `A1#`, or its OOXML
+  `ANCHORARRAY(A1)` representation, adds a dependency edge from the anchor
+  cell to its consumer and is inventoried in the profile. FormulaFence cannot
+  safely enumerate the dynamic spill extent or every possible blocking cell;
+  it emits `FF015` for newly added spill references. External, 3-D, range,
+  named, implicit-intersection, and malformed spill forms stay outside this
+  subset. A formula-defined name containing a spill reference is not expanded,
+  so callers retain a visible coverage gap.
 - Ordinary lexical names inside inline `LET` expressions and `LAMBDA` bodies
   are not workbook references and are excluded from unresolved-token reporting;
   FormulaFence still traces the static dependencies around them. A defined name
   whose whole definition is a static `LAMBDA` can also be expanded at a call
   site, preserving name scope and explicit argument edges. FormulaFence accepts
-  standard and `_xlfn.LAMBDA`/`_xlpm.`/`_xlop.` OOXML spellings. Spilled ranges,
-  recursive or non-static named LAMBDAs, and arbitrary custom functions remain
-  outside this subset and stay visible as coverage gaps.
+  standard and `_xlfn.LAMBDA`/`_xlpm.`/`_xlop.` OOXML spellings. Recursive or
+  non-static named LAMBDAs and arbitrary custom functions remain outside this
+  subset and stay visible as coverage gaps.
 - Static internal 3-D A1 references such as `Jan:Mar!B2:B10` are expanded over
   every worksheet in the endpoint tab span. FormulaFence compares the resolved
   span when the same 3-D formula survives a workbook change, because moving,
@@ -63,6 +70,9 @@ review prompt, not proof of an error.
   forms remain explicit coverage gaps.
 - Explicit external-workbook references are detected. References assembled from
   text or macro code are not.
+- A formula that the underlying tokenizer cannot inspect is recorded by cell
+  location in the profile, and a newly introduced one emits `FF016`; its graph
+  is deliberately omitted rather than partially guessed.
 - It inventories sheet visibility, defined names, calculation settings, and the
   VBA payload. It does not yet diff chart definitions, PivotTables, Power Query,
   styles, data validations, protection settings, or every OOXML part.

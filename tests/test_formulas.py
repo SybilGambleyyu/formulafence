@@ -12,6 +12,8 @@ def test_fingerprint_normalises_relative_copy_patterns() -> None:
     assert formula_fingerprint("=A2*2", "B2") == formula_fingerprint("=A3*2", "B3")
     assert formula_fingerprint("=$A2*2", "B2") == formula_fingerprint("=$A3*2", "B3")
     assert formula_fingerprint("=A2*2", "B2") != formula_fingerprint("=A2*3", "B2")
+    assert formula_fingerprint("=A1#", "B1") == formula_fingerprint("=A2#", "B2")
+    assert formula_fingerprint("=A1#", "B1") != formula_fingerprint("=A1", "B1")
 
 
 def test_extract_references_keeps_external_workbooks_separate() -> None:
@@ -50,10 +52,33 @@ def test_formula_inspection_recognises_a_known_named_constant() -> None:
     assert inspection.unresolved_range_tokens == ()
 
 
-def test_formula_inspection_marks_tokenization_failures() -> None:
-    inspection = inspect_formula("=SUM(A1#)")
+def test_formula_inspection_traces_static_spill_anchors_and_marks_the_boundary() -> None:
+    literal = inspect_formula("=SUM(A1#)")
+    qualified = inspect_formula("=SUM('My Sheet'!$B$2#)")
+    serialized = inspect_formula("=SUM(_xlfn.ANCHORARRAY(A1))")
+    string_literal = inspect_formula('=CONCAT("literal A1#",A1#)')
 
-    assert inspection.tokenization_failed is True
+    assert literal.references == (ParsedReference(None, 1, 1, 1, 1, raw="A1"),)
+    assert literal.spill_reference_tokens == ("A1#",)
+    assert literal.tokenization_failed is False
+    assert qualified.references == (
+        ParsedReference("My Sheet", 2, 2, 2, 2, raw="'My Sheet'!$B$2"),
+    )
+    assert qualified.spill_reference_tokens == ("'My Sheet'!$B$2#",)
+    assert serialized.references == (ParsedReference(None, 1, 1, 1, 1, raw="A1"),)
+    assert serialized.spill_reference_tokens == ("_xlfn.ANCHORARRAY",)
+    assert string_literal.references == (ParsedReference(None, 1, 1, 1, 1, raw="A1"),)
+    assert string_literal.spill_reference_tokens == ("A1#",)
+
+
+def test_formula_inspection_marks_unsupported_tokenization_failures() -> None:
+    malformed = inspect_formula("=SUM(A1#1)")
+    range_anchor = inspect_formula("=SUM(A1:B2#)")
+    external_anchor = inspect_formula("=SUM([book.xlsx]Sheet1!A1#)")
+
+    assert malformed.tokenization_failed is True
+    assert range_anchor.tokenization_failed is True
+    assert external_anchor.tokenization_failed is True
 
 
 def test_formula_inspection_respects_let_lexical_scope() -> None:

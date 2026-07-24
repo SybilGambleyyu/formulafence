@@ -97,6 +97,27 @@ def make_three_d_model(path: Path) -> Path:
     return path
 
 
+def make_spill_model(path: Path) -> Path:
+    """Create literal and OOXML-style dynamic-array spill-reference callers."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Dynamic-array anchors"
+    inputs["B2"] = "=SEQUENCE(3)"
+    inputs["B3"] = "=SEQUENCE(2)"
+
+    model = workbook.create_sheet("Model")
+    model["A1"] = "Spill-driven calculations"
+    model["B2"] = "=SUM(Inputs!B2#)"
+    model["B3"] = "=COUNTA(_xlfn.ANCHORARRAY(Inputs!B3))"
+
+    dashboard = workbook.create_sheet("Dashboard")
+    dashboard["A1"] = "Spill-driven output"
+    dashboard["B2"] = "=Model!B2"
+    workbook.save(path)
+    return path
+
+
 def make_named_formula_model(path: Path) -> Path:
     """Create global and local names whose definitions contain formulas."""
     workbook = Workbook()

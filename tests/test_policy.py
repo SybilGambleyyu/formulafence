@@ -66,6 +66,30 @@ def test_policy_can_block_new_formula_coverage_gaps(tmp_path) -> None:
     assert {"FFP011", "FFP012"} <= rule_ids
 
 
+def test_policy_can_block_spill_and_tokenization_coverage_limits(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+
+    def add_coverage_limits(workbook) -> None:
+        workbook["Model"]["D2"] = "=SUM(Inputs!B2#)"
+        workbook["Model"]["D3"] = "=SUM(Inputs!B2#1)"
+
+    rewrite(candidate, add_coverage_limits)
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {
+                "no_new_spill_references": True,
+                "no_new_tokenization_failures": True,
+            },
+        }
+    )
+
+    rule_ids = {finding.rule_id for finding in evaluate_policy(report, policy)}
+    assert {"FFP015", "FFP016"} <= rule_ids
+
+
 def test_policy_can_block_table_definition_changes(tmp_path) -> None:
     baseline = make_table_model(tmp_path / "baseline.xlsx")
     candidate = make_table_model(tmp_path / "candidate.xlsx")

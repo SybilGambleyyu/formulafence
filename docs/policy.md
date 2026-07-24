@@ -15,6 +15,8 @@ rules:
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
+  no_new_spill_references: true
+  no_new_tokenization_failures: true
   no_table_definition_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
@@ -56,6 +58,8 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
 | `no_new_dynamic_references` | boolean | A formula adds a dynamic reference function such as `INDIRECT` or `OFFSET`. |
+| `no_new_spill_references` | boolean | A formula adds a dynamic-array spill reference; FormulaFence traces its anchor but not its variable extent or blockers. |
+| `no_new_tokenization_failures` | boolean | A formula is newly introduced that the underlying formula tokenizer cannot inspect. |
 | `no_table_definition_changes` | boolean | An Excel table is added, removed, moved, renamed, or has its columns/header/total-row configuration changed. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
@@ -85,8 +89,21 @@ where FormulaFence intentionally does not guess at dependencies.
 Within a formula, ordinary `LET` bindings and inline `LAMBDA` parameters are
 treated as lexical local names rather than unresolved workbook names. This
 preserves the static dependencies in their value expressions and bodies,
-including nested lambdas in higher-order Excel functions. Spilled ranges and
-arbitrary custom functions remain outside this static subset.
+including nested lambdas in higher-order Excel functions.
+
+FormulaFence recognizes a direct internal static spill anchor written as
+`A1#` or its OOXML `ANCHORARRAY(A1)` representation. It adds the anchor cell
+to the dependency graph and records the spill token in the profile; `FF015` and
+`no_new_spill_references` let CI reject a newly introduced partial-coverage
+case. It deliberately does not infer a variable spill extent or every cell
+that could block it. External, 3-D, range, named, implicit-intersection, and
+malformed spill forms remain coverage limits. Formula-defined names containing
+a spill reference are left unresolved at their call sites so this boundary
+cannot be hidden behind a name.
+
+When a formula cannot be tokenized at all, FormulaFence records its location in
+the profile and emits `FF016` for a new instance. Enable
+`no_new_tokenization_failures` to turn that into `FFP016`.
 
 A call to a workbook- or worksheet-local defined name is also resolved when
 the complete definition is one statically resolvable `LAMBDA` expression. The

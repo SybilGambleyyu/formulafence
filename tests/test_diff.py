@@ -15,6 +15,7 @@ from .helpers import (
     make_named_formula_model,
     make_named_lambda_model,
     make_scoped_named_lambda_model,
+    make_spill_model,
     make_table_model,
     make_three_d_model,
     rewrite,
@@ -154,11 +155,18 @@ def test_formula_defined_names_remain_coverage_gaps_when_not_fully_static(tmp_pa
         workbook.defined_names.add(DefinedName("CircularMetricB", attr_text="=CircularMetricA"))
         workbook.defined_names.add(DefinedName("PeriodMetric", attr_text="=SUM(Inputs:Report!B2)"))
         workbook.defined_names.add(DefinedName("SpillMetric", attr_text="=SUM(Inputs!$B$2#)"))
+        workbook.defined_names.add(
+            DefinedName(
+                "SerializedSpillMetric",
+                attr_text="=SUM(_xlfn.ANCHORARRAY(Inputs!$B$2))",
+            )
+        )
         workbook["Summary"]["B5"] = "=RelativeMetric"
         workbook["Summary"]["B6"] = "=DynamicMetric"
         workbook["Summary"]["B7"] = "=CircularMetricA"
         workbook["Summary"]["B8"] = "=PeriodMetric"
         workbook["Summary"]["B9"] = "=SpillMetric"
+        workbook["Summary"]["B10"] = "=SerializedSpillMetric"
 
     rewrite(workbook_path, add_unsafe_formula_names)
     snapshot = load_snapshot(workbook_path)
@@ -169,12 +177,14 @@ def test_formula_defined_names_remain_coverage_gaps_when_not_fully_static(tmp_pa
         ("Summary", "B7"): ("CircularMetricA",),
         ("Summary", "B8"): ("PeriodMetric",),
         ("Summary", "B9"): ("SpillMetric",),
+        ("Summary", "B10"): ("SerializedSpillMetric",),
     }
     assert ("Summary", "B5") not in snapshot.direct_dependents(("Inputs", "B2"))
     assert ("Summary", "B6") not in snapshot.direct_dependents(("Inputs", "B2"))
     assert ("Summary", "B7") not in snapshot.direct_dependents(("Inputs", "B2"))
     assert ("Summary", "B8") not in snapshot.direct_dependents(("Inputs", "B2"))
     assert ("Summary", "B9") not in snapshot.direct_dependents(("Inputs", "B2"))
+    assert ("Summary", "B10") not in snapshot.direct_dependents(("Inputs", "B2"))
 
 
 def test_formula_defined_names_expand_supported_static_table_references(tmp_path) -> None:
@@ -328,6 +338,56 @@ def test_diff_surfaces_new_static_coverage_gaps(tmp_path) -> None:
         "unresolved_formula_reference_added",
         "dynamic_formula_reference_added",
     } <= change_kinds
+
+
+def test_spill_references_trace_anchors_but_remain_explicit_coverage_limits(tmp_path) -> None:
+    baseline = make_spill_model(tmp_path / "baseline.xlsx")
+    candidate = make_spill_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Inputs"]["B2"], "value", "=SEQUENCE(4)"))
+
+    snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(snapshot)
+
+    assert snapshot.unresolved_reference_tokens == {}
+    assert snapshot.tokenization_failure_cells == set()
+    assert snapshot.direct_dependents(("Inputs", "B2")) == {("Model", "B2")}
+    assert snapshot.direct_dependents(("Inputs", "B3")) == {("Model", "B3")}
+    assert snapshot.summary()["spill_reference_cells"] == 2
+    assert profile["features"]["spill_reference_cells"] == [
+        {"location": "Model!B2", "tokens": ["Inputs!B2#"]},
+        {"location": "Model!B3", "tokens": ["_xlfn.ANCHORARRAY"]},
+    ]
+    assert "## Dynamic-array spill references" in profile_to_markdown(profile)
+
+    report = compare_snapshots(snapshot, load_snapshot(candidate))
+    change = next(change for change in report.changes if change.location == ("Inputs", "B2"))
+
+    assert change.impacted_cells == (("Dashboard", "B2"), ("Model", "B2"))
+
+
+def test_diff_surfaces_new_spill_and_tokenization_coverage_limits(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+
+    def add_coverage_limits(workbook) -> None:
+        workbook["Model"]["D2"] = "=SUM(Inputs!B2#)"
+        workbook["Model"]["D3"] = "=SUM(Inputs!B2#1)"
+
+    rewrite(candidate, add_coverage_limits)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert profile["features"]["spill_reference_cells"] == [
+        {"location": "Model!D2", "tokens": ["Inputs!B2#"]}
+    ]
+    assert profile["features"]["tokenization_failure_cells"] == ["Model!D3"]
+    assert "Formula tokenizer could not inspect `Model!D3`" in profile_to_markdown(profile)
+    assert {finding.rule_id for finding in report.findings} >= {"FF015", "FF016"}
+    assert {change.kind for change in report.changes} >= {
+        "spill_reference_added",
+        "formula_tokenization_failure_added",
+    }
 
 
 def test_external_defined_name_is_tracked_as_an_external_reference(tmp_path) -> None:

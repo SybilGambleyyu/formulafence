@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.0 — 2026-07-24
+
+- Trace the static anchor behind direct internal `A1#` spilled-array references
+  and OOXML-style `ANCHORARRAY(A1)` calls without evaluating Excel.
+- Inventory spill-reference consumers in profiles and report new instances as
+  `FF015`; add `no_new_spill_references` (`FFP015`) for a fail-closed CI
+  boundary. Dynamic spill extent and blocking cells remain explicit limits.
+- Surface formula-tokenization failures at workbook level instead of silently
+  omitting their graph. New failures emit `FF016` and can be blocked with
+  `no_new_tokenization_failures` (`FFP016`).
+- Keep formula-defined names containing a spill reference unexpanded, so a
+  named formula cannot hide the dynamic boundary behind inferred dependencies.
+
 ## 0.9.0 — 2026-07-24
 
 - Expand calls to workbook- and worksheet-local defined names whose complete

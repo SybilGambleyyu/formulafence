@@ -7,6 +7,8 @@ rules:
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
+  no_new_spill_references: true
+  no_new_tokenization_failures: true
   no_table_definition_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 5

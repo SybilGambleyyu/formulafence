@@ -546,6 +546,51 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
             )
         )
 
+    for location, tokens in _new_coverage_items(
+        before.spill_reference_tokens, after.spill_reference_tokens
+    ):
+        details = {"tokens": list(tokens)}
+        changes.append(
+            Change(
+                "spill_reference_added",
+                location,
+                "medium",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF015",
+                "medium",
+                (
+                    "Formula introduces a dynamic-array spill reference; the anchor is "
+                    "traced but dynamic extent and blockers may affect impact."
+                ),
+                location,
+                details=details,
+            )
+        )
+
+    for location in sorted(
+        after.tokenization_failure_cells - before.tokenization_failure_cells,
+        key=_location_sort_key,
+    ):
+        changes.append(
+            Change(
+                "formula_tokenization_failure_added",
+                location,
+                "medium",
+            )
+        )
+        findings.append(
+            Finding(
+                "FF016",
+                "medium",
+                "Formula could not be tokenized; dependency impact may be incomplete.",
+                location,
+            )
+        )
+
     control_changes, control_findings = _workbook_control_changes(before, after)
     changes.extend(control_changes)
     findings.extend(control_findings)

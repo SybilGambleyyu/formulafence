@@ -30,6 +30,8 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         f"- **Formula cells:** {workbook['formula_cells']}",
         f"- **Tables:** {workbook['table_count']}",
         f"- **3-D reference formulas:** {workbook['three_d_reference_cells']}",
+        f"- **Spill-reference formulas:** {workbook['spill_reference_cells']}",
+        f"- **Formula tokenizer failures:** {workbook['tokenization_failure_cells']}",
         f"- **VBA payload:** {'present' if workbook['has_vba'] else 'absent'}",
         "",
         "## Sheets",
@@ -76,10 +78,19 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         for issue in features["three_d_reference_cells"]:
             tokens = ", ".join(f"`{token}`" for token in issue["tokens"])
             lines.append(f"- Static 3-D reference at `{issue['location']}`: {tokens}")
+    if features["spill_reference_cells"]:
+        lines.extend(["", "## Dynamic-array spill references", ""])
+        for issue in features["spill_reference_cells"]:
+            tokens = ", ".join(f"`{token}`" for token in issue["tokens"])
+            lines.append(
+                f"- Spill reference at `{issue['location']}`: {tokens} "
+                "(the anchor is traced; dynamic extent and blockers are coverage limits)"
+            )
     if (
         features["parser_warnings"]
         or features["unresolved_reference_cells"]
         or features["dynamic_reference_cells"]
+        or features["tokenization_failure_cells"]
     ):
         lines.extend(["", "## Inspection coverage notes", ""])
         for warning in features["parser_warnings"]:
@@ -93,6 +104,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             functions = ", ".join(f"`{function}`" for function in issue["functions"])
             lines.append(
                 f"- Dynamic reference function at `{issue['location']}`: {functions}"
+            )
+        for location in features["tokenization_failure_cells"]:
+            lines.append(
+                f"- Formula tokenizer could not inspect `{location}`; "
+                "dependency impact may be incomplete"
             )
     return "\n".join(lines) + "\n"
 

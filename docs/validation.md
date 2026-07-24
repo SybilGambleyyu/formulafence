@@ -119,6 +119,50 @@ Worksheet-local functions with the same name correctly shadowed workbook-level
 functions, while dynamic and recursive named LAMBDAs remained unresolved at the
 call site. No formula was evaluated during either check.
 
+## Dynamic-array spill references and tokenizer coverage — 2026-07-24
+
+Microsoft documents `A1#` as a reference to the whole spilled range rooted at
+`A1`, whose size can grow or shrink. Its
+[array-formula guidance](https://support.microsoft.com/en-us/excel/guidelines-and-examples-of-array-formulas)
+uses `=D9#` as the equivalent of a concrete output range. Excel-compatible
+writers do not necessarily store that display syntax verbatim:
+[XlsxWriter documents](https://xlsxwriter.readthedocs.io/working_with_formulas.html)
+that `F2#` is emitted as `ANCHORARRAY(F2)` in OOXML.
+
+FormulaFence 0.10.0 accepts both a direct internal A1 anchor such as
+`=SUM(Inputs!B2#)` and OOXML `_xlfn.ANCHORARRAY(Inputs!B2)`. It adds an anchor
+edge to the graph but records the spill token at the consumer. This is a
+deliberate partial edge: changing the anchor formula or its visible inputs
+reaches consumers, while the variable spill extent and potential blocking cells
+remain coverage limits. Formula-defined names containing a spill reference are
+not expanded, so callers continue to receive an unresolved coverage note rather
+than silently inheriting a partial graph.
+
+The controlled fixture has a literal spill consumer and an OOXML-style consumer.
+Changing the first anchor's `SEQUENCE` formula reached that consumer and its
+dashboard output; the profile listed both spill sites and no unresolved or
+tokenization-failure cells. An interoperability workbook generated with the
+independently maintained XlsxWriter 3.2.9 package had SHA-256
+`2d650855c229b2901dd0885242fcc1941d817990bd8acd69d340a76c6c93aa64` and
+stored these exact worksheet formulas:
+
+| Cell | Stored formula |
+| --- | --- |
+| `F2` | `_xlfn.UNIQUE(B2:B5)` |
+| `H2` | `_xlfn.ANCHORARRAY(F2)` |
+| `J2` | `COUNTA(_xlfn.ANCHORARRAY(F2))` |
+
+The profile found two spill-reference cells (`H2`, `J2`), zero unresolved
+references, and zero tokenizer failures; `F2` had both spill consumers as
+direct dependents. The compatibility fixture is generated locally and is not
+bundled with FormulaFence. It verifies OOXML serialization and graph behavior,
+not Excel calculation results.
+
+Finally, an unsupported malformed form such as `=SUM(Inputs!B2#1)` now appears
+as a tokenizer-failure cell, emits `FF016` when newly introduced, and can be
+blocked by `no_new_tokenization_failures`. This ensures a parser failure cannot
+silently erase a formula's dependency coverage.
+
 ## Public structured-reference example — 2026-07-24
 
 FormulaFence 0.6.0 was also profiled against the public

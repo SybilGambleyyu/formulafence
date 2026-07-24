@@ -12,6 +12,7 @@ rules:
   no_slicer_timeline_cache_changes: true
   no_power_pivot_data_model_changes: true
   no_what_if_data_table_changes: true
+  no_scenario_manager_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true

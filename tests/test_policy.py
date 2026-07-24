@@ -17,6 +17,7 @@ from .helpers import (
     change_power_pivot_data_model_payload,
     change_power_query_controls,
     change_ribbon_customization_callback,
+    change_scenario_manager_input_value,
     change_slicer_timeline_filter_material,
     change_what_if_data_table_input,
     change_worksheet_embedded_control_controls,
@@ -35,6 +36,7 @@ from .helpers import (
     make_power_query_model,
     make_protection_model,
     make_ribbon_customization_model,
+    make_scenario_manager_model,
     make_slicer_timeline_cache_model,
     make_table_model,
     make_three_d_model,
@@ -377,6 +379,19 @@ def test_policy_can_block_what_if_data_table_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP034"}
+
+
+def test_policy_can_block_scenario_manager_changes(tmp_path) -> None:
+    baseline = make_scenario_manager_model(tmp_path / "baseline.xlsx")
+    candidate = make_scenario_manager_model(tmp_path / "candidate.xlsx")
+    change_scenario_manager_input_value(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_scenario_manager_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP035"}
 
 
 def test_policy_can_block_worksheet_embedded_control_changes(tmp_path) -> None:

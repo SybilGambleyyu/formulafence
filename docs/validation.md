@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel Scenario Manager — 2026-07-25
+
+FormulaFence 0.31.0 was validated with controlled raw-OOXML `.xlsx` packages
+containing two worksheet-local scenarios, four private stored inputs, one locked
+scenario, one hidden scenario, comments/users, selected/shown scenario state,
+summary references, and an input display number format. The suite verifies safe
+profile counts, a zero-change self-diff, `FF035` for a stored-input-only change,
+and `FFP035` under `no_scenario_manager_changes`. The same controlled mutation
+is invisible to the published 0.30.0 wheel: its JSON report contains no changes
+or findings, while 0.31.0 emits only `scenario_manager_changed` / `FF035`.
+
+Equivalent local A1 case/absolute-reference, Boolean, and unsigned-integer
+spellings are exercised alongside omitted schema-default false flags. A scenario
+name duplicated on a different worksheet remains valid because Scenario Manager
+is worksheet-scoped. A malformed input reference produces an explicit parser
+coverage warning, `FF010`, and `FF035` rather than a silent omission. Scenario
+names, comments, users, stored values, changing-cell references, and summary
+references are verified absent from JSON, Markdown, ordinary reports, and
+SARIF.
+
+As an independent package-compatibility check, FormulaFence profiled the public
+[`scenario.xlsx` example](http://carltoncollins.com/scenario.xlsx) linked by the
+[Journal of Accountancy Scenario Manager article](https://www.journalofaccountancy.com/issues/2018/nov/excel-scenario-manager/),
+downloaded locally and not bundled with this repository. The downloaded workbook
+SHA-256 was `087e7cc6c64c42c66f26049e66334c2cb0df20042f6b3a89d363e1ee44ca631d`.
+FormulaFence found one Scenario Manager worksheet, six scenarios, 18 stored
+inputs, six locked scenarios, six comments/users, six display number formats,
+one summary reference, selected/shown scenario state, and no Scenario Manager
+coverage warning. Changing only one stored input in a temporary copy emitted
+`FF035` and `FFP035`; the replacement value was absent from JSON output. This
+validates static OOXML declaration comparison and data minimisation—not scenario
+application, formula calculation, result correctness, scenario-summary
+generation, dependency inference, or Excel rendering. The declaration boundary
+follows Open XML [`scenarios`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_scenarios_topic_ID0EVDF5.html),
+[`scenario`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_scenario_topic_ID0E5WE5.html),
+and [`inputCells`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_inputCells_topic_ID0EE624.html).
+
 ## Excel What-If Data Tables — 2026-07-24
 
 FormulaFence 0.30.0 was validated with controlled `.xlsx` fixtures containing

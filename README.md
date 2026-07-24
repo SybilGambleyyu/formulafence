@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.30.0/formulafence-0.30.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.31.0/formulafence-0.31.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -70,6 +70,7 @@ rules:
   no_slicer_timeline_cache_changes: true
   no_power_pivot_data_model_changes: true
   no_what_if_data_table_changes: true
+  no_scenario_manager_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -107,7 +108,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, Excel What-If Data Tables, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -469,6 +470,33 @@ ordinary dependency graph. Cached output cells remain ordinary cell values under
 the regular cell-diff boundary. The declaration boundary follows the Open XML
 [`f` (Formula) specification](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_f_topic_ID0E6TY4.html)
 and Excel's [What-If Data Table guidance](https://support.microsoft.com/en-us/office/calculate-multiple-results-by-using-a-data-table-e95e2487-6ca6-4413-ad12-77542a5ea50b).
+
+FormulaFence also inventories Excel **Scenario Manager** controls. Unlike a
+Data Table, a Scenario Manager worksheet stores named, alternate input-value
+sets that Excel can apply to the sheet. FormulaFence reads the worksheet's raw
+`<scenarios>` declaration before the workbook reader can omit it, then privately
+compares scenario selection state, result-summary references, names, protection
+flags, comments/users, changing-cell references, stored values, deleted/undone
+state, and display number formats. A material change emits `FF035`; enable
+`no_scenario_manager_changes` for `FFP035`.
+
+Profiles expose only safe structural counts: Scenario Manager worksheets,
+scenarios, stored inputs, locked/hidden controls, comment/user presence,
+summary references, selections, deleted/undone inputs, number-format presence,
+and malformed declarations. Scenario names, comments, users, input values,
+input references, summary references, and raw XML never enter a profile,
+Markdown control section, `FF035` details, or SARIF. Equivalent local A1
+case/absolute-reference, Boolean, and unsigned-integer spellings are normalized;
+schema-default `locked`, `hidden`, `deleted`, and `undone` flags are normalized
+too. Missing, malformed, duplicate-within-worksheet, or unsupported
+declarations become visible coverage warnings. FormulaFence does not show or
+apply a scenario, calculate its results, infer a scenario-to-formula dependency,
+or fetch an external target. Cached worksheet cells remain under the regular
+cell-diff boundary. The declaration boundary follows Open XML
+[`scenarios`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_scenarios_topic_ID0EVDF5.html),
+[`scenario`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_scenario_topic_ID0E5WE5.html),
+and [`inputCells`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_inputCells_topic_ID0EE624.html)
+definitions, plus Excel's [Scenario Manager guidance](https://support.microsoft.com/en-us/excel/switch-between-various-sets-of-values-by-using-scenarios).
 
 FormulaFence also inventories relationship-backed **worksheet controls, legacy
 VML form controls, and OLE objects**. A worksheet can bind modern `<control>`

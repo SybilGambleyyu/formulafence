@@ -21,6 +21,10 @@ financial correctness or replace model review.
 - What-If Data Table output ranges, input-cell references, and raw formula
   metadata are compared through a private signature only. Cached scenario-output
   cells remain under the normal cell-diff boundary.
+- Scenario Manager names, comments, user metadata, stored input values,
+  input/result references, and raw declarations are compared through a private
+  signature only. Cached worksheet cells remain under the normal cell-diff
+  boundary.
 - Protection credential material is never emitted: legacy verifiers, modern
   hashes/salts, protected-range names, and security descriptors are compared
   through private fingerprints and reported only as safe presence/change metadata.
@@ -101,6 +105,21 @@ review prompt, not proof of an error.
   output formula, predict recalculation results, or add Data Table inputs to
   the ordinary dependency graph; cached scenario-output cells remain ordinary
   cell values under the normal diff boundary.
+- Excel Scenario Manager controls are distinct from Data Tables. FormulaFence
+  reads each worksheet's raw `<scenarios>` declaration and privately compares
+  current/shown selection state, summary references, scenario names,
+  locked/hidden flags, declared input counts, comments/users, input references,
+  stored values, deleted/undone flags, and display number formats. A material
+  change emits `FF035` and can be blocked with
+  `no_scenario_manager_changes`. Profiles and `FF035` details expose only
+  structural counts, never names, comments, users, values, or references.
+  Equivalent local A1 case/absolute-reference, Boolean, and unsigned-integer
+  spellings plus schema-default false flags are normalized. Missing, malformed,
+  duplicate-within-worksheet, or unsupported declarations remain visible
+  coverage warnings. FormulaFence does not show/apply a scenario, calculate its
+  result, infer a scenario-to-formula dependency, or fetch an external target;
+  cached worksheet cells remain ordinary cell values under the normal diff
+  boundary.
 - Worksheet data-validation controls are inventoried and diffed as compact
   ranges rather than by expanding their target cells. FormulaFence compares the
   validation type, operator, two criteria expressions, blank/dropdown behavior,
@@ -333,8 +352,8 @@ review prompt, not proof of an error.
   payload, XLM macro-sheet packages, RibbonX custom UI packages, Office Web
   Add-in task-pane packages, PivotTable view/cache-schema/shared-item/cached-
   record chains, Slicer and Timeline cache filter-definition chains, embedded
-  Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table
-  declarations, DrawingML chart
+  Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and
+  Scenario Manager declarations, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link

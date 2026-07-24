@@ -1377,6 +1377,61 @@ class WhatIfDataTableSnapshot:
 
 
 @dataclass(frozen=True)
+class ScenarioManagerSnapshot:
+    """Safe aggregate of Excel Scenario Manager definitions.
+
+    Scenario Manager stores alternate input sets, names, comments, user
+    metadata, and summary references inside worksheet OOXML rather than normal
+    cells. Those values can be commercially sensitive, so the private
+    signature retains canonical definitions while ``to_dict`` exposes only
+    structural counts suitable for review artifacts.
+    """
+
+    scenario_sheet_count: int = 0
+    scenario_count: int = 0
+    input_cell_count: int = 0
+    locked_scenario_count: int = 0
+    hidden_scenario_count: int = 0
+    scenario_with_comment_count: int = 0
+    scenario_with_user_count: int = 0
+    summary_reference_count: int = 0
+    current_scenario_selection_count: int = 0
+    shown_scenario_selection_count: int = 0
+    deleted_input_cell_count: int = 0
+    undone_input_cell_count: int = 0
+    formatted_input_cell_count: int = 0
+    unrecognized_scenario_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(self.scenario_count or self.unrecognized_scenario_count)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural Scenario Manager evidence without values or references."""
+        return {
+            "present": self.present,
+            "scenario_sheet_count": self.scenario_sheet_count,
+            "scenario_count": self.scenario_count,
+            "input_cell_count": self.input_cell_count,
+            "locked_scenario_count": self.locked_scenario_count,
+            "hidden_scenario_count": self.hidden_scenario_count,
+            "scenario_with_comment_count": self.scenario_with_comment_count,
+            "scenario_with_user_count": self.scenario_with_user_count,
+            "summary_reference_count": self.summary_reference_count,
+            "current_scenario_selection_count": self.current_scenario_selection_count,
+            "shown_scenario_selection_count": self.shown_scenario_selection_count,
+            "deleted_input_cell_count": self.deleted_input_cell_count,
+            "undone_input_cell_count": self.undone_input_cell_count,
+            "formatted_input_cell_count": self.formatted_input_cell_count,
+            "unrecognized_scenario_count": self.unrecognized_scenario_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -1766,6 +1821,9 @@ class WorkbookSnapshot:
     what_if_data_tables: WhatIfDataTableSnapshot = field(
         default_factory=WhatIfDataTableSnapshot
     )
+    scenario_manager: ScenarioManagerSnapshot = field(
+        default_factory=ScenarioManagerSnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -1812,6 +1870,10 @@ class WorkbookSnapshot:
                 self.what_if_data_tables.declared_output_cell_count
             ),
             "has_what_if_data_tables": self.what_if_data_tables.present,
+            "scenario_manager_sheet_count": self.scenario_manager.scenario_sheet_count,
+            "scenario_manager_scenario_count": self.scenario_manager.scenario_count,
+            "scenario_manager_input_cell_count": self.scenario_manager.input_cell_count,
+            "has_scenario_manager": self.scenario_manager.present,
             "defined_names": len(self.defined_names),
             "table_count": len(self.tables),
             "data_validation_rules": len(self.data_validations),

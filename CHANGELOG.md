@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.31.0 — 2026-07-25
+
+- Inspect Excel Scenario Manager declarations directly from worksheet OOXML
+  (`scenarios` / `scenario` / `inputCells`). Private signatures retain selected
+  and shown state, summary references, names, protection flags, comments/users,
+  changing-cell references, stored input values, deleted/undone state, and
+  display number formats without serializing that material into profiles,
+  `FF035`, or SARIF.
+- Emit `FF035` for a material Scenario Manager definition or stored-input
+  change, and add the fail-closed `no_scenario_manager_changes` policy rule
+  (`FFP035`). Equivalent local A1 case/absolute-reference, Boolean, and
+  unsigned-integer spellings plus schema-default false flags are normalized.
+  Missing, malformed, duplicate-within-worksheet, or unsupported declarations
+  are visible parser-coverage warnings rather than silently ignored.
+- Treat Scenario Manager as worksheet-scoped: duplicate scenario names on
+  different worksheets remain valid. Do not show/apply scenarios, calculate
+  results, infer scenario-to-formula dependencies, or expose scenario names,
+  comments, users, stored values, references, or raw XML.
+
 ## 0.30.0 — 2026-07-25
 
 - Inspect Excel What-If Data Table masters directly from worksheet OOXML

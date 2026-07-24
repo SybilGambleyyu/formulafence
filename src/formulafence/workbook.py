@@ -63,6 +63,7 @@ from formulafence.models import (
     QueryTableRefreshSnapshot,
     RangeDependency,
     RibbonCustomizationSnapshot,
+    ScenarioManagerSnapshot,
     SheetProtectionSnapshot,
     SheetSnapshot,
     SlicerTimelineCacheSnapshot,
@@ -450,6 +451,14 @@ class _WhatIfDataTableMetadata:
     warnings: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _ScenarioManagerMetadata:
+    """Raw Scenario Manager evidence retained before reader loss."""
+
+    scenario_manager: ScenarioManagerSnapshot
+    warnings: tuple[str, ...]
+
+
 @dataclass
 class _WhatIfDataTableDefinition:
     """One private, raw Data Table declaration while it is being validated."""
@@ -466,6 +475,37 @@ class _WhatIfDataTableDefinition:
     recalculation_requested: bool | None
     deleted_input_reference_count: int
     signature_entry: tuple[str, str]
+    issues: set[str]
+
+
+@dataclass
+class _ScenarioManagerScenario:
+    """One private Scenario Manager record while its OOXML is validated."""
+
+    sheet: str
+    name_key: str | None
+    locked: bool | None
+    hidden: bool | None
+    input_cell_count: int
+    has_comment: bool
+    has_user: bool
+    deleted_input_cell_count: int
+    undone_input_cell_count: int
+    formatted_input_cell_count: int
+    signature: tuple[tuple[str, str], ...]
+    issues: set[str]
+
+
+@dataclass
+class _ScenarioManagerDefinition:
+    """One raw worksheet ``scenarios`` declaration and its private entries."""
+
+    sheet: str
+    current_scenario_selected: bool
+    shown_scenario_selected: bool
+    summary_reference_count: int
+    signature_prefix: tuple[tuple[str, str], ...]
+    scenarios: list[_ScenarioManagerScenario]
     issues: set[str]
 
 
@@ -12651,6 +12691,450 @@ def _what_if_data_table_metadata(path: Path) -> _WhatIfDataTableMetadata:
     return _WhatIfDataTableMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_SCENARIO_MANAGER_KNOWN_ATTRIBUTES = frozenset({"current", "show", "sqref"})
+_SCENARIO_MANAGER_SCENARIO_KNOWN_ATTRIBUTES = frozenset(
+    {"name", "locked", "hidden", "count", "user", "comment"}
+)
+_SCENARIO_MANAGER_INPUT_KNOWN_ATTRIBUTES = frozenset(
+    {"r", "deleted", "undone", "val", "numFmtId"}
+)
+_SCENARIO_MANAGER_UNSIGNED_INT_MAXIMUM = 4_294_967_295
+
+
+def _scenario_manager_unsigned_int(value: str | None) -> tuple[int | None, str]:
+    """Canonicalize one unsigned Scenario Manager integer attribute."""
+    if value is None:
+        return None, "none"
+    candidate = value.strip()
+    if candidate.isascii() and candidate.isdecimal():
+        parsed = int(candidate)
+        if parsed <= _SCENARIO_MANAGER_UNSIGNED_INT_MAXIMUM:
+            return parsed, str(parsed)
+    return None, f"invalid:{value}"
+
+
+def _scenario_manager_summary_references(
+    value: str | None,
+) -> tuple[tuple[str, ...] | None, str]:
+    """Normalize local Scenario Manager summary references without exposing them."""
+    if value is None or not value.strip():
+        return (), "none"
+    references: list[str] = []
+    for raw_reference in value.split():
+        reference, _ = _canonical_what_if_data_table_range(raw_reference)
+        if reference is None:
+            return None, f"invalid:{value}"
+        references.append(reference)
+    return tuple(references), " ".join(references)
+
+
+def _scenario_manager_metadata(path: Path) -> _ScenarioManagerMetadata:
+    """Inventory Excel Scenario Manager definitions directly from worksheet XML.
+
+    Scenario Manager persists alternate input values, names, comments, user
+    details, and summary targets outside ordinary cells. The raw OOXML pass is
+    therefore performed before openpyxl can omit those declarations. All
+    values and references remain inside a private signature.
+    """
+    warnings: set[str] = set()
+    default = ScenarioManagerSnapshot()
+    definitions: list[_ScenarioManagerDefinition] = []
+    try:
+        with ZipFile(path) as archive:
+            scenarios_tag = f"{{{_SPREADSHEETML_NS}}}scenarios"
+            scenario_tag = f"{{{_SPREADSHEETML_NS}}}scenario"
+            input_cell_tag = f"{{{_SPREADSHEETML_NS}}}inputCells"
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                scenario_containers = list(worksheet.findall(scenarios_tag))
+                for container_index, container in enumerate(scenario_containers):
+                    issues: set[str] = set()
+                    if len(scenario_containers) != 1:
+                        issues.add("multiple-scenarios-containers")
+
+                    unknown_attributes = tuple(
+                        sorted(
+                            (
+                                _xml_display_name(attribute),
+                                value,
+                            )
+                            for attribute, value in container.attrib.items()
+                            if attribute not in _SCENARIO_MANAGER_KNOWN_ATTRIBUTES
+                        )
+                    )
+                    if unknown_attributes:
+                        issues.add("unknown-container-attributes")
+
+                    scenario_elements = [
+                        child for child in container if child.tag == scenario_tag
+                    ]
+                    unknown_child_signatures = tuple(
+                        _private_payload_signature(
+                            ElementTree.tostring(child, encoding="utf-8")
+                        )
+                        for child in container
+                        if child.tag != scenario_tag
+                    )
+                    if unknown_child_signatures:
+                        issues.add("unknown-container-children")
+                    if not scenario_elements:
+                        issues.add("missing-scenarios")
+
+                    current, current_signature = _scenario_manager_unsigned_int(
+                        container.get("current")
+                    )
+                    shown, shown_signature = _scenario_manager_unsigned_int(
+                        container.get("show")
+                    )
+                    if container.get("current") is not None and current is None:
+                        issues.add("invalid-current-scenario")
+                    if container.get("show") is not None and shown is None:
+                        issues.add("invalid-shown-scenario")
+                    if current is not None and current >= len(scenario_elements):
+                        issues.add("current-scenario-out-of-range")
+                    if shown is not None and shown >= len(scenario_elements):
+                        issues.add("shown-scenario-out-of-range")
+
+                    summary_references, summary_reference_signature = (
+                        _scenario_manager_summary_references(container.get("sqref"))
+                    )
+                    if summary_references is None:
+                        issues.add("invalid-summary-references")
+                        summary_reference_count = 0
+                    else:
+                        summary_reference_count = len(summary_references)
+
+                    scenarios: list[_ScenarioManagerScenario] = []
+                    for scenario_element in scenario_elements:
+                        scenario_issues: set[str] = set()
+                        name = scenario_element.get("name")
+                        if name is None or not name.strip():
+                            scenario_issues.add("missing-scenario-name")
+                            name_key = None
+                            name_signature = "missing" if name is None else f"invalid:{name}"
+                        else:
+                            name_key = name.casefold()
+                            name_signature = name
+
+                        locked, locked_signature = _what_if_data_table_boolean(
+                            scenario_element.get("locked")
+                        )
+                        hidden, hidden_signature = _what_if_data_table_boolean(
+                            scenario_element.get("hidden")
+                        )
+                        if locked is None or hidden is None:
+                            scenario_issues.add("invalid-scenario-boolean")
+
+                        input_elements = [
+                            child
+                            for child in scenario_element
+                            if child.tag == input_cell_tag
+                        ]
+                        unknown_scenario_child_signatures = tuple(
+                            _private_payload_signature(
+                                ElementTree.tostring(child, encoding="utf-8")
+                            )
+                            for child in scenario_element
+                            if child.tag != input_cell_tag
+                        )
+                        if unknown_scenario_child_signatures:
+                            scenario_issues.add("unknown-scenario-children")
+                        if not input_elements:
+                            scenario_issues.add("missing-input-cells")
+
+                        declared_count, declared_count_signature = (
+                            _scenario_manager_unsigned_int(scenario_element.get("count"))
+                        )
+                        if scenario_element.get("count") is not None and declared_count is None:
+                            scenario_issues.add("invalid-input-cell-count")
+                        elif (
+                            declared_count is not None
+                            and declared_count != len(input_elements)
+                        ):
+                            scenario_issues.add("mismatched-input-cell-count")
+                        elif declared_count is None:
+                            declared_count_signature = str(len(input_elements))
+
+                        unknown_scenario_attributes = tuple(
+                            sorted(
+                                (
+                                    _xml_display_name(attribute),
+                                    value,
+                                )
+                                for attribute, value in scenario_element.attrib.items()
+                                if attribute
+                                not in _SCENARIO_MANAGER_SCENARIO_KNOWN_ATTRIBUTES
+                            )
+                        )
+                        if unknown_scenario_attributes:
+                            scenario_issues.add("unknown-scenario-attributes")
+
+                        input_signatures: list[tuple[tuple[str, str], ...]] = []
+                        input_references: set[str] = set()
+                        deleted_input_cell_count = 0
+                        undone_input_cell_count = 0
+                        formatted_input_cell_count = 0
+                        for input_element in input_elements:
+                            input_issues: set[str] = set()
+                            raw_reference = input_element.get("r")
+                            reference = _canonical_what_if_data_table_cell(raw_reference)
+                            if reference is None:
+                                input_issues.add("invalid-input-reference")
+                                reference_signature = (
+                                    "missing"
+                                    if raw_reference is None
+                                    else f"invalid:{raw_reference}"
+                                )
+                            else:
+                                reference_signature = reference
+                                if reference.casefold() in input_references:
+                                    input_issues.add("duplicate-input-reference")
+                                input_references.add(reference.casefold())
+
+                            value = input_element.get("val")
+                            if value is None:
+                                input_issues.add("missing-input-value")
+                                value_signature = "missing"
+                            else:
+                                value_signature = value
+
+                            deleted, deleted_signature = _what_if_data_table_boolean(
+                                input_element.get("deleted")
+                            )
+                            undone, undone_signature = _what_if_data_table_boolean(
+                                input_element.get("undone")
+                            )
+                            if deleted is None or undone is None:
+                                input_issues.add("invalid-input-boolean")
+                            if deleted is True:
+                                deleted_input_cell_count += 1
+                            if undone is True:
+                                undone_input_cell_count += 1
+
+                            number_format, number_format_signature = (
+                                _scenario_manager_unsigned_int(
+                                    input_element.get("numFmtId")
+                                )
+                            )
+                            if input_element.get("numFmtId") is not None:
+                                if number_format is None:
+                                    input_issues.add("invalid-input-number-format")
+                                else:
+                                    formatted_input_cell_count += 1
+
+                            unknown_input_attributes = tuple(
+                                sorted(
+                                    (
+                                        _xml_display_name(attribute),
+                                        raw_value,
+                                    )
+                                    for attribute, raw_value in input_element.attrib.items()
+                                    if attribute
+                                    not in _SCENARIO_MANAGER_INPUT_KNOWN_ATTRIBUTES
+                                )
+                            )
+                            if unknown_input_attributes:
+                                input_issues.add("unknown-input-attributes")
+                            input_child_signatures = tuple(
+                                _private_payload_signature(
+                                    ElementTree.tostring(child, encoding="utf-8")
+                                )
+                                for child in input_element
+                            )
+                            if input_child_signatures:
+                                input_issues.add("unexpected-input-children")
+                            scenario_issues.update(input_issues)
+                            input_signatures.append(
+                                (
+                                    ("reference", reference_signature),
+                                    ("value", value_signature),
+                                    ("deleted", deleted_signature),
+                                    ("undone", undone_signature),
+                                    ("number_format", number_format_signature),
+                                    (
+                                        "unknown_attributes",
+                                        repr(unknown_input_attributes),
+                                    ),
+                                    ("child_signatures", repr(input_child_signatures)),
+                                )
+                            )
+
+                        scenarios.append(
+                            _ScenarioManagerScenario(
+                                sheet=sheet,
+                                name_key=name_key,
+                                locked=locked,
+                                hidden=hidden,
+                                input_cell_count=len(input_elements),
+                                has_comment=scenario_element.get("comment") is not None,
+                                has_user=scenario_element.get("user") is not None,
+                                deleted_input_cell_count=deleted_input_cell_count,
+                                undone_input_cell_count=undone_input_cell_count,
+                                formatted_input_cell_count=formatted_input_cell_count,
+                                signature=(
+                                    ("name", name_signature),
+                                    ("locked", locked_signature),
+                                    ("hidden", hidden_signature),
+                                    ("count", declared_count_signature),
+                                    (
+                                        "user",
+                                        scenario_element.get("user", "none"),
+                                    ),
+                                    (
+                                        "comment",
+                                        scenario_element.get("comment", "none"),
+                                    ),
+                                    (
+                                        "input_cells",
+                                        repr(tuple(sorted(input_signatures))),
+                                    ),
+                                    (
+                                        "unknown_attributes",
+                                        repr(unknown_scenario_attributes),
+                                    ),
+                                    (
+                                        "child_signatures",
+                                        repr(unknown_scenario_child_signatures),
+                                    ),
+                                ),
+                                issues=scenario_issues,
+                            )
+                        )
+
+                    definitions.append(
+                        _ScenarioManagerDefinition(
+                            sheet=sheet,
+                            current_scenario_selected=current is not None,
+                            shown_scenario_selected=shown is not None,
+                            summary_reference_count=summary_reference_count,
+                            signature_prefix=(
+                                ("current", current_signature),
+                                ("show", shown_signature),
+                                ("summary_references", summary_reference_signature),
+                                ("unknown_attributes", repr(unknown_attributes)),
+                                ("child_signatures", repr(unknown_child_signatures)),
+                                ("container_index", str(container_index)),
+                            ),
+                            scenarios=scenarios,
+                            issues=issues,
+                        )
+                    )
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _ScenarioManagerMetadata(
+            default,
+            (
+                "FormulaFence could not inspect Scenario Manager OOXML "
+                f"({type(error).__name__}); affected what-if controls were not compared.",
+            ),
+        )
+
+    scenarios_by_sheet_and_name: dict[
+        tuple[str, str], list[_ScenarioManagerScenario]
+    ] = defaultdict(list)
+    for definition in definitions:
+        for scenario in definition.scenarios:
+            if scenario.name_key is not None:
+                scenarios_by_sheet_and_name[
+                    (scenario.sheet.casefold(), scenario.name_key)
+                ].append(scenario)
+    for matching_scenarios in scenarios_by_sheet_and_name.values():
+        if len(matching_scenarios) > 1:
+            for scenario in matching_scenarios:
+                scenario.issues.add("duplicate-scenario-name")
+
+    if any(
+        definition.issues or any(scenario.issues for scenario in definition.scenarios)
+        for definition in definitions
+    ):
+        warnings.add(
+            "FormulaFence found malformed or unsupported Scenario Manager metadata; "
+            "the affected what-if controls have a coverage gap."
+        )
+
+    signature_entries = tuple(
+        sorted(
+            (
+                f"{definition.sheet.casefold()}:{index}",
+                repr(
+                    (
+                        definition.signature_prefix,
+                        tuple(scenario.signature for scenario in definition.scenarios),
+                    )
+                ),
+            )
+            for index, definition in enumerate(definitions)
+        )
+    )
+    snapshot = ScenarioManagerSnapshot(
+        scenario_sheet_count=len({definition.sheet.casefold() for definition in definitions}),
+        scenario_count=sum(len(definition.scenarios) for definition in definitions),
+        input_cell_count=sum(
+            scenario.input_cell_count
+            for definition in definitions
+            for scenario in definition.scenarios
+        ),
+        locked_scenario_count=sum(
+            scenario.locked is True
+            for definition in definitions
+            for scenario in definition.scenarios
+        ),
+        hidden_scenario_count=sum(
+            scenario.hidden is True
+            for definition in definitions
+            for scenario in definition.scenarios
+        ),
+        scenario_with_comment_count=sum(
+            scenario.has_comment
+            for definition in definitions
+            for scenario in definition.scenarios
+        ),
+        scenario_with_user_count=sum(
+            scenario.has_user
+            for definition in definitions
+            for scenario in definition.scenarios
+        ),
+        summary_reference_count=sum(
+            definition.summary_reference_count for definition in definitions
+        ),
+        current_scenario_selection_count=sum(
+            definition.current_scenario_selected for definition in definitions
+        ),
+        shown_scenario_selection_count=sum(
+            definition.shown_scenario_selected for definition in definitions
+        ),
+        deleted_input_cell_count=sum(
+            scenario.deleted_input_cell_count
+            for definition in definitions
+            for scenario in definition.scenarios
+        ),
+        undone_input_cell_count=sum(
+            scenario.undone_input_cell_count
+            for definition in definitions
+            for scenario in definition.scenarios
+        ),
+        formatted_input_cell_count=sum(
+            scenario.formatted_input_cell_count
+            for definition in definitions
+            for scenario in definition.scenarios
+        ),
+        unrecognized_scenario_count=sum(
+            bool(definition.issues) + sum(
+                bool(scenario.issues) for scenario in definition.scenarios
+            )
+            for definition in definitions
+        ),
+        definition_signature=_private_external_data_signature(signature_entries),
+    )
+    return _ScenarioManagerMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
     """Inspect raw markers that openpyxl intentionally does not expose."""
     dynamic_cells: set[CellKey] = set()
@@ -13540,6 +14024,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     )
     power_pivot_data_model_metadata = _power_pivot_data_model_metadata(source)
     what_if_data_table_metadata = _what_if_data_table_metadata(source)
+    scenario_manager_metadata = _scenario_manager_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -13573,6 +14058,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(slicer_timeline_metadata.warnings)
     parser_warnings.update(power_pivot_data_model_metadata.warnings)
     parser_warnings.update(what_if_data_table_metadata.warnings)
+    parser_warnings.update(scenario_manager_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -13790,6 +14276,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         slicer_timeline_caches=slicer_timeline_metadata.caches,
         power_pivot_data_model=power_pivot_data_model_metadata.data_model,
         what_if_data_tables=what_if_data_table_metadata.data_tables,
+        scenario_manager=scenario_manager_metadata.scenario_manager,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -13860,6 +14347,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "slicer_timeline_caches": snapshot.slicer_timeline_caches.profile_dict(),
         "power_pivot_data_model": snapshot.power_pivot_data_model.profile_dict(),
         "what_if_data_tables": snapshot.what_if_data_tables.profile_dict(),
+        "scenario_manager": snapshot.scenario_manager.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -13882,6 +14370,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_slicer_timeline_caches": snapshot.slicer_timeline_caches.present,
             "has_power_pivot_data_model": snapshot.power_pivot_data_model.present,
             "has_what_if_data_tables": snapshot.what_if_data_tables.present,
+            "has_scenario_manager": snapshot.scenario_manager.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

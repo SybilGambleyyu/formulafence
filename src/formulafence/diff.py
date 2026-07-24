@@ -30,6 +30,7 @@ from formulafence.models import (
     ProtectionOpaqueMetadataSnapshot,
     QueryTableRefreshSnapshot,
     RibbonCustomizationSnapshot,
+    ScenarioManagerSnapshot,
     SlicerTimelineCacheSnapshot,
     WhatIfDataTableSnapshot,
     WorkbookSnapshot,
@@ -1323,6 +1324,31 @@ def _workbook_control_changes(
                 "FF034",
                 "high",
                 "What-If Data Table sensitivity definition or control changed.",
+                details=details,
+            )
+        )
+    if before.scenario_manager != after.scenario_manager:
+        old_scenarios: ScenarioManagerSnapshot = before.scenario_manager
+        new_scenarios: ScenarioManagerSnapshot = after.scenario_manager
+        details: dict[str, object] = {
+            "before": old_scenarios.to_dict(),
+            "after": new_scenarios.to_dict(),
+        }
+        if old_scenarios.definition_signature != new_scenarios.definition_signature:
+            details["scenario_definition_material_changed"] = True
+        changes.append(
+            Change(
+                "scenario_manager_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF035",
+                "high",
+                "Excel Scenario Manager definition or stored input set changed.",
                 details=details,
             )
         )

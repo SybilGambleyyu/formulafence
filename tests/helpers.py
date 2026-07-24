@@ -5641,6 +5641,175 @@ def make_what_if_data_table_model(path: Path) -> Path:
     return path
 
 
+def make_scenario_manager_model(
+    path: Path, *, duplicate_names_on_second_sheet: bool = False
+) -> Path:
+    """Create a controlled raw-OOXML Excel Scenario Manager fixture."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Scenario-controlled inputs"
+    inputs["B2"] = 0.1
+    inputs["B3"] = 125
+    inputs["D2"] = "Scenario summary result one"
+    inputs["D3"] = "Scenario summary result two"
+    if duplicate_names_on_second_sheet:
+        workbook.create_sheet("Second Inputs")
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        scenarios = ElementTree.Element(
+            f"{{{_SPREADSHEETML_NS}}}scenarios",
+            {"current": "1", "show": "0", "sqref": "D2 D3"},
+        )
+        upside = ElementTree.SubElement(
+            scenarios,
+            f"{{{_SPREADSHEETML_NS}}}scenario",
+            {
+                "name": "Private Upside",
+                "locked": "1",
+                "count": "2",
+                "user": "private-scenario-owner",
+                "comment": "PRIVATE-SCENARIO-COMMENT",
+            },
+        )
+        ElementTree.SubElement(
+            upside,
+            f"{{{_SPREADSHEETML_NS}}}inputCells",
+            {"r": "B2", "val": "PRIVATE-UPSIDERATE", "numFmtId": "10"},
+        )
+        ElementTree.SubElement(
+            upside,
+            f"{{{_SPREADSHEETML_NS}}}inputCells",
+            {"r": "B3", "val": "PRIVATE-UPSIDECOST"},
+        )
+        downside = ElementTree.SubElement(
+            scenarios,
+            f"{{{_SPREADSHEETML_NS}}}scenario",
+            {
+                "name": "Private Downside",
+                "hidden": "1",
+                "count": "2",
+                "comment": "PRIVATE-DOWNSIDE-COMMENT",
+            },
+        )
+        ElementTree.SubElement(
+            downside,
+            f"{{{_SPREADSHEETML_NS}}}inputCells",
+            {"r": "B2", "val": "PRIVATE-DOWNSIDERATE"},
+        )
+        ElementTree.SubElement(
+            downside,
+            f"{{{_SPREADSHEETML_NS}}}inputCells",
+            {"r": "B3", "val": "PRIVATE-DOWNSIDECOST"},
+        )
+        sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+        sheet_data_index = next(
+            index
+            for index, child in enumerate(worksheet)
+            if child.tag == sheet_data_tag
+        )
+        worksheet.insert(sheet_data_index + 1, scenarios)
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        if duplicate_names_on_second_sheet:
+            second_worksheet = ElementTree.fromstring(
+                contents["xl/worksheets/sheet2.xml"]
+            )
+            second_sheet_data_index = next(
+                index
+                for index, child in enumerate(second_worksheet)
+                if child.tag == sheet_data_tag
+            )
+            second_worksheet.insert(
+                second_sheet_data_index + 1,
+                ElementTree.fromstring(
+                    ElementTree.tostring(scenarios, encoding="utf-8")
+                ),
+            )
+            contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+                second_worksheet,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".scenario-manager.tmp.xlsx")
+
+
+def change_scenario_manager_input_value(path: Path) -> Path:
+    """Change a private stored Scenario Manager input without touching cells."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        input_cell_tag = f"{{{_SPREADSHEETML_NS}}}inputCells"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        input_cell = next(worksheet.iter(input_cell_tag))
+        input_cell.set("val", "CANDIDATE-PRIVATE-SCENARIO-VALUE")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".scenario-manager-change.tmp.xlsx")
+
+
+def normalize_scenario_manager_reference_spelling(path: Path) -> Path:
+    """Use equivalent OOXML references, integers, and Boolean spellings."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        scenarios_tag = f"{{{_SPREADSHEETML_NS}}}scenarios"
+        scenario_tag = f"{{{_SPREADSHEETML_NS}}}scenario"
+        input_cell_tag = f"{{{_SPREADSHEETML_NS}}}inputCells"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        scenarios = worksheet.find(scenarios_tag)
+        if scenarios is None:
+            raise ValueError("Could not find Scenario Manager fixture")
+        scenarios.set("current", "01")
+        scenarios.set("show", "00")
+        scenarios.set("sqref", "$D$2   $D$3")
+        for index, scenario in enumerate(scenarios.findall(scenario_tag)):
+            scenario.set("count", "02")
+            scenario.set("locked", "true" if index == 0 else "false")
+            scenario.set("hidden", "false" if index == 0 else "true")
+            for input_cell in scenario.findall(input_cell_tag):
+                reference = input_cell.get("r")
+                if reference is None:
+                    raise ValueError("Scenario Manager fixture input lacks a reference")
+                input_cell.set("r", f"${reference[0]}${reference[1:]}")
+                input_cell.set("deleted", "false")
+                input_cell.set("undone", "0")
+                if input_cell.get("numFmtId") is not None:
+                    input_cell.set("numFmtId", "010")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".scenario-manager-noise.tmp.xlsx")
+
+
+def corrupt_scenario_manager_input(path: Path) -> Path:
+    """Inject an unsupported Scenario Manager input to exercise fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        input_cell_tag = f"{{{_SPREADSHEETML_NS}}}inputCells"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        input_cell = next(worksheet.iter(input_cell_tag))
+        input_cell.set("r", "PrivateInputSheet!B2")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".scenario-manager-corrupt.tmp.xlsx")
+
+
 def change_what_if_data_table_input(path: Path) -> Path:
     """Change one private Data Table input reference without touching cells."""
 

@@ -34,6 +34,7 @@ from .helpers import (
     change_protected_range,
     change_ribbon_customization_callback,
     change_ribbon_customization_controls,
+    change_scenario_manager_input_value,
     change_slicer_timeline_filter_material,
     change_what_if_data_table_input,
     change_worksheet_embedded_control_controls,
@@ -45,6 +46,7 @@ from .helpers import (
     corrupt_office_web_addin_definition_root,
     corrupt_pivot_table_definition_root,
     corrupt_ribbon_customization_root,
+    corrupt_scenario_manager_input,
     corrupt_slicer_timeline_cache_root,
     corrupt_what_if_data_table_input,
     corrupt_worksheet_embedded_control_activex_root,
@@ -76,6 +78,7 @@ from .helpers import (
     make_power_query_model,
     make_protection_model,
     make_ribbon_customization_model,
+    make_scenario_manager_model,
     make_scoped_named_lambda_model,
     make_slicer_timeline_cache_model,
     make_spill_model,
@@ -86,6 +89,7 @@ from .helpers import (
     make_xlm_macro_sheet_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
+    normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
     overlap_what_if_data_table_outputs,
     rebind_external_link_declaration,
@@ -3902,6 +3906,128 @@ def test_data_table_free_workbook_has_no_sensitivity_inventory(tmp_path) -> None
     assert snapshot.what_if_data_tables.present is False
     assert snapshot.what_if_data_tables.data_table_count == 0
     assert not any("What-If Data Table" in warning for warning in snapshot.parser_warnings)
+
+
+def test_scenario_manager_is_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_scenario_manager_model(tmp_path / "baseline.xlsx")
+    candidate = make_scenario_manager_model(tmp_path / "candidate.xlsx")
+    change_scenario_manager_input_value(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(
+        change for change in report.changes if change.kind == "scenario_manager_changed"
+    )
+
+    assert baseline_snapshot.summary()["scenario_manager_sheet_count"] == 1
+    assert baseline_snapshot.summary()["scenario_manager_scenario_count"] == 2
+    assert baseline_snapshot.summary()["scenario_manager_input_cell_count"] == 4
+    assert baseline_snapshot.summary()["has_scenario_manager"] is True
+    assert profile["scenario_manager"] == {
+        "present": True,
+        "scenario_sheet_count": 1,
+        "scenario_count": 2,
+        "input_cell_count": 4,
+        "locked_scenario_count": 1,
+        "hidden_scenario_count": 1,
+        "scenario_with_comment_count": 2,
+        "scenario_with_user_count": 1,
+        "summary_reference_count": 2,
+        "current_scenario_selection_count": 1,
+        "shown_scenario_selection_count": 1,
+        "deleted_input_cell_count": 0,
+        "undone_input_cell_count": 0,
+        "formatted_input_cell_count": 1,
+        "unrecognized_scenario_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Scenario Manager" in markdown
+    assert change.details["scenario_definition_material_changed"] is True
+    assert "FF035" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "Private Upside",
+        "Private Downside",
+        "PRIVATE-UPSIDERATE",
+        "CANDIDATE-PRIVATE-SCENARIO-VALUE",
+        "PRIVATE-SCENARIO-COMMENT",
+        "private-scenario-owner",
+        "B2",
+        "D2 D3",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_scenario_manager_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_scenario_manager_model(tmp_path / "baseline.xlsx")
+    equivalent = make_scenario_manager_model(tmp_path / "equivalent.xlsx")
+    normalize_scenario_manager_reference_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert "scenario_manager_changed" not in {change.kind for change in report.changes}
+    assert "FF035" not in {finding.rule_id for finding in report.findings}
+
+
+def test_scenario_manager_names_are_scoped_to_their_worksheet(tmp_path) -> None:
+    snapshot = load_snapshot(
+        make_scenario_manager_model(
+            tmp_path / "worksheet-scoped-names.xlsx",
+            duplicate_names_on_second_sheet=True,
+        )
+    )
+
+    assert snapshot.scenario_manager.scenario_sheet_count == 2
+    assert snapshot.scenario_manager.scenario_count == 4
+    assert snapshot.scenario_manager.unrecognized_scenario_count == 0
+    assert not any("Scenario Manager" in warning for warning in snapshot.parser_warnings)
+
+
+def test_scenario_manager_malformed_input_fails_closed(tmp_path) -> None:
+    baseline = make_scenario_manager_model(tmp_path / "baseline.xlsx")
+    malformed = make_scenario_manager_model(tmp_path / "malformed.xlsx")
+    corrupt_scenario_manager_input(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    malformed_report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.scenario_manager.unrecognized_scenario_count == 1
+    assert any(
+        "malformed or unsupported Scenario Manager" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF035"} <= {
+        finding.rule_id for finding in malformed_report.findings
+    }
+
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(malformed_report.to_dict()),
+        report_to_markdown(malformed_report),
+        json.dumps(report_to_sarif(malformed_report)),
+    )
+    assert all("PrivateInputSheet!B2" not in artifact for artifact in rendered_artifacts)
+
+
+def test_scenario_manager_free_workbook_has_no_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.scenario_manager.present is False
+    assert snapshot.scenario_manager.scenario_count == 0
+    assert not any("Scenario Manager" in warning for warning in snapshot.parser_warnings)
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

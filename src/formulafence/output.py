@@ -80,6 +80,12 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         f"- **External-link package parts:** {workbook['external_link_package_count']}",
         f"- **DDE links:** {workbook['dde_link_count']}",
         f"- **OLE links:** {workbook['ole_link_count']}",
+        (
+            "- **Scenario Manager sheets / scenarios / stored inputs:** "
+            f"{workbook['scenario_manager_sheet_count']} / "
+            f"{workbook['scenario_manager_scenario_count']} / "
+            f"{workbook['scenario_manager_input_cell_count']}"
+        ),
         f"- **XLM macro-sheet parts:** {workbook['xlm_macro_sheet_count']}",
         (
             "- **XLM macro-sheet formula cells:** "
@@ -1135,6 +1141,52 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Data Table output ranges, input-cell references, and formula metadata are "
             "compared privately and intentionally omitted. Cached scenario-output cells "
             "remain ordinary cell values under the regular cell-diff boundary."
+        )
+    scenario_manager = profile["scenario_manager"]
+    if scenario_manager["present"]:
+        lines.extend(
+            [
+                "",
+                "## Scenario Manager",
+                "",
+                (
+                    "- **Scenario-bearing worksheets / scenarios / stored inputs:** "
+                    f"{scenario_manager['scenario_sheet_count']} / "
+                    f"{scenario_manager['scenario_count']} / "
+                    f"{scenario_manager['input_cell_count']}"
+                ),
+                (
+                    "- **Locked / hidden scenarios:** "
+                    f"{scenario_manager['locked_scenario_count']} / "
+                    f"{scenario_manager['hidden_scenario_count']}"
+                ),
+                (
+                    "- **Scenarios with comments / users:** "
+                    f"{scenario_manager['scenario_with_comment_count']} / "
+                    f"{scenario_manager['scenario_with_user_count']}"
+                ),
+                (
+                    "- **Summary references / current selections / shown selections:** "
+                    f"{scenario_manager['summary_reference_count']} / "
+                    f"{scenario_manager['current_scenario_selection_count']} / "
+                    f"{scenario_manager['shown_scenario_selection_count']}"
+                ),
+                (
+                    "- **Deleted / undone / formatted stored inputs:** "
+                    f"{scenario_manager['deleted_input_cell_count']} / "
+                    f"{scenario_manager['undone_input_cell_count']} / "
+                    f"{scenario_manager['formatted_input_cell_count']}"
+                ),
+            ]
+        )
+        if scenario_manager["unrecognized_scenario_count"]:
+            lines.append(
+                "- **Unrecognized or malformed scenario declarations:** "
+                f"{scenario_manager['unrecognized_scenario_count']}"
+            )
+        lines.append(
+            "Scenario names, comments, user metadata, input values, input references, and "
+            "summary references are compared privately and intentionally omitted."
         )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:

@@ -16,6 +16,7 @@ rules:
   no_ribbon_customization_changes: true
   no_office_web_addin_changes: true
   no_chart_definition_changes: true
+  no_pivot_table_definition_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -73,6 +74,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_ribbon_customization_changes` | boolean | An Office RibbonX custom-UI package declaration, control/callback XML, or direct relationship changes. |
 | `no_office_web_addin_changes` | boolean | An Office Web Add-in task-pane workbook binding, task-pane configuration, web-extension definition, or direct relationship changes. |
 | `no_chart_definition_changes` | boolean | A DrawingML chart binding, chart definition, cached series data, chart-overlay shape, direct relationship, or bounded direct related payload changes. |
+| `no_pivot_table_definition_changes` | boolean | A PivotTable binding/layout, cache schema, shared item, cache-record relationship, or bounded cached-record payload changes. Source and refresh controls remain under `no_external_data_connection_changes`. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -305,6 +307,31 @@ MiB per workbook, and 512 parts; direct payload hashes are bounded to 32 MiB
 per part, 64 MiB per workbook, and 512 parts. Missing, malformed, orphaned,
 unbound, oversized, or over-budget chart material remains a visible coverage
 warning.
+
+PivotTable packages can regroup, filter, aggregate, or present report material
+without changing an ordinary formula cell. FormulaFence follows the bounded
+workbook-cache and worksheet-PivotTable relationship graph, then privately
+compares PivotTable layouts, cache schemas, shared cache items, normalized
+relationships, and bounded raw cache-record payloads. Profiles expose only
+safe counts for parts, fields, items, cache records, relationships, and
+coverage; names, source ranges, item values, formulas, cache values, targets,
+XML, and payload bytes never enter a profile or diff. Writer-chosen
+relationship IDs, equivalent internal target spellings, and cache-ID
+renumbering are normalized. A material change emits `FF031`; enable
+`no_pivot_table_definition_changes` to make it `FFP031` in CI.
+
+Source definitions and refresh settings remain under `FF023` /
+`no_external_data_connection_changes`, so a refresh-only edit is not reported
+as a PivotTable definition change. FormulaFence does not refresh a cache,
+calculate or render a PivotTable, infer PivotTable-to-cell impact, fetch an
+external target, or interpret OLAP, extension-list, or slicer semantics.
+Missing, malformed, orphaned, unbound, oversized, or over-budget material
+remains a visible coverage warning. PivotTable/cache-definition XML reads are
+bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts; raw cache-record
+hashing is bounded to 32 MiB per part, 64 MiB per workbook, and 512 parts. A
+temporary reader copy detaches cache-record relationships before the underlying
+workbook library loads cells, so those raw records are not eagerly materialized;
+the original workbook remains unchanged.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

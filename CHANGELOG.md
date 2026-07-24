@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.27.0 — 2026-07-24
+
+- Inspect PivotTable view definitions, cache schemas, shared cache items, and
+  bounded raw cache-record payloads directly from the documented workbook-cache
+  and worksheet-PivotTable OOXML relationships. Private fingerprints retain
+  layouts, cache material, normalized relationships, and record hashes without
+  serializing names, source ranges, field/item values, formulas, cache records,
+  relationship targets, XML, or payload bytes.
+- Emit `FF031` for PivotTable bindings/layouts, cache definitions, shared items,
+  cache-record relationships, or cache-record payload changes, and add the
+  fail-closed `no_pivot_table_definition_changes` policy rule (`FFP031`). Cache
+  source and refresh settings deliberately remain with `FF023`. Relationship
+  IDs, equivalent internal target spellings, and cache-ID renumbering are
+  normalized away; malformed, orphaned, unbound, oversized, over-budget, or
+  unrecognized material remains a visible coverage warning. PivotTable and
+  cache-definition XML reads are bounded to 16 MiB per part, 64 MiB per
+  workbook, and 512 parts; raw cache-record hashes are bounded to 32 MiB per
+  part, 64 MiB per workbook, and 512 parts.
+- Detach cache-record relationships only in a temporary reader copy before the
+  underlying workbook library loads cells, so it does not eagerly materialize
+  unbounded record streams. The original workbook is never modified.
+- Never refresh or calculate a PivotTable, render a report, infer
+  PivotTable-to-cell impact, fetch an external target, parse cached record
+  values, or interpret OLAP, extension-list, or slicer semantics.
+
 ## 0.26.0 — 2026-07-24
 
 - Inspect DrawingML chart definitions, cached series presentation data, and

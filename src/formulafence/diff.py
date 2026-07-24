@@ -23,6 +23,7 @@ from formulafence.models import (
     Finding,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
+    PivotTableDefinitionSnapshot,
     PowerQuerySnapshot,
     ProtectionCredentialSnapshot,
     ProtectionOpaqueMetadataSnapshot,
@@ -1184,6 +1185,50 @@ def _workbook_control_changes(
                 "FF030",
                 "high",
                 "Chart definition, cached series data, or overlay shape material changed.",
+                details=details,
+            )
+        )
+    if before.pivot_table_definitions != after.pivot_table_definitions:
+        old_pivots: PivotTableDefinitionSnapshot = before.pivot_table_definitions
+        new_pivots: PivotTableDefinitionSnapshot = after.pivot_table_definitions
+        details: dict[str, object] = {
+            "before": old_pivots.to_dict(),
+            "after": new_pivots.to_dict(),
+        }
+        if old_pivots.declaration_signature != new_pivots.declaration_signature:
+            details["pivot_table_binding_changed"] = True
+        if old_pivots.layout_signature != new_pivots.layout_signature:
+            details["pivot_table_layout_material_changed"] = True
+        if (
+            old_pivots.cache_definition_signature
+            != new_pivots.cache_definition_signature
+        ):
+            details["pivot_cache_definition_material_changed"] = True
+        if (
+            old_pivots.cached_shared_item_signature
+            != new_pivots.cached_shared_item_signature
+        ):
+            details["cached_shared_item_material_changed"] = True
+        if old_pivots.relationship_signature != new_pivots.relationship_signature:
+            details["related_part_relationships_changed"] = True
+        if (
+            old_pivots.cache_record_payload_signature
+            != new_pivots.cache_record_payload_signature
+        ):
+            details["cache_record_payload_material_changed"] = True
+        changes.append(
+            Change(
+                "pivot_table_definitions_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF031",
+                "high",
+                "PivotTable view, cache-schema, shared-item, or cached-record material changed.",
                 details=details,
             )
         )

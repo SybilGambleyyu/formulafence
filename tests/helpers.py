@@ -3384,6 +3384,562 @@ def _relationship_member(member: str) -> str:
     return f"{directory}/_rels/{filename}.rels"
 
 
+def _pivot_fixture_part_names(contents: dict[str, bytes]) -> tuple[str, str, str]:
+    """Return the fixture's PivotTable, cache-definition, and record parts."""
+    pivot_table_member = next(
+        name
+        for name in contents
+        if name.startswith("xl/pivotTables/") and name.endswith(".xml")
+    )
+    cache_definition_member = next(
+        name
+        for name in contents
+        if name.startswith("xl/pivotCache/pivotCacheDefinition") and name.endswith(".xml")
+    )
+    cache_records_member = next(
+        name
+        for name in contents
+        if name.startswith("xl/pivotCache/pivotCacheRecords") and name.endswith(".xml")
+    )
+    return pivot_table_member, cache_definition_member, cache_records_member
+
+
+def make_pivot_table_definition_model(path: Path) -> Path:
+    """Create a harmless OOXML PivotTable graph with private redaction sentinels.
+
+    openpyxl preserves PivotTable packages but deliberately does not create or
+    edit them. This controlled fixture adds a small valid graph directly so the
+    package-only FormulaFence inspection can be tested without Office software.
+    """
+    make_model(path)
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        pivot_caches = ElementTree.SubElement(workbook, f"{{{spreadsheet}}}pivotCaches")
+        ElementTree.SubElement(
+            pivot_caches,
+            f"{{{spreadsheet}}}pivotCache",
+            {
+                "cacheId": "7",
+                f"{{{document_relationships}}}id": "rIdFenceWorkbookPivotCache",
+            },
+        )
+        contents["xl/workbook.xml"] = serialize(workbook)
+
+        workbook_relationships_name = _relationship_member("xl/workbook.xml")
+        workbook_relationships = ElementTree.fromstring(
+            contents[workbook_relationships_name]
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceWorkbookPivotCache",
+                "Type": f"{document_relationships}/pivotCacheDefinition",
+                "Target": "pivotCache/pivotCacheDefinition1.xml",
+            },
+        )
+        contents[workbook_relationships_name] = serialize(workbook_relationships)
+
+        worksheet = _inputs_worksheet_root(contents)
+        pivot_table_parts = ElementTree.SubElement(
+            worksheet,
+            f"{{{spreadsheet}}}pivotTableParts",
+            {"count": "1"},
+        )
+        ElementTree.SubElement(
+            pivot_table_parts,
+            f"{{{spreadsheet}}}pivotTablePart",
+            {f"{{{document_relationships}}}id": "rIdFencePivotTable"},
+        )
+        _save_inputs_worksheet(contents, worksheet)
+
+        worksheet_relationships_name = _relationship_member("xl/worksheets/sheet1.xml")
+        worksheet_relationships = (
+            ElementTree.fromstring(contents[worksheet_relationships_name])
+            if worksheet_relationships_name in contents
+            else ElementTree.Element(f"{{{package_relationships}}}Relationships")
+        )
+        ElementTree.SubElement(
+            worksheet_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFencePivotTable",
+                "Type": f"{document_relationships}/pivotTable",
+                "Target": "../pivotTables/pivotTable1.xml",
+            },
+        )
+        contents[worksheet_relationships_name] = serialize(worksheet_relationships)
+
+        pivot_table_member = "xl/pivotTables/pivotTable1.xml"
+        pivot_table = ElementTree.Element(
+            f"{{{spreadsheet}}}pivotTableDefinition",
+            {
+                "name": "Private baseline pivot report",
+                "cacheId": "7",
+                "dataCaption": "Private baseline total",
+            },
+        )
+        ElementTree.SubElement(
+            pivot_table,
+            f"{{{spreadsheet}}}location",
+            {
+                "ref": "A8:B10",
+                "firstHeaderRow": "1",
+                "firstDataRow": "2",
+                "firstDataCol": "1",
+            },
+        )
+        pivot_fields = ElementTree.SubElement(
+            pivot_table,
+            f"{{{spreadsheet}}}pivotFields",
+            {"count": "1"},
+        )
+        pivot_field = ElementTree.SubElement(
+            pivot_fields,
+            f"{{{spreadsheet}}}pivotField",
+            {"axis": "axisRow", "showAll": "0"},
+        )
+        items = ElementTree.SubElement(
+            pivot_field,
+            f"{{{spreadsheet}}}items",
+            {"count": "2"},
+        )
+        ElementTree.SubElement(items, f"{{{spreadsheet}}}item", {"x": "0"})
+        ElementTree.SubElement(items, f"{{{spreadsheet}}}item", {"x": "1"})
+        row_fields = ElementTree.SubElement(
+            pivot_table,
+            f"{{{spreadsheet}}}rowFields",
+            {"count": "1"},
+        )
+        ElementTree.SubElement(row_fields, f"{{{spreadsheet}}}field", {"x": "0"})
+        row_items = ElementTree.SubElement(
+            pivot_table,
+            f"{{{spreadsheet}}}rowItems",
+            {"count": "1"},
+        )
+        row_item = ElementTree.SubElement(row_items, f"{{{spreadsheet}}}i")
+        ElementTree.SubElement(row_item, f"{{{spreadsheet}}}x", {"v": "0"})
+        data_fields = ElementTree.SubElement(
+            pivot_table,
+            f"{{{spreadsheet}}}dataFields",
+            {"count": "1"},
+        )
+        ElementTree.SubElement(
+            data_fields,
+            f"{{{spreadsheet}}}dataField",
+            {"name": "Private baseline sum", "fld": "0", "subtotal": "sum"},
+        )
+        contents[pivot_table_member] = serialize(pivot_table)
+
+        pivot_table_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            pivot_table_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFencePivotCache",
+                "Type": f"{document_relationships}/pivotCacheDefinition",
+                "Target": "../pivotCache/pivotCacheDefinition1.xml",
+            },
+        )
+        contents[_relationship_member(pivot_table_member)] = serialize(
+            pivot_table_relationships
+        )
+
+        cache_definition_member = "xl/pivotCache/pivotCacheDefinition1.xml"
+        cache_definition = ElementTree.Element(
+            f"{{{spreadsheet}}}pivotCacheDefinition",
+            {
+                "recordCount": "2",
+                "refreshOnLoad": "0",
+                "saveData": "1",
+                f"{{{document_relationships}}}id": "rIdFencePivotRecords",
+            },
+        )
+        cache_source = ElementTree.SubElement(
+            cache_definition,
+            f"{{{spreadsheet}}}cacheSource",
+            {"type": "worksheet"},
+        )
+        ElementTree.SubElement(
+            cache_source,
+            f"{{{spreadsheet}}}worksheetSource",
+            {"ref": "A2:B3", "sheet": "Private Pivot Source"},
+        )
+        cache_fields = ElementTree.SubElement(
+            cache_definition,
+            f"{{{spreadsheet}}}cacheFields",
+            {"count": "1"},
+        )
+        cache_field = ElementTree.SubElement(
+            cache_fields,
+            f"{{{spreadsheet}}}cacheField",
+            {"name": "Private baseline category", "numFmtId": "0"},
+        )
+        shared_items = ElementTree.SubElement(
+            cache_field,
+            f"{{{spreadsheet}}}sharedItems",
+            {"count": "2"},
+        )
+        ElementTree.SubElement(
+            shared_items,
+            f"{{{spreadsheet}}}s",
+            {"v": "Private baseline item one"},
+        )
+        ElementTree.SubElement(
+            shared_items,
+            f"{{{spreadsheet}}}s",
+            {"v": "Private baseline item two"},
+        )
+        contents[cache_definition_member] = serialize(cache_definition)
+
+        cache_definition_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            cache_definition_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFencePivotRecords",
+                "Type": f"{document_relationships}/pivotCacheRecords",
+                "Target": "pivotCacheRecords1.xml",
+            },
+        )
+        contents[_relationship_member(cache_definition_member)] = serialize(
+            cache_definition_relationships
+        )
+
+        cache_records_member = "xl/pivotCache/pivotCacheRecords1.xml"
+        cache_records = ElementTree.Element(
+            f"{{{spreadsheet}}}pivotCacheRecords",
+            {"count": "2"},
+        )
+        for value in ("0", "1"):
+            record = ElementTree.SubElement(cache_records, f"{{{spreadsheet}}}r")
+            ElementTree.SubElement(record, f"{{{spreadsheet}}}x", {"v": value})
+        contents[cache_records_member] = serialize(cache_records)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        override_tag = f"{{{content_types}}}Override"
+        for part_name, content_type in (
+            (
+                "/xl/pivotTables/pivotTable1.xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml."
+                "pivotTable+xml",
+            ),
+            (
+                "/xl/pivotCache/pivotCacheDefinition1.xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml."
+                "pivotCacheDefinition+xml",
+            ),
+            (
+                "/xl/pivotCache/pivotCacheRecords1.xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml."
+                "pivotCacheRecords+xml",
+            ),
+        ):
+            ElementTree.SubElement(
+                types,
+                override_tag,
+                {"PartName": part_name, "ContentType": content_type},
+            )
+        contents["[Content_Types].xml"] = serialize(types)
+
+    return _rewrite_archive(path, mutate, ".pivot-table-definition.tmp.xlsx")
+
+
+def change_pivot_table_definition_material(path: Path) -> Path:
+    """Change private PivotTable layout, cache schema, items, and record values."""
+    spreadsheet = _SPREADSHEETML_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        pivot_table_member, cache_definition_member, cache_records_member = (
+            _pivot_fixture_part_names(contents)
+        )
+        pivot_table = ElementTree.fromstring(contents[pivot_table_member])
+        pivot_table.set("dataCaption", "Private candidate total")
+        location = pivot_table.find(f"{{{spreadsheet}}}location")
+        if location is None:
+            raise ValueError("Fixture does not contain a PivotTable location")
+        location.set("ref", "D8:E10")
+        contents[pivot_table_member] = ElementTree.tostring(
+            pivot_table,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        cache_definition = ElementTree.fromstring(contents[cache_definition_member])
+        cache_field = next(cache_definition.iter(f"{{{spreadsheet}}}cacheField"))
+        cache_field.set("name", "Private candidate category")
+        shared_item = next(cache_definition.iter(f"{{{spreadsheet}}}s"))
+        shared_item.set("v", "Private candidate item")
+        contents[cache_definition_member] = ElementTree.tostring(
+            cache_definition,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        cache_records = ElementTree.fromstring(contents[cache_records_member])
+        cache_value = next(cache_records.iter(f"{{{spreadsheet}}}x"))
+        cache_value.set("v", "999")
+        contents[cache_records_member] = ElementTree.tostring(
+            cache_records,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".pivot-table-definition-change.tmp.xlsx")
+
+
+def change_pivot_table_refresh_control(path: Path) -> Path:
+    """Change only a refresh setting owned by the FF023 external-data guard."""
+    spreadsheet = _SPREADSHEETML_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _pivot_table_member, cache_definition_member, _cache_records_member = (
+            _pivot_fixture_part_names(contents)
+        )
+        cache_definition = ElementTree.fromstring(contents[cache_definition_member])
+        if cache_definition.tag != f"{{{spreadsheet}}}pivotCacheDefinition":
+            raise ValueError("Fixture does not contain a PivotTable cache definition")
+        cache_definition.set("refreshOnLoad", "1")
+        contents[cache_definition_member] = ElementTree.tostring(
+            cache_definition,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".pivot-refresh-control.tmp.xlsx")
+
+
+def rebind_pivot_table_cache_records(path: Path) -> Path:
+    """Move the safe cache-record relationship to a distinct internal part."""
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _pivot_table_member, cache_definition_member, cache_records_member = (
+            _pivot_fixture_part_names(contents)
+        )
+        cache_relationships_name = _relationship_member(cache_definition_member)
+        cache_relationships = ElementTree.fromstring(contents[cache_relationships_name])
+        cache_relationship = next(
+            relationship
+            for relationship in cache_relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if relationship.get("Id") == "rIdFencePivotRecords"
+        )
+        replacement_member = "xl/pivotCache/pivotCacheRecords2.xml"
+        cache_relationship.set("Target", "pivotCacheRecords2.xml")
+        contents[cache_relationships_name] = ElementTree.tostring(
+            cache_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents[replacement_member] = contents.pop(cache_records_member)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        override_tag = f"{{{content_types}}}Override"
+        for override in types.findall(override_tag):
+            if override.get("PartName") == f"/{cache_records_member}":
+                override.set("PartName", f"/{replacement_member}")
+        contents["[Content_Types].xml"] = ElementTree.tostring(
+            types,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".pivot-cache-record-rebind.tmp.xlsx")
+
+
+def externalize_pivot_table_cache_record_relationship(path: Path) -> Path:
+    """Turn the direct cache-record target into an external redaction fixture."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _pivot_table_member, cache_definition_member, _cache_records_member = (
+            _pivot_fixture_part_names(contents)
+        )
+        relationships_name = _relationship_member(cache_definition_member)
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        relationship = next(
+            relationship
+            for relationship in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if relationship.get("Id") == "rIdFencePivotRecords"
+        )
+        relationship.set("Target", "https://example.invalid/private-pivot-cache-records")
+        relationship.set("TargetMode", "External")
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".pivot-external-target.tmp.xlsx")
+
+
+def renumber_pivot_table_relationships(path: Path) -> Path:
+    """Rewrite PivotTable relationship IDs while retaining the same graph."""
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+    replacements = {
+        "rIdFenceWorkbookPivotCache": "rIdFenceRenumberedWorkbookPivotCache",
+        "rIdFencePivotTable": "rIdFenceRenumberedPivotTable",
+        "rIdFencePivotCache": "rIdFenceRenumberedPivotCache",
+        "rIdFencePivotRecords": "rIdFenceRenumberedPivotRecords",
+    }
+
+    def replace_ids(root: ElementTree.Element) -> None:
+        for relationship in root.findall(f"{{{package_relationships}}}Relationship"):
+            if replacement := replacements.get(relationship.get("Id")):
+                relationship.set("Id", replacement)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        pivot_table_member, cache_definition_member, _cache_records_member = (
+            _pivot_fixture_part_names(contents)
+        )
+        for member in (
+            _relationship_member("xl/workbook.xml"),
+            _relationship_member("xl/worksheets/sheet1.xml"),
+            _relationship_member(pivot_table_member),
+            _relationship_member(cache_definition_member),
+        ):
+            relationships = ElementTree.fromstring(contents[member])
+            replace_ids(relationships)
+            contents[member] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        pivot_cache = next(workbook.iter(f"{{{spreadsheet}}}pivotCache"))
+        pivot_cache.set(
+            f"{{{document_relationships}}}id",
+            replacements["rIdFenceWorkbookPivotCache"],
+        )
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        worksheet = _inputs_worksheet_root(contents)
+        pivot_table_part = next(worksheet.iter(f"{{{spreadsheet}}}pivotTablePart"))
+        pivot_table_part.set(
+            f"{{{document_relationships}}}id",
+            replacements["rIdFencePivotTable"],
+        )
+        _save_inputs_worksheet(contents, worksheet)
+
+        cache_definition = ElementTree.fromstring(contents[cache_definition_member])
+        cache_definition.set(
+            f"{{{document_relationships}}}id",
+            replacements["rIdFencePivotRecords"],
+        )
+        contents[cache_definition_member] = ElementTree.tostring(
+            cache_definition,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".pivot-relationship-renumber.tmp.xlsx")
+
+
+def renumber_pivot_table_cache_id(path: Path) -> Path:
+    """Renumber the workbook/cache-view identifier without changing its binding."""
+    spreadsheet = _SPREADSHEETML_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        pivot_table_member, _cache_definition_member, _cache_records_member = (
+            _pivot_fixture_part_names(contents)
+        )
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        pivot_cache = next(workbook.iter(f"{{{spreadsheet}}}pivotCache"))
+        pivot_cache.set("cacheId", "101")
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        pivot_table = ElementTree.fromstring(contents[pivot_table_member])
+        pivot_table.set("cacheId", "101")
+        contents[pivot_table_member] = ElementTree.tostring(
+            pivot_table,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".pivot-cache-id-renumber.tmp.xlsx")
+
+
+def rewrite_pivot_table_internal_target_spelling(path: Path) -> Path:
+    """Use equivalent relative target spellings across the PivotTable graph."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        pivot_table_member, cache_definition_member, _cache_records_member = (
+            _pivot_fixture_part_names(contents)
+        )
+        targets = {
+            _relationship_member("xl/workbook.xml"): "./pivotCache/./pivotCacheDefinition1.xml",
+            _relationship_member("xl/worksheets/sheet1.xml"): "../pivotTables/./pivotTable1.xml",
+            _relationship_member(pivot_table_member): "../pivotCache/./pivotCacheDefinition1.xml",
+            _relationship_member(cache_definition_member): "./pivotCacheRecords1.xml",
+        }
+        for member, target in targets.items():
+            relationships = ElementTree.fromstring(contents[member])
+            relationship = next(
+                relationship
+                for relationship in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if relationship.get("Type", "").startswith(document_relationships)
+                and relationship.get("TargetMode", "Internal").casefold() == "internal"
+                and "pivot" in relationship.get("Type", "").casefold()
+            )
+            relationship.set("Target", target)
+            contents[member] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".pivot-target-spelling.tmp.xlsx")
+
+
+def corrupt_pivot_table_definition_root(path: Path) -> Path:
+    """Replace a PivotTable root with unexpected XML for coverage tests."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        pivot_table_member, _cache_definition_member, _cache_records_member = (
+            _pivot_fixture_part_names(contents)
+        )
+        pivot_table = ElementTree.fromstring(contents[pivot_table_member])
+        pivot_table.tag = "notPivotTableDefinition"
+        contents[pivot_table_member] = ElementTree.tostring(
+            pivot_table,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".pivot-definition-corrupt.tmp.xlsx")
+
+
 def make_chart_definition_model(path: Path) -> Path:
     """Create a harmless chart package with cache and overlay test material.
 

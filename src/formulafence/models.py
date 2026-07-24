@@ -755,7 +755,11 @@ class QueryTableRefreshSnapshot:
 class PivotCacheRefreshSnapshot:
     """One pivot-cache source and refresh control set without cached data."""
 
-    cache_id: int | None
+    # OOXML cache IDs are writer-assigned graph handles. Preserve the safe value
+    # in a standalone profile, but do not make a harmless renumbering a source
+    # or refresh-control change; the PivotTable package scanner compares the
+    # normalized cache binding separately.
+    cache_id: int | None = field(compare=False)
     source_type: str
     connection_id: int | None = None
     refresh_on_load: bool = False
@@ -770,9 +774,16 @@ class PivotCacheRefreshSnapshot:
 
     def sort_key(self) -> tuple[object, ...]:
         return (
-            self.cache_id is None,
-            self.cache_id if self.cache_id is not None else -1,
             self.source_configuration_signature or "",
+            self.source_type,
+            self.connection_id is None,
+            self.connection_id if self.connection_id is not None else -1,
+            self.refresh_on_load,
+            self.background_query,
+            self.refresh_enabled,
+            self.save_data,
+            self.upgrade_on_refresh,
+            self.opaque_metadata.signature or "",
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1107,6 +1118,93 @@ class ChartDefinitionSnapshot:
             "internal_related_part_count": self.internal_related_part_count,
             "fingerprinted_related_part_count": self.fingerprinted_related_part_count,
             "uninspected_related_part_count": self.uninspected_related_part_count,
+            "unrecognized_part_count": self.unrecognized_part_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
+class PivotTableDefinitionSnapshot:
+    """Safe aggregate of PivotTable view, cache-schema, and cached-data material.
+
+    PivotTable views and their cache packages can change grouping, filtering,
+    aggregation, and report presentation outside ordinary formula cells. Private
+    signatures retain those definitions and cache payload evidence for comparison;
+    ``to_dict`` deliberately exposes only structural counts.
+    """
+
+    pivot_table_sheet_count: int = 0
+    pivot_table_part_count: int = 0
+    pivot_cache_definition_part_count: int = 0
+    pivot_cache_records_part_count: int = 0
+    pivot_cache_binding_count: int = 0
+    layout_location_count: int = 0
+    pivot_field_count: int = 0
+    row_field_count: int = 0
+    column_field_count: int = 0
+    page_field_count: int = 0
+    data_field_count: int = 0
+    filter_count: int = 0
+    row_item_count: int = 0
+    column_item_count: int = 0
+    cache_field_count: int = 0
+    shared_item_count: int = 0
+    calculated_item_count: int = 0
+    calculated_member_count: int = 0
+    cache_record_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    fingerprinted_cache_record_part_count: int = 0
+    uninspected_cache_record_part_count: int = 0
+    unrecognized_part_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    layout_signature: str | None = field(default=None, repr=False)
+    cache_definition_signature: str | None = field(default=None, repr=False)
+    cached_shared_item_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+    cache_record_payload_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.pivot_table_sheet_count
+            or self.pivot_table_part_count
+            or self.pivot_cache_definition_part_count
+            or self.pivot_cache_records_part_count
+            or self.unrecognized_part_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return PivotTable evidence without values, formulas, names, or targets."""
+        return {
+            "present": self.present,
+            "pivot_table_sheet_count": self.pivot_table_sheet_count,
+            "pivot_table_part_count": self.pivot_table_part_count,
+            "pivot_cache_definition_part_count": self.pivot_cache_definition_part_count,
+            "pivot_cache_records_part_count": self.pivot_cache_records_part_count,
+            "pivot_cache_binding_count": self.pivot_cache_binding_count,
+            "layout_location_count": self.layout_location_count,
+            "pivot_field_count": self.pivot_field_count,
+            "row_field_count": self.row_field_count,
+            "column_field_count": self.column_field_count,
+            "page_field_count": self.page_field_count,
+            "data_field_count": self.data_field_count,
+            "filter_count": self.filter_count,
+            "row_item_count": self.row_item_count,
+            "column_item_count": self.column_item_count,
+            "cache_field_count": self.cache_field_count,
+            "shared_item_count": self.shared_item_count,
+            "calculated_item_count": self.calculated_item_count,
+            "calculated_member_count": self.calculated_member_count,
+            "cache_record_count": self.cache_record_count,
+            "related_relationship_count": self.related_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+            "fingerprinted_cache_record_part_count": (
+                self.fingerprinted_cache_record_part_count
+            ),
+            "uninspected_cache_record_part_count": self.uninspected_cache_record_part_count,
             "unrecognized_part_count": self.unrecognized_part_count,
         }
 
@@ -1492,6 +1590,9 @@ class WorkbookSnapshot:
     office_web_addins: OfficeWebAddinSnapshot = field(
         default_factory=OfficeWebAddinSnapshot
     )
+    pivot_table_definitions: PivotTableDefinitionSnapshot = field(
+        default_factory=PivotTableDefinitionSnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -1605,6 +1706,15 @@ class WorkbookSnapshot:
                 self.office_web_addins.auto_show_taskpane_count
             ),
             "has_office_web_addins": self.office_web_addins.present,
+            "pivot_table_sheet_count": (
+                self.pivot_table_definitions.pivot_table_sheet_count
+            ),
+            "pivot_table_part_count": self.pivot_table_definitions.pivot_table_part_count,
+            "pivot_cache_definition_part_count": (
+                self.pivot_table_definitions.pivot_cache_definition_part_count
+            ),
+            "pivot_cache_record_count": self.pivot_table_definitions.cache_record_count,
+            "has_pivot_table_definitions": self.pivot_table_definitions.present,
             "chart_host_sheet_count": self.chart_definitions.chart_host_sheet_count,
             "chart_drawing_part_count": self.chart_definitions.chart_drawing_part_count,
             "chart_part_count": self.chart_definitions.chart_part_count,

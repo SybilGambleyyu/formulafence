@@ -178,6 +178,26 @@ review prompt, not proof of an error.
   reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts.
   Worksheet-scoped web-extension markup outside this task-pane chain is not
   yet modeled.
+- PivotTable packages are followed through the bounded workbook cache and
+  worksheet PivotTable relationship graph, then privately fingerprinted as
+  view layout, cache-schema, shared-item, normalized relationship, and bounded
+  raw cache-record material. Profiles expose only structural counts; names,
+  source ranges, fields, item values, formulas, cache records, targets, XML,
+  and payload bytes remain private. A material change emits `FF031` and can be
+  blocked with `no_pivot_table_definition_changes`. Cache source and refresh
+  settings remain under `FF023` / `no_external_data_connection_changes` so a
+  refresh-only edit remains distinct. Relationship IDs, equivalent internal
+  target spellings, and cache-ID renumbering are normalized. FormulaFence does
+  **not** refresh a cache, calculate or render a PivotTable, infer
+  PivotTable-to-cell impact, fetch an external target, or interpret OLAP,
+  extension-list, or slicer semantics. Missing, malformed, orphaned, unbound,
+  oversized, or over-budget material remains a visible parser-coverage warning.
+  PivotTable/cache-definition XML reads are bounded to 16 MiB per part, 64 MiB
+  per workbook, and 512 parts; raw cache-record hashes are bounded to 32 MiB per
+  part, 64 MiB per workbook, and 512 parts. FormulaFence detaches cache-record
+  relationships in a temporary reader copy before the underlying workbook
+  library loads cells, so raw records are not eagerly materialized; the original
+  workbook is never changed.
 - DrawingML chart definitions and cached presentation data are followed from
   standard worksheet or chartsheet `drawing` relationships through chart parts
   and direct `userShapes` overlays. FormulaFence privately fingerprints
@@ -257,16 +277,18 @@ review prompt, not proof of an error.
   is deliberately omitted rather than partially guessed.
 - It inventories sheet visibility, defined names, calculation settings, the VBA
   payload, XLM macro-sheet packages, RibbonX custom UI packages, Office Web
-  Add-in task-pane packages, DrawingML chart definition/cached-presentation/
-  overlay chains, relationship-backed worksheet ActiveX/form-control/legacy-
-  VML/OLE chains, the protection controls above, external-data refresh controls,
-  external-link packages, and private Power Query definition material. It does
-  not yet diff PivotTable layout or cached data, modern `chartEx` or nested-chart
-  semantics, general drawing layout/objects or chart-to-cell impact, Ribbon image
-  payloads, VML/drawing control layout or comment content, embedded OLE/package
-  formats, worksheet-scoped Web Add-in markup, Power Query runtime behavior or
-  returned data, ordinary styles beyond direct protection assignments, complete
-  Excel style-cascade results, or every OOXML part.
+  Add-in task-pane packages, PivotTable view/cache-schema/shared-item/cached-
+  record chains, DrawingML chart definition/cached-presentation/overlay chains,
+  relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
+  protection controls above, external-data refresh controls, external-link
+  packages, and private Power Query definition material. It does not yet
+  interpret PivotTable OLAP, extension-list, or slicer semantics; modern
+  `chartEx` or nested-chart semantics; general drawing layout/objects or
+  chart-to-cell impact; Ribbon image payloads; VML/drawing control layout or
+  comment content; embedded OLE/package formats; worksheet-scoped Web Add-in
+  markup; Power Query runtime behavior or returned data; ordinary styles beyond
+  direct protection assignments; complete Excel style-cascade results; or every
+  OOXML part.
 - The tool preserves Excel formula text and uses a limited A1-reference
   normalizer for peer-pattern detection; it is not an Excel-compatible parser
   or calculation engine.

@@ -6,16 +6,19 @@ import base64
 import binascii
 import hashlib
 import io
+import os
 import posixpath
 import re
+import shutil
 import struct
+import tempfile
 import warnings
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from xml.etree import ElementTree
-from zipfile import BadZipFile, ZipFile
+from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile
 
 from openpyxl import load_workbook
 from openpyxl.utils.cell import column_index_from_string, get_column_letter, range_boundaries
@@ -48,6 +51,7 @@ from formulafence.models import (
     ExternalLinkPackageSnapshot,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
+    PivotTableDefinitionSnapshot,
     PowerQueryPermissionControlsSnapshot,
     PowerQuerySnapshot,
     ProtectedRangeSnapshot,
@@ -182,6 +186,20 @@ _CHART_RELATED_PART_MAX_BYTES = 32 * 1024 * 1024
 _CHART_RELATED_PART_TOTAL_MAX_BYTES = 64 * 1024 * 1024
 _CHART_RELATED_PART_TOTAL_MAX_COUNT = 512
 _CHART_RELATED_PART_HASH_CHUNK_BYTES = 1024 * 1024
+_PIVOT_TABLE_PART_PATTERN = re.compile(r"^xl/pivotTables/[^/]+\.xml$", re.IGNORECASE)
+_PIVOT_CACHE_DEFINITION_PART_PATTERN = re.compile(
+    r"^xl/pivotCache/pivotCacheDefinition[^/]*\.xml$", re.IGNORECASE
+)
+_PIVOT_CACHE_RECORDS_PART_PATTERN = re.compile(
+    r"^xl/pivotCache/pivotCacheRecords[^/]*\.xml$", re.IGNORECASE
+)
+_PIVOT_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_PIVOT_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_PIVOT_TOTAL_XML_MAX_COUNT = 512
+_PIVOT_CACHE_RECORD_MAX_BYTES = 32 * 1024 * 1024
+_PIVOT_CACHE_RECORD_TOTAL_MAX_BYTES = 64 * 1024 * 1024
+_PIVOT_CACHE_RECORD_TOTAL_MAX_COUNT = 512
+_PIVOT_CACHE_RECORD_HASH_CHUNK_BYTES = 1024 * 1024
 _ACTIVEX_NS = "http://schemas.microsoft.com/office/2006/activeX"
 _VML_NS = "urn:schemas-microsoft-com:vml"
 _VML_OFFICE_NS = "urn:schemas-microsoft-com:office:office"
@@ -201,6 +219,11 @@ _WORKSHEET_VML_DRAWING_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/vmlDrawing"
 _WORKSHEET_DRAWING_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/drawing"
 _CHART_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/chart"
 _CHART_USER_SHAPES_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/chartUserShapes"
+_PIVOT_TABLE_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/pivotTable"
+_PIVOT_CACHE_DEFINITION_RELATIONSHIP = (
+    f"{_DOCUMENT_RELATIONSHIP_NS}/pivotCacheDefinition"
+)
+_PIVOT_CACHE_RECORDS_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/pivotCacheRecords"
 _WORKSHEET_ACTIVEX_BINARY_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary"
 )
@@ -210,6 +233,35 @@ _CHART_RELATIONSHIP_ATTRIBUTES = frozenset(
         f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
         f"{{{_DOCUMENT_RELATIONSHIP_NS}}}embed",
         f"{{{_DOCUMENT_RELATIONSHIP_NS}}}link",
+    }
+)
+_PIVOT_RELATIONSHIP_ATTRIBUTES = frozenset(
+    {
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}embed",
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}link",
+    }
+)
+_PIVOT_CACHE_DEFINITION_VOLATILE_ATTRIBUTES = frozenset(
+    {
+        "invalid",
+        "saveData",
+        "refreshOnLoad",
+        "optimizeMemory",
+        "enableRefresh",
+        "refreshedBy",
+        "refreshedDate",
+        "refreshedDateIso",
+        "backgroundQuery",
+        "missingItemsLimit",
+        "createdVersion",
+        "refreshedVersion",
+        "minRefreshableVersion",
+        "recordCount",
+        "upgradeOnRefresh",
+        "tupleCache",
+        "supportSubquery",
+        "supportAdvancedDrill",
     }
 )
 _CHART_CACHE_ELEMENT_NAMES = frozenset({"numCache", "strCache", "multiLvlStrCache"})
@@ -323,6 +375,14 @@ class _ChartDefinitionMetadata:
     """Raw chart evidence retained before the workbook reader can omit it."""
 
     charts: ChartDefinitionSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _PivotTableMetadata:
+    """Raw PivotTable evidence retained before the workbook reader can omit it."""
+
+    pivot_tables: PivotTableDefinitionSnapshot
     warnings: tuple[str, ...]
 
 
@@ -444,6 +504,28 @@ class _ChartRawRelationship:
         )
 
 
+@dataclass(frozen=True)
+class _PivotRawRelationship:
+    """One private PivotTable-package relationship and its canonical target."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return relationship semantics while ignoring arbitrary identifiers."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        return (
+            self.relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
 @dataclass
 class _RibbonCustomizationBudget:
     """Bound total custom-UI bytes read across one RibbonX package scan."""
@@ -474,6 +556,22 @@ class _ChartRelatedPartBudget:
 
     remaining_bytes: int = _CHART_RELATED_PART_TOTAL_MAX_BYTES
     remaining_parts: int = _CHART_RELATED_PART_TOTAL_MAX_COUNT
+
+
+@dataclass
+class _PivotXmlBudget:
+    """Bound PivotTable and cache-definition XML bytes in one package scan."""
+
+    remaining_bytes: int = _PIVOT_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _PIVOT_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _PivotCacheRecordBudget:
+    """Bound raw PivotTable cache-record bytes in one package scan."""
+
+    remaining_bytes: int = _PIVOT_CACHE_RECORD_TOTAL_MAX_BYTES
+    remaining_parts: int = _PIVOT_CACHE_RECORD_TOTAL_MAX_COUNT
 
 
 @dataclass
@@ -602,6 +700,16 @@ class _ChartRelatedPartPayloadInspection:
 
 
 @dataclass(frozen=True)
+class _PivotCacheRecordPayloadInspection:
+    """Private fingerprint result for raw PivotTable cache-record parts."""
+
+    record_part_count: int = 0
+    fingerprinted_part_count: int = 0
+    uninspected_part_count: int = 0
+    payload_signature: str | None = None
+
+
+@dataclass(frozen=True)
 class _ChartDrawingInspection:
     """Private chart bindings discovered in one worksheet/chart-sheet drawing."""
 
@@ -658,6 +766,50 @@ class _ChartUserShapeInspection:
     unrecognized_count: int = 0
     inspected: bool = False
     definition_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _PivotTablePartInspection:
+    """Private parsed state for one PivotTable view-definition part."""
+
+    member: str
+    cache_id: str | None = None
+    layout_location_count: int = 0
+    pivot_field_count: int = 0
+    row_field_count: int = 0
+    column_field_count: int = 0
+    page_field_count: int = 0
+    data_field_count: int = 0
+    filter_count: int = 0
+    row_item_count: int = 0
+    column_item_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    cache_definition_members: tuple[str, ...] = ()
+    unrecognized_count: int = 0
+    inspected: bool = False
+    layout_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _PivotCacheDefinitionInspection:
+    """Private parsed state for one PivotTable cache-definition part."""
+
+    member: str
+    cache_field_count: int = 0
+    shared_item_count: int = 0
+    calculated_item_count: int = 0
+    calculated_member_count: int = 0
+    cache_record_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    cache_record_members: tuple[str, ...] = ()
+    unrecognized_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
+    cached_shared_item_signature: str | None = None
     relationship_signature: str | None = None
 
 
@@ -7799,6 +7951,1201 @@ def _chart_definition_metadata(path: Path) -> _ChartDefinitionMetadata:
     return _ChartDefinitionMetadata(snapshot, tuple(sorted(warnings)))
 
 
+def _pivot_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> tuple[_PivotRawRelationship, ...]:
+    """Read PivotTable-package relationships without opening their targets."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for PivotTable inspection "
+            f"({type(error).__name__}); affected PivotTables were not compared."
+        )
+        return ()
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting PivotTables; affected "
+            "PivotTables were not compared."
+        )
+        return ()
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_PivotRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _PivotRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting PivotTables; "
+            "affected PivotTables may be incomplete."
+        )
+    return tuple(relationships)
+
+
+def _pivot_relationship_signature(
+    relationships: tuple[_PivotRawRelationship, ...],
+) -> str | None:
+    """Fingerprint PivotTable relationship semantics without identifier churn."""
+    material = sorted(relationship.semantic_key() for relationship in relationships)
+    return _private_external_data_signature(
+        tuple(
+            (f"relationship:{index}", repr(relationship))
+            for index, relationship in enumerate(material)
+        )
+    )
+
+
+def _pivot_relationship_semantics(
+    relationships: tuple[_PivotRawRelationship, ...],
+    warnings: set[str],
+    *,
+    context: str,
+) -> dict[str, tuple[str, str, str]]:
+    """Resolve PivotTable relationship identifiers into stable private semantics."""
+    relationships_by_id: dict[str, list[_PivotRawRelationship]] = defaultdict(list)
+    for relationship in relationships:
+        if relationship.relationship_id:
+            relationships_by_id[relationship.relationship_id].append(relationship)
+        else:
+            warnings.add(
+                "FormulaFence found a PivotTable "
+                f"{context} relationship without an id; affected PivotTables have a coverage gap."
+            )
+    semantics: dict[str, tuple[str, str, str]] = {}
+    for relationship_id, matches in relationships_by_id.items():
+        values = sorted(match.semantic_key() for match in matches)
+        if len(values) > 1:
+            warnings.add(
+                "FormulaFence found duplicate PivotTable "
+                f"{context} relationship ids; affected PivotTables have a coverage gap."
+            )
+        semantics[relationship_id] = values[0]
+    return semantics
+
+
+def _pivot_xml_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+    *,
+    cache_definition_members_by_id: Mapping[str, str] | None = None,
+    omit_cache_data: bool = False,
+) -> tuple[object, ...]:
+    """Canonicalize private PivotTable XML while resolving relationship identifiers."""
+    local_name = _xml_local_name(element.tag)
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        attribute_name = _xml_local_name(attribute)
+        if attribute in _PIVOT_RELATIONSHIP_ATTRIBUTES:
+            relationship = relationship_semantics.get(value)
+            resolved = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+            continue
+        if (
+            local_name == "pivotTableDefinition"
+            and attribute_name == "cacheId"
+            and cache_definition_members_by_id is not None
+        ):
+            cache_definition_member = cache_definition_members_by_id.get(value)
+            resolved = (
+                ("cache-definition", cache_definition_member)
+                if cache_definition_member is not None
+                else ("missing-cache-definition", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+            continue
+        if (
+            omit_cache_data
+            and local_name == "pivotCacheDefinition"
+            and attribute_name in _PIVOT_CACHE_DEFINITION_VOLATILE_ATTRIBUTES
+        ):
+            continue
+        attributes.append((_xml_display_name(attribute), value))
+    children = tuple(
+        _pivot_xml_fragment(
+            child,
+            relationship_semantics,
+            cache_definition_members_by_id=cache_definition_members_by_id,
+            omit_cache_data=omit_cache_data,
+        )
+        for child in element
+        if not (
+            omit_cache_data
+            and _xml_namespace(child.tag) == _SPREADSHEETML_NS
+            and _xml_local_name(child.tag) in {"cacheSource", "sharedItems"}
+        )
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+    )
+
+
+def _pivot_xml_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _PivotXmlBudget,
+) -> tuple[bytes | None, str | None]:
+    """Read one bounded PivotTable XML part without following relationship targets."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded PivotTable XML part count budget; affected "
+            "PivotTables have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("part-count-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a PivotTable XML package part; affected "
+            "PivotTables were not compared."
+        )
+        return None, _private_external_data_signature((("missing-member", member),))
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _PIVOT_MAX_XML_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized PivotTable XML part; affected "
+            "PivotTables have a coverage gap."
+        )
+        return None, _private_external_data_signature((("oversized-part", metadata),))
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded PivotTable XML read budget; affected "
+            "PivotTables have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a PivotTable XML package part "
+            f"({type(error).__name__}); affected PivotTables were not compared."
+        )
+        return None, _private_external_data_signature((("unreadable-part", metadata),))
+
+
+def _pivot_cache_record_payloads(
+    archive: ZipFile,
+    members: set[str],
+    unresolved_entries: list[tuple[str, str]],
+    warnings: set[str],
+    budget: _PivotCacheRecordBudget,
+) -> _PivotCacheRecordPayloadInspection:
+    """Fingerprint bounded raw PivotTable cache records without parsing values."""
+    entries = list(unresolved_entries)
+    fingerprinted_part_count = 0
+    uninspected_part_count = len(unresolved_entries)
+    for member in sorted(members, key=str.casefold):
+        if budget.remaining_parts == 0:
+            warnings.add(
+                "FormulaFence reached its bounded PivotTable cache-record part count budget; "
+                "affected PivotTables have a coverage gap."
+            )
+            entries.append(("part-count-budget-exhausted", member))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_parts -= 1
+        try:
+            info = archive.getinfo(member)
+        except KeyError:
+            warnings.add(
+                "FormulaFence could not locate a PivotTable cache-record part; affected "
+                "PivotTables were not compared."
+            )
+            entries.append(("missing-part", member))
+            uninspected_part_count += 1
+            continue
+        metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+        if info.file_size > _PIVOT_CACHE_RECORD_MAX_BYTES:
+            warnings.add(
+                "FormulaFence did not fully read an oversized PivotTable cache-record part; "
+                "affected PivotTables have a coverage gap."
+            )
+            entries.append(("oversized-part", metadata))
+            uninspected_part_count += 1
+            continue
+        if info.file_size > budget.remaining_bytes:
+            warnings.add(
+                "FormulaFence reached its bounded PivotTable cache-record read budget; "
+                "affected PivotTables have a coverage gap."
+            )
+            entries.append(("read-budget-exhausted", metadata))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_bytes -= info.file_size
+        digest = hashlib.sha256()
+        bytes_read = 0
+        try:
+            with archive.open(info) as payload:
+                while chunk := payload.read(_PIVOT_CACHE_RECORD_HASH_CHUNK_BYTES):
+                    bytes_read += len(chunk)
+                    if bytes_read > info.file_size:
+                        raise ValueError("payload exceeded its declared size")
+                    digest.update(chunk)
+            if bytes_read != info.file_size:
+                raise ValueError("payload did not match its declared size")
+        except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+            warnings.add(
+                "FormulaFence could not fingerprint a PivotTable cache-record part "
+                f"({type(error).__name__}); affected PivotTables were not compared."
+            )
+            entries.append(("unreadable-part", metadata))
+            uninspected_part_count += 1
+            continue
+        entries.append(("payload", repr((member, digest.hexdigest()))))
+        fingerprinted_part_count += 1
+
+    entries.sort()
+    return _PivotCacheRecordPayloadInspection(
+        record_part_count=len(members) + len(unresolved_entries),
+        fingerprinted_part_count=fingerprinted_part_count,
+        uninspected_part_count=uninspected_part_count,
+        payload_signature=_private_external_data_signature(tuple(entries)),
+    )
+
+
+def _pivot_table_part_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    xml_budget: _PivotXmlBudget,
+    cache_definition_members_by_id: Mapping[str, tuple[str, ...]],
+) -> _PivotTablePartInspection:
+    """Inspect one PivotTable view definition without calculating its report."""
+    relationships = _pivot_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="PivotTable",
+    )
+    relationship_semantics = _pivot_relationship_semantics(
+        relationships,
+        warnings,
+        context="PivotTable",
+    )
+    payload, fallback_signature = _pivot_xml_payload(
+        archive,
+        member,
+        warnings,
+        xml_budget,
+    )
+    if payload is None:
+        return _PivotTablePartInspection(
+            member=member,
+            unrecognized_count=1,
+            layout_signature=fallback_signature,
+            relationship_signature=_pivot_relationship_signature(relationships),
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a PivotTable XML part "
+            f"({type(error).__name__}); affected PivotTables were not compared."
+        )
+        return _PivotTablePartInspection(
+            member=member,
+            unrecognized_count=1,
+            layout_signature=_private_payload_signature(payload),
+            relationship_signature=_pivot_relationship_signature(relationships),
+        )
+    if (
+        _xml_local_name(root.tag) != "pivotTableDefinition"
+        or _xml_namespace(root.tag) != _SPREADSHEETML_NS
+    ):
+        warnings.add(
+            "FormulaFence found a PivotTable part with an unexpected root; affected "
+            "PivotTables were not compared."
+        )
+        return _PivotTablePartInspection(
+            member=member,
+            unrecognized_count=1,
+            layout_signature=_private_payload_signature(payload),
+            relationship_signature=_pivot_relationship_signature(relationships),
+        )
+
+    cache_id = root.get("cacheId")
+    unrecognized_count = 0
+    if cache_id is None:
+        warnings.add(
+            "FormulaFence found a PivotTable definition without a cache id; affected "
+            "PivotTables have a coverage gap."
+        )
+        unrecognized_count += 1
+    cache_relationships = tuple(
+        relationship
+        for relationship in relationships
+        if relationship.relationship_type == _PIVOT_CACHE_DEFINITION_RELATIONSHIP
+    )
+    cache_definition_members: set[str] = set()
+    for relationship in cache_relationships:
+        if relationship.target_mode.casefold() != "internal" or relationship.safe_target is None:
+            warnings.add(
+                "FormulaFence found a PivotTable cache-definition relationship without a "
+                "safe internal target; affected PivotTables were not compared."
+            )
+            unrecognized_count += 1
+            continue
+        cache_definition_members.add(relationship.safe_target)
+    if not cache_relationships:
+        warnings.add(
+            "FormulaFence found a PivotTable definition without a cache-definition "
+            "relationship; affected PivotTables have a coverage gap."
+        )
+        unrecognized_count += 1
+    for relationship in relationships:
+        if relationship.relationship_type == _PIVOT_CACHE_DEFINITION_RELATIONSHIP:
+            continue
+        warnings.add(
+            "FormulaFence found an unmodelled PivotTable relationship; affected "
+            "PivotTables have a coverage gap."
+        )
+        unrecognized_count += 1
+    expected_cache_members = (
+        set(cache_definition_members_by_id.get(cache_id, ())) if cache_id is not None else set()
+    )
+    if cache_id is not None and not expected_cache_members:
+        warnings.add(
+            "FormulaFence could not bind a PivotTable cache id to a workbook cache "
+            "declaration; affected PivotTables have a coverage gap."
+        )
+        unrecognized_count += 1
+    elif expected_cache_members and cache_definition_members != expected_cache_members:
+        warnings.add(
+            "FormulaFence found a PivotTable cache relationship that disagrees with its "
+            "workbook cache declaration; affected PivotTables have a coverage gap."
+        )
+        unrecognized_count += 1
+
+    def child_count(container_name: str, child_name: str) -> int:
+        container = root.find(f"{{{_SPREADSHEETML_NS}}}{container_name}")
+        if container is None:
+            return 0
+        return len(container.findall(f"{{{_SPREADSHEETML_NS}}}{child_name}"))
+
+    try:
+        layout_signature = _private_external_data_signature(
+            (
+                (
+                    "pivot-table",
+                    repr(
+                        _pivot_xml_fragment(
+                            root,
+                            relationship_semantics,
+                            cache_definition_members_by_id={
+                                identifier: members[0]
+                                for identifier, members in cache_definition_members_by_id.items()
+                                if len(members) == 1
+                            },
+                        )
+                    ),
+                ),
+            )
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested PivotTable part; "
+            "affected PivotTables were not compared."
+        )
+        layout_signature = _private_payload_signature(payload)
+        inspected = False
+        unrecognized_count += 1
+    else:
+        inspected = True
+    return _PivotTablePartInspection(
+        member=member,
+        cache_id=cache_id,
+        layout_location_count=len(root.findall(f"{{{_SPREADSHEETML_NS}}}location")),
+        pivot_field_count=child_count("pivotFields", "pivotField"),
+        row_field_count=child_count("rowFields", "field"),
+        column_field_count=child_count("colFields", "field"),
+        page_field_count=child_count("pageFields", "pageField"),
+        data_field_count=child_count("dataFields", "dataField"),
+        filter_count=child_count("filters", "filter"),
+        row_item_count=child_count("rowItems", "i"),
+        column_item_count=child_count("colItems", "i"),
+        related_relationship_count=len(relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in relationships
+        ),
+        cache_definition_members=tuple(
+            sorted(cache_definition_members, key=str.casefold)
+        ),
+        unrecognized_count=unrecognized_count,
+        inspected=inspected,
+        layout_signature=layout_signature,
+        relationship_signature=_pivot_relationship_signature(relationships),
+    )
+
+
+def _pivot_cache_definition_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    xml_budget: _PivotXmlBudget,
+) -> _PivotCacheDefinitionInspection:
+    """Inspect one PivotTable cache definition without opening cache-record values."""
+    relationships = _pivot_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="PivotTable cache definition",
+    )
+    relationship_semantics = _pivot_relationship_semantics(
+        relationships,
+        warnings,
+        context="PivotTable cache definition",
+    )
+    relationship_by_id: dict[str, _PivotRawRelationship] = {}
+    for relationship in relationships:
+        if relationship.relationship_id and relationship.relationship_id not in relationship_by_id:
+            relationship_by_id[relationship.relationship_id] = relationship
+
+    payload, fallback_signature = _pivot_xml_payload(
+        archive,
+        member,
+        warnings,
+        xml_budget,
+    )
+    if payload is None:
+        return _PivotCacheDefinitionInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+            relationship_signature=_pivot_relationship_signature(relationships),
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a PivotTable cache-definition XML part "
+            f"({type(error).__name__}); affected PivotTables were not compared."
+        )
+        return _PivotCacheDefinitionInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_pivot_relationship_signature(relationships),
+        )
+    if (
+        _xml_local_name(root.tag) != "pivotCacheDefinition"
+        or _xml_namespace(root.tag) != _SPREADSHEETML_NS
+    ):
+        warnings.add(
+            "FormulaFence found a PivotTable cache-definition part with an unexpected root; "
+            "affected PivotTables were not compared."
+        )
+        return _PivotCacheDefinitionInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_pivot_relationship_signature(relationships),
+        )
+
+    unrecognized_count = 0
+    relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    record_relationship_id = root.get(relationship_attribute)
+    cache_record_members: set[str] = set()
+    if record_relationship_id is not None:
+        relationship = relationship_by_id.get(record_relationship_id)
+        if relationship is None:
+            warnings.add(
+                "FormulaFence found a PivotTable cache-record reference without a matching "
+                "relationship; affected PivotTables have a coverage gap."
+            )
+            unrecognized_count += 1
+        elif relationship.relationship_type != _PIVOT_CACHE_RECORDS_RELATIONSHIP:
+            warnings.add(
+                "FormulaFence found a PivotTable cache-record reference with an unexpected "
+                "relationship type; affected PivotTables have a coverage gap."
+            )
+            unrecognized_count += 1
+        elif (
+            relationship.target_mode.casefold() != "internal"
+            or relationship.safe_target is None
+        ):
+            warnings.add(
+                "FormulaFence found a PivotTable cache-record reference without a safe "
+                "internal target; affected PivotTables were not compared."
+            )
+            unrecognized_count += 1
+        else:
+            cache_record_members.add(relationship.safe_target)
+    for relationship in relationships:
+        if relationship.relationship_type != _PIVOT_CACHE_RECORDS_RELATIONSHIP:
+            warnings.add(
+                "FormulaFence found an unmodelled PivotTable cache-definition relationship; "
+                "affected PivotTables have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        if relationship.relationship_id != record_relationship_id:
+            warnings.add(
+                "FormulaFence found a PivotTable cache-record relationship not bound by its "
+                "cache definition; affected PivotTables have a coverage gap."
+            )
+            unrecognized_count += 1
+
+    cache_record_count = 0
+    record_count_value = root.get("recordCount")
+    if record_count_value is not None:
+        try:
+            cache_record_count = int(record_count_value)
+            if cache_record_count < 0:
+                raise ValueError("negative record count")
+        except ValueError:
+            warnings.add(
+                "FormulaFence could not interpret a PivotTable cache record count; affected "
+                "PivotTables have a coverage gap."
+            )
+            cache_record_count = 0
+            unrecognized_count += 1
+    cache_fields = [
+        element
+        for element in root.iter(f"{{{_SPREADSHEETML_NS}}}cacheField")
+    ]
+    shared_items = [
+        element
+        for element in root.iter(f"{{{_SPREADSHEETML_NS}}}sharedItems")
+    ]
+    try:
+        definition_signature = _private_external_data_signature(
+            (
+                (
+                    "pivot-cache-definition",
+                    repr(
+                        _pivot_xml_fragment(
+                            root,
+                            relationship_semantics,
+                            omit_cache_data=True,
+                        )
+                    ),
+                ),
+            )
+        )
+        cached_shared_item_signature = _private_external_data_signature(
+            tuple(
+                [("record-count", record_count_value or "")]
+                + [
+                    (
+                        f"shared-items:{index}",
+                        repr(_pivot_xml_fragment(items, relationship_semantics)),
+                    )
+                    for index, items in enumerate(shared_items)
+                ]
+            )
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested PivotTable cache "
+            "definition; affected PivotTables were not compared."
+        )
+        definition_signature = _private_payload_signature(payload)
+        cached_shared_item_signature = None
+        inspected = False
+        unrecognized_count += 1
+    else:
+        inspected = True
+    return _PivotCacheDefinitionInspection(
+        member=member,
+        cache_field_count=len(cache_fields),
+        shared_item_count=sum(len(list(items)) for items in shared_items),
+        calculated_item_count=sum(
+            element.tag == f"{{{_SPREADSHEETML_NS}}}calculatedItem" for element in root.iter()
+        ),
+        calculated_member_count=sum(
+            element.tag == f"{{{_SPREADSHEETML_NS}}}calculatedMember" for element in root.iter()
+        ),
+        cache_record_count=cache_record_count,
+        related_relationship_count=len(relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in relationships
+        ),
+        cache_record_members=tuple(sorted(cache_record_members, key=str.casefold)),
+        unrecognized_count=unrecognized_count,
+        inspected=inspected,
+        definition_signature=definition_signature,
+        cached_shared_item_signature=cached_shared_item_signature,
+        relationship_signature=_pivot_relationship_signature(relationships),
+    )
+
+
+def _pivot_table_metadata(path: Path) -> _PivotTableMetadata:
+    """Inspect PivotTable views and cache packages before the reader omits them.
+
+    The scan is package-only: it neither refreshes a cache nor renders a report.
+    Cache source and refresh controls are already compared by the external-data
+    scanner; this scanner instead protects PivotTable presentation, cache schema,
+    shared-item, and bounded cache-record material.
+    """
+    warnings: set[str] = set()
+    default = PivotTableDefinitionSnapshot()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                workbook_root = _xml_root(archive, "xl/workbook.xml")
+                sheet_parts = _sheet_xml_parts(archive)
+            except (
+                KeyError,
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                return _PivotTableMetadata(
+                    default,
+                    (
+                        "FormulaFence could not map workbook OOXML for PivotTable inspection "
+                        f"({type(error).__name__}); affected PivotTables were not compared.",
+                    ),
+                )
+
+            xml_budget = _PivotXmlBudget()
+            record_budget = _PivotCacheRecordBudget()
+            workbook_relationships = _pivot_raw_relationships(
+                archive,
+                "xl/workbook.xml",
+                warnings,
+                context="workbook",
+            )
+            workbook_relationships_by_id: dict[
+                str, list[_PivotRawRelationship]
+            ] = defaultdict(list)
+            for relationship in workbook_relationships:
+                if relationship.relationship_id:
+                    workbook_relationships_by_id[relationship.relationship_id].append(
+                        relationship
+                    )
+
+            cache_definition_members_by_id: dict[str, set[str]] = defaultdict(set)
+            declaration_entries: list[tuple[str, str]] = []
+            unrecognized_declaration_count = 0
+            declared_workbook_relationship_ids: set[str] = set()
+            declared_cache_ids: set[str] = set()
+            cache_container = workbook_root.find(f"{{{_SPREADSHEETML_NS}}}pivotCaches")
+            if cache_container is not None:
+                for cache in cache_container.findall(f"{{{_SPREADSHEETML_NS}}}pivotCache"):
+                    cache_id = cache.get("cacheId")
+                    relationship_id = cache.get(f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id")
+                    if cache_id is None:
+                        warnings.add(
+                            "FormulaFence found a PivotTable cache declaration without a cache "
+                            "id; affected PivotTables have a coverage gap."
+                        )
+                        unrecognized_declaration_count += 1
+                    elif cache_id in declared_cache_ids:
+                        warnings.add(
+                            "FormulaFence found duplicate PivotTable cache ids; affected "
+                            "PivotTables have a coverage gap."
+                        )
+                        unrecognized_declaration_count += 1
+                    else:
+                        declared_cache_ids.add(cache_id)
+                    if relationship_id is None:
+                        warnings.add(
+                            "FormulaFence found a PivotTable cache declaration without a "
+                            "relationship; affected PivotTables have a coverage gap."
+                        )
+                        unrecognized_declaration_count += 1
+                        continue
+                    declared_workbook_relationship_ids.add(relationship_id)
+                    relationship_matches = workbook_relationships_by_id.get(
+                        relationship_id,
+                        [],
+                    )
+                    if not relationship_matches:
+                        warnings.add(
+                            "FormulaFence found a PivotTable cache declaration without a "
+                            "matching workbook relationship; affected PivotTables have a "
+                            "coverage gap."
+                        )
+                        unrecognized_declaration_count += 1
+                        continue
+                    if len(relationship_matches) > 1:
+                        warnings.add(
+                            "FormulaFence found duplicate workbook relationship ids for a "
+                            "PivotTable cache; affected PivotTables have a coverage gap."
+                        )
+                        unrecognized_declaration_count += 1
+                        continue
+                    relationship = relationship_matches[0]
+                    if relationship.relationship_type != _PIVOT_CACHE_DEFINITION_RELATIONSHIP:
+                        warnings.add(
+                            "FormulaFence found a PivotTable cache declaration with an "
+                            "unexpected relationship type; affected PivotTables have a "
+                            "coverage gap."
+                        )
+                        unrecognized_declaration_count += 1
+                        continue
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.safe_target is None
+                    ):
+                        warnings.add(
+                            "FormulaFence found a PivotTable cache declaration without a safe "
+                            "internal target; affected PivotTables were not compared."
+                        )
+                        unrecognized_declaration_count += 1
+                        continue
+                    declaration_entries.append(
+                        ("workbook-cache-definition", relationship.safe_target)
+                    )
+                    if cache_id is not None:
+                        cache_definition_members_by_id[cache_id].add(
+                            relationship.safe_target
+                        )
+
+            for relationship in workbook_relationships:
+                if relationship.relationship_type != _PIVOT_CACHE_DEFINITION_RELATIONSHIP:
+                    continue
+                if relationship.relationship_id in declared_workbook_relationship_ids:
+                    continue
+                warnings.add(
+                    "FormulaFence found a workbook PivotTable cache-definition relationship "
+                    "not bound by a cache declaration; affected PivotTables have a coverage "
+                    "gap."
+                )
+                unrecognized_declaration_count += 1
+            for _cache_id, members in cache_definition_members_by_id.items():
+                if len(members) <= 1:
+                    continue
+                warnings.add(
+                    "FormulaFence found one PivotTable cache id bound to multiple cache "
+                    "definitions; affected PivotTables have a coverage gap."
+                )
+                unrecognized_declaration_count += 1
+
+            pivot_table_sources: dict[str, set[tuple[str, str]]] = defaultdict(set)
+            unresolved_sheet_entries: list[tuple[str, str]] = []
+            for sheet, (member, sheet_kind) in sorted(
+                sheet_parts.items(),
+                key=lambda item: item[0].casefold(),
+            ):
+                if sheet_kind != "worksheet":
+                    continue
+                relationships = _pivot_raw_relationships(
+                    archive,
+                    member,
+                    warnings,
+                    context="worksheet",
+                )
+                for relationship in relationships:
+                    if relationship.relationship_type != _PIVOT_TABLE_RELATIONSHIP:
+                        continue
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.safe_target is None
+                    ):
+                        warnings.add(
+                            "FormulaFence found a worksheet PivotTable relationship without a "
+                            "safe internal target; affected PivotTables were not compared."
+                        )
+                        unresolved_sheet_entries.append(
+                            (member, repr(relationship.semantic_key()))
+                        )
+                        unrecognized_declaration_count += 1
+                        continue
+                    pivot_table_sources[relationship.safe_target].add((sheet, member))
+
+            referenced_pivot_table_members = set(pivot_table_sources)
+            for entry in archive.infolist():
+                member = entry.filename
+                if not _PIVOT_TABLE_PART_PATTERN.fullmatch(member):
+                    continue
+                pivot_table_sources.setdefault(member, set())
+                if member in referenced_pivot_table_members:
+                    continue
+                warnings.add(
+                    "FormulaFence found a PivotTable package part not declared by an "
+                    "inspected worksheet; affected PivotTables have a coverage gap."
+                )
+                unrecognized_declaration_count += 1
+
+            cache_members_by_id = {
+                cache_id: tuple(sorted(members, key=str.casefold))
+                for cache_id, members in cache_definition_members_by_id.items()
+            }
+            pivot_table_inspections: list[_PivotTablePartInspection] = []
+            cache_definition_sources: dict[str, set[str]] = defaultdict(set)
+            for _cache_id, members in cache_members_by_id.items():
+                for member in members:
+                    cache_definition_sources[member].add("workbook")
+            for member in sorted(pivot_table_sources, key=str.casefold):
+                sources = tuple(
+                    sorted(pivot_table_sources[member], key=lambda item: item[0].casefold())
+                )
+                declaration_entries.append(("pivot-table-part", repr((member, sources))))
+                inspection = _pivot_table_part_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    xml_budget,
+                    cache_members_by_id,
+                )
+                pivot_table_inspections.append(inspection)
+                for cache_member in inspection.cache_definition_members:
+                    cache_definition_sources[cache_member].add(member)
+
+            referenced_cache_definition_members = set(cache_definition_sources)
+            for entry in archive.infolist():
+                member = entry.filename
+                if not _PIVOT_CACHE_DEFINITION_PART_PATTERN.fullmatch(member):
+                    continue
+                cache_definition_sources.setdefault(member, set())
+                if member in referenced_cache_definition_members:
+                    continue
+                warnings.add(
+                    "FormulaFence found a PivotTable cache-definition package part not bound "
+                    "by an inspected declaration; affected PivotTables have a coverage gap."
+                )
+                unrecognized_declaration_count += 1
+
+            cache_definition_inspections: list[_PivotCacheDefinitionInspection] = []
+            cache_record_members: set[str] = set()
+            for member in sorted(cache_definition_sources, key=str.casefold):
+                sources = tuple(sorted(cache_definition_sources[member], key=str.casefold))
+                declaration_entries.append(
+                    ("pivot-cache-definition-part", repr((member, sources)))
+                )
+                inspection = _pivot_cache_definition_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    xml_budget,
+                )
+                cache_definition_inspections.append(inspection)
+                cache_record_members.update(inspection.cache_record_members)
+
+            referenced_cache_record_members = set(cache_record_members)
+            for entry in archive.infolist():
+                member = entry.filename
+                if not _PIVOT_CACHE_RECORDS_PART_PATTERN.fullmatch(member):
+                    continue
+                cache_record_members.add(member)
+                if member in referenced_cache_record_members:
+                    continue
+                warnings.add(
+                    "FormulaFence found a PivotTable cache-record package part not bound by "
+                    "an inspected cache definition; affected PivotTables have a coverage gap."
+                )
+                unrecognized_declaration_count += 1
+
+            cache_record_payloads = _pivot_cache_record_payloads(
+                archive,
+                cache_record_members,
+                [],
+                warnings,
+                record_budget,
+            )
+
+            def aggregate_signature(
+                inspections: list[object], attribute: str
+            ) -> str | None:
+                material = sorted(
+                    (inspection.member, value)
+                    for inspection in inspections
+                    if (value := getattr(inspection, attribute)) is not None
+                )
+                return _private_external_data_signature(tuple(material))
+
+            pivot_table_sheets = {
+                sheet
+                for member, sources in pivot_table_sources.items()
+                if any(inspection.member == member for inspection in pivot_table_inspections)
+                for sheet, _source_member in sources
+            }
+            declaration_entries.extend(
+                ("unresolved-worksheet-pivot-relationship", entry)
+                for entry in unresolved_sheet_entries
+            )
+            declaration_entries.sort()
+            all_inspections: list[object] = [
+                *pivot_table_inspections,
+                *cache_definition_inspections,
+            ]
+            snapshot = PivotTableDefinitionSnapshot(
+                pivot_table_sheet_count=len(pivot_table_sheets),
+                pivot_table_part_count=len(pivot_table_sources),
+                pivot_cache_definition_part_count=len(cache_definition_sources),
+                pivot_cache_records_part_count=cache_record_payloads.record_part_count,
+                pivot_cache_binding_count=sum(
+                    len(inspection.cache_definition_members)
+                    for inspection in pivot_table_inspections
+                ),
+                layout_location_count=sum(
+                    inspection.layout_location_count for inspection in pivot_table_inspections
+                ),
+                pivot_field_count=sum(
+                    inspection.pivot_field_count for inspection in pivot_table_inspections
+                ),
+                row_field_count=sum(
+                    inspection.row_field_count for inspection in pivot_table_inspections
+                ),
+                column_field_count=sum(
+                    inspection.column_field_count for inspection in pivot_table_inspections
+                ),
+                page_field_count=sum(
+                    inspection.page_field_count for inspection in pivot_table_inspections
+                ),
+                data_field_count=sum(
+                    inspection.data_field_count for inspection in pivot_table_inspections
+                ),
+                filter_count=sum(
+                    inspection.filter_count for inspection in pivot_table_inspections
+                ),
+                row_item_count=sum(
+                    inspection.row_item_count for inspection in pivot_table_inspections
+                ),
+                column_item_count=sum(
+                    inspection.column_item_count for inspection in pivot_table_inspections
+                ),
+                cache_field_count=sum(
+                    inspection.cache_field_count
+                    for inspection in cache_definition_inspections
+                ),
+                shared_item_count=sum(
+                    inspection.shared_item_count
+                    for inspection in cache_definition_inspections
+                ),
+                calculated_item_count=sum(
+                    inspection.calculated_item_count
+                    for inspection in cache_definition_inspections
+                ),
+                calculated_member_count=sum(
+                    inspection.calculated_member_count
+                    for inspection in cache_definition_inspections
+                ),
+                cache_record_count=sum(
+                    inspection.cache_record_count
+                    for inspection in cache_definition_inspections
+                ),
+                related_relationship_count=sum(
+                    inspection.related_relationship_count for inspection in all_inspections
+                ),
+                external_relationship_count=sum(
+                    inspection.external_relationship_count for inspection in all_inspections
+                ),
+                fingerprinted_cache_record_part_count=(
+                    cache_record_payloads.fingerprinted_part_count
+                ),
+                uninspected_cache_record_part_count=(
+                    cache_record_payloads.uninspected_part_count
+                ),
+                unrecognized_part_count=(
+                    unrecognized_declaration_count
+                    + sum(inspection.unrecognized_count for inspection in all_inspections)
+                ),
+                declaration_signature=_private_external_data_signature(
+                    tuple(declaration_entries)
+                ),
+                layout_signature=aggregate_signature(
+                    list(pivot_table_inspections), "layout_signature"
+                ),
+                cache_definition_signature=aggregate_signature(
+                    list(cache_definition_inspections), "definition_signature"
+                ),
+                cached_shared_item_signature=aggregate_signature(
+                    list(cache_definition_inspections), "cached_shared_item_signature"
+                ),
+                relationship_signature=aggregate_signature(
+                    all_inspections, "relationship_signature"
+                ),
+                cache_record_payload_signature=cache_record_payloads.payload_signature,
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _PivotTableMetadata(
+            default,
+            (
+                "FormulaFence could not inspect PivotTable OOXML "
+                f"({type(error).__name__}); affected PivotTables were not compared.",
+            ),
+        )
+    return _PivotTableMetadata(snapshot, tuple(sorted(warnings)))
+
+
+def _pivot_reader_cache_record_replacements(
+    path: Path,
+) -> tuple[dict[str, bytes], tuple[str, ...]]:
+    """Build safe cache-definition overlays for the ordinary workbook reader.
+
+    openpyxl eagerly parses complete PivotTable cache-record streams even though
+    FormulaFence never needs those values to index cells. Replace only the
+    temporary reader copy's cache-record bindings after the package scanner has
+    fingerprinted the original payload under its explicit limits.
+    """
+    replacements: dict[str, bytes] = {}
+    reader_warnings: set[str] = set()
+    try:
+        with ZipFile(path) as archive:
+            xml_budget = _PivotXmlBudget()
+            cache_definition_members = {
+                entry.filename
+                for entry in archive.infolist()
+                if _PIVOT_CACHE_DEFINITION_PART_PATTERN.fullmatch(entry.filename)
+            }
+            workbook_relationships = _pivot_raw_relationships(
+                archive,
+                "xl/workbook.xml",
+                set(),
+                context="workbook",
+            )
+            cache_definition_members.update(
+                relationship.safe_target
+                for relationship in workbook_relationships
+                if (
+                    relationship.relationship_type == _PIVOT_CACHE_DEFINITION_RELATIONSHIP
+                    and relationship.safe_target is not None
+                )
+            )
+            for member in sorted(cache_definition_members, key=str.casefold):
+                payload, _fallback_signature = _pivot_xml_payload(
+                    archive,
+                    member,
+                    set(),
+                    xml_budget,
+                )
+                if payload is None:
+                    reader_warnings.add(
+                        "FormulaFence could not isolate a bounded PivotTable cache "
+                        "definition from the underlying workbook reader."
+                    )
+                    continue
+                try:
+                    cache_definition = _xml_root_from_payload(payload)
+                except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+                    continue
+                if (
+                    _xml_local_name(cache_definition.tag) != "pivotCacheDefinition"
+                    or _xml_namespace(cache_definition.tag) != _SPREADSHEETML_NS
+                ):
+                    continue
+
+                relationship_member = _relationship_part_path(member)
+                relationship_payload, _fallback_signature = _pivot_xml_payload(
+                    archive,
+                    relationship_member,
+                    set(),
+                    xml_budget,
+                )
+                if relationship_payload is None:
+                    continue
+                try:
+                    relationships = _xml_root_from_payload(relationship_payload)
+                except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+                    continue
+                if (
+                    _xml_local_name(relationships.tag) != "Relationships"
+                    or _xml_namespace(relationships.tag) != _PACKAGE_RELATIONSHIP_NS
+                ):
+                    continue
+                relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+                record_relationships = [
+                    relationship
+                    for relationship in relationships.findall(relationship_tag)
+                    if relationship.get("Type") == _PIVOT_CACHE_RECORDS_RELATIONSHIP
+                ]
+                if not record_relationships:
+                    continue
+                record_relationship_id_attribute = (
+                    f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+                )
+                cache_definition.attrib.pop(record_relationship_id_attribute, None)
+                for relationship in record_relationships:
+                    relationships.remove(relationship)
+                replacements[member] = ElementTree.tostring(
+                    cache_definition,
+                    encoding="utf-8",
+                    xml_declaration=True,
+                )
+                replacements[relationship_member] = ElementTree.tostring(
+                    relationships,
+                    encoding="utf-8",
+                    xml_declaration=True,
+                )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        reader_warnings.add(
+            "FormulaFence could not prepare a PivotTable-safe workbook-reader copy "
+            f"({type(error).__name__})."
+        )
+    return replacements, tuple(sorted(reader_warnings))
+
+
+def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...]]:
+    """Return a temporary source that prevents unbounded PivotTable record reads."""
+    replacements, reader_warnings = _pivot_reader_cache_record_replacements(path)
+    if not replacements:
+        return path, None, reader_warnings
+
+    temporary_path: Path | None = None
+    warnings_for_reader = set(reader_warnings)
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix="formulafence-pivot-reader-",
+            suffix=path.suffix,
+        )
+        os.close(descriptor)
+        temporary_path = Path(temporary_name)
+        shutil.copyfile(path, temporary_path)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with ZipFile(temporary_path, "a", compression=ZIP_DEFLATED) as archive:
+                for member, payload in sorted(replacements.items(), key=lambda item: item[0]):
+                    archive.writestr(member, payload)
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        warnings_for_reader.add(
+            "FormulaFence could not isolate PivotTable cache records before the "
+            f"underlying workbook reader ran ({type(error).__name__})."
+        )
+        return path, None, tuple(sorted(warnings_for_reader))
+    return temporary_path, temporary_path, tuple(sorted(warnings_for_reader))
+
+
 def _worksheet_control_raw_relationships(
     archive: ZipFile,
     source_member: str,
@@ -10378,25 +11725,37 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     xlm_macro_metadata = _xlm_macro_metadata(source)
     ribbon_customization_metadata = _ribbon_customization_metadata(source)
     office_web_addin_metadata = _office_web_addin_metadata(source)
+    pivot_table_metadata = _pivot_table_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
+    reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
+        source
+    )
     try:
         with warnings.catch_warnings(record=True) as caught_warnings:
             warnings.simplefilter("always")
             workbook = load_workbook(
-                source,
+                reader_source,
                 read_only=False,
                 data_only=False,
                 keep_vba=False,
                 keep_links=False,
                 rich_text=False,
             )
-    except (BadZipFile, InvalidFileException, OSError, ValueError) as error:
+    except (BadZipFile, InvalidFileException, KeyError, OSError, ValueError) as error:
         raise WorkbookLoadError(f"Could not read workbook {source}: {error}") from error
+    finally:
+        if temporary_reader_source is not None:
+            try:
+                temporary_reader_source.unlink(missing_ok=True)
+            except OSError:
+                pass
     parser_warnings = {str(warning.message) for warning in caught_warnings}
+    parser_warnings.update(reader_source_warnings)
     parser_warnings.update(xlm_macro_metadata.warnings)
     parser_warnings.update(ribbon_customization_metadata.warnings)
     parser_warnings.update(office_web_addin_metadata.warnings)
+    parser_warnings.update(pivot_table_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -10607,6 +11966,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
+        pivot_table_definitions=pivot_table_metadata.pivot_tables,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -10673,6 +12033,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
+        "pivot_table_definitions": snapshot.pivot_table_definitions.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -10691,6 +12052,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_xlm_macro_sheets": snapshot.xlm_macro_sheets.present,
             "has_ribbon_customization": snapshot.ribbon_customization.present,
             "has_office_web_addins": snapshot.office_web_addins.present,
+            "has_pivot_table_definitions": snapshot.pivot_table_definitions.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

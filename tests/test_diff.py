@@ -23,6 +23,8 @@ from .helpers import (
     change_legacy_vml_note,
     change_office_web_addin_auto_show,
     change_office_web_addin_controls,
+    change_pivot_table_definition_material,
+    change_pivot_table_refresh_control,
     change_power_query_controls,
     change_power_query_refresh_noise,
     change_protected_range,
@@ -35,12 +37,14 @@ from .helpers import (
     corrupt_chart_definition_root,
     corrupt_legacy_vml_control_root,
     corrupt_office_web_addin_definition_root,
+    corrupt_pivot_table_definition_root,
     corrupt_ribbon_customization_root,
     corrupt_worksheet_embedded_control_activex_root,
     corrupt_xlm_macro_sheet_root,
     duplicate_external_link_definition,
     duplicate_external_link_sheet_names,
     externalize_chart_overlay_relationship,
+    externalize_pivot_table_cache_record_relationship,
     make_chart_definition_model,
     make_conditional_formatting_model,
     make_current_row_table_model,
@@ -56,6 +60,7 @@ from .helpers import (
     make_named_formula_model,
     make_named_lambda_model,
     make_office_web_addin_model,
+    make_pivot_table_definition_model,
     make_power_query_model,
     make_protection_model,
     make_ribbon_customization_model,
@@ -68,11 +73,14 @@ from .helpers import (
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
     rebind_external_link_declaration,
+    rebind_pivot_table_cache_records,
     remove_xlm_macro_sheet_related_part_payload,
     renumber_chart_relationships,
     renumber_external_link_declaration_relationships,
     renumber_legacy_vml_control_relationships,
     renumber_office_web_addin_relationships,
+    renumber_pivot_table_cache_id,
+    renumber_pivot_table_relationships,
     renumber_ribbon_customization_relationships,
     renumber_worksheet_embedded_control_relationships,
     renumber_xlm_macro_sheet_relationships,
@@ -81,6 +89,7 @@ from .helpers import (
     rewrite_chart_internal_target_spelling,
     rewrite_legacy_vml_control_internal_target_spelling,
     rewrite_office_web_addin_internal_target_spelling,
+    rewrite_pivot_table_internal_target_spelling,
     rewrite_ribbon_customization_internal_target_spelling,
     rewrite_worksheet_embedded_control_internal_target_spelling,
     rewrite_xlm_macro_sheet_internal_target_spelling,
@@ -3061,6 +3070,259 @@ def test_chart_xml_and_related_part_budgets_fail_closed(tmp_path, monkeypatch) -
         "oversized chart related part" in warning
         for warning in payload_snapshot.parser_warnings
     )
+
+
+def test_pivot_table_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
+    baseline = make_pivot_table_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    change_pivot_table_definition_material(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    pivot_change = next(
+        change
+        for change in report.changes
+        if change.kind == "pivot_table_definitions_changed"
+    )
+
+    pivots = profile["pivot_table_definitions"]
+    assert baseline_snapshot.summary()["pivot_table_sheet_count"] == 1
+    assert baseline_snapshot.summary()["pivot_table_part_count"] == 1
+    assert baseline_snapshot.summary()["pivot_cache_definition_part_count"] == 1
+    assert baseline_snapshot.summary()["pivot_cache_record_count"] == 2
+    assert pivots == {
+        "present": True,
+        "pivot_table_sheet_count": 1,
+        "pivot_table_part_count": 1,
+        "pivot_cache_definition_part_count": 1,
+        "pivot_cache_records_part_count": 1,
+        "pivot_cache_binding_count": 1,
+        "layout_location_count": 1,
+        "pivot_field_count": 1,
+        "row_field_count": 1,
+        "column_field_count": 0,
+        "page_field_count": 0,
+        "data_field_count": 1,
+        "filter_count": 0,
+        "row_item_count": 1,
+        "column_item_count": 0,
+        "cache_field_count": 1,
+        "shared_item_count": 2,
+        "calculated_item_count": 0,
+        "calculated_member_count": 0,
+        "cache_record_count": 2,
+        "related_relationship_count": 2,
+        "external_relationship_count": 0,
+        "fingerprinted_cache_record_part_count": 1,
+        "uninspected_cache_record_part_count": 0,
+        "unrecognized_part_count": 0,
+    }
+    assert baseline_snapshot.parser_warnings == ()
+    assert "## PivotTable definitions and cached report material" in markdown
+    assert pivot_change.details["pivot_table_layout_material_changed"] is True
+    assert pivot_change.details["pivot_cache_definition_material_changed"] is True
+    assert pivot_change.details["cached_shared_item_material_changed"] is True
+    assert pivot_change.details["cache_record_payload_material_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF031"}
+    assert "FF023" not in {finding.rule_id for finding in report.findings}
+
+    sensitive_values = (
+        "Private baseline pivot report",
+        "Private baseline total",
+        "Private candidate total",
+        "Private baseline category",
+        "Private candidate category",
+        "Private baseline item one",
+        "Private candidate item",
+        "Private Pivot Source",
+        "A2:B3",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_pivot_table_refresh_controls_remain_with_external_data_guard(tmp_path) -> None:
+    baseline = make_pivot_table_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    change_pivot_table_refresh_control(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "pivot_cache_refresh_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "pivot_table_definitions_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert {finding.rule_id for finding in report.findings} >= {"FF023"}
+    assert "FF031" not in {finding.rule_id for finding in report.findings}
+
+
+def test_pivot_relationship_ids_targets_and_cache_ids_are_normalized(tmp_path) -> None:
+    baseline = make_pivot_table_definition_model(tmp_path / "baseline.xlsx")
+    renumbered = make_pivot_table_definition_model(tmp_path / "renumbered.xlsx")
+    target_rewritten = make_pivot_table_definition_model(tmp_path / "target.xlsx")
+    cache_id_renumbered = make_pivot_table_definition_model(tmp_path / "cache-id.xlsx")
+    renumber_pivot_table_relationships(renumbered)
+    rewrite_pivot_table_internal_target_spelling(target_rewritten)
+    renumber_pivot_table_cache_id(cache_id_renumbered)
+
+    reports = (
+        compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered)),
+        compare_snapshots(load_snapshot(baseline), load_snapshot(target_rewritten)),
+        compare_snapshots(load_snapshot(baseline), load_snapshot(cache_id_renumbered)),
+    )
+
+    for report in reports:
+        assert "pivot_table_definitions_changed" not in {
+            change.kind for change in report.changes
+        }
+        assert "pivot_cache_refresh_controls_changed" not in {
+            change.kind for change in report.changes
+        }
+        assert "FF031" not in {finding.rule_id for finding in report.findings}
+        assert "FF023" not in {finding.rule_id for finding in report.findings}
+
+
+def test_pivot_cache_record_rebinding_is_guarded(tmp_path) -> None:
+    baseline = make_pivot_table_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    rebind_pivot_table_cache_records(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    pivot_change = next(
+        change
+        for change in report.changes
+        if change.kind == "pivot_table_definitions_changed"
+    )
+
+    assert pivot_change.details["pivot_cache_definition_material_changed"] is True
+    assert pivot_change.details["related_part_relationships_changed"] is True
+    assert pivot_change.details["cache_record_payload_material_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF031"}
+
+
+def test_pivot_cache_records_are_not_parsed_by_the_underlying_reader(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from openpyxl.pivot.record import RecordList
+
+    workbook = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    original_payload = workbook.read_bytes()
+
+    def reject_record_parse(*args, **kwargs):
+        raise AssertionError("the workbook reader must not parse PivotTable records")
+
+    monkeypatch.setattr(RecordList, "from_tree", reject_record_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.pivot_table_definitions.fingerprinted_cache_record_part_count == 1
+    assert workbook.read_bytes() == original_payload
+    assert not any(
+        "could not isolate PivotTable cache records" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_external_pivot_cache_record_targets_are_not_followed_or_exposed(tmp_path) -> None:
+    baseline = make_pivot_table_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_pivot_table_definition_model(tmp_path / "external-target.xlsx")
+    externalize_pivot_table_cache_record_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.pivot_table_definitions.external_relationship_count == 1
+    assert candidate_snapshot.pivot_table_definitions.fingerprinted_cache_record_part_count == 1
+    assert any(
+        "cache-record reference without a safe internal target" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "FF031" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all(
+        "example.invalid/private-pivot-cache-records" not in artifact
+        for artifact in rendered_artifacts
+    )
+
+
+def test_pivot_table_parts_fail_closed_on_malformed_or_bounded_material(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_pivot_table_definition_model(tmp_path / "baseline.xlsx")
+    malformed = make_pivot_table_definition_model(tmp_path / "malformed.xlsx")
+    corrupt_pivot_table_definition_root(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.pivot_table_definitions.unrecognized_part_count >= 1
+    assert any(
+        "PivotTable part with an unexpected root" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert "pivot_table_definitions_changed" in {
+        change.kind for change in malformed_report.changes
+    }
+    assert "FF031" in {finding.rule_id for finding in malformed_report.findings}
+
+    oversized_xml = make_pivot_table_definition_model(tmp_path / "oversized.xml.xlsx")
+    monkeypatch.setattr(workbook_module, "_PIVOT_MAX_XML_PART_BYTES", 1)
+    oversized_xml_snapshot = load_snapshot(oversized_xml)
+
+    assert oversized_xml_snapshot.pivot_table_definitions.unrecognized_part_count >= 1
+    assert any(
+        "oversized PivotTable XML part" in warning
+        for warning in oversized_xml_snapshot.parser_warnings
+    )
+
+    oversized_records = make_pivot_table_definition_model(tmp_path / "oversized.records.xlsx")
+    monkeypatch.setattr(workbook_module, "_PIVOT_MAX_XML_PART_BYTES", 16 * 1024 * 1024)
+    monkeypatch.setattr(workbook_module, "_PIVOT_CACHE_RECORD_MAX_BYTES", 1)
+    oversized_record_snapshot = load_snapshot(oversized_records)
+
+    assert (
+        oversized_record_snapshot.pivot_table_definitions.fingerprinted_cache_record_part_count
+        == 0
+    )
+    assert (
+        oversized_record_snapshot.pivot_table_definitions.uninspected_cache_record_part_count
+        == 1
+    )
+    assert any(
+        "oversized PivotTable cache-record part" in warning
+        for warning in oversized_record_snapshot.parser_warnings
+    )
+
+
+def test_pivotless_workbook_does_not_consume_pivottable_budget(tmp_path, monkeypatch) -> None:
+    workbook = make_model(tmp_path / "pivotless.xlsx")
+    monkeypatch.setattr(workbook_module, "_PIVOT_MAX_XML_PART_BYTES", 1)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.pivot_table_definitions.present is False
+    assert snapshot.pivot_table_definitions.pivot_table_part_count == 0
+    assert not any("PivotTable XML" in warning for warning in snapshot.parser_warnings)
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

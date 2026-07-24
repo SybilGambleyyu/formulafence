@@ -20,7 +20,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.26.0/formulafence-0.26.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.27.0/formulafence-0.27.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

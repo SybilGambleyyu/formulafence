@@ -468,6 +468,42 @@ semantics. The fixture follows the OOXML [chart-part model](https://c-rex.net/sa
 the documented [number-reference cache](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.numberreference?view=openxml-3.0.1),
 and the [chart user-shapes relationship](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.usershapesreference?view=openxml-2.20.0).
 
+## PivotTable definitions and cached report material — 2026-07-24
+
+FormulaFence 0.27.0 was validated with controlled raw-OOXML `.xlsx` packages
+that openpyxl can load and preserve but does not author. The fixture follows a
+standard worksheet → PivotTable → pivot-cache-definition → cache-records chain,
+plus the workbook-level cache declaration. It includes a report location,
+fields, items, data field, cache schema, shared cache items, source definition,
+and raw cache records. All labels, source ranges, item values, and record values
+were harmless redaction sentinels; the workbook was never opened in Office.
+
+Changing only private layout, cache-schema, shared-item, and cache-record
+material emitted `FF031` with the matching private flags. Moving the direct
+cache-record relationship emitted relationship and raw-payload flags. Changing
+only `refreshOnLoad` emitted the existing `FF023` and no `FF031`, preserving the
+source/refresh boundary. Profiles exposed only structural counts, and synthetic
+names, source ranges, item values, XML, and record markers were verified absent
+from JSON, Markdown, ordinary reports, and SARIF. The
+`no_pivot_table_definition_changes` policy produced `FFP031`.
+
+The controlled suite also renumbered relationship IDs and cache IDs, rewrote
+equivalent internal target spellings, corrupted the PivotTable root, and
+lowered both XML and cache-record limits. Identifier and path-spelling churn
+produced no finding; malformed or bounded-out material remained explicitly
+visible as a coverage warning. Production PivotTable/cache-definition XML reads
+are bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts; raw cache
+record hashes are bounded to 32 MiB per part, 64 MiB per workbook, and 512
+parts. The suite also made the underlying reader's record parser fail if called;
+FormulaFence still loaded the workbook by detaching cache-record relationships
+in a temporary reader copy. This validates static, relationship-aware
+comparison and data minimisation—not PivotTable refresh/calculation/rendering,
+PivotTable-to-cell impact analysis, external-target retrieval, source trust, or OLAP,
+extension-list, and slicer semantics. The fixture follows the OOXML [Pivot
+Table Part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Pivot_topic_ID0ELLAM.html),
+[Pivot Cache Definition Part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Pivot_topic_ID0E1TAM.html),
+and [Pivot Cache Records Part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Pivot_topic_ID0EV2AM.html).
+
 ## Office Web Add-in task-pane controls and redaction — 2026-07-24
 
 FormulaFence 0.23.0 was validated with controlled raw-OOXML `.xlsx` packages

@@ -109,6 +109,13 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "- **Office Web Add-ins requesting auto-show:** "
             f"{workbook['office_web_addin_auto_show_taskpane_count']}"
         ),
+        f"- **PivotTable host sheets:** {workbook['pivot_table_sheet_count']}",
+        f"- **PivotTable parts:** {workbook['pivot_table_part_count']}",
+        (
+            "- **Pivot cache-definition parts:** "
+            f"{workbook['pivot_cache_definition_part_count']}"
+        ),
+        f"- **Declared PivotTable cache records:** {workbook['pivot_cache_record_count']}",
         f"- **Chart host sheets:** {workbook['chart_host_sheet_count']}",
         f"- **Chart parts:** {workbook['chart_part_count']}",
         f"- **Cached chart data points:** {workbook['chart_cached_data_point_count']}",
@@ -909,6 +916,85 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Add-in identities, store references, properties, bindings, snapshots, and "
             "relationship targets are compared privately and intentionally omitted."
+        )
+    pivot_table_definitions = profile["pivot_table_definitions"]
+    if pivot_table_definitions["present"]:
+        lines.extend(
+            [
+                "",
+                "## PivotTable definitions and cached report material",
+                "",
+                (
+                    "- **PivotTable host sheets / parts:** "
+                    f"{pivot_table_definitions['pivot_table_sheet_count']} / "
+                    f"{pivot_table_definitions['pivot_table_part_count']}"
+                ),
+                (
+                    "- **Cache-definition / cache-record parts:** "
+                    f"{pivot_table_definitions['pivot_cache_definition_part_count']} / "
+                    f"{pivot_table_definitions['pivot_cache_records_part_count']}"
+                ),
+                (
+                    "- **PivotTable-to-cache bindings:** "
+                    f"{pivot_table_definitions['pivot_cache_binding_count']}"
+                ),
+                (
+                    "- **Layout locations:** "
+                    f"{pivot_table_definitions['layout_location_count']}"
+                ),
+                (
+                    "- **Pivot / row / column / page / data fields:** "
+                    f"{pivot_table_definitions['pivot_field_count']} / "
+                    f"{pivot_table_definitions['row_field_count']} / "
+                    f"{pivot_table_definitions['column_field_count']} / "
+                    f"{pivot_table_definitions['page_field_count']} / "
+                    f"{pivot_table_definitions['data_field_count']}"
+                ),
+                (
+                    "- **Filters / row items / column items:** "
+                    f"{pivot_table_definitions['filter_count']} / "
+                    f"{pivot_table_definitions['row_item_count']} / "
+                    f"{pivot_table_definitions['column_item_count']}"
+                ),
+                (
+                    "- **Cache fields / shared items:** "
+                    f"{pivot_table_definitions['cache_field_count']} / "
+                    f"{pivot_table_definitions['shared_item_count']}"
+                ),
+                (
+                    "- **Calculated cache items / members:** "
+                    f"{pivot_table_definitions['calculated_item_count']} / "
+                    f"{pivot_table_definitions['calculated_member_count']}"
+                ),
+                (
+                    "- **Declared cache records:** "
+                    f"{pivot_table_definitions['cache_record_count']}"
+                ),
+                (
+                    "- **Related package relationships:** "
+                    f"{pivot_table_definitions['related_relationship_count']} "
+                    f"({pivot_table_definitions['external_relationship_count']} external)"
+                ),
+                (
+                    "- **Fingerprinted cache-record parts:** "
+                    f"{pivot_table_definitions['fingerprinted_cache_record_part_count']}"
+                ),
+            ]
+        )
+        if pivot_table_definitions["uninspected_cache_record_part_count"]:
+            lines.append(
+                "- **Uninspected cache-record parts:** "
+                f"{pivot_table_definitions['uninspected_cache_record_part_count']}"
+            )
+        if pivot_table_definitions["unrecognized_part_count"]:
+            lines.append(
+                "- **Unrecognized or uninspected PivotTable parts/bindings:** "
+                f"{pivot_table_definitions['unrecognized_part_count']}"
+            )
+        lines.append(
+            "PivotTable names, source ranges, fields, item values, formulas, cache records, "
+            "relationship targets, XML, and payload bytes are compared privately and "
+            "intentionally omitted."
         )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:

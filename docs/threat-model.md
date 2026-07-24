@@ -178,20 +178,24 @@ review prompt, not proof of an error.
   reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts.
   Worksheet-scoped web-extension markup outside this task-pane chain is not
   yet modeled.
-- Relationship-backed worksheet embedded controls and OLE objects are read from
-  the raw worksheet control/OLE markup and its direct control relationships
-  before the workbook reader can omit them. FormulaFence privately fingerprints
+- Relationship-backed worksheet controls and OLE objects are read from raw
+  worksheet control/OLE markup and direct control relationships before the
+  workbook reader can omit them. FormulaFence also follows `vmlDrawing`
+  relationships and privately fingerprints non-`Note` legacy VML `ClientData`
+  controls, including macro, linked-cell, source-range, camera-range, and
+  directly referenced relationship material. It privately fingerprints
   worksheet declarations, ActiveX `ocx` persistence XML, form-control-property
   XML, relationship semantics, and bounded direct ActiveX binary and
   OLE/package payload hashes. Profiles report only structural counts; control
-  names, class IDs, licenses, macros, formulas/ranges, OLE identities, targets,
-  XML, and payload bytes remain private. A material change emits `FF029` and
-  can be blocked with `no_worksheet_embedded_control_changes`. FormulaFence
-  does **not** initialize an ActiveX control, deserialize/open an OLE object or
-  package, render a drawing surface, follow an external relationship, or infer
-event dispatch. Relevant XML reads are bounded to 16 MiB per part, 64 MiB per
-workbook, and 512 parts; direct payload hashing is bounded to 32 MiB per
-part, 64 MiB per workbook, and 512 parts. Missing, malformed, orphaned,
+  names, class IDs, licenses, captions, macros, formulas/ranges, OLE identities,
+  targets, XML, and payload bytes remain private. A material change emits
+  `FF029` and can be blocked with `no_worksheet_embedded_control_changes`.
+  FormulaFence does **not** initialize an ActiveX control, deserialize/open an
+  OLE object or package, render a VML drawing, include ordinary comment notes in
+  its control inventory, follow an external relationship, or infer event
+  dispatch. Relevant XML reads are bounded to 16 MiB per part, 64 MiB per
+  workbook, and 512 parts; direct payload hashing is bounded to 32 MiB per
+  part, 64 MiB per workbook, and 512 parts. Missing, malformed, orphaned,
   unbound, oversized, or over-budget material remains a visible parser-coverage
   warning. VML/drawing layout, embedded payload formats, and behavior outside
   this relationship-backed chain are not modeled.
@@ -237,10 +241,10 @@ part, 64 MiB per workbook, and 512 parts. Missing, malformed, orphaned,
 - It inventories sheet visibility, defined names, calculation settings, the VBA
   payload, XLM macro-sheet packages, RibbonX custom UI packages, Office Web
   Add-in task-pane packages, relationship-backed worksheet ActiveX/form-control/
-  OLE chains, the protection controls above, external-data refresh controls,
+  legacy-VML/OLE chains, the protection controls above, external-data refresh controls,
   external-link packages, and private Power Query definition material. It does
   not yet diff chart definitions, PivotTable layout or cached data, Ribbon image
-  payloads, VML/drawing control layout, embedded OLE/package formats,
+  payloads, VML/drawing control layout or comment content, embedded OLE/package formats,
   worksheet-scoped Web Add-in markup, Power Query runtime behavior or returned
   data, ordinary styles beyond direct protection assignments, complete Excel
   style-cascade results, or every OOXML part.

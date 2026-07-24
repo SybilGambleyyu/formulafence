@@ -1031,13 +1031,13 @@ class OfficeWebAddinSnapshot:
 
 @dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
-    """Safe aggregate of worksheet ActiveX, form-control, and OLE package data.
+    """Safe aggregate of worksheet control and OLE package data.
 
-    Worksheet controls can bind persisted ActiveX state, form-control formulas,
-    OLE payloads, and external linked objects outside cells and the VBA project.
-    Private signatures retain all control definitions, relationships, and safely
-    fingerprinted direct payloads for comparison; ``to_dict`` deliberately
-    exposes only structural counts.
+    Worksheet controls can bind persisted ActiveX state, modern and legacy form-
+    control formulas, OLE payloads, and external linked objects outside cells and
+    the VBA project. Private signatures retain all control definitions,
+    relationships, and safely fingerprinted direct payloads for comparison;
+    ``to_dict`` deliberately exposes only structural counts.
     """
 
     control_sheet_count: int = 0
@@ -1045,6 +1045,12 @@ class WorksheetEmbeddedControlSnapshot:
     active_x_part_count: int = 0
     active_x_binary_reference_count: int = 0
     form_control_property_part_count: int = 0
+    legacy_vml_drawing_part_count: int = 0
+    legacy_vml_control_count: int = 0
+    legacy_vml_macro_assignment_count: int = 0
+    legacy_vml_cell_link_count: int = 0
+    legacy_vml_source_range_count: int = 0
+    legacy_vml_camera_source_range_count: int = 0
     control_macro_assignment_count: int = 0
     control_cell_link_count: int = 0
     control_source_range_count: int = 0
@@ -1063,6 +1069,8 @@ class WorksheetEmbeddedControlSnapshot:
     control_definition_signature: str | None = field(default=None, repr=False)
     active_x_definition_signature: str | None = field(default=None, repr=False)
     form_control_property_signature: str | None = field(default=None, repr=False)
+    legacy_vml_definition_signature: str | None = field(default=None, repr=False)
+    legacy_vml_relationship_signature: str | None = field(default=None, repr=False)
     relationship_signature: str | None = field(default=None, repr=False)
     related_part_payload_signature: str | None = field(default=None, repr=False)
 
@@ -1073,6 +1081,8 @@ class WorksheetEmbeddedControlSnapshot:
             or self.worksheet_control_count
             or self.active_x_part_count
             or self.form_control_property_part_count
+            or self.legacy_vml_drawing_part_count
+            or self.legacy_vml_control_count
             or self.ole_object_count
             or self.unrecognized_part_count
         )
@@ -1086,6 +1096,16 @@ class WorksheetEmbeddedControlSnapshot:
             "active_x_part_count": self.active_x_part_count,
             "active_x_binary_reference_count": self.active_x_binary_reference_count,
             "form_control_property_part_count": self.form_control_property_part_count,
+            "legacy_vml_drawing_part_count": self.legacy_vml_drawing_part_count,
+            "legacy_vml_control_count": self.legacy_vml_control_count,
+            "legacy_vml_macro_assignment_count": (
+                self.legacy_vml_macro_assignment_count
+            ),
+            "legacy_vml_cell_link_count": self.legacy_vml_cell_link_count,
+            "legacy_vml_source_range_count": self.legacy_vml_source_range_count,
+            "legacy_vml_camera_source_range_count": (
+                self.legacy_vml_camera_source_range_count
+            ),
             "control_macro_assignment_count": self.control_macro_assignment_count,
             "control_cell_link_count": self.control_cell_link_count,
             "control_source_range_count": self.control_source_range_count,
@@ -1502,6 +1522,12 @@ class WorkbookSnapshot:
             ),
             "worksheet_active_x_part_count": (
                 self.worksheet_embedded_controls.active_x_part_count
+            ),
+            "worksheet_legacy_vml_drawing_part_count": (
+                self.worksheet_embedded_controls.legacy_vml_drawing_part_count
+            ),
+            "worksheet_legacy_vml_control_count": (
+                self.worksheet_embedded_controls.legacy_vml_control_count
             ),
             "worksheet_ole_object_count": (
                 self.worksheet_embedded_controls.ole_object_count

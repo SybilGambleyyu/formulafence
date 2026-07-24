@@ -110,12 +110,20 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['office_web_addin_auto_show_taskpane_count']}"
         ),
         (
-            "- **Worksheet embedded-control sheets:** "
+            "- **Worksheet control-bearing sheets:** "
             f"{workbook['worksheet_embedded_control_sheet_count']}"
         ),
         (
             "- **Worksheet ActiveX parts:** "
             f"{workbook['worksheet_active_x_part_count']}"
+        ),
+        (
+            "- **Worksheet legacy VML drawing parts:** "
+            f"{workbook['worksheet_legacy_vml_drawing_part_count']}"
+        ),
+        (
+            "- **Worksheet legacy VML controls:** "
+            f"{workbook['worksheet_legacy_vml_control_count']}"
         ),
         (
             "- **Worksheet OLE objects:** "
@@ -904,7 +912,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "## Worksheet embedded controls and OLE objects",
+                "## Worksheet embedded controls, legacy VML controls, and OLE objects",
                 "",
                 (
                     "- **Control-bearing worksheets:** "
@@ -925,6 +933,21 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 (
                     "- **Form-control properties parts:** "
                     f"{worksheet_embedded_controls['form_control_property_part_count']}"
+                ),
+                (
+                    "- **Legacy VML drawing parts / controls:** "
+                    f"{worksheet_embedded_controls['legacy_vml_drawing_part_count']} / "
+                    f"{worksheet_embedded_controls['legacy_vml_control_count']}"
+                ),
+                (
+                    "- **Legacy VML macro assignments:** "
+                    f"{worksheet_embedded_controls['legacy_vml_macro_assignment_count']}"
+                ),
+                (
+                    "- **Legacy VML cell links / source ranges / camera ranges:** "
+                    f"{worksheet_embedded_controls['legacy_vml_cell_link_count']} / "
+                    f"{worksheet_embedded_controls['legacy_vml_source_range_count']} / "
+                    f"{worksheet_embedded_controls['legacy_vml_camera_source_range_count']}"
                 ),
                 (
                     "- **Control macro assignments:** "
@@ -976,9 +999,9 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 f"{worksheet_embedded_controls['unrecognized_part_count']}"
             )
         lines.append(
-            "Control names, class IDs, macros, linked formulas/ranges, OLE identities, "
-            "relationship targets, and direct payloads are compared privately and "
-            "intentionally omitted."
+            "Control names, class IDs, VML and modern-control macros, linked "
+            "formulas/ranges, OLE identities, relationship targets, and direct payloads "
+            "are compared privately and intentionally omitted."
         )
     power_query = profile["power_query"]
     if power_query["present"]:

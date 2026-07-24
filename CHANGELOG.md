@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.25.0 — 2026-07-24
+
+- Extend the existing worksheet-control guardrail to legacy VML form controls.
+  FormulaFence now follows standard worksheet `vmlDrawing` relationships and
+  privately fingerprints non-`Note` VML `ClientData` control material, including
+  macro assignments, cell/range bindings, camera source ranges, and directly
+  referenced VML-part relationship semantics. Ordinary VML comment notes are
+  deliberately excluded from the control inventory.
+- Keep the `FF029` / `FFP029` contract while making it cover modern worksheet
+  controls, legacy VML controls, and OLE objects together. Relationship IDs and
+  equivalent internal target spellings remain normalized; malformed, orphaned,
+  missing, oversized, and over-budget VML material remains a visible coverage
+  warning. VML XML shares the existing 16 MiB-per-part, 64 MiB-per-workbook,
+  512-part control XML budget.
+- Never render a VML drawing, read comment text into the control profile, execute
+  a macro, evaluate a binding, or open a relationship target. Macro names,
+  formulas/ranges, captions, relationship targets, and VML XML remain private.
+
 ## 0.24.0 — 2026-07-24
 
 - Inspect relationship-backed worksheet ActiveX, form-control, and OLE-object

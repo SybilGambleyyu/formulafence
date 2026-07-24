@@ -1115,6 +1115,16 @@ def _workbook_control_changes(
             != new_controls.form_control_property_signature
         ):
             details["form_control_property_material_changed"] = True
+        if (
+            old_controls.legacy_vml_definition_signature
+            != new_controls.legacy_vml_definition_signature
+        ):
+            details["legacy_vml_control_definition_material_changed"] = True
+        if (
+            old_controls.legacy_vml_relationship_signature
+            != new_controls.legacy_vml_relationship_signature
+        ):
+            details["legacy_vml_related_part_relationships_changed"] = True
         if old_controls.relationship_signature != new_controls.relationship_signature:
             details["related_part_relationships_changed"] = True
         if (
@@ -1134,7 +1144,7 @@ def _workbook_control_changes(
             Finding(
                 "FF029",
                 "critical",
-                "Worksheet embedded controls and OLE objects changed.",
+                "Worksheet embedded, legacy VML controls, or OLE objects changed.",
                 details=details,
             )
         )

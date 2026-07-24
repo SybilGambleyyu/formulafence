@@ -346,7 +346,7 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                 Finding(
                     "FFP029",
                     "critical",
-                    "Policy forbids changes to worksheet embedded controls and OLE objects.",
+                    "Policy forbids changes to worksheet, legacy VML controls, and OLE objects.",
                     details=finding.details,
                 )
             )

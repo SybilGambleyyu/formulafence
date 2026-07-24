@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.24.0/formulafence-0.24.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.25.0/formulafence-0.25.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -102,7 +102,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, worksheet ActiveX/form-control/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -332,20 +332,24 @@ Microsoft's [Taskpane Web Extension File](https://learn.microsoft.com/en-us/open
 and [Web Extension](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/56fe5a64-dd6d-422c-beac-19d72dd10ade)
 specifications.
 
-FormulaFence also inventories relationship-backed **worksheet embedded controls
-and OLE objects**. A worksheet can bind `<control>` markup to persisted ActiveX
-state, nested form-control properties, or raw OLE/package data without changing
-an ordinary cell or the VBA payload. FormulaFence confirms the worksheet
-relationship chain, then compares control/OLE declarations, ActiveX `ocx`
-persistence XML, `formControlPr` bindings, direct related relationships, and
-bounded private hashes of ActiveX binary and direct OLE/package payloads. A
-material change emits `FF029`; enable
+FormulaFence also inventories relationship-backed **worksheet controls, legacy
+VML form controls, and OLE objects**. A worksheet can bind modern `<control>`
+markup to persisted ActiveX state, nested form-control properties, or raw
+OLE/package data without changing an ordinary cell or the VBA payload. It can
+also point to a legacy VML drawing whose non-comment `ClientData` records carry
+macro assignments, linked cells, source ranges, or camera source ranges.
+FormulaFence follows these package relationships, compares the relevant modern
+or VML control definitions privately, and hashes only bounded direct ActiveX
+binary and OLE/package payloads. Ordinary VML comment notes are intentionally
+excluded.
+
+A material change emits `FF029`; enable
 `no_worksheet_embedded_control_changes` for `FFP029`. Profiles expose only safe
-counts. Control names, class IDs, licenses, macros, formulas/ranges, OLE
-identities, relationship targets, XML, and payload bytes never enter profiles
-or reports. FormulaFence never initializes a control, deserializes or opens an
-OLE object/package, renders a drawing surface, follows an external target, or
-infers control event dispatch. Relevant XML reads are bounded to 16 MiB per
+counts. Control names, class IDs, licenses, captions, macros, formulas/ranges,
+OLE identities, relationship targets, XML, and payload bytes never enter
+profiles or reports. FormulaFence never initializes a control, deserializes or
+opens an OLE object/package, renders a VML drawing, follows an external target,
+or infers control event dispatch. Relevant XML reads are bounded to 16 MiB per
 part, 64 MiB per workbook, and 512 parts; direct raw payload hashes are bounded
 to 32 MiB per part, 64 MiB per workbook, and 512 parts. Malformed, orphaned,
 unbound, oversized, or over-budget material remains an explicit coverage
@@ -353,7 +357,11 @@ warning. This scope follows Microsoft's guidance on [sheet ActiveX
 controls](https://learn.microsoft.com/en-us/office/vba/excel/concepts/controls-dialogboxes-forms/using-activex-controls-on-sheets),
 the [`ocx` ActiveX persistence
 schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/b30a660a-95eb-4716-b201-a46aae788610),
-and [form-control properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/3d054a6d-4f94-4082-837a-f939fd8d4a45).
+[form-control properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/3d054a6d-4f94-4082-837a-f939fd8d4a45),
+and VML [`ClientData`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.vml.spreadsheet.clientdata?view=openxml-3.0.1)
+with [macro](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/fdd83507-7a57-4bf1-b844-66f551ee55b9)
+and [list-range](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/3d0c9716-88c5-4af3-b63a-feef60b8ebd8)
+bindings.
 
 FormulaFence also inventories **Power Query Data Mashup** custom XML parts.
 It reads the documented length-prefixed container, fingerprints the embedded

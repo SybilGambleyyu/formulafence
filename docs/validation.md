@@ -399,6 +399,37 @@ ActiveX controls](https://learn.microsoft.com/en-us/office/vba/excel/concepts/co
 the [`ocx` persistence schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/b30a660a-95eb-4716-b201-a46aae788610),
 and [form-control properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/3d054a6d-4f94-4082-837a-f939fd8d4a45).
 
+## Legacy VML worksheet-control guardrails — 2026-07-24
+
+FormulaFence 0.25.0 was validated with controlled raw-OOXML `.xlsx` packages
+containing a standard worksheet-to-`vmlDrawing` relationship. The VML drawing
+contained a `Button` with `FmlaMacro`, a `Drop` with `FmlaLink`, `FmlaRange`,
+and `FmlaTxbx`, a `GBox` with `FmlaGroup`, a `Pict` with `FmlaPict`, an image
+relationship, and a separate `Note` comment shape. All macros, formula bindings, captions, relationship
+targets, and image bytes were harmless fixture values; no workbook was opened
+in Office.
+
+Changing the VML macro/binding material and direct presentation relationship
+emitted `FF029` with private legacy-VML definition and relationship flags.
+Profiles exposed only safe counts for VML parts, controls, macro assignments,
+cell links, source ranges, and camera ranges. Synthetic macro names, bindings,
+captions, note text, relationship targets, and image markers were verified
+absent from JSON, Markdown, report, and SARIF output. The same
+`no_worksheet_embedded_control_changes` policy produced `FFP029`.
+
+The controlled suite also changed only the adjacent VML `Note` comment,
+renumbered worksheet and VML relationship IDs, rewrote equivalent internal
+target spellings, corrupted the VML root, and reduced the XML per-part limit.
+Comment-only edits and identifier/path spelling churn produced no control
+finding; malformed or bounded-out VML material remained visible as a coverage
+warning. This validates static, relationship-aware comparison and data
+minimisation—not VML rendering, comment parsing, macro execution, formula
+evaluation, image decoding, source trust, or event behavior. The fixture uses
+the documented VML [`ClientData`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.vml.spreadsheet.clientdata?view=openxml-3.0.1)
+structure and Microsoft’s notes on [`FmlaMacro`](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/fdd83507-7a57-4bf1-b844-66f551ee55b9),
+[`FmlaRange`](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/3d0c9716-88c5-4af3-b63a-feef60b8ebd8),
+and camera ranges.
+
 ## Office Web Add-in task-pane controls and redaction — 2026-07-24
 
 FormulaFence 0.23.0 was validated with controlled raw-OOXML `.xlsx` packages

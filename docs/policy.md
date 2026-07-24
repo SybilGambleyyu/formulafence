@@ -71,7 +71,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_xlm_macro_sheet_changes` | boolean | An Excel 4.0 / XLM macro-sheet declaration, program XML, related-part relationship, or direct internal related-part payload changes. |
 | `no_ribbon_customization_changes` | boolean | An Office RibbonX custom-UI package declaration, control/callback XML, or direct relationship changes. |
 | `no_office_web_addin_changes` | boolean | An Office Web Add-in task-pane workbook binding, task-pane configuration, web-extension definition, or direct relationship changes. |
-| `no_worksheet_embedded_control_changes` | boolean | A worksheet ActiveX/form-control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
+| `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
 | `no_new_dynamic_references` | boolean | A formula adds a dynamic reference function such as `INDIRECT` or `OFFSET`. |
@@ -284,28 +284,33 @@ reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts.
 Worksheet-scoped web-extension markup outside this task-pane chain is not yet
 modeled.
 
-Worksheet embedded controls and OLE objects can bind a sheet to persisted
-ActiveX state, form-control formulas, macro assignments, linked cells, raw OLE
-data, or an external OLE link outside ordinary cells and the VBA payload.
-FormulaFence starts from standard worksheet relationships, confirms the related
-`<controls>` / `<oleObjects>` markup, then inspects ActiveX `ocx` persistence
-parts and `formControlPr` parts. It streams only direct safe internal ActiveX
-binary and OLE/package targets into private hashes; it does not parse them.
-Writer-chosen relationship IDs and equivalent internal target spellings are
-normalized when semantics are unchanged. Profiles expose only structural counts
-for controls, bindings, OLE behavior, relationships, and inspected versus
-uninspected raw payloads. Control names, class IDs, licenses, macros, formulas,
-ranges, OLE identities, relationship targets, XML, and payload bytes never
-enter a profile or diff. A material change emits `FF029`; enable
+Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
+modern or legacy form-control formulas, macro assignments, linked cells, raw
+OLE data, or an external OLE link outside ordinary cells and the VBA payload.
+FormulaFence starts from standard worksheet relationships, confirms modern
+`<controls>` / `<oleObjects>` markup, and follows `vmlDrawing` relationships to
+legacy VML `ClientData`. It inspects ActiveX `ocx` persistence parts,
+`formControlPr` parts, and non-`Note` VML controls; it counts legacy macro,
+linked-cell, source-range, and camera-range bindings without exposing their
+values. It streams only direct safe internal ActiveX binary and OLE/package
+targets into private hashes; it does not parse them. Writer-chosen relationship
+IDs and equivalent internal target spellings are normalized when semantics are
+unchanged. Profiles expose only structural counts for controls, bindings, OLE
+behavior, relationships, and inspected versus uninspected raw payloads. Control
+names, class IDs, licenses, captions, macros, formulas, ranges, OLE identities,
+relationship targets, XML, and payload bytes never enter a profile or diff. A
+material change emits `FF029`; enable
 `no_worksheet_embedded_control_changes` to make it `FFP029` in CI.
 FormulaFence does not initialize an ActiveX control, deserialize/open an OLE
-object or package, render its drawing surface, follow an external relationship,
-or infer event dispatch. Relevant XML reads are bounded to 16 MiB per part,
+object or package, render a VML drawing, read comment-note content into the
+control inventory, follow an external relationship, or infer event dispatch.
+Relevant XML reads are bounded to 16 MiB per part,
 64 MiB per workbook, and 512 parts; direct payload hashes are bounded to 32 MiB
 per part, 64 MiB per workbook, and 512 parts. Missing, malformed, orphaned,
 unbound, oversized, or over-budget material remains a visible coverage warning.
-VML/drawing layout, embedded payload formats, and behavior not reachable through
-this relationship-backed chain are outside this control's scope.
+VML/drawing layout, embedded payload formats, event behavior, and behavior not
+reachable through this relationship-backed chain are outside this control's
+scope.
 
 Power Query stores query definitions in a `DataMashup` Custom XML part. FormulaFence
 parses the documented length-prefixed container and privately compares its

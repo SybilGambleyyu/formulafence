@@ -170,11 +170,18 @@ _WORKSHEET_ACTIVEX_PART_PATTERN = re.compile(
 _WORKSHEET_CONTROL_PROPERTY_PART_PATTERN = re.compile(
     r"^xl/ctrlProps/[^/]+\.xml$", re.IGNORECASE
 )
+_WORKSHEET_LEGACY_VML_PART_PATTERN = re.compile(
+    r"^xl/drawings/[^/]+\.vml$", re.IGNORECASE
+)
 _ACTIVEX_NS = "http://schemas.microsoft.com/office/2006/activeX"
+_VML_NS = "urn:schemas-microsoft-com:vml"
+_VML_OFFICE_NS = "urn:schemas-microsoft-com:office:office"
+_VML_EXCEL_NS = "urn:schemas-microsoft-com:office:excel"
 _WORKSHEET_CONTROL_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/control"
 _WORKSHEET_CTRLPROP_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/ctrlProp"
 _WORKSHEET_OLE_OBJECT_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/oleObject"
 _WORKSHEET_EMBEDDED_PACKAGE_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/package"
+_WORKSHEET_VML_DRAWING_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/vmlDrawing"
 _WORKSHEET_ACTIVEX_BINARY_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary"
 )
@@ -508,6 +515,9 @@ class _WorksheetControlSheetInspection:
     external_relationship_count: int = 0
     active_x_members: tuple[str, ...] = ()
     control_property_members: tuple[str, ...] = ()
+    legacy_vml_members: tuple[str, ...] = ()
+    legacy_vml_relationships: tuple[_WorksheetControlRawRelationship, ...] = ()
+    legacy_vml_unrecognized_count: int = 0
     payload_members: tuple[str, ...] = ()
     unresolved_payload_entries: tuple[tuple[str, str], ...] = ()
     unrecognized_count: int = 0
@@ -544,6 +554,25 @@ class _WorksheetControlPropertyInspection:
     external_relationship_count: int = 0
     payload_members: tuple[str, ...] = ()
     unresolved_payload_entries: tuple[tuple[str, str], ...] = ()
+    unrecognized_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _WorksheetVmlDrawingInspection:
+    """Private parsed state for one legacy worksheet VML drawing part."""
+
+    member: str
+    present: bool = False
+    control_count: int = 0
+    macro_assignment_count: int = 0
+    cell_link_count: int = 0
+    source_range_count: int = 0
+    camera_source_range_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
     unrecognized_count: int = 0
     inspected: bool = False
     definition_signature: str | None = None
@@ -6642,12 +6671,17 @@ def _worksheet_control_relationship_semantics(
 def _worksheet_control_fragment(
     element: ElementTree.Element,
     relationship_semantics: Mapping[str, tuple[str, str, str]],
+    *,
+    relationship_attributes: frozenset[str] | None = None,
 ) -> tuple[object, ...]:
     """Canonicalize private control XML while resolving relationship identifiers."""
-    relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    if relationship_attributes is None:
+        relationship_attributes = frozenset(
+            {f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"}
+        )
     attributes: list[tuple[str, str]] = []
     for attribute, value in element.attrib.items():
-        if attribute == relationship_attribute:
+        if attribute in relationship_attributes:
             relationship = relationship_semantics.get(value)
             resolved = (
                 ("relationship", relationship)
@@ -6658,7 +6692,12 @@ def _worksheet_control_fragment(
         else:
             attributes.append((_xml_display_name(attribute), value))
     children = tuple(
-        _worksheet_control_fragment(child, relationship_semantics) for child in element
+        _worksheet_control_fragment(
+            child,
+            relationship_semantics,
+            relationship_attributes=relationship_attributes,
+        )
+        for child in element
     )
     text = element.text
     if children and text is not None and not text.strip():
@@ -6873,8 +6912,29 @@ def _worksheet_control_sheet_inspection(
 
     active_x_members: set[str] = set()
     control_property_members: set[str] = set()
+    legacy_vml_members: set[str] = set()
     payload_members: set[str] = set()
     unresolved_payload_entries: list[tuple[str, str]] = []
+    legacy_vml_relationships = tuple(
+        relationship
+        for relationship in relationships
+        if relationship.relationship_type == _WORKSHEET_VML_DRAWING_RELATIONSHIP
+    )
+    legacy_vml_unrecognized_count = 0
+    for relationship in legacy_vml_relationships:
+        if relationship.safe_target is None:
+            warnings.add(
+                "FormulaFence found a legacy VML drawing relationship without a safe "
+                "internal target; the affected controls were not compared."
+            )
+            legacy_vml_unrecognized_count += 1
+        else:
+            legacy_vml_members.add(relationship.safe_target)
+    legacy_vml_kwargs = {
+        "legacy_vml_members": tuple(sorted(legacy_vml_members, key=str.casefold)),
+        "legacy_vml_relationships": legacy_vml_relationships,
+        "legacy_vml_unrecognized_count": legacy_vml_unrecognized_count,
+    }
     relevant_relationship_types = {
         _WORKSHEET_CONTROL_RELATIONSHIP,
         _WORKSHEET_CTRLPROP_RELATIONSHIP,
@@ -6918,7 +6978,7 @@ def _worksheet_control_sheet_inspection(
     # have no relevant relationship declaration at all: large data sheets are
     # common, and no valid control chain can start there.
     if not relevant_relationships:
-        return _WorksheetControlSheetInspection(member=member)
+        return _WorksheetControlSheetInspection(member=member, **legacy_vml_kwargs)
     payload, fallback_signature = _worksheet_control_xml_payload(
         archive,
         member,
@@ -6933,6 +6993,7 @@ def _worksheet_control_sheet_inspection(
             control_property_members=tuple(
                 sorted(control_property_members, key=str.casefold)
             ),
+            **legacy_vml_kwargs,
             payload_members=tuple(sorted(payload_members, key=str.casefold)),
             unresolved_payload_entries=tuple(unresolved_payload_entries),
             unrecognized_count=int(bool(relevant_relationships)),
@@ -6956,6 +7017,7 @@ def _worksheet_control_sheet_inspection(
             control_property_members=tuple(
                 sorted(control_property_members, key=str.casefold)
             ),
+            **legacy_vml_kwargs,
             payload_members=tuple(sorted(payload_members, key=str.casefold)),
             unresolved_payload_entries=tuple(unresolved_payload_entries),
             unrecognized_count=int(bool(relevant_relationships)),
@@ -6979,6 +7041,7 @@ def _worksheet_control_sheet_inspection(
             control_property_members=tuple(
                 sorted(control_property_members, key=str.casefold)
             ),
+            **legacy_vml_kwargs,
             payload_members=tuple(sorted(payload_members, key=str.casefold)),
             unresolved_payload_entries=tuple(unresolved_payload_entries),
             unrecognized_count=int(bool(relevant_relationships)),
@@ -7234,6 +7297,7 @@ def _worksheet_control_sheet_inspection(
         control_property_members=tuple(
             sorted(control_property_members, key=str.casefold)
         ),
+        **legacy_vml_kwargs,
         payload_members=tuple(sorted(payload_members, key=str.casefold)),
         unresolved_payload_entries=tuple(unresolved_payload_entries),
         unrecognized_count=unrecognized_count,
@@ -7590,13 +7654,219 @@ def _worksheet_control_property_inspection(
     )
 
 
+def _worksheet_vml_drawing_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    xml_budget: _WorksheetEmbeddedControlXmlBudget,
+) -> _WorksheetVmlDrawingInspection:
+    """Inspect legacy VML controls without rendering drawings or evaluating bindings.
+
+    VML drawing parts also carry ordinary comment notes. Only ``ClientData`` nodes
+    whose ``ObjectType`` is not ``Note`` enter this control inventory, so comment
+    layout and note text do not create control findings.
+    """
+    relationships = _worksheet_control_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="legacy VML drawing",
+    )
+    relationship_semantics = _worksheet_control_relationship_semantics(
+        relationships,
+        warnings,
+        context="legacy VML drawing",
+    )
+    relationship_by_id: dict[str, _WorksheetControlRawRelationship] = {}
+    for relationship in relationships:
+        if (
+            relationship.relationship_id
+            and relationship.relationship_id not in relationship_by_id
+        ):
+            relationship_by_id[relationship.relationship_id] = relationship
+
+    payload, fallback_signature = _worksheet_control_xml_payload(
+        archive,
+        member,
+        warnings,
+        xml_budget,
+    )
+    if payload is None:
+        return _WorksheetVmlDrawingInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+            relationship_signature=_worksheet_control_relationship_signature(
+                relationships
+            ),
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a legacy VML control XML part "
+            f"({type(error).__name__}); the affected controls were not compared."
+        )
+        return _WorksheetVmlDrawingInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_worksheet_control_relationship_signature(
+                relationships
+            ),
+        )
+    if _xml_local_name(root.tag) != "xml" or _xml_namespace(root.tag) not in {
+        None,
+        _VML_NS,
+    }:
+        warnings.add(
+            "FormulaFence found a legacy VML control part with an unexpected root; "
+            "the affected controls were not compared."
+        )
+        return _WorksheetVmlDrawingInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_worksheet_control_relationship_signature(
+                relationships
+            ),
+        )
+
+    client_data_tag = f"{{{_VML_EXCEL_NS}}}ClientData"
+    client_data_nodes = list(root.iter(client_data_tag))
+    parent_by_child = {
+        child: parent
+        for parent in root.iter()
+        for child in parent
+    }
+    controls: list[ElementTree.Element] = []
+    control_containers: list[ElementTree.Element] = []
+    seen_containers: set[int] = set()
+    unrecognized_count = 0
+    for client_data in client_data_nodes:
+        object_type = (client_data.get("ObjectType") or "").strip()
+        if object_type.casefold() == "note":
+            continue
+        if not object_type:
+            warnings.add(
+                "FormulaFence found legacy VML ClientData without an ObjectType; "
+                "the affected controls have a coverage gap."
+            )
+            unrecognized_count += 1
+        controls.append(client_data)
+        container = parent_by_child.get(client_data, client_data)
+        if id(container) not in seen_containers:
+            seen_containers.add(id(container))
+            control_containers.append(container)
+
+    if not controls:
+        return _WorksheetVmlDrawingInspection(member=member, inspected=True)
+
+    relationship_attributes = frozenset(
+        {
+            f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
+            f"{{{_VML_OFFICE_NS}}}relid",
+        }
+    )
+    referenced_relationship_ids = {
+        relationship_id
+        for container in control_containers
+        for element in container.iter()
+        for relationship_attribute in relationship_attributes
+        if (relationship_id := element.get(relationship_attribute)) is not None
+    }
+    selected_relationships: list[_WorksheetControlRawRelationship] = []
+    for relationship_id in sorted(referenced_relationship_ids):
+        semantic = relationship_semantics.get(relationship_id)
+        if semantic is None:
+            warnings.add(
+                "FormulaFence found a legacy VML control relationship reference without "
+                "a matching relationship; the affected controls have a coverage gap."
+            )
+            unrecognized_count += 1
+            continue
+        relationship = relationship_by_id.get(relationship_id)
+        if relationship is not None:
+            selected_relationships.append(relationship)
+
+    macro_tag = f"{{{_VML_EXCEL_NS}}}FmlaMacro"
+    cell_link_tags = {
+        f"{{{_VML_EXCEL_NS}}}FmlaGroup",
+        f"{{{_VML_EXCEL_NS}}}FmlaLink",
+        f"{{{_VML_EXCEL_NS}}}FmlaTxbx",
+    }
+    source_range_tag = f"{{{_VML_EXCEL_NS}}}FmlaRange"
+    camera_source_range_tag = f"{{{_VML_EXCEL_NS}}}FmlaPict"
+    try:
+        fragments = tuple(
+            (
+                f"legacy-vml-control:{index}",
+                repr(
+                    _worksheet_control_fragment(
+                        container,
+                        relationship_semantics,
+                        relationship_attributes=relationship_attributes,
+                    )
+                ),
+            )
+            for index, container in enumerate(control_containers)
+        )
+        definition_signature = _private_external_data_signature(fragments)
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested legacy VML "
+            "control part; the affected controls were not compared."
+        )
+        definition_signature = _private_payload_signature(payload)
+        inspected = False
+        unrecognized_count += 1
+    else:
+        inspected = True
+    return _WorksheetVmlDrawingInspection(
+        member=member,
+        present=True,
+        control_count=len(controls),
+        macro_assignment_count=sum(
+            sum(child.tag == macro_tag for child in client_data)
+            for client_data in controls
+        ),
+        cell_link_count=sum(
+            sum(child.tag in cell_link_tags for child in client_data)
+            for client_data in controls
+        ),
+        source_range_count=sum(
+            sum(child.tag == source_range_tag for child in client_data)
+            for client_data in controls
+        ),
+        camera_source_range_count=sum(
+            sum(child.tag == camera_source_range_tag for child in client_data)
+            for client_data in controls
+        ),
+        related_relationship_count=len(selected_relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in selected_relationships
+        ),
+        unrecognized_count=unrecognized_count,
+        inspected=inspected,
+        definition_signature=definition_signature,
+        relationship_signature=_worksheet_control_relationship_signature(
+            tuple(selected_relationships)
+        ),
+    )
+
+
 def _worksheet_embedded_control_metadata(
     path: Path,
 ) -> _WorksheetEmbeddedControlMetadata:
-    """Inspect worksheet ActiveX, form-control, and OLE data before load time.
+    """Inspect worksheet controls and OLE data before load time.
 
     This scan is intentionally package-only: it does not initialize controls,
-    deserialize OLE data, open embedded packages, or follow external targets.
+    deserialize OLE data, open embedded packages, render VML, or follow external
+    targets.
     """
     warnings: set[str] = set()
     default = WorksheetEmbeddedControlSnapshot()
@@ -7619,11 +7889,17 @@ def _worksheet_embedded_control_metadata(
             sheet_inspections: list[_WorksheetControlSheetInspection] = []
             active_x_sources: dict[str, set[str]] = defaultdict(set)
             control_property_sources: dict[str, set[str]] = defaultdict(set)
+            legacy_vml_sources: dict[str, set[str]] = defaultdict(set)
+            legacy_vml_declarations: dict[
+                str, list[tuple[str, tuple[str, str, str]]]
+            ] = defaultdict(list)
             declared_active_x_members: set[str] = set()
             declared_control_property_members: set[str] = set()
+            declared_legacy_vml_members: set[str] = set()
             payload_members: set[str] = set()
             unresolved_payload_entries: list[tuple[str, str]] = []
             declaration_entries: list[tuple[str, str]] = []
+            unresolved_legacy_vml_declarations: list[tuple[str, str]] = []
 
             for _, (member, sheet_kind) in sorted(
                 sheet_parts.items(),
@@ -7658,6 +7934,18 @@ def _worksheet_embedded_control_metadata(
                 for control_property_member in inspection.control_property_members:
                     control_property_sources[control_property_member].add(member)
                     declared_control_property_members.add(control_property_member)
+                for legacy_vml_member in inspection.legacy_vml_members:
+                    legacy_vml_sources[legacy_vml_member].add(member)
+                    declared_legacy_vml_members.add(legacy_vml_member)
+                for relationship in inspection.legacy_vml_relationships:
+                    if relationship.safe_target is None:
+                        unresolved_legacy_vml_declarations.append(
+                            (member, repr(relationship.semantic_key()))
+                        )
+                    else:
+                        legacy_vml_declarations[relationship.safe_target].append(
+                            (member, relationship.semantic_key())
+                        )
                 payload_members.update(inspection.payload_members)
                 unresolved_payload_entries.extend(inspection.unresolved_payload_entries)
 
@@ -7686,6 +7974,20 @@ def _worksheet_embedded_control_metadata(
                 if member not in declared_control_property_members:
                     warnings.add(
                         "FormulaFence found a form-control properties package part not declared "
+                        "by an inspected worksheet; the affected controls have a coverage gap."
+                    )
+                    orphan_part_count += 1
+
+            discovered_legacy_vml_members = {
+                entry.filename
+                for entry in archive.infolist()
+                if _WORKSHEET_LEGACY_VML_PART_PATTERN.fullmatch(entry.filename)
+            }
+            for member in discovered_legacy_vml_members:
+                legacy_vml_sources.setdefault(member, set())
+                if member not in declared_legacy_vml_members:
+                    warnings.add(
+                        "FormulaFence found a legacy VML drawing package part not declared "
                         "by an inspected worksheet; the affected controls have a coverage gap."
                     )
                     orphan_part_count += 1
@@ -7722,6 +8024,30 @@ def _worksheet_embedded_control_metadata(
                 payload_members.update(inspection.payload_members)
                 unresolved_payload_entries.extend(inspection.unresolved_payload_entries)
 
+            legacy_vml_inspections: list[_WorksheetVmlDrawingInspection] = []
+            for member in sorted(legacy_vml_sources, key=str.casefold):
+                inspection = _worksheet_vml_drawing_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    xml_budget,
+                )
+                legacy_vml_inspections.append(inspection)
+                if inspection.present:
+                    declarations = tuple(
+                        sorted(
+                            legacy_vml_declarations.get(member, []),
+                            key=repr,
+                        )
+                    )
+                    declaration_entries.append(
+                        ("legacy-vml-drawing-part", repr((member, declarations)))
+                    )
+            declaration_entries.extend(
+                ("legacy-vml-worksheet-relationship", declaration)
+                for declaration in unresolved_legacy_vml_declarations
+            )
+
             payload_inspection = _worksheet_control_related_part_payloads(
                 archive,
                 payload_members,
@@ -7741,16 +8067,34 @@ def _worksheet_embedded_control_metadata(
                 )
                 return _private_external_data_signature(tuple(material))
 
+            control_sheet_members = {
+                inspection.member
+                for inspection in sheet_inspections
+                if inspection.present
+            }
+            active_legacy_vml_members = {
+                inspection.member
+                for inspection in legacy_vml_inspections
+                if inspection.present
+            }
+            active_legacy_vml_source_relationships = [
+                relationship
+                for inspection in sheet_inspections
+                for relationship in inspection.legacy_vml_relationships
+                if relationship.safe_target in active_legacy_vml_members
+            ]
+            for inspection in legacy_vml_inspections:
+                if inspection.present:
+                    control_sheet_members.update(legacy_vml_sources[inspection.member])
             all_inspections: list[object] = [
                 *sheet_inspections,
                 *active_x_inspections,
                 *control_property_inspections,
+                *legacy_vml_inspections,
             ]
             declaration_entries.sort()
             snapshot = WorksheetEmbeddedControlSnapshot(
-                control_sheet_count=sum(
-                    inspection.present for inspection in sheet_inspections
-                ),
+                control_sheet_count=len(control_sheet_members),
                 worksheet_control_count=sum(
                     inspection.worksheet_control_count for inspection in sheet_inspections
                 ),
@@ -7760,9 +8104,34 @@ def _worksheet_embedded_control_metadata(
                     for inspection in active_x_inspections
                 ),
                 form_control_property_part_count=len(control_property_sources),
+                legacy_vml_drawing_part_count=sum(
+                    inspection.present for inspection in legacy_vml_inspections
+                ),
+                legacy_vml_control_count=sum(
+                    inspection.control_count for inspection in legacy_vml_inspections
+                ),
+                legacy_vml_macro_assignment_count=sum(
+                    inspection.macro_assignment_count
+                    for inspection in legacy_vml_inspections
+                ),
+                legacy_vml_cell_link_count=sum(
+                    inspection.cell_link_count for inspection in legacy_vml_inspections
+                ),
+                legacy_vml_source_range_count=sum(
+                    inspection.source_range_count
+                    for inspection in legacy_vml_inspections
+                ),
+                legacy_vml_camera_source_range_count=sum(
+                    inspection.camera_source_range_count
+                    for inspection in legacy_vml_inspections
+                ),
                 control_macro_assignment_count=sum(
                     inspection.control_macro_assignment_count
                     for inspection in sheet_inspections
+                )
+                + sum(
+                    inspection.macro_assignment_count
+                    for inspection in legacy_vml_inspections
                 ),
                 control_cell_link_count=sum(
                     inspection.control_cell_link_count for inspection in sheet_inspections
@@ -7770,6 +8139,9 @@ def _worksheet_embedded_control_metadata(
                 + sum(
                     inspection.cell_link_count
                     for inspection in control_property_inspections
+                )
+                + sum(
+                    inspection.cell_link_count for inspection in legacy_vml_inspections
                 ),
                 control_source_range_count=sum(
                     inspection.control_source_range_count
@@ -7778,6 +8150,10 @@ def _worksheet_embedded_control_metadata(
                 + sum(
                     inspection.source_range_count
                     for inspection in control_property_inspections
+                )
+                + sum(
+                    inspection.source_range_count
+                    for inspection in legacy_vml_inspections
                 ),
                 form_control_formula_binding_count=sum(
                     inspection.formula_binding_count
@@ -7798,15 +8174,24 @@ def _worksheet_embedded_control_metadata(
                 ),
                 related_relationship_count=sum(
                     inspection.related_relationship_count for inspection in all_inspections
-                ),
+                )
+                + len(active_legacy_vml_source_relationships),
                 external_relationship_count=sum(
                     inspection.external_relationship_count for inspection in all_inspections
+                )
+                + sum(
+                    relationship.target_mode.casefold() != "internal"
+                    for relationship in active_legacy_vml_source_relationships
                 ),
                 internal_related_part_count=payload_inspection.internal_part_count,
                 fingerprinted_related_part_count=payload_inspection.fingerprinted_part_count,
                 uninspected_related_part_count=payload_inspection.uninspected_part_count,
                 unrecognized_part_count=orphan_part_count
-                + sum(inspection.unrecognized_count for inspection in all_inspections),
+                + sum(inspection.unrecognized_count for inspection in all_inspections)
+                + sum(
+                    inspection.legacy_vml_unrecognized_count
+                    for inspection in sheet_inspections
+                ),
                 declaration_signature=_private_external_data_signature(
                     tuple(declaration_entries)
                 ),
@@ -7821,6 +8206,14 @@ def _worksheet_embedded_control_metadata(
                 form_control_property_signature=aggregate_signature(
                     list(control_property_inspections),
                     "definition_signature",
+                ),
+                legacy_vml_definition_signature=aggregate_signature(
+                    list(legacy_vml_inspections),
+                    "definition_signature",
+                ),
+                legacy_vml_relationship_signature=aggregate_signature(
+                    list(legacy_vml_inspections),
+                    "relationship_signature",
                 ),
                 relationship_signature=aggregate_signature(
                     all_inspections,

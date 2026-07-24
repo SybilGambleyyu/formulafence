@@ -17,6 +17,8 @@ from .helpers import (
     add_protected_range,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
+    change_legacy_vml_control_controls,
+    change_legacy_vml_note,
     change_office_web_addin_auto_show,
     change_office_web_addin_controls,
     change_power_query_controls,
@@ -28,6 +30,7 @@ from .helpers import (
     change_worksheet_embedded_control_payload,
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
+    corrupt_legacy_vml_control_root,
     corrupt_office_web_addin_definition_root,
     corrupt_ribbon_customization_root,
     corrupt_worksheet_embedded_control_activex_root,
@@ -41,6 +44,8 @@ from .helpers import (
     make_external_link_package_model,
     make_implicit_intersection_model,
     make_legacy_array_model,
+    make_legacy_vml_control_model,
+    make_legacy_vml_note_model,
     make_let_model,
     make_model,
     make_named_formula_model,
@@ -60,12 +65,14 @@ from .helpers import (
     rebind_external_link_declaration,
     remove_xlm_macro_sheet_related_part_payload,
     renumber_external_link_declaration_relationships,
+    renumber_legacy_vml_control_relationships,
     renumber_office_web_addin_relationships,
     renumber_ribbon_customization_relationships,
     renumber_worksheet_embedded_control_relationships,
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
     rewrite,
+    rewrite_legacy_vml_control_internal_target_spelling,
     rewrite_office_web_addin_internal_target_spelling,
     rewrite_ribbon_customization_internal_target_spelling,
     rewrite_worksheet_embedded_control_internal_target_spelling,
@@ -2400,6 +2407,12 @@ def test_worksheet_embedded_controls_are_profiled_and_diffed_privately(tmp_path)
         "active_x_part_count": 1,
         "active_x_binary_reference_count": 1,
         "form_control_property_part_count": 1,
+        "legacy_vml_drawing_part_count": 0,
+        "legacy_vml_control_count": 0,
+        "legacy_vml_macro_assignment_count": 0,
+        "legacy_vml_cell_link_count": 0,
+        "legacy_vml_source_range_count": 0,
+        "legacy_vml_camera_source_range_count": 0,
         "control_macro_assignment_count": 1,
         "control_cell_link_count": 4,
         "control_source_range_count": 2,
@@ -2415,7 +2428,7 @@ def test_worksheet_embedded_controls_are_profiled_and_diffed_privately(tmp_path)
         "uninspected_related_part_count": 0,
         "unrecognized_part_count": 0,
     }
-    assert "## Worksheet embedded controls and OLE objects" in markdown
+    assert "## Worksheet embedded controls, legacy VML controls, and OLE objects" in markdown
     assert "**ActiveX persistence parts:** 1" in markdown
     assert control_change.details["worksheet_binding_changed"] is True
     assert control_change.details["worksheet_control_definition_material_changed"] is True
@@ -2521,6 +2534,150 @@ def test_worksheet_embedded_control_equivalent_target_spellings_are_ignored(tmp_
         change.kind for change in report.changes
     }
     assert "FF029" not in {finding.rule_id for finding in report.findings}
+
+
+def test_legacy_vml_controls_are_profiled_and_diffed_privately(tmp_path) -> None:
+    baseline = make_legacy_vml_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_vml_control_model(tmp_path / "candidate.xlsx")
+    change_legacy_vml_control_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    control_change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_embedded_controls_changed"
+    )
+
+    controls = profile["worksheet_embedded_controls"]
+    assert baseline_snapshot.summary()["worksheet_legacy_vml_drawing_part_count"] == 1
+    assert baseline_snapshot.summary()["worksheet_legacy_vml_control_count"] == 4
+    assert controls["control_sheet_count"] == 1
+    assert controls["worksheet_control_count"] == 0
+    assert controls["legacy_vml_drawing_part_count"] == 1
+    assert controls["legacy_vml_control_count"] == 4
+    assert controls["legacy_vml_macro_assignment_count"] == 1
+    assert controls["legacy_vml_cell_link_count"] == 3
+    assert controls["legacy_vml_source_range_count"] == 1
+    assert controls["legacy_vml_camera_source_range_count"] == 1
+    assert controls["control_macro_assignment_count"] == 1
+    assert controls["control_cell_link_count"] == 3
+    assert controls["control_source_range_count"] == 1
+    assert controls["related_relationship_count"] == 2
+    assert baseline_snapshot.parser_warnings == ()
+    assert "**Legacy VML drawing parts / controls:** 1 / 4" in markdown
+    assert control_change.details["legacy_vml_control_definition_material_changed"] is True
+    assert control_change.details["legacy_vml_related_part_relationships_changed"] is True
+    assert control_change.details["related_part_relationships_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF029"}
+
+    sensitive_values = (
+        "PrivateLegacyVmlMacro",
+        "PrivateCandidateVmlMacro",
+        "Private legacy VML button caption",
+        "Private legacy VML note text",
+        "private-legacy-vml.png",
+        "private-candidate-legacy-vml.png",
+        "Inputs!$B$2:$B$4",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_legacy_vml_comment_notes_do_not_change_control_findings(tmp_path) -> None:
+    baseline = make_legacy_vml_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_vml_control_model(tmp_path / "candidate.xlsx")
+    change_legacy_vml_note(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "worksheet_embedded_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF029" not in {finding.rule_id for finding in report.findings}
+
+
+def test_legacy_vml_comment_notes_are_not_profiled_as_controls(tmp_path) -> None:
+    workbook = make_legacy_vml_note_model(tmp_path / "notes.xlsx")
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_embedded_controls.present is False
+    assert snapshot.worksheet_embedded_controls.legacy_vml_drawing_part_count == 0
+    assert snapshot.worksheet_embedded_controls.legacy_vml_control_count == 0
+    assert snapshot.parser_warnings == ()
+
+
+def test_legacy_vml_control_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_legacy_vml_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_vml_control_model(tmp_path / "candidate.xlsx")
+    renumber_legacy_vml_control_relationships(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "worksheet_embedded_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF029" not in {finding.rule_id for finding in report.findings}
+
+
+def test_legacy_vml_control_equivalent_target_spellings_are_ignored(tmp_path) -> None:
+    baseline = make_legacy_vml_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_vml_control_model(tmp_path / "candidate.xlsx")
+    rewrite_legacy_vml_control_internal_target_spelling(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "worksheet_embedded_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF029" not in {finding.rule_id for finding in report.findings}
+
+
+def test_malformed_legacy_vml_control_parts_fail_closed(tmp_path) -> None:
+    baseline = make_legacy_vml_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_vml_control_model(tmp_path / "candidate.xlsx")
+    corrupt_legacy_vml_control_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.worksheet_embedded_controls.unrecognized_part_count >= 1
+    assert any(
+        "legacy VML control part with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "worksheet_embedded_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF029" in {finding.rule_id for finding in report.findings}
+
+
+def test_legacy_vml_control_xml_budgets_fail_closed(tmp_path, monkeypatch) -> None:
+    workbook = make_legacy_vml_control_model(tmp_path / "candidate.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKSHEET_EMBEDDED_CONTROL_MAX_XML_PART_BYTES",
+        1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_embedded_controls.unrecognized_part_count >= 1
+    assert any(
+        "oversized worksheet embedded-control XML part" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_ordinary_worksheets_do_not_consume_control_xml_budget(

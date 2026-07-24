@@ -2953,6 +2953,411 @@ def corrupt_worksheet_embedded_control_activex_root(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".worksheet-embedded-control-corrupt.tmp.xlsx")
 
 
+def make_legacy_vml_control_model(path: Path) -> Path:
+    """Create raw VML form-control material alongside a harmless comment note.
+
+    The VML macros and bindings are inert XML strings. They exercise the scanner
+    without being opened by Excel or executed during tests.
+    """
+    make_model(path)
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+    vml = "urn:schemas-microsoft-com:vml"
+    vml_office = "urn:schemas-microsoft-com:office:office"
+    vml_excel = "urn:schemas-microsoft-com:office:excel"
+    vml_drawing_relationship = f"{document_relationships}/vmlDrawing"
+    image_relationship = f"{document_relationships}/image"
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_vml_default(root: ElementTree.Element) -> None:
+        default_tag = f"{{{content_types}}}Default"
+        if any(item.get("Extension") == "vml" for item in root.findall(default_tag)):
+            return
+        ElementTree.SubElement(
+            root,
+            default_tag,
+            {
+                "Extension": "vml",
+                "ContentType": "application/vnd.openxmlformats-officedocument.vmlDrawing",
+            },
+        )
+
+    def formula_child(
+        parent: ElementTree.Element,
+        name: str,
+        value: str,
+    ) -> None:
+        ElementTree.SubElement(parent, f"{{{vml_excel}}}{name}").text = value
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        add_vml_default(types)
+        contents["[Content_Types].xml"] = serialize(types)
+
+        worksheet = _inputs_worksheet_root(contents)
+        ElementTree.SubElement(
+            worksheet,
+            f"{{{spreadsheet}}}legacyDrawing",
+            {f"{{{document_relationships}}}id": "rIdFenceLegacyVmlDrawing"},
+        )
+        _save_inputs_worksheet(contents, worksheet)
+
+        relationships = ElementTree.fromstring(
+            contents.get(
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                (
+                    b'<?xml version="1.0" encoding="UTF-8"?>'
+                    b'<Relationships xmlns="http://schemas.openxmlformats.org/'
+                    b'package/2006/relationships"/>'
+                ),
+            )
+        )
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        ElementTree.SubElement(
+            relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceLegacyVmlDrawing",
+                "Type": vml_drawing_relationship,
+                "Target": "../drawings/vmlDrawing1.vml",
+            },
+        )
+        contents["xl/worksheets/_rels/sheet1.xml.rels"] = serialize(relationships)
+
+        drawing = ElementTree.Element("xml")
+        note_shape = ElementTree.SubElement(
+            drawing,
+            f"{{{vml}}}shape",
+            {"id": "_x0000_s1024", "type": "#_x0000_t202"},
+        )
+        ElementTree.SubElement(note_shape, f"{{{vml}}}textbox").text = (
+            "Private legacy VML note text"
+        )
+        ElementTree.SubElement(
+            note_shape,
+            f"{{{vml_excel}}}ClientData",
+            {"ObjectType": "Note"},
+        )
+
+        button_shape = ElementTree.SubElement(
+            drawing,
+            f"{{{vml}}}shape",
+            {
+                "id": "_x0000_s1025",
+                "type": "#_x0000_t201",
+                f"{{{vml_office}}}button": "t",
+            },
+        )
+        ElementTree.SubElement(
+            button_shape,
+            f"{{{vml}}}imagedata",
+            {f"{{{vml_office}}}relid": "rIdFenceLegacyVmlPresentation"},
+        )
+        ElementTree.SubElement(button_shape, f"{{{vml}}}textbox").text = (
+            "Private legacy VML button caption"
+        )
+        button_data = ElementTree.SubElement(
+            button_shape,
+            f"{{{vml_excel}}}ClientData",
+            {"ObjectType": "Button"},
+        )
+        formula_child(button_data, "FmlaMacro", "[0]!PrivateLegacyVmlMacro")
+
+        dropdown_shape = ElementTree.SubElement(
+            drawing,
+            f"{{{vml}}}shape",
+            {"id": "_x0000_s1026", "type": "#_x0000_t201"},
+        )
+        dropdown_data = ElementTree.SubElement(
+            dropdown_shape,
+            f"{{{vml_excel}}}ClientData",
+            {"ObjectType": "Drop"},
+        )
+        formula_child(dropdown_data, "FmlaLink", "Inputs!$B$2")
+        formula_child(dropdown_data, "FmlaRange", "Inputs!$B$2:$B$4")
+        formula_child(dropdown_data, "FmlaTxbx", "Inputs!$A$1")
+
+        camera_shape = ElementTree.SubElement(
+            drawing,
+            f"{{{vml}}}shape",
+            {"id": "_x0000_s1027", "type": "#_x0000_t201"},
+        )
+        camera_data = ElementTree.SubElement(
+            camera_shape,
+            f"{{{vml_excel}}}ClientData",
+            {"ObjectType": "Pict"},
+        )
+        formula_child(camera_data, "FmlaPict", "Inputs!$B$2:$B$4")
+
+        group_shape = ElementTree.SubElement(
+            drawing,
+            f"{{{vml}}}shape",
+            {"id": "_x0000_s1028", "type": "#_x0000_t201"},
+        )
+        group_data = ElementTree.SubElement(
+            group_shape,
+            f"{{{vml_excel}}}ClientData",
+            {"ObjectType": "GBox"},
+        )
+        formula_child(group_data, "FmlaGroup", "Inputs!$B$3")
+        contents["xl/drawings/vmlDrawing1.vml"] = serialize(drawing)
+
+        drawing_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            drawing_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceLegacyVmlPresentation",
+                "Type": image_relationship,
+                "Target": "../media/private-legacy-vml.png",
+            },
+        )
+        contents["xl/drawings/_rels/vmlDrawing1.vml.rels"] = serialize(
+            drawing_relationships
+        )
+        contents["xl/media/private-legacy-vml.png"] = b"private legacy VML presentation"
+
+    return _rewrite_archive(path, mutate, ".legacy-vml-control.tmp.xlsx")
+
+
+def make_legacy_vml_note_model(path: Path) -> Path:
+    """Create a worksheet VML drawing that contains only an ordinary note."""
+    make_legacy_vml_control_model(path)
+    vml_excel = "urn:schemas-microsoft-com:office:excel"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing = ElementTree.fromstring(contents["xl/drawings/vmlDrawing1.vml"])
+        parent_by_child = {
+            child: parent
+            for parent in drawing.iter()
+            for child in parent
+        }
+        for client_data in list(drawing.iter(f"{{{vml_excel}}}ClientData")):
+            if client_data.get("ObjectType") == "Note":
+                continue
+            parent = parent_by_child.get(client_data)
+            if parent is not None:
+                parent_by_child.get(parent, drawing).remove(parent)
+        contents["xl/drawings/vmlDrawing1.vml"] = ElementTree.tostring(
+            drawing,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-vml-note-only.tmp.xlsx")
+
+
+def change_legacy_vml_control_controls(path: Path) -> Path:
+    """Change private legacy VML control definitions and presentation target."""
+    vml_excel = "urn:schemas-microsoft-com:office:excel"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing = ElementTree.fromstring(contents["xl/drawings/vmlDrawing1.vml"])
+        button = next(
+            (
+                item
+                for item in drawing.iter(f"{{{vml_excel}}}ClientData")
+                if item.get("ObjectType") == "Button"
+            ),
+            None,
+        )
+        dropdown = next(
+            (
+                item
+                for item in drawing.iter(f"{{{vml_excel}}}ClientData")
+                if item.get("ObjectType") == "Drop"
+            ),
+            None,
+        )
+        camera = next(
+            (
+                item
+                for item in drawing.iter(f"{{{vml_excel}}}ClientData")
+                if item.get("ObjectType") == "Pict"
+            ),
+            None,
+        )
+        if button is None or dropdown is None or camera is None:
+            raise ValueError("Fixture does not contain legacy VML controls")
+        button.find(f"{{{vml_excel}}}FmlaMacro").text = "[0]!PrivateCandidateVmlMacro"
+        dropdown.find(f"{{{vml_excel}}}FmlaLink").text = "Inputs!$B$4"
+        dropdown.find(f"{{{vml_excel}}}FmlaRange").text = "Inputs!$B$3:$B$4"
+        camera.find(f"{{{vml_excel}}}FmlaPict").text = "Inputs!$B$3:$B$4"
+        contents["xl/drawings/vmlDrawing1.vml"] = ElementTree.tostring(
+            drawing,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships_name = "xl/drawings/_rels/vmlDrawing1.vml.rels"
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        relationship = relationships.find(
+            f"{{{package_relationships}}}Relationship"
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain a legacy VML presentation relationship")
+        relationship.set("Target", "../media/private-candidate-legacy-vml.png")
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["xl/media/private-candidate-legacy-vml.png"] = (
+            b"private candidate legacy VML presentation"
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-vml-control-change.tmp.xlsx")
+
+
+def change_legacy_vml_note(path: Path) -> Path:
+    """Change a comment note stored beside VML controls without touching a control."""
+    vml = "urn:schemas-microsoft-com:vml"
+    vml_excel = "urn:schemas-microsoft-com:office:excel"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing = ElementTree.fromstring(contents["xl/drawings/vmlDrawing1.vml"])
+        note = next(
+            (
+                item
+                for item in drawing.iter(f"{{{vml_excel}}}ClientData")
+                if item.get("ObjectType") == "Note"
+            ),
+            None,
+        )
+        if note is None:
+            raise ValueError("Fixture does not contain a legacy VML note")
+        parent_by_child = {
+            child: parent
+            for parent in drawing.iter()
+            for child in parent
+        }
+        shape = parent_by_child.get(note)
+        textbox = shape.find(f"{{{vml}}}textbox") if shape is not None else None
+        if textbox is None:
+            raise ValueError("Fixture does not contain a legacy VML note textbox")
+        textbox.text = "Private candidate legacy VML note text"
+        contents["xl/drawings/vmlDrawing1.vml"] = ElementTree.tostring(
+            drawing,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-vml-note-change.tmp.xlsx")
+
+
+def renumber_legacy_vml_control_relationships(path: Path) -> Path:
+    """Rewrite arbitrary relationship identifiers across a legacy VML chain."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    vml = "urn:schemas-microsoft-com:vml"
+    vml_office = "urn:schemas-microsoft-com:office:office"
+    replacements = {
+        "rIdFenceLegacyVmlDrawing": "rIdFenceRenumberedLegacyVmlDrawing",
+        "rIdFenceLegacyVmlPresentation": "rIdFenceRenumberedLegacyVmlPresentation",
+    }
+
+    def replace_relationship_ids(root: ElementTree.Element) -> None:
+        for relationship in root.findall(f"{{{package_relationships}}}Relationship"):
+            if replacement := replacements.get(relationship.get("Id")):
+                relationship.set("Id", replacement)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        for member in (
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            "xl/drawings/_rels/vmlDrawing1.vml.rels",
+        ):
+            relationships = ElementTree.fromstring(contents[member])
+            replace_relationship_ids(relationships)
+            contents[member] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+        worksheet = _inputs_worksheet_root(contents)
+        legacy_drawing = worksheet.find(f"{{{_SPREADSHEETML_NS}}}legacyDrawing")
+        if legacy_drawing is None:
+            raise ValueError("Fixture does not contain a legacy VML worksheet binding")
+        relationship_attribute = f"{{{document_relationships}}}id"
+        legacy_drawing.set(
+            relationship_attribute,
+            replacements[legacy_drawing.get(relationship_attribute)],
+        )
+        _save_inputs_worksheet(contents, worksheet)
+
+        drawing = ElementTree.fromstring(contents["xl/drawings/vmlDrawing1.vml"])
+        relationship_attribute = f"{{{vml_office}}}relid"
+        for image in drawing.iter(f"{{{vml}}}imagedata"):
+            if replacement := replacements.get(image.get(relationship_attribute)):
+                image.set(relationship_attribute, replacement)
+        contents["xl/drawings/vmlDrawing1.vml"] = ElementTree.tostring(
+            drawing,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-vml-control-renumber.tmp.xlsx")
+
+
+def rewrite_legacy_vml_control_internal_target_spelling(path: Path) -> Path:
+    """Use equivalent relative target spellings in a legacy VML control chain."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_relationships_name = "xl/worksheets/_rels/sheet1.xml.rels"
+        worksheet_relationships = ElementTree.fromstring(
+            contents[worksheet_relationships_name]
+        )
+        worksheet_relationship = worksheet_relationships.find(
+            f"{{{package_relationships}}}Relationship"
+        )
+        if worksheet_relationship is None:
+            raise ValueError("Fixture does not contain a legacy VML worksheet relationship")
+        worksheet_relationship.set("Target", "../drawings/./vmlDrawing1.vml")
+        contents[worksheet_relationships_name] = ElementTree.tostring(
+            worksheet_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        drawing_relationships_name = "xl/drawings/_rels/vmlDrawing1.vml.rels"
+        drawing_relationships = ElementTree.fromstring(contents[drawing_relationships_name])
+        drawing_relationship = drawing_relationships.find(
+            f"{{{package_relationships}}}Relationship"
+        )
+        if drawing_relationship is None:
+            raise ValueError("Fixture does not contain a legacy VML presentation relationship")
+        drawing_relationship.set("Target", "../media/./private-legacy-vml.png")
+        contents[drawing_relationships_name] = ElementTree.tostring(
+            drawing_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-vml-control-target.tmp.xlsx")
+
+
+def corrupt_legacy_vml_control_root(path: Path) -> Path:
+    """Replace a legacy VML root with unexpected XML for coverage tests."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing = ElementTree.fromstring(contents["xl/drawings/vmlDrawing1.vml"])
+        drawing.tag = "notVmlXml"
+        contents["xl/drawings/vmlDrawing1.vml"] = ElementTree.tostring(
+            drawing,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-vml-control-corrupt.tmp.xlsx")
+
+
 def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Path:
     """Create a workbook with operational protection and sparse style controls."""
     workbook = Workbook()

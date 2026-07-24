@@ -10,6 +10,7 @@ from formulafence.workbook import load_snapshot
 from .helpers import (
     change_external_data_refresh_controls,
     change_external_link_package_controls,
+    change_legacy_vml_control_controls,
     change_office_web_addin_auto_show,
     change_power_query_controls,
     change_ribbon_customization_callback,
@@ -20,6 +21,7 @@ from .helpers import (
     make_external_data_refresh_model,
     make_external_link_package_model,
     make_legacy_array_model,
+    make_legacy_vml_control_model,
     make_model,
     make_office_web_addin_model,
     make_power_query_model,
@@ -306,6 +308,22 @@ def test_policy_can_block_worksheet_embedded_control_changes(tmp_path) -> None:
     baseline = make_worksheet_embedded_control_model(tmp_path / "baseline.xlsx")
     candidate = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
     change_worksheet_embedded_control_controls(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_worksheet_embedded_control_changes": True},
+        }
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP029"}
+
+
+def test_policy_can_block_legacy_vml_control_changes(tmp_path) -> None:
+    baseline = make_legacy_vml_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_vml_control_model(tmp_path / "candidate.xlsx")
+    change_legacy_vml_control_controls(candidate)
 
     report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
     policy = parse_policy(

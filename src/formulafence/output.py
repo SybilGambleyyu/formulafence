@@ -97,6 +97,15 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "- **Pivot caches refreshing on open:** "
             f"{workbook['pivot_caches_refresh_on_load']}"
         ),
+        f"- **Power Query Data Mashup parts:** {workbook['power_query_mashup_count']}",
+        (
+            "- **Power Query formula documents:** "
+            f"{workbook['power_query_formula_document_count']}"
+        ),
+        (
+            "- **Power Query metadata items:** "
+            f"{workbook['power_query_metadata_item_count']}"
+        ),
         f"- **3-D reference formulas:** {workbook['three_d_reference_cells']}",
         f"- **Spill-reference formulas:** {workbook['spill_reference_cells']}",
         (
@@ -629,6 +638,62 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Pivot-cache source details, cached records, and raw extension XML "
             "are intentionally omitted."
+        )
+    power_query = profile["power_query"]
+    if power_query["present"]:
+        permission_controls = power_query["permission_controls"]
+        lines.extend(
+            [
+                "",
+                "## Power Query controls",
+                "",
+                (
+                    "- **Data Mashup custom XML parts:** "
+                    f"{power_query['mashup_count']} "
+                    f"({power_query['parsed_mashup_count']} structurally parsed)"
+                ),
+                (
+                    "- **Formula documents:** "
+                    f"{power_query['formula_document_count']} across "
+                    f"{power_query['package_part_count']} package part(s)"
+                ),
+                (
+                    "- **Embedded content parts:** "
+                    f"{power_query['embedded_content_part_count']}"
+                ),
+                (
+                    "- **Query metadata records:** "
+                    f"{power_query['metadata_item_count']} in "
+                    f"{power_query['metadata_document_count']} document(s)"
+                ),
+                (
+                    "- **Formula-firewall enabled:** "
+                    f"{permission_controls['firewall_enabled_count']} of "
+                    f"{permission_controls['payload_count']} permission payload(s)"
+                ),
+                (
+                    "- **Future package evaluation allowed:** "
+                    f"{permission_controls['future_packages_allowed_count']}"
+                ),
+                (
+                    "- **Permission-binding payloads:** "
+                    f"{power_query['permission_binding_count']}"
+                ),
+            ]
+        )
+        if permission_controls["opaque_metadata"]["present"]:
+            lines.append(
+                "- **Unmodelled permission items:** "
+                f"{permission_controls['opaque_metadata']['count']}"
+            )
+        if power_query["opaque_metadata"]["present"]:
+            lines.append(
+                "- **Unmodelled Data Mashup items:** "
+                f"{power_query['opaque_metadata']['count']}"
+            )
+        lines.append(
+            "M formulas, query names, source locations, metadata values, embedded content, "
+            "telemetry IDs, and user-bound permission bindings are intentionally omitted."
         )
     features = profile["features"]
     if features["external_reference_cells"] or features["broken_reference_cells"]:

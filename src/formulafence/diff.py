@@ -20,6 +20,7 @@ from formulafence.models import (
     ExternalDataConnectionSnapshot,
     Finding,
     PivotCacheRefreshSnapshot,
+    PowerQuerySnapshot,
     ProtectionCredentialSnapshot,
     ProtectionOpaqueMetadataSnapshot,
     QueryTableRefreshSnapshot,
@@ -847,6 +848,59 @@ def _workbook_control_changes(
                 "FF023",
                 "high",
                 "Pivot-cache refresh controls changed.",
+                details=details,
+            )
+        )
+
+    if before.power_query != after.power_query:
+        old_power_query: PowerQuerySnapshot = before.power_query
+        new_power_query: PowerQuerySnapshot = after.power_query
+        details: dict[str, object] = {
+            "before": old_power_query.to_dict(),
+            "after": new_power_query.to_dict(),
+        }
+        if old_power_query.formula_signature != new_power_query.formula_signature:
+            details["formula_material_changed"] = True
+        if (
+            old_power_query.package_configuration_signature
+            != new_power_query.package_configuration_signature
+        ):
+            details["package_configuration_material_changed"] = True
+        if (
+            old_power_query.metadata_identity_signature
+            != new_power_query.metadata_identity_signature
+        ):
+            details["metadata_identity_material_changed"] = True
+        if (
+            old_power_query.metadata_control_signature
+            != new_power_query.metadata_control_signature
+        ):
+            details["metadata_control_material_changed"] = True
+        if old_power_query.permission_controls != new_power_query.permission_controls:
+            details["permission_controls_changed"] = True
+        if (
+            old_power_query.permission_binding_count
+            != new_power_query.permission_binding_count
+        ):
+            details["permission_binding_presence_changed"] = True
+        if (
+            old_power_query.opaque_metadata.signature
+            != new_power_query.opaque_metadata.signature
+        ):
+            details["opaque_metadata_changed"] = True
+        changes.append(
+            Change(
+                "power_query_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF024",
+                "high",
+                "Power Query formulas or semantic query controls changed.",
                 details=details,
             )
         )

@@ -594,7 +594,7 @@ class CellProtectionAssignmentSnapshot:
 
 @dataclass(frozen=True)
 class ExternalDataOpaqueMetadataSnapshot:
-    """Private comparison evidence for unmodelled external-data XML."""
+    """Private comparison evidence for unmodelled external-data XML or mashups."""
 
     count: int = 0
     signature: str | None = field(default=None, repr=False)
@@ -786,6 +786,79 @@ class PivotCacheRefreshSnapshot:
             "refresh_enabled": self.refresh_enabled,
             "save_data": self.save_data,
             "upgrade_on_refresh": self.upgrade_on_refresh,
+            "opaque_metadata": self.opaque_metadata.to_dict(),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
+class PowerQueryPermissionControlsSnapshot:
+    """Safe aggregate controls from Data Mashup permission documents."""
+
+    payload_count: int = 0
+    parsed_count: int = 0
+    firewall_enabled_count: int = 0
+    future_packages_allowed_count: int = 0
+    workbook_group_type_count: int = 0
+    opaque_metadata: ExternalDataOpaqueMetadataSnapshot = field(
+        default_factory=ExternalDataOpaqueMetadataSnapshot
+    )
+    signature: str | None = field(default=None, repr=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return permission-control counts without query or user identity material."""
+        return {
+            "payload_count": self.payload_count,
+            "parsed_count": self.parsed_count,
+            "firewall_enabled_count": self.firewall_enabled_count,
+            "future_packages_allowed_count": self.future_packages_allowed_count,
+            "workbook_group_type_count": self.workbook_group_type_count,
+            "opaque_metadata": self.opaque_metadata.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class PowerQuerySnapshot:
+    """Safe inventory of Data Mashup query definitions stored in custom XML."""
+
+    mashup_count: int = 0
+    parsed_mashup_count: int = 0
+    formula_document_count: int = 0
+    package_part_count: int = 0
+    embedded_content_part_count: int = 0
+    metadata_document_count: int = 0
+    metadata_item_count: int = 0
+    permission_controls: PowerQueryPermissionControlsSnapshot = field(
+        default_factory=PowerQueryPermissionControlsSnapshot
+    )
+    permission_binding_count: int = 0
+    formula_signature: str | None = field(default=None, repr=False)
+    package_configuration_signature: str | None = field(default=None, repr=False)
+    metadata_identity_signature: str | None = field(default=None, repr=False)
+    metadata_control_signature: str | None = field(default=None, repr=False)
+    opaque_metadata: ExternalDataOpaqueMetadataSnapshot = field(
+        default_factory=ExternalDataOpaqueMetadataSnapshot
+    )
+
+    @property
+    def present(self) -> bool:
+        return self.mashup_count > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural Power Query evidence without M text or source material."""
+        return {
+            "present": self.present,
+            "mashup_count": self.mashup_count,
+            "parsed_mashup_count": self.parsed_mashup_count,
+            "formula_document_count": self.formula_document_count,
+            "package_part_count": self.package_part_count,
+            "embedded_content_part_count": self.embedded_content_part_count,
+            "metadata_document_count": self.metadata_document_count,
+            "metadata_item_count": self.metadata_item_count,
+            "permission_controls": self.permission_controls.to_dict(),
+            "permission_binding_count": self.permission_binding_count,
             "opaque_metadata": self.opaque_metadata.to_dict(),
         }
 
@@ -989,6 +1062,7 @@ class WorkbookSnapshot:
     external_data_connections: tuple[ExternalDataConnectionSnapshot, ...] = ()
     query_table_refresh_controls: tuple[QueryTableRefreshSnapshot, ...] = ()
     pivot_cache_refresh_controls: tuple[PivotCacheRefreshSnapshot, ...] = ()
+    power_query: PowerQuerySnapshot = field(default_factory=PowerQuerySnapshot)
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     spill_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -1070,6 +1144,9 @@ class WorkbookSnapshot:
                 control.refresh_on_load
                 for control in self.pivot_cache_refresh_controls
             ),
+            "power_query_mashup_count": self.power_query.mashup_count,
+            "power_query_formula_document_count": self.power_query.formula_document_count,
+            "power_query_metadata_item_count": self.power_query.metadata_item_count,
             "has_vba": self.macro_hash is not None,
             "external_reference_cells": len(self.external_references),
             "broken_reference_cells": len(self.broken_references),

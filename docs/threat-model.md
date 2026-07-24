@@ -121,8 +121,18 @@ review prompt, not proof of an error.
   parameter values, SSO IDs, cached records, and opaque extension XML remain
   private fingerprints; a material change emits `FF023` and can be blocked with
   `no_external_data_connection_changes`. FormulaFence does **not** connect,
-  refresh data, establish source trust, inspect Power Query M or DDE/OLE links,
-  or model PivotTable layout semantics.
+  refresh data, establish source trust, inspect DDE/OLE links, or model
+  PivotTable layout semantics.
+- Power Query Data Mashup custom XML is inspected without serializing its M
+  formulas or data/source material. FormulaFence privately compares the
+  `Section1.m` formula document, logical package content, stable query metadata,
+  and formula-firewall permissions. Profiles expose only structural counts and
+  safe controls; query names, locations, metadata values, embedded content,
+  telemetry IDs, and user-bound permission bindings remain private. `sqmid`
+  telemetry and result-only refresh metadata are intentionally ignored. A
+  material change emits `FF024` and can be blocked with
+  `no_power_query_changes`. FormulaFence does **not** execute M, refresh a
+  query, establish source trust, or infer returned values.
 - Explicit implicit intersection is inventoried for literal `@` display syntax,
   `@` applied to a function, and persisted `SINGLE()` OOXML. When `SINGLE()`
   has one direct static A1 cell or range argument with an unambiguous

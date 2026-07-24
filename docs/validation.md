@@ -333,6 +333,35 @@ Markdown, or SARIF artifacts. This validates comparison and data-minimisation
 behavior, not Excel authentication, file encryption, rights management, or the
 complete style-cascade result.
 
+## Power Query Data Mashup controls and redaction — 2026-07-24
+
+FormulaFence 0.18.0 was profiled against DecimalTurn's public
+[Power Query `.xlsm` example](https://github.com/DecimalTurn/VBA-StackOverflow-Demos/tree/7100c961fec96435adfb402fdd7e6c59c0af4f43/demos/answers/79461277),
+downloaded only for local compatibility validation and not bundled with the
+project. The downloaded `79461277.xlsm` had SHA-256
+`eed5eb994b426fde70d68e20f59bab2e0c02dd5fe6a620a4d9ffff9777bd1bc9`.
+
+The workbook carries a `customXml/item1.xml` `DataMashup` part, one embedded
+`Section1.m` formula document, Data Mashup metadata and permissions, and a
+QueryTable reached through an Excel table relationship rather than a direct
+worksheet relationship. FormulaFence reported the safe structural counts,
+formula-firewall state, and linked query-table control without printing its M
+formula, query/source identity, or metadata values. The file's pre-existing
+unmodelled Connections-container warning remained a visible coverage note.
+On a local, non-distributed copy, a change confined to `Section1.m` emitted
+only `FF024` with a private formula-material flag; the inserted M-code marker
+did not appear in the JSON report.
+
+Controlled raw-OOXML fixtures changed M text, stable metadata, and firewall
+settings, producing `FF024` and `FFP024` under `no_power_query_changes`.
+Separate changes to only `sqmid` telemetry, result-time metadata, and the
+user-bound permission-binding blob did not create a query-control diff. The
+fixtures placed synthetic URLs, query names, package content, embedded content,
+metadata values, IDs, and permission material in the raw package, then verified
+that none entered JSON, Markdown, or SARIF. This validates static comparison
+and redaction—not M execution, connection refresh, source trust, or returned
+data correctness.
+
 ## External-data refresh controls and redaction — 2026-07-24
 
 FormulaFence 0.17.0 was profiled against Mullins Lab's public

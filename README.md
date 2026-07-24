@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.17.0/formulafence-0.17.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.18.0/formulafence-0.18.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,6 +75,7 @@ rules:
   no_conditional_formatting_changes: true
   no_protection_changes: true
   no_external_data_connection_changes: true
+  no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -96,7 +97,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, and external-data refresh controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -252,10 +253,24 @@ identifiers, cached records, and opaque extension XML; private fingerprints
 still expose a material source or identity change. Any change emits `FF023`;
 enable `no_external_data_connection_changes` for `FFP023`. FormulaFence never
 opens a connection or refreshes data, does not assess source trust or actual
-returned values, and does not yet inspect Power Query M scripts, DDE/OLE links,
-or PivotTable layout semantics. The scope follows Microsoft's
+returned values, and does not inspect DDE/OLE links or PivotTable layout
+semantics. The scope follows Microsoft's
 [external-data refresh guidance](https://support.microsoft.com/en-us/excel/refresh-an-external-data-connection-in-excel)
 and the [SpreadsheetML Connections part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Connections_topic_ID0EQLGK.html).
+
+FormulaFence also inventories **Power Query Data Mashup** custom XML parts.
+It reads the documented length-prefixed container, fingerprints the embedded
+`Section1.m` formula document and logical package material privately, and
+compares structural query metadata plus formula-firewall permissions. Its
+profile exposes only safe counts and controls—not M text, query names, source
+locations, metadata values, embedded content, telemetry IDs, or user-bound
+permission bindings. `sqmid` telemetry and result-only refresh metadata are
+ignored to avoid writer and refresh noise. A material query-definition or
+semantic-control change emits `FF024`; enable `no_power_query_changes` for
+`FFP024`. FormulaFence does not execute M, refresh a connection, or infer the
+returned data. The implementation follows Microsoft's
+[Query Definition File Format](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-qdeff/27b1dd1e-7de8-45d9-9c84-dfcc7a802e37),
+which stores Power Query definitions in a Custom XML part.
 
 FormulaFence also follows a call to a workbook- or worksheet-local defined name
 when its complete definition is one statically resolvable `LAMBDA` expression.

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.18.0 — 2026-07-24
+
+- Inspect Power Query Data Mashup custom XML parts directly: private fingerprints
+  cover the embedded `Section1.m` formula document, logical package material,
+  stable query metadata, and formula-firewall permissions without serializing
+  M text, query/source names, metadata values, embedded content, telemetry IDs,
+  or user-bound permission bindings.
+- Ignore documented refresh-result metadata and `sqmid` telemetry noise while
+  preserving high-signal query-definition and execution-control changes. Query
+  tables linked through normal Excel table relationships are now inventoried in
+  addition to directly worksheet-linked tables.
+- Emit `FF024` for changed Power Query formulas or semantic controls and add
+  the fail-closed `no_power_query_changes` policy rule (`FFP024`). FormulaFence
+  does not execute M, refresh connections, assess sources, or inspect DDE/OLE
+  links or full PivotTable layout semantics.
+
 ## 0.17.0 — 2026-07-24
 
 - Inventory external-data refresh controls directly from OOXML: workbook-wide

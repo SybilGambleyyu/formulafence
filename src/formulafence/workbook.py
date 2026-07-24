@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+import io
 import posixpath
 import re
+import struct
 import warnings
 from collections import defaultdict
 from collections.abc import Mapping
@@ -41,6 +45,8 @@ from formulafence.models import (
     ExternalDataOpaqueMetadataSnapshot,
     ExternalDataRefreshSettingsSnapshot,
     PivotCacheRefreshSnapshot,
+    PowerQueryPermissionControlsSnapshot,
+    PowerQuerySnapshot,
     ProtectedRangeSnapshot,
     ProtectionCredentialSnapshot,
     ProtectionOpaqueMetadataSnapshot,
@@ -80,6 +86,7 @@ _DOCUMENT_RELATIONSHIP_NS = (
 _DYNAMIC_ARRAY_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"
 _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
 _EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
+_DATA_MASHUP_NS = "http://schemas.microsoft.com/DataMashup"
 _XML_NAMESPACE_PREFIXES = {
     _SPREADSHEETML_NS: "",
     _OFFICE_2010_SPREADSHEET_NS: "x14:",
@@ -89,6 +96,7 @@ _GUID_PATTERN = re.compile(
     r"\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}"
 )
+_CUSTOM_XML_ITEM_PATTERN = re.compile(r"^customXml/item(?:\d+)?\.xml$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -144,7 +152,33 @@ class _ExternalDataMetadata:
     connections: tuple[ExternalDataConnectionSnapshot, ...]
     query_tables: tuple[QueryTableRefreshSnapshot, ...]
     pivot_caches: tuple[PivotCacheRefreshSnapshot, ...]
+    power_query: PowerQuerySnapshot
     warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _PowerQueryMashupInspection:
+    """Private parsed state for one Data Mashup custom XML payload."""
+
+    parsed: bool = False
+    formula_document_count: int = 0
+    package_part_count: int = 0
+    embedded_content_part_count: int = 0
+    metadata_document_count: int = 0
+    metadata_item_count: int = 0
+    permission_payload_count: int = 0
+    permission_parsed_count: int = 0
+    firewall_enabled_count: int = 0
+    future_packages_allowed_count: int = 0
+    workbook_group_type_count: int = 0
+    permission_binding_present: bool = False
+    formula_signature: str | None = None
+    package_configuration_signature: str | None = None
+    metadata_identity_signature: str | None = None
+    metadata_control_signature: str | None = None
+    permission_signature: str | None = None
+    opaque_entries: tuple[tuple[str, str], ...] = ()
+    permission_opaque_entries: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -219,6 +253,47 @@ _PIVOT_CACHE_SOURCE_TYPES = {
     "consolidation": "consolidation",
     "scenario": "scenario",
 }
+_POWER_QUERY_STABLE_METADATA_TYPES = frozenset(
+    {
+        "AddedToDataModel",
+        "BufferNextRefresh",
+        "FillEnabled",
+        "FillObjectType",
+        "FillTarget",
+        "FillTargetNameCustomized",
+        "FillToDataModelEnabled",
+        "IsFunctionQuery",
+        "IsPrivate",
+        "IsRelationshipDetectionEnabled",
+        "NameUpdatedAfterFill",
+        "QueryGroups",
+        "Relationships",
+        "ResultType",
+    }
+)
+_POWER_QUERY_VOLATILE_METADATA_TYPES = frozenset(
+    {
+        "FillColumnNames",
+        "FillColumnTypes",
+        "FillCount",
+        "FillErrorCode",
+        "FillErrorCount",
+        "FillErrorMessage",
+        "FilledCompleteResultToWorksheet",
+        "FillLastUpdated",
+        "FillStatus",
+        "PublishedPackageID",
+        "PublishedPackageLastModifiedAt",
+        "QueryGroupID",
+        "QueryID",
+        "RecoveryTargetColumn",
+        "RecoveryTargetRow",
+        "RecoveryTargetSheet",
+        "RelationshipInfoContainer",
+    }
+)
+_POWER_QUERY_FORMULA_MEMBER = "Formulas/Section1.m"
+_POWER_QUERY_MAX_FORMULA_BYTES = 16 * 1024 * 1024
 
 
 def sha256_file(path: Path) -> str:
@@ -244,7 +319,11 @@ def _vba_hash(path: Path) -> str | None:
 
 def _xml_root(archive: ZipFile, member: str) -> ElementTree.Element:
     """Read one OOXML part without accepting document type declarations."""
-    payload = archive.read(member)
+    return _xml_root_from_payload(archive.read(member))
+
+
+def _xml_root_from_payload(payload: bytes) -> ElementTree.Element:
+    """Parse untrusted XML payload without accepting document type declarations."""
     if b"<!DOCTYPE" in payload or b"<!ENTITY" in payload:
         raise ValueError("OOXML metadata contains a document type declaration")
     return ElementTree.fromstring(payload)
@@ -1624,6 +1703,715 @@ def _external_data_opaque_metadata(
     )
 
 
+def _private_payload_signature(payload: bytes) -> str:
+    """Hash opaque bytes without retaining them in any reviewable model."""
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _power_query_opaque_metadata(
+    entries: list[tuple[str, str]],
+) -> ExternalDataOpaqueMetadataSnapshot:
+    """Aggregate private Data Mashup evidence without serializing its material."""
+    entries.sort()
+    return ExternalDataOpaqueMetadataSnapshot(
+        count=len(entries),
+        signature=_private_external_data_signature(tuple(entries)),
+    )
+
+
+def _power_query_boolean(
+    value: str | None,
+    default: bool,
+    element_name: str,
+    warnings: set[str],
+) -> bool:
+    """Read a Data Mashup boolean while retaining the documented default."""
+    if value is None:
+        return default
+    lowered = value.strip().casefold()
+    if lowered in {"1", "true"}:
+        return True
+    if lowered in {"0", "false"}:
+        return False
+    warnings.add(
+        "FormulaFence could not interpret a Power Query "
+        f"{element_name} boolean; the documented default was used."
+    )
+    return default
+
+
+def _power_query_fields(
+    payload: bytes,
+    member: str,
+    warnings: set[str],
+    opaque_entries: list[tuple[str, str]],
+) -> tuple[int, tuple[bytes, bytes, bytes, bytes]] | None:
+    """Read the versioned, length-prefixed Data Mashup binary stream safely."""
+    if len(payload) < 4:
+        warnings.add(
+            "FormulaFence found a truncated Power Query Data Mashup stream; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append((f"{member}:truncated", _private_payload_signature(payload)))
+        return None
+    version = struct.unpack_from("<I", payload, 0)[0]
+    if version != 0:
+        warnings.add(
+            "FormulaFence found an unrecognized Power Query Data Mashup stream version; "
+            "the affected query controls have a coverage gap."
+        )
+    cursor = 4
+    fields: list[bytes] = []
+    for field_name in ("package parts", "permissions", "metadata", "permission bindings"):
+        if cursor + 4 > len(payload):
+            warnings.add(
+                "FormulaFence found a truncated Power Query Data Mashup "
+                f"{field_name} length; the affected query controls have a coverage gap."
+            )
+            opaque_entries.append(
+                (f"{member}:truncated-{field_name}", _private_payload_signature(payload))
+            )
+            return None
+        length = struct.unpack_from("<I", payload, cursor)[0]
+        cursor += 4
+        if length > len(payload) - cursor:
+            warnings.add(
+                "FormulaFence found an out-of-range Power Query Data Mashup "
+                f"{field_name} length; the affected query controls have a coverage gap."
+            )
+            opaque_entries.append(
+                (f"{member}:out-of-range-{field_name}", _private_payload_signature(payload))
+            )
+            return None
+        fields.append(payload[cursor : cursor + length])
+        cursor += length
+    if cursor != len(payload):
+        warnings.add(
+            "FormulaFence found trailing bytes in a Power Query Data Mashup stream; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append(
+            (f"{member}:trailing-bytes", _private_payload_signature(payload[cursor:]))
+        )
+    return version, (fields[0], fields[1], fields[2], fields[3])
+
+
+def _power_query_package_inventory(
+    package_parts: bytes,
+    member: str,
+    warnings: set[str],
+    opaque_entries: list[tuple[str, str]],
+) -> tuple[int, int, int, str | None, str | None]:
+    """Fingerprint logical query-package parts without exposing any part contents."""
+    try:
+        with ZipFile(io.BytesIO(package_parts)) as package:
+            entries = package.infolist()
+            formula_entries = [
+                entry for entry in entries if entry.filename == _POWER_QUERY_FORMULA_MEMBER
+            ]
+            if len(formula_entries) > 1:
+                warnings.add(
+                    "FormulaFence found multiple Power Query Section1.m formula parts; "
+                    "the affected query controls have a coverage gap."
+                )
+            formula_material: list[tuple[str, str]] = []
+            configuration_material: list[tuple[str, str]] = []
+            for entry in entries:
+                label = f"{member}:{entry.filename}"
+                if entry.file_size > _POWER_QUERY_MAX_FORMULA_BYTES:
+                    warnings.add(
+                        "FormulaFence did not fully read an oversized Power Query package part; "
+                        "the affected query controls have a coverage gap."
+                    )
+                    signature = _private_external_data_signature(
+                        (
+                            ("size", str(entry.file_size)),
+                            ("crc", str(entry.CRC)),
+                            ("compressed_size", str(entry.compress_size)),
+                        )
+                    )
+                    opaque_entries.append((f"{label}:oversized", signature or ""))
+                else:
+                    signature = _private_payload_signature(package.read(entry))
+                if entry.filename == _POWER_QUERY_FORMULA_MEMBER:
+                    formula_material.append((label, signature or ""))
+                else:
+                    configuration_material.append((label, signature or ""))
+            embedded_content_count = sum(
+                entry.filename.startswith("Content/") for entry in entries
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a Power Query package-part stream "
+            f"({type(error).__name__}); the affected query controls have a coverage gap."
+        )
+        opaque_entries.append(
+            (f"{member}:package-parts", _private_payload_signature(package_parts))
+        )
+        return 0, 0, 0, None, None
+    return (
+        len(entries),
+        len(formula_entries),
+        embedded_content_count,
+        _private_external_data_signature(tuple(sorted(formula_material))),
+        _private_external_data_signature(tuple(sorted(configuration_material))),
+    )
+
+
+def _power_query_metadata_content_count(
+    payload: bytes,
+    member: str,
+    warnings: set[str],
+    opaque_entries: list[tuple[str, str]],
+) -> int:
+    """Count metadata-side embedded parts without reading their sensitive contents."""
+    if not payload:
+        return 0
+    try:
+        with ZipFile(io.BytesIO(payload)) as archive:
+            return len(archive.infolist())
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect Power Query metadata embedded content "
+            f"({type(error).__name__}); the affected query controls have a coverage gap."
+        )
+        opaque_entries.append(
+            (f"{member}:metadata-content", _private_payload_signature(payload))
+        )
+        return 0
+
+
+def _power_query_metadata_inventory(
+    payload: bytes,
+    member: str,
+    warnings: set[str],
+    opaque_entries: list[tuple[str, str]],
+) -> tuple[int, int, int, str | None, str | None]:
+    """Read stable query metadata while intentionally ignoring refresh-result noise."""
+    if not payload:
+        return 0, 0, 0, None, None
+    if len(payload) < 8:
+        warnings.add(
+            "FormulaFence found a truncated Power Query metadata stream; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append((f"{member}:truncated-metadata", _private_payload_signature(payload)))
+        return 0, 0, 0, None, None
+
+    version, xml_length = struct.unpack_from("<II", payload, 0)
+    if version != 0:
+        warnings.add(
+            "FormulaFence found an unrecognized Power Query metadata version; "
+            "the affected query controls have a coverage gap."
+        )
+    cursor = 8
+    if xml_length > len(payload) - cursor:
+        warnings.add(
+            "FormulaFence found an out-of-range Power Query metadata XML length; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append(
+            (f"{member}:metadata-xml-length", _private_payload_signature(payload))
+        )
+        return 0, 0, 0, None, None
+    metadata_xml = payload[cursor : cursor + xml_length]
+    cursor += xml_length
+    if cursor + 4 > len(payload):
+        warnings.add(
+            "FormulaFence found a truncated Power Query metadata content length; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append(
+            (f"{member}:metadata-content-length", _private_payload_signature(payload))
+        )
+        return 0, 0, 0, None, None
+    content_length = struct.unpack_from("<I", payload, cursor)[0]
+    cursor += 4
+    if content_length > len(payload) - cursor:
+        warnings.add(
+            "FormulaFence found an out-of-range Power Query metadata content length; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append(
+            (f"{member}:metadata-content-length", _private_payload_signature(payload))
+        )
+        return 0, 0, 0, None, None
+    embedded_content = payload[cursor : cursor + content_length]
+    cursor += content_length
+    if cursor != len(payload):
+        warnings.add(
+            "FormulaFence found trailing Power Query metadata bytes; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append(
+            (f"{member}:metadata-trailing-bytes", _private_payload_signature(payload[cursor:]))
+        )
+
+    embedded_content_count = _power_query_metadata_content_count(
+        embedded_content,
+        member,
+        warnings,
+        opaque_entries,
+    )
+    try:
+        root = _xml_root_from_payload(metadata_xml)
+    except (ElementTree.ParseError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect Power Query metadata XML "
+            f"({type(error).__name__}); the affected query controls have a coverage gap."
+        )
+        opaque_entries.append(
+            (f"{member}:metadata-xml", _private_payload_signature(metadata_xml))
+        )
+        return 0, 0, embedded_content_count, None, None
+    if (
+        _xml_local_name(root.tag) != "LocalPackageMetadataFile"
+        or _xml_namespace(root.tag) not in {None, _DATA_MASHUP_NS}
+    ):
+        warnings.add(
+            "FormulaFence found Power Query metadata with an unexpected root; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append(
+            (f"{member}:metadata-root", _private_payload_signature(metadata_xml))
+        )
+        return 0, 0, embedded_content_count, None, None
+
+    def named_children(element: ElementTree.Element, name: str) -> list[ElementTree.Element]:
+        return [
+            child
+            for child in element
+            if _xml_local_name(child.tag) == name
+            and _xml_namespace(child.tag) in {None, _DATA_MASHUP_NS}
+        ]
+
+    def named_child(element: ElementTree.Element, name: str) -> ElementTree.Element | None:
+        children = named_children(element, name)
+        return children[0] if children else None
+
+    items_containers = named_children(root, "Items")
+    if len(items_containers) != 1:
+        warnings.add(
+            "FormulaFence found an unexpected Power Query metadata Items container; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append(
+            (f"{member}:metadata-items", _private_payload_signature(metadata_xml))
+        )
+        return 1, 0, embedded_content_count, None, None
+    unknown_root_children = [
+        child
+        for child in root
+        if _xml_local_name(child.tag) != "Items"
+    ]
+    for child in unknown_root_children:
+        opaque_entries.append(
+            (
+                f"{member}:metadata-root-child",
+                _private_payload_signature(ElementTree.tostring(child, encoding="utf-8")),
+            )
+        )
+
+    identity_entries: list[tuple[str, str]] = [("metadata-version", str(version))]
+    control_entries: list[tuple[str, str]] = []
+    item_count = 0
+    for item_index, item in enumerate(named_children(items_containers[0], "Item")):
+        item_count += 1
+        item_location = named_child(item, "ItemLocation")
+        stable_entries = named_child(item, "StableEntries")
+        if item_location is None or stable_entries is None:
+            warnings.add(
+                "FormulaFence found incomplete Power Query query metadata; "
+                "the affected query controls have a coverage gap."
+            )
+            opaque_entries.append(
+                (
+                    f"{member}:metadata-item:{item_index}",
+                    _private_payload_signature(ElementTree.tostring(item, encoding="utf-8")),
+                )
+            )
+            continue
+        item_type_element = named_child(item_location, "ItemType")
+        item_path_element = named_child(item_location, "ItemPath")
+        if item_type_element is None or item_path_element is None:
+            warnings.add(
+                "FormulaFence found Power Query metadata without an item location; "
+                "the affected query controls have a coverage gap."
+            )
+            opaque_entries.append(
+                (
+                    f"{member}:metadata-location:{item_index}",
+                    _private_payload_signature(
+                        ElementTree.tostring(item_location, encoding="utf-8")
+                    ),
+                )
+            )
+            continue
+        item_type = item_type_element.text or ""
+        item_path = item_path_element.text or ""
+        if not item_type:
+            warnings.add(
+                "FormulaFence found Power Query metadata without an item type; "
+                "the affected query controls have a coverage gap."
+            )
+            opaque_entries.append(
+                (
+                    f"{member}:metadata-item-type:{item_index}",
+                    _private_payload_signature(
+                        ElementTree.tostring(item_location, encoding="utf-8")
+                    ),
+                )
+            )
+            continue
+        item_key = f"{item_type}\0{item_path}"
+        identity_entries.append((f"item:{item_index}", item_key))
+        unknown_item_children = [
+            child
+            for child in item
+            if _xml_local_name(child.tag) not in {"ItemLocation", "StableEntries"}
+        ]
+        for child in unknown_item_children:
+            opaque_entries.append(
+                (
+                    f"{member}:metadata-item-child:{item_index}",
+                    _private_payload_signature(ElementTree.tostring(child, encoding="utf-8")),
+                )
+            )
+        for entry_index, entry in enumerate(named_children(stable_entries, "Entry")):
+            entry_type = entry.get("Type")
+            value = entry.get("Value")
+            if entry_type is None or value is None:
+                warnings.add(
+                    "FormulaFence found incomplete Power Query metadata entry; "
+                    "the affected query controls have a coverage gap."
+                )
+                opaque_entries.append(
+                    (
+                        f"{member}:metadata-entry:{item_index}:{entry_index}",
+                        _private_payload_signature(ElementTree.tostring(entry, encoding="utf-8")),
+                    )
+                )
+                continue
+            if entry_type in _POWER_QUERY_STABLE_METADATA_TYPES:
+                control_entries.append(
+                    (f"{item_key}\0{entry_type}", value)
+                )
+            elif entry_type not in _POWER_QUERY_VOLATILE_METADATA_TYPES:
+                opaque_entries.append(
+                    (
+                        f"{member}:unknown-metadata-entry:{item_index}:{entry_index}",
+                        _private_external_data_signature(
+                            (("item", item_key), ("type", entry_type), ("value", value))
+                        )
+                        or "",
+                    )
+                )
+        unknown_stable_children = [
+            child
+            for child in stable_entries
+            if _xml_local_name(child.tag) != "Entry"
+        ]
+        for child in unknown_stable_children:
+            opaque_entries.append(
+                (
+                    f"{member}:metadata-stable-child:{item_index}",
+                    _private_payload_signature(ElementTree.tostring(child, encoding="utf-8")),
+                )
+            )
+    return (
+        1,
+        item_count,
+        embedded_content_count,
+        _private_external_data_signature(tuple(sorted(identity_entries))),
+        _private_external_data_signature(tuple(sorted(control_entries))),
+    )
+
+
+def _power_query_permission_inventory(
+    payload: bytes,
+    member: str,
+    warnings: set[str],
+    opaque_entries: list[tuple[str, str]],
+) -> tuple[int, int, int, int, int, str | None]:
+    """Read safe formula-firewall controls without retaining user-bound payloads."""
+    if not payload:
+        return 0, 0, 0, 0, 0, None
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect Power Query permissions "
+            f"({type(error).__name__}); the affected query controls have a coverage gap."
+        )
+        opaque_entries.append((f"{member}:permissions", _private_payload_signature(payload)))
+        return 1, 0, 0, 0, 0, None
+    if _xml_local_name(root.tag) != "PermissionList":
+        warnings.add(
+            "FormulaFence found Power Query permissions with an unexpected root; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append((f"{member}:permissions-root", _private_payload_signature(payload)))
+        return 1, 0, 0, 0, 0, None
+
+    children = {_xml_local_name(child.tag): child for child in root}
+    firewall_enabled = _power_query_boolean(
+        children.get("FirewallEnabled").text
+        if children.get("FirewallEnabled") is not None
+        else None,
+        True,
+        "FirewallEnabled",
+        warnings,
+    )
+    future_packages_allowed = _power_query_boolean(
+        children.get("CanEvaluateFuturePackages").text
+        if children.get("CanEvaluateFuturePackages") is not None
+        else None,
+        False,
+        "CanEvaluateFuturePackages",
+        warnings,
+    )
+    workbook_group_type = children.get("WorkbookGroupType")
+    xsi_nil = "{http://www.w3.org/2001/XMLSchema-instance}nil"
+    has_workbook_group_type = bool(
+        workbook_group_type is not None
+        and workbook_group_type.get(xsi_nil, "").casefold() not in {"1", "true"}
+        and (workbook_group_type.text or "").strip()
+    )
+    signature_entries: list[tuple[str, str]] = [
+        ("firewall", str(firewall_enabled)),
+        ("future-packages", str(future_packages_allowed)),
+    ]
+    if has_workbook_group_type and workbook_group_type is not None:
+        signature_entries.append(("workbook-group-type", workbook_group_type.text or ""))
+    for child in root:
+        if _xml_local_name(child.tag) not in {
+            "CanEvaluateFuturePackages",
+            "FirewallEnabled",
+            "WorkbookGroupType",
+        }:
+            opaque_entries.append(
+                (
+                    f"{member}:permissions-child",
+                    _private_payload_signature(ElementTree.tostring(child, encoding="utf-8")),
+                )
+            )
+    for attribute, value in root.attrib.items():
+        opaque_entries.append(
+            (
+                f"{member}:permissions-attribute:{_xml_display_name(attribute)}",
+                value,
+            )
+        )
+    return (
+        1,
+        1,
+        int(firewall_enabled),
+        int(future_packages_allowed),
+        int(has_workbook_group_type),
+        _private_external_data_signature(tuple(sorted(signature_entries))),
+    )
+
+
+def _power_query_mashup_inspection(
+    root: ElementTree.Element,
+    member: str,
+    warnings: set[str],
+) -> _PowerQueryMashupInspection:
+    """Inspect one Data Mashup part while keeping formulas and sources private."""
+    opaque_entries: list[tuple[str, str]] = []
+    permission_opaque_entries: list[tuple[str, str]] = []
+    for attribute, value in root.attrib.items():
+        if _xml_local_name(attribute) != "sqmid":
+            opaque_entries.append(
+                (f"{member}:attribute:{_xml_display_name(attribute)}", value)
+            )
+    if tuple(root):
+        warnings.add(
+            "FormulaFence found child XML inside a Power Query Data Mashup root; "
+            "the affected query controls have a coverage gap."
+        )
+        for child in root:
+            opaque_entries.append(
+                (
+                    f"{member}:root-child",
+                    _private_payload_signature(ElementTree.tostring(child, encoding="utf-8")),
+                )
+            )
+    encoded_payload = "".join((root.text or "").split())
+    if not encoded_payload:
+        warnings.add(
+            "FormulaFence found an empty Power Query Data Mashup payload; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append((f"{member}:empty-payload", ""))
+        return _PowerQueryMashupInspection(opaque_entries=tuple(opaque_entries))
+    try:
+        payload = base64.b64decode(encoded_payload.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, binascii.Error, ValueError):
+        warnings.add(
+            "FormulaFence could not decode a Power Query Data Mashup payload; "
+            "the affected query controls have a coverage gap."
+        )
+        opaque_entries.append(
+            (
+                f"{member}:invalid-base64",
+                _private_external_data_signature((("payload", encoded_payload),)) or "",
+            )
+        )
+        return _PowerQueryMashupInspection(opaque_entries=tuple(opaque_entries))
+
+    fields = _power_query_fields(payload, member, warnings, opaque_entries)
+    if fields is None:
+        return _PowerQueryMashupInspection(opaque_entries=tuple(opaque_entries))
+    version, (package_parts, permissions, metadata, permission_bindings) = fields
+    (
+        package_part_count,
+        formula_document_count,
+        package_embedded_content_count,
+        formula_signature,
+        package_configuration_signature,
+    ) = _power_query_package_inventory(
+        package_parts,
+        member,
+        warnings,
+        opaque_entries,
+    )
+    (
+        metadata_document_count,
+        metadata_item_count,
+        metadata_embedded_content_count,
+        metadata_identity_signature,
+        metadata_control_signature,
+    ) = _power_query_metadata_inventory(metadata, member, warnings, opaque_entries)
+    (
+        permission_payload_count,
+        permission_parsed_count,
+        firewall_enabled_count,
+        future_packages_allowed_count,
+        workbook_group_type_count,
+        permission_signature,
+    ) = _power_query_permission_inventory(
+        permissions,
+        member,
+        warnings,
+        permission_opaque_entries,
+    )
+    package_signature_entries = [("stream-version", str(version))]
+    if package_configuration_signature is not None:
+        package_signature_entries.append(("logical-package", package_configuration_signature))
+    return _PowerQueryMashupInspection(
+        parsed=True,
+        formula_document_count=formula_document_count,
+        package_part_count=package_part_count,
+        embedded_content_part_count=(
+            package_embedded_content_count + metadata_embedded_content_count
+        ),
+        metadata_document_count=metadata_document_count,
+        metadata_item_count=metadata_item_count,
+        permission_payload_count=permission_payload_count,
+        permission_parsed_count=permission_parsed_count,
+        firewall_enabled_count=firewall_enabled_count,
+        future_packages_allowed_count=future_packages_allowed_count,
+        workbook_group_type_count=workbook_group_type_count,
+        permission_binding_present=bool(permission_bindings),
+        formula_signature=formula_signature,
+        package_configuration_signature=_private_external_data_signature(
+            tuple(package_signature_entries)
+        ),
+        metadata_identity_signature=metadata_identity_signature,
+        metadata_control_signature=metadata_control_signature,
+        permission_signature=permission_signature,
+        opaque_entries=tuple(opaque_entries),
+        permission_opaque_entries=tuple(permission_opaque_entries),
+    )
+
+
+def _power_query_snapshot(
+    archive: ZipFile,
+    warnings: set[str],
+) -> PowerQuerySnapshot:
+    """Inventory all Data Mashup custom XML parts without exposing their payloads."""
+    inspections: list[tuple[str, _PowerQueryMashupInspection]] = []
+    for member in sorted(archive.namelist(), key=str.casefold):
+        if not _CUSTOM_XML_ITEM_PATTERN.fullmatch(member):
+            continue
+        try:
+            root = _xml_root(archive, member)
+        except (KeyError, ElementTree.ParseError, ValueError) as error:
+            warnings.add(
+                "FormulaFence could not inspect a custom XML part while looking for "
+                f"Power Query definitions ({type(error).__name__}); coverage may be incomplete."
+            )
+            continue
+        if (
+            _xml_local_name(root.tag) != "DataMashup"
+            or _xml_namespace(root.tag) != _DATA_MASHUP_NS
+        ):
+            continue
+        inspections.append((member, _power_query_mashup_inspection(root, member, warnings)))
+    if not inspections:
+        return PowerQuerySnapshot()
+
+    opaque_entries = [
+        entry
+        for _, inspection in inspections
+        for entry in inspection.opaque_entries
+    ]
+    permission_opaque_entries = [
+        entry
+        for _, inspection in inspections
+        for entry in inspection.permission_opaque_entries
+    ]
+
+    def aggregate_signature(attribute: str) -> str | None:
+        material = [
+            (member, value)
+            for member, inspection in inspections
+            if (value := getattr(inspection, attribute)) is not None
+        ]
+        return _private_external_data_signature(tuple(material))
+
+    permission_controls = PowerQueryPermissionControlsSnapshot(
+        payload_count=sum(inspection.permission_payload_count for _, inspection in inspections),
+        parsed_count=sum(inspection.permission_parsed_count for _, inspection in inspections),
+        firewall_enabled_count=sum(
+            inspection.firewall_enabled_count for _, inspection in inspections
+        ),
+        future_packages_allowed_count=sum(
+            inspection.future_packages_allowed_count for _, inspection in inspections
+        ),
+        workbook_group_type_count=sum(
+            inspection.workbook_group_type_count for _, inspection in inspections
+        ),
+        opaque_metadata=_power_query_opaque_metadata(permission_opaque_entries),
+        signature=aggregate_signature("permission_signature"),
+    )
+    return PowerQuerySnapshot(
+        mashup_count=len(inspections),
+        parsed_mashup_count=sum(inspection.parsed for _, inspection in inspections),
+        formula_document_count=sum(
+            inspection.formula_document_count for _, inspection in inspections
+        ),
+        package_part_count=sum(inspection.package_part_count for _, inspection in inspections),
+        embedded_content_part_count=sum(
+            inspection.embedded_content_part_count for _, inspection in inspections
+        ),
+        metadata_document_count=sum(
+            inspection.metadata_document_count for _, inspection in inspections
+        ),
+        metadata_item_count=sum(inspection.metadata_item_count for _, inspection in inspections),
+        permission_controls=permission_controls,
+        permission_binding_count=sum(
+            inspection.permission_binding_present for _, inspection in inspections
+        ),
+        formula_signature=aggregate_signature("formula_signature"),
+        package_configuration_signature=aggregate_signature("package_configuration_signature"),
+        metadata_identity_signature=aggregate_signature("metadata_identity_signature"),
+        metadata_control_signature=aggregate_signature("metadata_control_signature"),
+        opaque_metadata=_power_query_opaque_metadata(opaque_entries),
+    )
+
+
 def _external_data_workbook_settings(
     workbook: ElementTree.Element,
     warnings: set[str],
@@ -2162,9 +2950,40 @@ def _query_table_refresh_snapshots(
     sheet_parts: Mapping[str, tuple[str, str]],
     warnings: set[str],
 ) -> tuple[QueryTableRefreshSnapshot, ...]:
-    """Read query-table parts linked from normal worksheet OOXML."""
+    """Read query tables linked directly from worksheets or through Excel tables."""
     snapshots: list[QueryTableRefreshSnapshot] = []
     seen_parts: set[tuple[str, str]] = set()
+
+    def append_query_table(sheet: str, target: str | None, *, context: str) -> None:
+        if target is None:
+            warnings.add(
+                "FormulaFence found a query-table relationship without a safe internal target; "
+                "the affected controls were not compared."
+            )
+            return
+        part_key = (sheet, target)
+        if part_key in seen_parts:
+            return
+        seen_parts.add(part_key)
+        root = _external_data_part_root(
+            archive,
+            target,
+            warnings,
+            context=context,
+        )
+        if root is None:
+            return
+        if (
+            _xml_local_name(root.tag) != "queryTable"
+            or _xml_namespace(root.tag) != _SPREADSHEETML_NS
+        ):
+            warnings.add(
+                "FormulaFence found a query-table part with an unexpected root; "
+                "the affected controls were not compared."
+            )
+            return
+        snapshots.append(_query_table_snapshot(sheet, root, warnings))
+
     for sheet, (sheet_member, sheet_type) in sheet_parts.items():
         if sheet_type != "worksheet":
             continue
@@ -2178,36 +2997,56 @@ def _query_table_refresh_snapshots(
             context="worksheet query-table",
         )
         for relationship in relationships:
-            if relationship.relationship_type.rsplit("/", maxsplit=1)[-1] != "queryTable":
+            relationship_kind = relationship.relationship_type.rsplit("/", maxsplit=1)[-1]
+            if relationship_kind == "queryTable":
+                append_query_table(
+                    sheet,
+                    relationship.target,
+                    context="worksheet query-table",
+                )
+                continue
+            if relationship_kind != "table":
                 continue
             if relationship.target is None:
                 warnings.add(
-                    "FormulaFence found a query-table relationship without a safe internal target; "
-                    "the affected controls were not compared."
+                    "FormulaFence found a worksheet table relationship without a safe internal "
+                    "target; linked query-table controls were not compared."
                 )
                 continue
-            part_key = (sheet, relationship.target)
-            if part_key in seen_parts:
-                continue
-            seen_parts.add(part_key)
-            root = _external_data_part_root(
+            table_root = _external_data_part_root(
                 archive,
                 relationship.target,
                 warnings,
-                context="query-table",
+                context="worksheet table",
             )
-            if root is None:
+            if table_root is None:
                 continue
             if (
-                _xml_local_name(root.tag) != "queryTable"
-                or _xml_namespace(root.tag) != _SPREADSHEETML_NS
+                _xml_local_name(table_root.tag) != "table"
+                or _xml_namespace(table_root.tag) != _SPREADSHEETML_NS
             ):
                 warnings.add(
-                    "FormulaFence found a query-table part with an unexpected root; "
-                    "the affected controls were not compared."
+                    "FormulaFence found a worksheet table part with an unexpected root; "
+                    "linked query-table controls were not compared."
                 )
                 continue
-            snapshots.append(_query_table_snapshot(sheet, root, warnings))
+            table_relationships_member = _relationship_part_path(relationship.target)
+            if table_relationships_member not in archive.namelist():
+                continue
+            table_relationships = _external_data_part_relationships(
+                archive,
+                relationship.target,
+                warnings,
+                context="worksheet table query-table",
+            )
+            for table_relationship in table_relationships:
+                if table_relationship.relationship_type.rsplit("/", maxsplit=1)[-1] != "queryTable":
+                    continue
+                append_query_table(
+                    sheet,
+                    table_relationship.target,
+                    context="table query-table",
+                )
     return tuple(sorted(snapshots, key=QueryTableRefreshSnapshot.sort_key))
 
 
@@ -2425,6 +3264,7 @@ def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
     """Read external-data refresh controls before the workbook reader drops them."""
     warnings: set[str] = set()
     default_settings = ExternalDataRefreshSettingsSnapshot()
+    default_power_query = PowerQuerySnapshot()
     try:
         with ZipFile(path) as archive:
             workbook = _external_data_part_root(
@@ -2439,6 +3279,7 @@ def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
                     connections=(),
                     query_tables=(),
                     pivot_caches=(),
+                    power_query=default_power_query,
                     warnings=tuple(sorted(warnings)),
                 )
             refresh_settings = _external_data_workbook_settings(workbook, warnings)
@@ -2472,12 +3313,14 @@ def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
                 workbook_relationships,
                 warnings,
             )
+            power_query = _power_query_snapshot(archive, warnings)
     except (BadZipFile, OSError, ValueError) as error:
         return _ExternalDataMetadata(
             refresh_settings=default_settings,
             connections=(),
             query_tables=(),
             pivot_caches=(),
+            power_query=default_power_query,
             warnings=(
                 "FormulaFence could not inspect external-data OOXML "
                 f"({type(error).__name__}); external-data controls were not compared.",
@@ -2488,6 +3331,7 @@ def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
         connections=connections,
         query_tables=query_tables,
         pivot_caches=pivot_caches,
+        power_query=power_query,
         warnings=tuple(sorted(warnings)),
     )
 
@@ -3614,6 +4458,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         external_data_connections=external_data_metadata.connections,
         query_table_refresh_controls=external_data_metadata.query_tables,
         pivot_cache_refresh_controls=external_data_metadata.pivot_caches,
+        power_query=external_data_metadata.power_query,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),
@@ -3673,6 +4518,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "pivot_cache_refresh_controls": [
             control.profile_dict() for control in snapshot.pivot_cache_refresh_controls
         ],
+        "power_query": snapshot.power_query.profile_dict(),
         "defined_names": sorted(snapshot.defined_names),
         "calculation_settings": snapshot.calculation_settings,
         "features": {

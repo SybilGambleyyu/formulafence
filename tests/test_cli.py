@@ -69,4 +69,5 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
     assert "no_conditional_formatting_changes: true" in content
     assert "no_protection_changes: true" in content
     assert "no_external_data_connection_changes: true" in content
+    assert "no_power_query_changes: true" in content
     assert "no_new_tokenization_failures: true" in content

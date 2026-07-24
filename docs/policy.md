@@ -25,6 +25,7 @@ rules:
   no_conditional_formatting_changes: true
   no_protection_changes: true
   no_external_data_connection_changes: true
+  no_power_query_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
   max_changed_formulas: 20
@@ -75,6 +76,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_conditional_formatting_changes` | boolean | A worksheet conditional-formatting control changes, including its precedence, target ranges, criteria, flags, visual style, or retained OOXML extension fragment. |
 | `no_protection_changes` | boolean | A workbook, worksheet, dialog-sheet, chart-sheet, protected-range, or direct cell/row/column protection control changes. |
 | `no_external_data_connection_changes` | boolean | A workbook-wide external-data refresh flag, connection, linked query-table refresh control, or pivot-cache source/refresh control changes. |
+| `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
@@ -206,7 +208,18 @@ never appear in profiles or reports; private fingerprints still expose material
 source or identity changes. Any such control change emits `FF023`; enable
 `no_external_data_connection_changes` to make it `FFP023` in CI. FormulaFence
 does not execute a connection, refresh workbook data, determine source trust,
-or inspect Power Query M, DDE/OLE links, or PivotTable layout semantics.
+or inspect DDE/OLE links or PivotTable layout semantics.
+
+Power Query stores query definitions in a `DataMashup` Custom XML part. FormulaFence
+parses the documented length-prefixed container and privately compares its
+`Section1.m` formula document, logical package material, stable metadata, and
+formula-firewall permissions. It reports only counts and safe control state:
+M text, query/source names, metadata values, embedded content, telemetry IDs,
+and user-bound permission-binding blobs never enter a profile or diff. `sqmid`
+telemetry and result-only refresh metadata are intentionally ignored. A material
+change emits `FF024`; enable `no_power_query_changes` to make it `FFP024` in CI.
+FormulaFence does not execute M, refresh a connection, assess a source, or infer
+the data a query would return.
 
 When a formula cannot be tokenized at all, FormulaFence records its location in
 the profile and emits `FF016` for a new instance. Enable

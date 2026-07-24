@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import io
+import struct
 from collections.abc import Callable
 from pathlib import Path
 from xml.etree import ElementTree
@@ -20,6 +23,13 @@ from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.formula import ArrayFormula
 from openpyxl.worksheet.table import Table
+
+_DATA_MASHUP_NS = "http://schemas.microsoft.com/DataMashup"
+_PACKAGE_RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+_DOCUMENT_RELATIONSHIPS_NS = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+)
+_SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 
 def make_model(path: Path) -> Path:
@@ -224,6 +234,278 @@ def _save_inputs_worksheet(contents: dict[str, bytes], root: ElementTree.Element
         encoding="utf-8",
         xml_declaration=True,
     )
+
+
+def _zip_payload(parts: dict[str, bytes]) -> bytes:
+    """Build one in-memory OPC-like package for a Data Mashup test fixture."""
+    payload = io.BytesIO()
+    with ZipFile(payload, "w", compression=ZIP_DEFLATED) as archive:
+        for name, value in parts.items():
+            archive.writestr(name, value)
+    return payload.getvalue()
+
+
+def _synthetic_power_query_mashup(
+    *,
+    formula: str,
+    fill_enabled: bool = True,
+    firewall_enabled: bool = True,
+    volatile_timestamp: str = "2026-07-24T12:00:00.0000000",
+    sqmid: str = "11111111-2222-3333-4444-555555555555",
+    permission_binding: bytes = b"\x00",
+) -> bytes:
+    """Return a valid, deliberately confidential Data Mashup XML payload."""
+    package_parts = _zip_payload(
+        {
+            "[Content_Types].xml": b"<Types/>",
+            "Config/Package.xml": (
+                b"<Package>private-baseline-package-config</Package>"
+            ),
+            "Formulas/Section1.m": formula.encode("utf-8"),
+            "Content/11111111-2222-3333-4444-555555555555": (
+                b"private-baseline-embedded-content"
+            ),
+        }
+    )
+    metadata_xml = f"""<?xml version="1.0" encoding="utf-8"?>
+<LocalPackageMetadataFile xmlns="{_DATA_MASHUP_NS}">
+  <Items>
+    <Item>
+      <ItemLocation>
+        <ItemType>Formula</ItemType>
+        <ItemPath>Section1/Private revenue query</ItemPath>
+      </ItemLocation>
+      <StableEntries>
+        <Entry Type="FillEnabled" Value="l{int(fill_enabled)}" />
+        <Entry Type="FillTarget" Value="sprivate-baseline-target" />
+        <Entry Type="FillLastUpdated" Value="d{volatile_timestamp}" />
+        <Entry Type="FillErrorMessage" Value="sprivate-refresh-message" />
+      </StableEntries>
+    </Item>
+  </Items>
+</LocalPackageMetadataFile>
+""".encode()
+    metadata_content = _zip_payload({})
+    metadata = (
+        struct.pack("<II", 0, len(metadata_xml))
+        + metadata_xml
+        + struct.pack("<I", len(metadata_content))
+        + metadata_content
+    )
+    permissions = f"""<?xml version="1.0" encoding="utf-8"?>
+<PermissionList xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <CanEvaluateFuturePackages>false</CanEvaluateFuturePackages>
+  <FirewallEnabled>{str(firewall_enabled).lower()}</FirewallEnabled>
+  <WorkbookGroupType xsi:nil="true" />
+</PermissionList>
+""".encode()
+    stream = struct.pack("<I", 0)
+    for field in (package_parts, permissions, metadata, permission_binding):
+        stream += struct.pack("<I", len(field)) + field
+    root = ElementTree.Element(
+        f"{{{_DATA_MASHUP_NS}}}DataMashup",
+        {"sqmid": sqmid},
+    )
+    root.text = base64.b64encode(stream).decode("ascii")
+    return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _power_query_formula(*, source: str) -> str:
+    """Build one M document whose source material must never be emitted."""
+    return f'''section Section1;
+
+shared PrivateRevenueQuery = let
+    Source = Web.Contents("{source}"),
+    Result = Source
+in
+    Result;
+'''
+
+
+def make_power_query_model(path: Path) -> Path:
+    """Create a raw-OOXML workbook containing a Power Query Data Mashup."""
+    make_model(path)
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+    content_types_namespace = (
+        "http://schemas.openxmlformats.org/package/2006/content-types"
+    )
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_override(root: ElementTree.Element, part_name: str, content_type: str) -> None:
+        override_tag = f"{{{content_types_namespace}}}Override"
+        if any(item.get("PartName") == part_name for item in root.findall(override_tag)):
+            return
+        ElementTree.SubElement(
+            root,
+            override_tag,
+            {"PartName": part_name, "ContentType": content_type},
+        )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        add_override(
+            content_types,
+            "/xl/tables/table1.xml",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml",
+        )
+        add_override(
+            content_types,
+            "/xl/queryTables/queryTable1.xml",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml",
+        )
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+        root_relationships = ElementTree.fromstring(contents["_rels/.rels"])
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        ElementTree.SubElement(
+            root_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFencePowerQueryCustomXml",
+                "Type": f"{document_relationships}/customXml",
+                "Target": "customXml/item1.xml",
+            },
+        )
+        contents["_rels/.rels"] = serialize(root_relationships)
+
+        worksheet = _inputs_worksheet_root(contents)
+        table_parts = ElementTree.SubElement(
+            worksheet,
+            f"{{{spreadsheet}}}tableParts",
+            {"count": "1"},
+        )
+        ElementTree.SubElement(
+            table_parts,
+            f"{{{spreadsheet}}}tablePart",
+            {f"{{{document_relationships}}}id": "rIdFencePowerQueryTable"},
+        )
+        _save_inputs_worksheet(contents, worksheet)
+
+        worksheet_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            worksheet_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFencePowerQueryTable",
+                "Type": f"{document_relationships}/table",
+                "Target": "../tables/table1.xml",
+            },
+        )
+        contents["xl/worksheets/_rels/sheet1.xml.rels"] = serialize(
+            worksheet_relationships
+        )
+
+        table = ElementTree.Element(
+            f"{{{spreadsheet}}}table",
+            {
+                "id": "1",
+                "name": "ResultTable",
+                "displayName": "ResultTable",
+                "ref": "A1:B2",
+            },
+        )
+        ElementTree.SubElement(table, f"{{{spreadsheet}}}autoFilter", {"ref": "A1:B2"})
+        columns = ElementTree.SubElement(
+            table,
+            f"{{{spreadsheet}}}tableColumns",
+            {"count": "2"},
+        )
+        ElementTree.SubElement(
+            columns,
+            f"{{{spreadsheet}}}tableColumn",
+            {"id": "1", "name": "Metric"},
+        )
+        ElementTree.SubElement(
+            columns,
+            f"{{{spreadsheet}}}tableColumn",
+            {"id": "2", "name": "Value"},
+        )
+        ElementTree.SubElement(
+            table,
+            f"{{{spreadsheet}}}tableStyleInfo",
+            {
+                "name": "TableStyleMedium2",
+                "showFirstColumn": "0",
+                "showLastColumn": "0",
+                "showRowStripes": "1",
+                "showColumnStripes": "0",
+            },
+        )
+        contents["xl/tables/table1.xml"] = serialize(table)
+        table_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            table_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFencePowerQueryQueryTable",
+                "Type": f"{document_relationships}/queryTable",
+                "Target": "../queryTables/queryTable1.xml",
+            },
+        )
+        contents["xl/tables/_rels/table1.xml.rels"] = serialize(table_relationships)
+
+        query_table = ElementTree.Element(
+            f"{{{spreadsheet}}}queryTable",
+            {
+                "name": "ResultTable_ExternalData_1",
+                "connectionId": "1",
+                "refreshOnLoad": "1",
+                "backgroundRefresh": "1",
+                "disableRefresh": "0",
+                "removeDataOnSave": "0",
+                "fillFormulas": "0",
+                "disableEdit": "1",
+                "growShrinkType": "insertClear",
+            },
+        )
+        contents["xl/queryTables/queryTable1.xml"] = serialize(query_table)
+        contents["customXml/item1.xml"] = _synthetic_power_query_mashup(
+            formula=_power_query_formula(
+                source="https://private.example/private-baseline-power-query-token"
+            )
+        )
+
+    return _rewrite_archive(path, mutate, ".power-query.tmp.xlsx")
+
+
+def change_power_query_controls(path: Path) -> Path:
+    """Change private M material plus safe Power Query execution controls."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["customXml/item1.xml"] = _synthetic_power_query_mashup(
+            formula=_power_query_formula(
+                source="https://private.example/private-candidate-power-query-token"
+            ),
+            fill_enabled=False,
+            firewall_enabled=False,
+            sqmid="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        )
+
+    return _rewrite_archive(path, mutate, ".power-query-change.tmp.xlsx")
+
+
+def change_power_query_refresh_noise(path: Path) -> Path:
+    """Change volatile refresh state and user-bound binding without semantic drift."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["customXml/item1.xml"] = _synthetic_power_query_mashup(
+            formula=_power_query_formula(
+                source="https://private.example/private-baseline-power-query-token"
+            ),
+            volatile_timestamp="2026-07-24T13:45:00.0000000",
+            sqmid="99999999-8888-7777-6666-555555555555",
+            permission_binding=b"synthetic-user-bound-permission-binding",
+        )
+
+    return _rewrite_archive(path, mutate, ".power-query-noise.tmp.xlsx")
 
 
 def make_external_data_refresh_model(path: Path) -> Path:

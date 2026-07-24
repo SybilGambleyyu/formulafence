@@ -30,6 +30,7 @@ _RULE_FIELDS = {
     "no_conditional_formatting_changes",
     "no_protection_changes",
     "no_external_data_connection_changes",
+    "no_power_query_changes",
     "no_3d_reference_scope_changes",
     "no_sheet_visibility_changes",
     "max_changed_formulas",
@@ -77,6 +78,7 @@ class Policy:
     no_conditional_formatting_changes: bool = False
     no_protection_changes: bool = False
     no_external_data_connection_changes: bool = False
+    no_power_query_changes: bool = False
     no_3d_reference_scope_changes: bool = False
     no_sheet_visibility_changes: bool = False
     max_changed_formulas: int | None = None
@@ -106,6 +108,7 @@ rules:
   no_conditional_formatting_changes: true
   no_protection_changes: true
   no_external_data_connection_changes: true
+  no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -215,6 +218,7 @@ def parse_policy(data: object) -> Policy:
         no_external_data_connection_changes=_boolean_rule(
             rules, "no_external_data_connection_changes"
         ),
+        no_power_query_changes=_boolean_rule(rules, "no_power_query_changes"),
         no_3d_reference_scope_changes=_boolean_rule(
             rules, "no_3d_reference_scope_changes"
         ),
@@ -417,6 +421,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP023",
                     "high",
                     "Policy forbids changes to external-data connections and refresh controls.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_power_query_changes:
+        for finding in _rule_triggered(report, "FF024"):
+            violations.append(
+                Finding(
+                    "FFP024",
+                    "high",
+                    "Policy forbids changes to Power Query formulas and semantic controls.",
                     details=finding.details,
                 )
             )

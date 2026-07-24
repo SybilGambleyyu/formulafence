@@ -15,6 +15,8 @@ from .helpers import (
     add_conditional_formatting_databar_extension,
     add_protected_range,
     change_external_data_refresh_controls,
+    change_power_query_controls,
+    change_power_query_refresh_noise,
     change_protected_range,
     make_conditional_formatting_model,
     make_current_row_table_model,
@@ -26,6 +28,7 @@ from .helpers import (
     make_model,
     make_named_formula_model,
     make_named_lambda_model,
+    make_power_query_model,
     make_protection_model,
     make_scoped_named_lambda_model,
     make_spill_model,
@@ -1546,6 +1549,99 @@ def test_external_data_connection_defaults_are_canonical(tmp_path) -> None:
         if change.kind == "external_data_connections_changed"
     }
     assert "FF023" not in {finding.rule_id for finding in report.findings}
+
+
+def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:
+    baseline = make_power_query_model(tmp_path / "baseline.xlsx")
+    candidate = make_power_query_model(tmp_path / "candidate.xlsx")
+    change_power_query_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    assert baseline_snapshot.summary()["power_query_mashup_count"] == 1
+    assert baseline_snapshot.summary()["power_query_formula_document_count"] == 1
+    assert baseline_snapshot.summary()["power_query_metadata_item_count"] == 1
+    assert profile["query_table_refresh_controls"] == [
+        {
+            "sheet": "Inputs",
+            "connection_id": 1,
+            "refresh_on_load": True,
+            "background_refresh": True,
+            "refresh_disabled": False,
+            "remove_data_on_save": False,
+            "fill_formulas": False,
+            "connection_edit_disabled": True,
+            "growth_behavior": "insert_clear",
+            "has_name": True,
+            "has_refresh_metadata": False,
+            "opaque_metadata": {"present": False, "count": 0},
+        }
+    ]
+    assert profile["power_query"] == {
+        "present": True,
+        "mashup_count": 1,
+        "parsed_mashup_count": 1,
+        "formula_document_count": 1,
+        "package_part_count": 4,
+        "embedded_content_part_count": 1,
+        "metadata_document_count": 1,
+        "metadata_item_count": 1,
+        "permission_controls": {
+            "payload_count": 1,
+            "parsed_count": 1,
+            "firewall_enabled_count": 1,
+            "future_packages_allowed_count": 0,
+            "workbook_group_type_count": 0,
+            "opaque_metadata": {"present": False, "count": 0},
+        },
+        "permission_binding_count": 1,
+        "opaque_metadata": {"present": False, "count": 0},
+    }
+    assert "## Power Query controls" in markdown
+    assert "## Query-table refresh controls" in markdown
+
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    power_query_change = next(
+        change for change in report.changes if change.kind == "power_query_changed"
+    )
+    assert power_query_change.details["formula_material_changed"] is True
+    assert power_query_change.details["metadata_control_material_changed"] is True
+    assert power_query_change.details["permission_controls_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF024"}
+
+    sensitive_values = (
+        "private-baseline-power-query-token",
+        "private-candidate-power-query-token",
+        "private-baseline-package-config",
+        "private-baseline-embedded-content",
+        "Private revenue query",
+        "private-baseline-target",
+        "private-refresh-message",
+        "11111111-2222-3333-4444-555555555555",
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_power_query_ignores_volatile_refresh_and_user_binding_noise(tmp_path) -> None:
+    baseline = make_power_query_model(tmp_path / "baseline.xlsx")
+    candidate = make_power_query_model(tmp_path / "candidate.xlsx")
+    change_power_query_refresh_noise(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "power_query_changed" not in {change.kind for change in report.changes}
+    assert "FF024" not in {finding.rule_id for finding in report.findings}
 
 
 def test_current_row_table_references_trace_only_the_matching_row(tmp_path) -> None:

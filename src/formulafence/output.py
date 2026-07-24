@@ -80,6 +80,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         f"- **External-link package parts:** {workbook['external_link_package_count']}",
         f"- **DDE links:** {workbook['dde_link_count']}",
         f"- **OLE links:** {workbook['ole_link_count']}",
+        f"- **XLM macro-sheet parts:** {workbook['xlm_macro_sheet_count']}",
+        (
+            "- **XLM macro-sheet formula cells:** "
+            f"{workbook['xlm_macro_formula_cell_count']}"
+        ),
         (
             "- **Connections refreshing on open:** "
             f"{workbook['external_data_connections_refresh_on_load']}"
@@ -700,6 +705,49 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "External workbook targets, sheet and defined names, DDE services/topics/items, "
             "OLE program and item names, and cached values are intentionally omitted."
+        )
+    xlm_macro_sheets = profile["xlm_macro_sheets"]
+    if xlm_macro_sheets["present"]:
+        lines.extend(
+            [
+                "",
+                "## Excel 4.0 / XLM macro sheets",
+                "",
+                (
+                    "- **Workbook declarations:** "
+                    f"{xlm_macro_sheets['declared_macro_sheet_count']}"
+                ),
+                (
+                    "- **Package parts:** "
+                    f"{xlm_macro_sheets['macro_sheet_count']} "
+                    f"({xlm_macro_sheets['international_macro_sheet_count']} international)"
+                ),
+                (
+                    "- **Macro formula cells:** "
+                    f"{xlm_macro_sheets['formula_cell_count']}"
+                ),
+                (
+                    "- **Hidden parts:** "
+                    f"{xlm_macro_sheets['hidden_macro_sheet_count']} hidden, "
+                    f"{xlm_macro_sheets['very_hidden_macro_sheet_count']} very hidden"
+                ),
+                (
+                    "- **Related package relationships:** "
+                    f"{xlm_macro_sheets['related_relationship_count']} "
+                    f"({xlm_macro_sheets['external_relationship_count']} external, "
+                    f"{xlm_macro_sheets['embedded_object_relationship_count']} OLE object, "
+                    f"{xlm_macro_sheets['embedded_package_relationship_count']} package)"
+                ),
+            ]
+        )
+        if xlm_macro_sheets["unrecognized_macro_sheet_count"]:
+            lines.append(
+                "- **Unrecognized or uninspected macro-sheet parts:** "
+                f"{xlm_macro_sheets['unrecognized_macro_sheet_count']}"
+            )
+        lines.append(
+            "XLM commands, cell values, relationship targets, and embedded-object "
+            "contents are compared privately and intentionally omitted."
         )
     power_query = profile["power_query"]
     if power_query["present"]:

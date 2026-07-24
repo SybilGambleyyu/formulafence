@@ -12,6 +12,7 @@ rules:
   no_new_external_links: true
   no_new_broken_references: true
   no_macro_changes: true
+  no_xlm_macro_sheet_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
@@ -64,6 +65,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_external_links` | boolean | A formula adds a statically visible external-workbook reference. |
 | `no_new_broken_references` | boolean | A formula adds `#REF!`. |
 | `no_macro_changes` | boolean | The `xl/vbaProject.bin` payload is added, removed, or has a different SHA-256. |
+| `no_xlm_macro_sheet_changes` | boolean | An Excel 4.0 / XLM macro-sheet package declaration, program XML, or related-part relationship changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
 | `no_new_dynamic_references` | boolean | A formula adds a dynamic reference function such as `INDIRECT` or `OFFSET`. |
@@ -222,6 +224,18 @@ cached values never enter a profile or diff. Any material package change emits
 `FF025`; enable `no_external_link_package_changes` to make it `FFP025` in CI.
 FormulaFence does not follow or execute these links, determine source trust, or
 infer returned data.
+
+Excel 4.0 / XLM macro sheets are separate from the VBA binary: their executable
+commands live in Macro Sheet XML package parts, typically under
+`xl/macrosheets/`. FormulaFence reads those parts before the workbook library
+can omit their cells. It privately binds documented macro-sheet workbook
+relationships to parts, fingerprints complete XML and related package
+relationships, and reports only safe counts for formula cells, visibility,
+international-sheet status, and related OLE/package parts. A material change
+emits `FF026`; enable `no_xlm_macro_sheet_changes` to make it `FFP026` in CI.
+XLM commands, values, relationship targets, and embedded-object payloads never
+enter a profile or diff. FormulaFence does not execute, emulate, or resolve any
+of them.
 
 Power Query stores query definitions in a `DataMashup` Custom XML part. FormulaFence
 parses the documented length-prefixed container and privately compares its

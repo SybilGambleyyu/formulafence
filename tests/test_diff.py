@@ -19,6 +19,8 @@ from .helpers import (
     change_power_query_controls,
     change_power_query_refresh_noise,
     change_protected_range,
+    change_xlm_macro_sheet_controls,
+    corrupt_xlm_macro_sheet_root,
     duplicate_external_link_definition,
     duplicate_external_link_sheet_names,
     make_conditional_formatting_model,
@@ -38,12 +40,15 @@ from .helpers import (
     make_spill_model,
     make_table_model,
     make_three_d_model,
+    make_xlm_macro_sheet_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
     rebind_external_link_declaration,
     renumber_external_link_declaration_relationships,
+    renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
     rewrite,
+    rewrite_xlm_macro_sheet_internal_target_spelling,
     set_external_data_connection_defaults,
     set_sheet_protection_defaults,
     set_sheet_protection_modern_verifier,
@@ -1709,6 +1714,123 @@ def test_repeated_external_link_children_are_retained_as_opaque_material(tmp_pat
     )
     assert external_link_change.details["opaque_metadata_changed"] is True
     assert "FF025" in {finding.rule_id for finding in report.findings}
+
+
+def test_xlm_macro_sheets_are_profiled_and_diffed_privately(tmp_path) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    change_xlm_macro_sheet_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    assert baseline_snapshot.sheets["Macro Automation"].formula_cells == 0
+    assert baseline_snapshot.summary()["has_xlm_macro_sheets"] is True
+    assert baseline_snapshot.summary()["xlm_macro_sheet_count"] == 1
+    assert baseline_snapshot.summary()["xlm_macro_formula_cell_count"] == 2
+    assert profile["xlm_macro_sheets"] == {
+        "present": True,
+        "declared_macro_sheet_count": 1,
+        "macro_sheet_count": 1,
+        "international_macro_sheet_count": 0,
+        "unrecognized_macro_sheet_count": 0,
+        "hidden_macro_sheet_count": 0,
+        "very_hidden_macro_sheet_count": 1,
+        "formula_cell_count": 2,
+        "related_relationship_count": 3,
+        "external_relationship_count": 1,
+        "embedded_object_relationship_count": 2,
+        "embedded_package_relationship_count": 1,
+    }
+    assert "## Excel 4.0 / XLM macro sheets" in markdown
+    assert "**Macro formula cells:** 2" in markdown
+
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    macro_sheet_change = next(
+        change for change in report.changes if change.kind == "xlm_macro_sheets_changed"
+    )
+
+    assert macro_sheet_change.details["workbook_binding_changed"] is True
+    assert macro_sheet_change.details["macro_program_material_changed"] is True
+    assert macro_sheet_change.details["related_part_relationships_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF026"}
+
+    sensitive_values = (
+        "private-baseline-xl-command-argument",
+        "private-candidate-xl-command-argument",
+        "private-baseline-xl-cell-value",
+        "private-candidate-xl-cell-value",
+        "private.baseline.xlm.embedded.object",
+        "private.candidate.xlm.embedded.object",
+        "file:///private/baseline-xl-linked-object.bin",
+        "file:///private/candidate-xl-linked-object.bin",
+        "private-baseline-xl-object.bin",
+        "private-candidate-xl-object.bin",
+        "private candidate XLM extension payload",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_international_xlm_macro_sheet_parts_are_detected(tmp_path) -> None:
+    workbook = make_xlm_macro_sheet_model(
+        tmp_path / "international.xlsm", international=True
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.xlm_macro_sheets.international_macro_sheet_count == 1
+    assert snapshot.xlm_macro_sheets.formula_cell_count == 2
+    assert snapshot.parser_warnings == ()
+
+
+def test_xlm_macro_sheet_relationship_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    renumber_xlm_macro_sheet_relationships(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "xlm_macro_sheets_changed" not in {change.kind for change in report.changes}
+    assert "FF026" not in {finding.rule_id for finding in report.findings}
+
+
+def test_xlm_macro_sheet_equivalent_internal_target_spellings_are_ignored(
+    tmp_path,
+) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    rewrite_xlm_macro_sheet_internal_target_spelling(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "xlm_macro_sheets_changed" not in {change.kind for change in report.changes}
+    assert "FF026" not in {finding.rule_id for finding in report.findings}
+
+
+def test_malformed_xlm_macro_sheet_parts_fail_closed(tmp_path) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    corrupt_xlm_macro_sheet_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 1
+    assert any(
+        "XLM macro-sheet part with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "xlm_macro_sheets_changed" in {change.kind for change in report.changes}
+    assert "FF026" in {finding.rule_id for finding in report.findings}
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

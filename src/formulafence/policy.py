@@ -17,6 +17,7 @@ _RULE_FIELDS = {
     "no_new_external_links",
     "no_new_broken_references",
     "no_macro_changes",
+    "no_xlm_macro_sheet_changes",
     "no_new_parser_warnings",
     "no_new_unresolved_references",
     "no_new_dynamic_references",
@@ -66,6 +67,7 @@ class Policy:
     no_new_external_links: bool = False
     no_new_broken_references: bool = False
     no_macro_changes: bool = False
+    no_xlm_macro_sheet_changes: bool = False
     no_new_parser_warnings: bool = False
     no_new_unresolved_references: bool = False
     no_new_dynamic_references: bool = False
@@ -97,6 +99,7 @@ rules:
   no_new_external_links: true
   no_new_broken_references: true
   no_macro_changes: true
+  no_xlm_macro_sheet_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
@@ -196,6 +199,7 @@ def parse_policy(data: object) -> Policy:
         no_new_external_links=_boolean_rule(rules, "no_new_external_links"),
         no_new_broken_references=_boolean_rule(rules, "no_new_broken_references"),
         no_macro_changes=_boolean_rule(rules, "no_macro_changes"),
+        no_xlm_macro_sheet_changes=_boolean_rule(rules, "no_xlm_macro_sheet_changes"),
         no_new_parser_warnings=_boolean_rule(rules, "no_new_parser_warnings"),
         no_new_unresolved_references=_boolean_rule(rules, "no_new_unresolved_references"),
         no_new_dynamic_references=_boolean_rule(rules, "no_new_dynamic_references"),
@@ -290,6 +294,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
         violations.append(
             Finding("FFP004", "critical", "Policy forbids changes to the VBA macro payload.")
         )
+    if policy.no_xlm_macro_sheet_changes:
+        for finding in _rule_triggered(report, "FF026"):
+            violations.append(
+                Finding(
+                    "FFP026",
+                    "critical",
+                    "Policy forbids changes to Excel 4.0 / XLM macro sheets.",
+                    details=finding.details,
+                )
+            )
     if policy.no_new_parser_warnings:
         for finding in _rule_triggered(report, "FF010"):
             violations.append(

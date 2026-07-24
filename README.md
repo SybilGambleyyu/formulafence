@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.19.0/formulafence-0.19.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.20.0/formulafence-0.20.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -62,6 +62,7 @@ rules:
   no_new_external_links: true
   no_new_broken_references: true
   no_macro_changes: true
+  no_xlm_macro_sheet_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
   no_new_dynamic_references: true
@@ -98,7 +99,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -269,6 +270,20 @@ emits `FF025`; enable `no_external_link_package_changes` for `FFP025`.
 FormulaFence never follows or executes these links, establishes source trust,
 or infers returned data. The package shape follows the
 [SpreadsheetML `externalLink` definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.externallink?view=openxml-3.0.1).
+
+FormulaFence separately inventories **Excel 4.0 / XLM macro sheets**. Unlike
+VBA, this executable automation is stored in raw macro-sheet XML parts (usually
+`xl/macrosheets/*.xml`), not `xl/vbaProject.bin`. FormulaFence binds the
+documented `xlMacrosheet` and `xlIntlMacrosheet` workbook relationships to
+their parts, privately fingerprints complete macro XML and related package
+relationships, and exposes only safe counts for sheets, formula cells,
+visibility, and related OLE/package parts. A material change emits `FF026`;
+enable `no_xlm_macro_sheet_changes` for `FFP026`. FormulaFence never executes,
+emulates, opens, or resolves XLM commands, relationship targets, or embedded
+objects. The package shape follows Microsoft's [Macro Sheet
+part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-offmacro/b8bee527-ef5a-4734-bb8c-6eae4166b6c9)
+and [International Macro Sheet
+part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-offmacro/450634cb-ca5a-4350-9edb-940a90707f49).
 
 FormulaFence also inventories **Power Query Data Mashup** custom XML parts.
 It reads the documented length-prefixed container, fingerprints the embedded

@@ -26,6 +26,7 @@ from formulafence.models import (
     ProtectionOpaqueMetadataSnapshot,
     QueryTableRefreshSnapshot,
     WorkbookSnapshot,
+    XlmMacroSheetSnapshot,
 )
 
 _IMPACT_SAMPLE_SIZE = 20
@@ -982,6 +983,44 @@ def _workbook_control_changes(
                 "FF005",
                 "critical",
                 "VBA macro payload was added, removed, or changed.",
+            )
+        )
+    if before.xlm_macro_sheets != after.xlm_macro_sheets:
+        old_xlm_macro_sheets: XlmMacroSheetSnapshot = before.xlm_macro_sheets
+        new_xlm_macro_sheets: XlmMacroSheetSnapshot = after.xlm_macro_sheets
+        details: dict[str, object] = {
+            "before": old_xlm_macro_sheets.to_dict(),
+            "after": new_xlm_macro_sheets.to_dict(),
+        }
+        if (
+            old_xlm_macro_sheets.declaration_signature
+            != new_xlm_macro_sheets.declaration_signature
+        ):
+            details["workbook_binding_changed"] = True
+        if (
+            old_xlm_macro_sheets.program_signature
+            != new_xlm_macro_sheets.program_signature
+        ):
+            details["macro_program_material_changed"] = True
+        if (
+            old_xlm_macro_sheets.relationship_signature
+            != new_xlm_macro_sheets.relationship_signature
+        ):
+            details["related_part_relationships_changed"] = True
+        changes.append(
+            Change(
+                "xlm_macro_sheets_changed",
+                None,
+                "critical",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF026",
+                "critical",
+                "Excel 4.0 / XLM macro-sheet controls changed.",
+                details=details,
             )
         )
     new_parser_warnings = sorted(set(after.parser_warnings) - set(before.parser_warnings))

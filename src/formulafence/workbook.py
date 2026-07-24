@@ -59,6 +59,7 @@ from formulafence.models import (
     WorkbookLoadError,
     WorkbookProtectionSnapshot,
     WorkbookSnapshot,
+    XlmMacroSheetSnapshot,
     XmlFragmentSnapshot,
     display_location,
     json_safe_value,
@@ -103,6 +104,19 @@ _EXTERNAL_LINK_PART_PATTERN = re.compile(
     r"^xl/externalLinks/externalLink(?:\d+)?\.xml$", re.IGNORECASE
 )
 _EXTERNAL_LINK_MAX_PART_BYTES = 16 * 1024 * 1024
+_XLM_MACRO_SHEET_PART_PATTERN = re.compile(r"^xl/macrosheets/[^/]+\.xml$", re.IGNORECASE)
+_XLM_MACRO_SHEET_MAX_PART_BYTES = 16 * 1024 * 1024
+_XLM_MACRO_SHEET_RELATIONSHIPS = {
+    "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet": "macro",
+    "http://schemas.microsoft.com/office/2006/relationships/xlIntlMacrosheet": (
+        "international"
+    ),
+}
+_XLM_MACRO_SHEET_CONTENT_TYPES = {
+    "application/vnd.ms-excel.macrosheet+xml": "macro",
+    "application/vnd.ms-excel.intlmacrosheet+xml": "international",
+}
+_CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 
 
 @dataclass(frozen=True)
@@ -161,6 +175,51 @@ class _ExternalDataMetadata:
     external_link_packages: ExternalLinkPackageSnapshot
     power_query: PowerQuerySnapshot
     warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _XlmMacroMetadata:
+    """Raw XLM macro-sheet evidence retained before the workbook reader omits it."""
+
+    macro_sheets: XlmMacroSheetSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _XlmRawRelationship:
+    """One private package relationship, including the original target material."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return canonical target semantics without writer-chosen identifiers."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        return (
+            self.relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
+@dataclass(frozen=True)
+class _XlmMacroSheetInspection:
+    """Private parsed state for one candidate XLM macro-sheet part."""
+
+    member: str
+    formula_cell_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    embedded_object_relationship_count: int = 0
+    embedded_package_relationship_count: int = 0
+    inspected: bool = False
+    program_signature: str | None = None
+    relationship_signature: str | None = None
 
 
 @dataclass(frozen=True)
@@ -4156,6 +4215,569 @@ def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
     )
 
 
+def _normalise_content_type_part_name(part_name: str) -> str | None:
+    """Turn an OPC content-type part name into a safe ZIP member name."""
+    normalised = posixpath.normpath(part_name.lstrip("/"))
+    if normalised in {"", ".", ".."} or normalised.startswith("../"):
+        return None
+    return normalised
+
+
+def _xlm_macro_content_type_parts(
+    archive: ZipFile,
+    warnings: set[str],
+) -> dict[str, set[str]]:
+    """Find XLM macro-sheet parts declared through OPC content types."""
+    try:
+        root = _xml_root(archive, "[Content_Types].xml")
+    except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect XLM macro-sheet content types "
+            f"({type(error).__name__}); affected macro-sheet controls may be incomplete."
+        )
+        return {}
+    if (
+        _xml_local_name(root.tag) != "Types"
+        or _xml_namespace(root.tag) != _CONTENT_TYPES_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected OPC content-types root while inspecting "
+            "XLM macro sheets; affected macro-sheet controls may be incomplete."
+        )
+        return {}
+
+    parts: dict[str, set[str]] = defaultdict(set)
+    override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
+    for override in root.findall(override_tag):
+        kind = _XLM_MACRO_SHEET_CONTENT_TYPES.get(override.get("ContentType", ""))
+        if kind is None:
+            continue
+        part_name = override.get("PartName")
+        member = _normalise_content_type_part_name(part_name) if part_name else None
+        if member is None:
+            warnings.add(
+                "FormulaFence found an XLM macro-sheet content type without a safe part "
+                "name; the affected macro-sheet controls were not compared."
+            )
+            continue
+        parts[member].add(kind)
+    return dict(parts)
+
+
+def _xlm_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+    missing_is_warning: bool = False,
+) -> tuple[_XlmRawRelationship, ...]:
+    """Read private relationship endpoints without following any target."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        if missing_is_warning:
+            warnings.add(
+                "FormulaFence could not locate "
+                f"{context} relationships while inspecting XLM macro sheets; "
+                "affected macro-sheet controls may be incomplete."
+            )
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for XLM macro sheets ({type(error).__name__}); "
+            "affected macro-sheet controls were not compared."
+        )
+        return ()
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting XLM macro sheets; "
+            "affected macro-sheet controls were not compared."
+        )
+        return ()
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_XlmRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _XlmRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting XLM macro "
+            "sheets; affected macro-sheet controls may be incomplete."
+        )
+    return tuple(relationships)
+
+
+def _xlm_relationship_signature(
+    relationships: tuple[_XlmRawRelationship, ...],
+) -> str | None:
+    """Fingerprint relationship semantics while ignoring arbitrary identifiers."""
+    material = sorted(relationship.semantic_key() for relationship in relationships)
+    return _private_external_data_signature(
+        tuple(
+            (f"relationship:{index}", repr(relationship))
+            for index, relationship in enumerate(material)
+        )
+    )
+
+
+def _xlm_macro_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+) -> tuple[object, ...]:
+    """Canonicalize macro XML while resolving relationship ids privately.
+
+    Relationship identifiers are writer-chosen.  Replacing each ``r:id`` with
+    its relationship semantic tuple makes an identifier-only rewrite compare
+    equal, but retains the target/type change that would alter macro behavior.
+    """
+    relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if attribute == relationship_attribute:
+            relationship = relationship_semantics.get(value)
+            resolved = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+        else:
+            attributes.append((_xml_display_name(attribute), value))
+    children = tuple(
+        _xlm_macro_fragment(child, relationship_semantics) for child in element
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+    )
+
+
+def _xlm_macro_formula_cell_count(root: ElementTree.Element) -> int:
+    """Count macro-sheet cells with a formula without evaluating the formula."""
+    return sum(
+        any(_xml_local_name(child.tag) == "f" for child in cell)
+        for cell in root.iter()
+        if _xml_local_name(cell.tag) == "c"
+    )
+
+
+def _xlm_macro_part_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+) -> _XlmMacroSheetInspection:
+    """Fingerprint one XLM macro-sheet part and its relationships privately."""
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate an XLM macro-sheet package part; "
+            "the affected macro-sheet controls were not compared."
+        )
+        return _XlmMacroSheetInspection(
+            member=member,
+            program_signature=_private_external_data_signature(
+                (("missing-member", member),)
+            ),
+        )
+    if info.file_size > _XLM_MACRO_SHEET_MAX_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized XLM macro-sheet part; "
+            "the affected macro-sheet controls have a coverage gap."
+        )
+        return _XlmMacroSheetInspection(
+            member=member,
+            program_signature=_private_external_data_signature(
+                (
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            ),
+        )
+    payload: bytes | None = None
+    try:
+        payload = archive.read(member)
+        root = _xml_root_from_payload(payload)
+    except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect an XLM macro-sheet XML part "
+            f"({type(error).__name__}); the affected macro-sheet controls were not compared."
+        )
+        signature = (
+            _private_payload_signature(payload)
+            if payload is not None
+            else _private_external_data_signature(
+                (
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            )
+        )
+        return _XlmMacroSheetInspection(
+            member=member,
+            program_signature=signature,
+        )
+    if (
+        _xml_local_name(root.tag) != "macrosheet"
+        or _xml_namespace(root.tag) != _EXCEL_2006_MAIN_NS
+    ):
+        warnings.add(
+            "FormulaFence found an XLM macro-sheet part with an unexpected root; "
+            "the affected macro-sheet controls were not compared."
+        )
+        return _XlmMacroSheetInspection(
+            member=member,
+            program_signature=_private_payload_signature(payload),
+        )
+
+    relationships = _xlm_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="XLM macro-sheet",
+    )
+    relationships_by_id: dict[str, list[_XlmRawRelationship]] = defaultdict(list)
+    for relationship in relationships:
+        if relationship.relationship_id:
+            relationships_by_id[relationship.relationship_id].append(relationship)
+    relationship_semantics: dict[str, tuple[str, str, str]] = {}
+    for relationship_id, matches in relationships_by_id.items():
+        semantics = sorted(match.semantic_key() for match in matches)
+        if len(semantics) > 1:
+            warnings.add(
+                "FormulaFence found duplicate XLM macro-sheet relationship ids; "
+                "the affected macro-sheet controls have a coverage gap."
+            )
+        relationship_semantics[relationship_id] = semantics[0]
+
+    referenced_relationship_ids = {
+        value
+        for element in root.iter()
+        if (value := element.get(f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id")) is not None
+    }
+    if referenced_relationship_ids - set(relationship_semantics):
+        warnings.add(
+            "FormulaFence found an XLM macro-sheet relationship reference without a "
+            "matching relationship; the affected macro-sheet controls have a coverage gap."
+        )
+    relationship_kinds = [
+        relationship.relationship_type.rsplit("/", maxsplit=1)[-1]
+        for relationship in relationships
+    ]
+    formula_cell_count = _xlm_macro_formula_cell_count(root)
+    try:
+        program_signature = _private_external_data_signature(
+            (("macro-sheet", repr(_xlm_macro_fragment(root, relationship_semantics))),)
+        )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested XLM macro-sheet "
+            "part; the affected macro-sheet controls were not compared."
+        )
+        return _XlmMacroSheetInspection(
+            member=member,
+            formula_cell_count=formula_cell_count,
+            related_relationship_count=len(relationships),
+            external_relationship_count=sum(
+                relationship.target_mode.casefold() != "internal"
+                for relationship in relationships
+            ),
+            embedded_object_relationship_count=relationship_kinds.count("oleObject"),
+            embedded_package_relationship_count=relationship_kinds.count("package"),
+            program_signature=_private_payload_signature(payload),
+            relationship_signature=_xlm_relationship_signature(relationships),
+        )
+    return _XlmMacroSheetInspection(
+        member=member,
+        formula_cell_count=formula_cell_count,
+        related_relationship_count=len(relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in relationships
+        ),
+        embedded_object_relationship_count=relationship_kinds.count("oleObject"),
+        embedded_package_relationship_count=relationship_kinds.count("package"),
+        inspected=True,
+        program_signature=program_signature,
+        relationship_signature=_xlm_relationship_signature(relationships),
+    )
+
+
+def _xlm_macro_metadata(path: Path) -> _XlmMacroMetadata:
+    """Inspect XLM macro sheets before a workbook library can omit their code."""
+    warnings: set[str] = set()
+    default = XlmMacroSheetSnapshot()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                workbook = _xml_root(archive, "xl/workbook.xml")
+            except (KeyError, ElementTree.ParseError, ValueError) as error:
+                warnings.add(
+                    "FormulaFence could not inspect workbook OOXML for XLM macro sheets "
+                    f"({type(error).__name__}); affected macro-sheet controls were not compared."
+                )
+                return _XlmMacroMetadata(default, tuple(sorted(warnings)))
+            if (
+                _xml_local_name(workbook.tag) != "workbook"
+                or _xml_namespace(workbook.tag) != _SPREADSHEETML_NS
+            ):
+                warnings.add(
+                    "FormulaFence found an unexpected workbook root while inspecting XLM "
+                    "macro sheets; affected macro-sheet controls were not compared."
+                )
+                return _XlmMacroMetadata(default, tuple(sorted(warnings)))
+
+            workbook_relationships = _xlm_raw_relationships(
+                archive,
+                "xl/workbook.xml",
+                warnings,
+                context="workbook",
+                missing_is_warning=True,
+            )
+            macro_relationships = tuple(
+                relationship
+                for relationship in workbook_relationships
+                if relationship.relationship_type in _XLM_MACRO_SHEET_RELATIONSHIPS
+            )
+            workbook_relationships_by_id: dict[
+                str, list[_XlmRawRelationship]
+            ] = defaultdict(list)
+            for relationship in workbook_relationships:
+                if relationship.relationship_id:
+                    workbook_relationships_by_id[relationship.relationship_id].append(
+                        relationship
+                    )
+            workbook_relationship_semantics = {
+                relationship_id: sorted(
+                    relationship.semantic_key() for relationship in matches
+                )[0]
+                for relationship_id, matches in workbook_relationships_by_id.items()
+            }
+            content_type_parts = _xlm_macro_content_type_parts(archive, warnings)
+            discovered_members = {
+                entry.filename
+                for entry in archive.infolist()
+                if _XLM_MACRO_SHEET_PART_PATTERN.fullmatch(entry.filename)
+            }
+
+            candidate_kinds: dict[str, set[str]] = defaultdict(set)
+            declaration_entries: list[tuple[str, str]] = []
+            declared_targets: set[str] = set()
+            relationships_by_id: dict[str, list[_XlmRawRelationship]] = defaultdict(list)
+            for relationship in macro_relationships:
+                kind = _XLM_MACRO_SHEET_RELATIONSHIPS[relationship.relationship_type]
+                declaration_entries.append(
+                    ("workbook-relationship", repr((kind, relationship.semantic_key())))
+                )
+                if relationship.relationship_id:
+                    relationships_by_id[relationship.relationship_id].append(relationship)
+                else:
+                    warnings.add(
+                        "FormulaFence found an XLM macro-sheet workbook relationship without "
+                        "an id; the affected macro-sheet controls have a coverage gap."
+                    )
+                if relationship.safe_target is None:
+                    warnings.add(
+                        "FormulaFence found an XLM macro-sheet relationship without a safe "
+                        "internal part target; the affected macro-sheet controls were not compared."
+                    )
+                    continue
+                candidate_kinds[relationship.safe_target].add(kind)
+                declared_targets.add(relationship.safe_target)
+
+            duplicate_relationship_ids = {
+                relationship_id
+                for relationship_id, matches in relationships_by_id.items()
+                if len(matches) > 1
+            }
+            if duplicate_relationship_ids:
+                warnings.add(
+                    "FormulaFence found duplicate XLM macro-sheet workbook relationship ids; "
+                    "the affected macro-sheet controls have a coverage gap."
+                )
+
+            for member, kinds in content_type_parts.items():
+                candidate_kinds[member].update(kinds)
+                declaration_entries.append(
+                    ("content-type", repr((member, tuple(sorted(kinds)))))
+                )
+                if member not in declared_targets:
+                    warnings.add(
+                        "FormulaFence found an XLM macro-sheet content-type part not declared "
+                        "by the workbook; the affected macro-sheet controls have a coverage gap."
+                    )
+            for member in discovered_members:
+                candidate_kinds.setdefault(member, set())
+                if member not in declared_targets:
+                    warnings.add(
+                        "FormulaFence found an XLM macro-sheet package part not declared by "
+                        "the workbook; the affected macro-sheet controls have a coverage gap."
+                    )
+
+            binding_entries: list[tuple[str, str]] = []
+            bound_relationship_ids: set[str] = set()
+            binding_occurrences: dict[str, int] = defaultdict(int)
+            hidden_macro_sheet_count = 0
+            very_hidden_macro_sheet_count = 0
+            sheets = workbook.find(f"{{{_SPREADSHEETML_NS}}}sheets")
+            relationship_id_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+            if sheets is not None:
+                for index, sheet in enumerate(sheets.findall(f"{{{_SPREADSHEETML_NS}}}sheet")):
+                    relationship_id = sheet.get(relationship_id_attribute)
+                    matches = relationships_by_id.get(relationship_id or "", [])
+                    if not matches:
+                        continue
+                    if len(matches) != 1:
+                        warnings.add(
+                            "FormulaFence found a workbook sheet bound to repeated XLM macro-sheet "
+                            "relationships; the affected macro-sheet controls have a coverage gap."
+                        )
+                    relationship = matches[0]
+                    state = sheet.get("state", "visible")
+                    if state not in {"visible", "hidden", "veryHidden"}:
+                        warnings.add(
+                            "FormulaFence found an unrecognized XLM macro-sheet visibility state; "
+                            "the affected macro-sheet controls have a coverage gap."
+                        )
+                    hidden_macro_sheet_count += int(state == "hidden")
+                    very_hidden_macro_sheet_count += int(state == "veryHidden")
+                    if sheet.get("name") is None:
+                        warnings.add(
+                            "FormulaFence found an XLM macro-sheet workbook declaration without "
+                            "a name; the affected macro-sheet controls have a coverage gap."
+                        )
+                    binding_entries.append(
+                        (
+                            f"sheet-binding:{index}",
+                            repr(
+                                _xlm_macro_fragment(
+                                    sheet, workbook_relationship_semantics
+                                )
+                            ),
+                        )
+                    )
+                    if relationship_id:
+                        bound_relationship_ids.add(relationship_id)
+                        binding_occurrences[relationship_id] += 1
+            if any(count > 1 for count in binding_occurrences.values()):
+                warnings.add(
+                    "FormulaFence found multiple workbook sheets bound to one XLM macro-sheet "
+                    "relationship; the affected macro-sheet controls have a coverage gap."
+                )
+            for relationship in macro_relationships:
+                if (
+                    relationship.relationship_id is None
+                    or relationship.relationship_id not in bound_relationship_ids
+                ):
+                    warnings.add(
+                        "FormulaFence found an XLM macro-sheet relationship not bound to a "
+                        "workbook sheet; the affected macro-sheet controls have a coverage gap."
+                    )
+                    binding_entries.append(
+                        (
+                            "unbound-workbook-relationship",
+                            repr(relationship.semantic_key()),
+                        )
+                    )
+
+            inspections: list[_XlmMacroSheetInspection] = []
+            unrecognized_macro_sheet_members: set[str] = set()
+            international_macro_sheet_count = 0
+            for member in sorted(candidate_kinds, key=str.casefold):
+                kinds = candidate_kinds[member]
+                if len(kinds) != 1:
+                    warnings.add(
+                        "FormulaFence could not identify one XLM macro-sheet part's declared "
+                        "kind; the affected macro-sheet controls have a coverage gap."
+                    )
+                    unrecognized_macro_sheet_members.add(member)
+                elif "international" in kinds:
+                    international_macro_sheet_count += 1
+                inspection = _xlm_macro_part_inspection(archive, member, warnings)
+                inspections.append(inspection)
+                if not inspection.inspected:
+                    unrecognized_macro_sheet_members.add(member)
+
+            def aggregate_signature(attribute: str) -> str | None:
+                material = sorted(
+                    (inspection.member, value)
+                    for inspection in inspections
+                    if (value := getattr(inspection, attribute)) is not None
+                )
+                return _private_external_data_signature(tuple(material))
+
+            declaration_entries.extend(binding_entries)
+            declaration_entries.sort()
+            snapshot = XlmMacroSheetSnapshot(
+                declared_macro_sheet_count=len(macro_relationships),
+                macro_sheet_count=len(candidate_kinds),
+                international_macro_sheet_count=international_macro_sheet_count,
+                unrecognized_macro_sheet_count=len(unrecognized_macro_sheet_members),
+                hidden_macro_sheet_count=hidden_macro_sheet_count,
+                very_hidden_macro_sheet_count=very_hidden_macro_sheet_count,
+                formula_cell_count=sum(
+                    inspection.formula_cell_count for inspection in inspections
+                ),
+                related_relationship_count=sum(
+                    inspection.related_relationship_count for inspection in inspections
+                ),
+                external_relationship_count=sum(
+                    inspection.external_relationship_count for inspection in inspections
+                ),
+                embedded_object_relationship_count=sum(
+                    inspection.embedded_object_relationship_count
+                    for inspection in inspections
+                ),
+                embedded_package_relationship_count=sum(
+                    inspection.embedded_package_relationship_count
+                    for inspection in inspections
+                ),
+                declaration_signature=_private_external_data_signature(
+                    tuple(declaration_entries)
+                ),
+                program_signature=aggregate_signature("program_signature"),
+                relationship_signature=aggregate_signature("relationship_signature"),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _XlmMacroMetadata(
+            default,
+            (
+                "FormulaFence could not inspect XLM macro-sheet OOXML "
+                f"({type(error).__name__}); affected macro-sheet controls were not compared.",
+            ),
+        )
+    return _XlmMacroMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _dynamic_metadata_indexes(archive: ZipFile) -> set[int]:
     """Return the one-based cell-metadata indexes marked as dynamic arrays."""
     try:
@@ -5060,6 +5682,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             f"Unsupported workbook type {source.suffix!r}; supported types: {supported}"
         )
 
+    xlm_macro_metadata = _xlm_macro_metadata(source)
     try:
         with warnings.catch_warnings(record=True) as caught_warnings:
             warnings.simplefilter("always")
@@ -5074,6 +5697,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     except (BadZipFile, InvalidFileException, OSError, ValueError) as error:
         raise WorkbookLoadError(f"Could not read workbook {source}: {error}") from error
     parser_warnings = {str(warning.message) for warning in caught_warnings}
+    parser_warnings.update(xlm_macro_metadata.warnings)
     has_array_formulas = any(
         _is_array_formula(cell)
         for worksheet in workbook.worksheets
@@ -5279,6 +5903,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         query_table_refresh_controls=external_data_metadata.query_tables,
         pivot_cache_refresh_controls=external_data_metadata.pivot_caches,
         external_link_packages=external_data_metadata.external_link_packages,
+        xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         power_query=external_data_metadata.power_query,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
@@ -5340,6 +5965,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             control.profile_dict() for control in snapshot.pivot_cache_refresh_controls
         ],
         "external_link_packages": snapshot.external_link_packages.profile_dict(),
+        "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
         "defined_names": sorted(snapshot.defined_names),
         "calculation_settings": snapshot.calculation_settings,
@@ -5353,6 +5979,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
                 for sheet, coordinate in sorted(snapshot.broken_references)
             ],
             "has_vba": snapshot.macro_hash is not None,
+            "has_xlm_macro_sheets": snapshot.xlm_macro_sheets.present,
             "parser_warnings": list(snapshot.parser_warnings),
             "unresolved_reference_cells": [
                 {

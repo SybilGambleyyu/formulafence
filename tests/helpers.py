@@ -1320,6 +1320,363 @@ def duplicate_external_link_sheet_names(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".external-link-repeated-child.tmp.xlsx")
 
 
+def make_xlm_macro_sheet_model(path: Path, *, international: bool = False) -> Path:
+    """Create a harmless raw XLM macro-sheet fixture that readers commonly omit.
+
+    The macro formula strings are never opened in Excel or evaluated. They are
+    only private OOXML test material for FormulaFence's package scanner.
+    """
+    make_model(path)
+    spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    document_relationships = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    )
+    content_types_namespace = (
+        "http://schemas.openxmlformats.org/package/2006/content-types"
+    )
+    macro_namespace = "http://schemas.microsoft.com/office/excel/2006/main"
+    macro_member = (
+        "xl/macrosheets/intlsheet1.xml"
+        if international
+        else "xl/macrosheets/sheet1.xml"
+    )
+    macro_target = macro_member.removeprefix("xl/")
+    macro_kind = "xlIntlMacrosheet" if international else "xlMacrosheet"
+    macro_content_type = (
+        "application/vnd.ms-excel.intlmacrosheet+xml"
+        if international
+        else "application/vnd.ms-excel.macrosheet+xml"
+    )
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        namespace = root.tag[1:].split("}", maxsplit=1)[0]
+        if namespace in {
+            spreadsheet,
+            package_relationships,
+            content_types_namespace,
+            macro_namespace,
+        }:
+            ElementTree.register_namespace("", namespace)
+        ElementTree.register_namespace("r", document_relationships)
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        sheets = workbook.find(f"{{{spreadsheet}}}sheets")
+        if sheets is None:
+            raise ValueError("Fixture does not contain workbook sheets")
+        sheet_ids = [int(sheet.get("sheetId", "0")) for sheet in sheets]
+        ElementTree.SubElement(
+            sheets,
+            f"{{{spreadsheet}}}sheet",
+            {
+                "name": "Macro Automation",
+                "sheetId": str(max(sheet_ids) + 1),
+                "state": "veryHidden",
+                f"{{{document_relationships}}}id": "rIdFenceXlmMacro",
+            },
+        )
+        contents["xl/workbook.xml"] = serialize(workbook)
+
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceXlmMacro",
+                "Type": (
+                    "http://schemas.microsoft.com/office/2006/relationships/"
+                    f"{macro_kind}"
+                ),
+                "Target": macro_target,
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        override_tag = f"{{{content_types_namespace}}}Override"
+        for override in content_types.findall(override_tag):
+            if override.get("PartName") == "/xl/workbook.xml":
+                override.set(
+                    "ContentType",
+                    "application/vnd.ms-excel.sheet.macroEnabled.main+xml",
+                )
+        ElementTree.SubElement(
+            content_types,
+            override_tag,
+            {"PartName": f"/{macro_member}", "ContentType": macro_content_type},
+        )
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+        macro_sheet = ElementTree.Element(f"{{{macro_namespace}}}macrosheet")
+        sheet_data = ElementTree.SubElement(
+            macro_sheet, f"{{{macro_namespace}}}sheetData"
+        )
+        for row_number, formula, value in (
+            (1, 'PRIVATE.XLM("private-baseline-xl-command-argument")', None),
+            (2, "RETURN()", "private-baseline-xl-cell-value"),
+        ):
+            row = ElementTree.SubElement(
+                sheet_data,
+                f"{{{macro_namespace}}}row",
+                {"r": str(row_number)},
+            )
+            cell = ElementTree.SubElement(
+                row,
+                f"{{{macro_namespace}}}c",
+                {"r": f"A{row_number}"},
+            )
+            ElementTree.SubElement(cell, f"{{{macro_namespace}}}f").text = formula
+            if value is not None:
+                ElementTree.SubElement(cell, f"{{{macro_namespace}}}v").text = value
+        ole_objects = ElementTree.SubElement(
+            macro_sheet, f"{{{macro_namespace}}}oleObjects"
+        )
+        ElementTree.SubElement(
+            ole_objects,
+            f"{{{macro_namespace}}}oleObject",
+            {
+                f"{{{document_relationships}}}id": "rIdFenceEmbeddedObject",
+                "progId": "private.baseline.xlm.embedded.object",
+            },
+        )
+        ElementTree.SubElement(
+            ole_objects,
+            f"{{{macro_namespace}}}oleObject",
+            {
+                f"{{{document_relationships}}}id": "rIdFenceExternalObject",
+                "progId": "private.baseline.xlm.linked.object",
+            },
+        )
+        contents[macro_member] = serialize(macro_sheet)
+
+        macro_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        for relationship_id, relationship_type, target, target_mode in (
+            (
+                "rIdFenceEmbeddedObject",
+                f"{document_relationships}/oleObject",
+                "../embeddings/private-baseline-xl-object.bin",
+                None,
+            ),
+            (
+                "rIdFenceExternalObject",
+                f"{document_relationships}/oleObject",
+                "file:///private/baseline-xl-linked-object.bin",
+                "External",
+            ),
+            (
+                "rIdFenceEmbeddedPackage",
+                f"{document_relationships}/package",
+                "../embeddings/private-baseline-xl-package.bin",
+                None,
+            ),
+        ):
+            attributes = {
+                "Id": relationship_id,
+                "Type": relationship_type,
+                "Target": target,
+            }
+            if target_mode is not None:
+                attributes["TargetMode"] = target_mode
+            ElementTree.SubElement(macro_relationships, relationship_tag, attributes)
+        contents[
+            "xl/macrosheets/_rels/" + macro_member.rsplit("/", maxsplit=1)[-1] + ".rels"
+        ] = serialize(macro_relationships)
+        contents["xl/embeddings/private-baseline-xl-object.bin"] = (
+            b"private baseline embedded XLM object payload"
+        )
+        contents["xl/embeddings/private-baseline-xl-package.bin"] = (
+            b"private baseline embedded XLM package payload"
+        )
+
+    return _rewrite_archive(path, mutate, ".xlm-macro-sheet.tmp.xlsx")
+
+
+def change_xlm_macro_sheet_controls(path: Path) -> Path:
+    """Change private XLM code, binding, and related-part material."""
+    macro_namespace = "http://schemas.microsoft.com/office/excel/2006/main"
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    macro_member = "xl/macrosheets/sheet1.xml"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        macro_sheet = ElementTree.fromstring(contents[macro_member])
+        formula = macro_sheet.find(
+            f"./{{{macro_namespace}}}sheetData/{{{macro_namespace}}}row/"
+            f"{{{macro_namespace}}}c/{{{macro_namespace}}}f"
+        )
+        cell_value = macro_sheet.find(
+            f"./{{{macro_namespace}}}sheetData/{{{macro_namespace}}}row[2]/"
+            f"{{{macro_namespace}}}c/{{{macro_namespace}}}v"
+        )
+        embedded_object = macro_sheet.find(
+            f"./{{{macro_namespace}}}oleObjects/{{{macro_namespace}}}oleObject"
+        )
+        if formula is None or cell_value is None or embedded_object is None:
+            raise ValueError("Fixture does not contain expected XLM macro-sheet controls")
+        formula.text = 'PRIVATE.XLM("private-candidate-xl-command-argument")'
+        cell_value.text = "private-candidate-xl-cell-value"
+        embedded_object.set("progId", "private.candidate.xlm.embedded.object")
+        extensions = ElementTree.SubElement(macro_sheet, f"{{{macro_namespace}}}extLst")
+        ElementTree.SubElement(
+            extensions,
+            f"{{{macro_namespace}}}ext",
+            {"uri": "urn:private:candidate:xlm-extension"},
+        ).text = "private candidate XLM extension payload"
+        contents[macro_member] = ElementTree.tostring(
+            macro_sheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships_name = "xl/macrosheets/_rels/sheet1.xml.rels"
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        for relationship in relationships.findall(relationship_tag):
+            if relationship.get("Id") == "rIdFenceEmbeddedObject":
+                relationship.set(
+                    "Target", "../embeddings/private-candidate-xl-object.bin"
+                )
+            elif relationship.get("Id") == "rIdFenceExternalObject":
+                relationship.set(
+                    "Target", "file:///private/candidate-xl-linked-object.bin"
+                )
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["xl/embeddings/private-candidate-xl-object.bin"] = (
+            b"private candidate embedded XLM object payload"
+        )
+
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        sheet = next(
+            (
+                item
+                for item in workbook.findall(
+                    ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheet"
+                )
+                if item.get("name") == "Macro Automation"
+            ),
+            None,
+        )
+        if sheet is None:
+            raise ValueError("Fixture does not contain XLM macro-sheet declaration")
+        sheet.set("state", "hidden")
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".xlm-macro-sheet-change.tmp.xlsx")
+
+
+def renumber_xlm_macro_sheet_relationships(path: Path) -> Path:
+    """Rewrite arbitrary XLM relationship ids while retaining their bindings."""
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    document_relationships = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    )
+    replacements = {
+        "rIdFenceXlmMacro": "rIdFenceRenumberedXlmMacro",
+        "rIdFenceEmbeddedObject": "rIdFenceRenumberedEmbeddedObject",
+        "rIdFenceExternalObject": "rIdFenceRenumberedExternalObject",
+        "rIdFenceEmbeddedPackage": "rIdFenceRenumberedEmbeddedPackage",
+    }
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        for name in (
+            "xl/_rels/workbook.xml.rels",
+            "xl/macrosheets/_rels/sheet1.xml.rels",
+        ):
+            relationships = ElementTree.fromstring(contents[name])
+            for relationship in relationships.findall(relationship_tag):
+                if replacement := replacements.get(relationship.get("Id")):
+                    relationship.set("Id", replacement)
+            contents[name] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+        relationship_id_attribute = f"{{{document_relationships}}}id"
+        for name in ("xl/workbook.xml", "xl/macrosheets/sheet1.xml"):
+            root = ElementTree.fromstring(contents[name])
+            for element in root.iter():
+                if replacement := replacements.get(element.get(relationship_id_attribute)):
+                    element.set(relationship_id_attribute, replacement)
+            contents[name] = ElementTree.tostring(
+                root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".xlm-macro-sheet-renumber.tmp.xlsx")
+
+
+def rewrite_xlm_macro_sheet_internal_target_spelling(path: Path) -> Path:
+    """Rewrite an XLM internal target using an equivalent relative path."""
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships_name = "xl/_rels/workbook.xml.rels"
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        macro_relationship = next(
+            (
+                relationship
+                for relationship in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if relationship.get("Type", "").endswith("/xlMacrosheet")
+            ),
+            None,
+        )
+        if macro_relationship is None:
+            raise ValueError("Fixture does not contain an XLM macro-sheet relationship")
+        macro_relationship.set(
+            "Target", "./macrosheets/../macrosheets/sheet1.xml"
+        )
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".xlm-macro-sheet-target.tmp.xlsx")
+
+
+def corrupt_xlm_macro_sheet_root(path: Path) -> Path:
+    """Replace the macro-sheet root with an unexpected element for fail-closed tests."""
+    macro_namespace = "http://schemas.microsoft.com/office/excel/2006/main"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        macro_sheet = ElementTree.fromstring(contents["xl/macrosheets/sheet1.xml"])
+        macro_sheet.tag = f"{{{macro_namespace}}}notMacroSheet"
+        contents["xl/macrosheets/sheet1.xml"] = ElementTree.tostring(
+            macro_sheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".xlm-macro-sheet-corrupt.tmp.xlsx")
+
+
 def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Path:
     """Create a workbook with operational protection and sparse style controls."""
     workbook = Workbook()

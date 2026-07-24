@@ -11,6 +11,7 @@ from .helpers import (
     change_external_data_refresh_controls,
     change_external_link_package_controls,
     change_power_query_controls,
+    change_xlm_macro_sheet_controls,
     make_conditional_formatting_model,
     make_data_validation_model,
     make_external_data_refresh_model,
@@ -21,6 +22,7 @@ from .helpers import (
     make_protection_model,
     make_table_model,
     make_three_d_model,
+    make_xlm_macro_sheet_model,
     mark_array_formula_dynamic,
     rewrite,
 )
@@ -253,6 +255,19 @@ def test_policy_can_block_external_link_package_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP025"}
+
+
+def test_policy_can_block_xlm_macro_sheet_changes(tmp_path) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    change_xlm_macro_sheet_controls(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_xlm_macro_sheet_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP026"}
 
 
 def test_policy_can_block_power_query_changes(tmp_path) -> None:

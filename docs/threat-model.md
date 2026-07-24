@@ -9,8 +9,9 @@ financial correctness or replace model review.
 - Workbook content stays on the machine running FormulaFence. The CLI makes no
   network requests.
 - It loads formulas as text with `data_only=False`; it does not calculate them.
-- It never executes VBA, DDE, external links, Power Query, or add-in code.
-- Macro payloads are reported by cryptographic hash only.
+- It never executes VBA, XLM macro sheets, DDE, external links, Power Query, or add-in code.
+- VBA payloads and XLM macro-sheet source material are compared through private
+  fingerprints only.
 - Protection credential material is never emitted: legacy verifiers, modern
   hashes/salts, protected-range names, and security descriptors are compared
   through private fingerprints and reported only as safe presence/change metadata.
@@ -132,6 +133,16 @@ review prompt, not proof of an error.
   and can be blocked with `no_external_link_package_changes`. FormulaFence does
   **not** follow or execute these links, establish source trust, or infer
   returned data.
+- Excel 4.0 / XLM macro sheets are read directly from their raw Macro Sheet XML
+  package parts before a workbook library can omit their executable cells.
+  FormulaFence binds the documented workbook relationships to those parts,
+  privately fingerprints complete XML plus related-part relationships, and
+  reports only structural counts. Commands, cell values, relationship targets,
+  and embedded-object payloads remain private. A material change emits `FF026`
+  and can be blocked with `no_xlm_macro_sheet_changes`. FormulaFence does
+  **not** execute, emulate, open, or resolve any XLM command, related target,
+  or embedded object. Oversized, malformed, unbound, or unrecognized parts
+  remain visible parser-coverage warnings rather than being silently ignored.
 - Power Query Data Mashup custom XML is inspected without serializing its M
   formulas or data/source material. FormulaFence privately compares the
   `Section1.m` formula document, logical package content, stable query metadata,
@@ -172,8 +183,8 @@ review prompt, not proof of an error.
   location in the profile, and a newly introduced one emits `FF016`; its graph
   is deliberately omitted rather than partially guessed.
 - It inventories sheet visibility, defined names, calculation settings, the VBA
-  payload, the protection controls above, external-data refresh controls,
-  external-link packages, and private Power Query definition material. It does
+  payload, XLM macro-sheet packages, the protection controls above, external-data
+  refresh controls, external-link packages, and private Power Query definition material. It does
   not yet diff chart definitions, PivotTable layout or cached data, Power Query
   runtime behavior or returned data, ordinary styles beyond direct protection
   assignments, complete Excel style-cascade results, or every OOXML part.

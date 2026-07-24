@@ -860,6 +860,60 @@ class ExternalLinkPackageSnapshot:
 
 
 @dataclass(frozen=True)
+class XlmMacroSheetSnapshot:
+    """Safe aggregate of raw Excel 4.0 / XLM macro-sheet package parts.
+
+    XLM automation lives in XML macro-sheet parts rather than in the VBA
+    binary.  The private signatures retain complete program and relationship
+    evidence for comparison, while ``to_dict`` intentionally exposes only
+    structural counts.
+    """
+
+    declared_macro_sheet_count: int = 0
+    macro_sheet_count: int = 0
+    international_macro_sheet_count: int = 0
+    unrecognized_macro_sheet_count: int = 0
+    hidden_macro_sheet_count: int = 0
+    very_hidden_macro_sheet_count: int = 0
+    formula_cell_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    embedded_object_relationship_count: int = 0
+    embedded_package_relationship_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    program_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(self.declared_macro_sheet_count or self.macro_sheet_count)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe macro-sheet inventory without commands or endpoints."""
+        return {
+            "present": self.present,
+            "declared_macro_sheet_count": self.declared_macro_sheet_count,
+            "macro_sheet_count": self.macro_sheet_count,
+            "international_macro_sheet_count": self.international_macro_sheet_count,
+            "unrecognized_macro_sheet_count": self.unrecognized_macro_sheet_count,
+            "hidden_macro_sheet_count": self.hidden_macro_sheet_count,
+            "very_hidden_macro_sheet_count": self.very_hidden_macro_sheet_count,
+            "formula_cell_count": self.formula_cell_count,
+            "related_relationship_count": self.related_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+            "embedded_object_relationship_count": (
+                self.embedded_object_relationship_count
+            ),
+            "embedded_package_relationship_count": (
+                self.embedded_package_relationship_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class PowerQueryPermissionControlsSnapshot:
     """Safe aggregate controls from Data Mashup permission documents."""
 
@@ -1131,6 +1185,9 @@ class WorkbookSnapshot:
     external_link_packages: ExternalLinkPackageSnapshot = field(
         default_factory=ExternalLinkPackageSnapshot
     )
+    xlm_macro_sheets: XlmMacroSheetSnapshot = field(
+        default_factory=XlmMacroSheetSnapshot
+    )
     power_query: PowerQuerySnapshot = field(default_factory=PowerQuerySnapshot)
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -1217,6 +1274,9 @@ class WorkbookSnapshot:
             "external_workbook_link_count": self.external_link_packages.external_workbook_count,
             "dde_link_count": self.external_link_packages.dde_link_count,
             "ole_link_count": self.external_link_packages.ole_link_count,
+            "xlm_macro_sheet_count": self.xlm_macro_sheets.macro_sheet_count,
+            "xlm_macro_formula_cell_count": self.xlm_macro_sheets.formula_cell_count,
+            "has_xlm_macro_sheets": self.xlm_macro_sheets.present,
             "power_query_mashup_count": self.power_query.mashup_count,
             "power_query_formula_document_count": self.power_query.formula_document_count,
             "power_query_metadata_item_count": self.power_query.metadata_item_count,

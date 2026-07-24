@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.20.0 — 2026-07-24
+
+- Inspect Excel 4.0 / XLM Macro Sheet and International Macro Sheet package
+  parts directly, before the workbook reader can omit their executable cells.
+  Private fingerprints retain complete macro XML, workbook bindings, and
+  related package relationships without serializing commands, cell values,
+  targets, identifiers, or embedded-object payloads.
+- Emit `FF026` for XLM macro-sheet changes and add the fail-closed
+  `no_xlm_macro_sheet_changes` policy rule (`FFP026`). Relationship-id-only
+  rewrites are normalized away, while malformed, unbound, oversized, or
+  unrecognized parts remain visible coverage warnings. FormulaFence does not
+  execute or emulate XLM commands, resolve targets, or load embedded objects.
+
 ## 0.19.0 — 2026-07-24
 
 - Inspect raw `xl/externalLinks/externalLink*.xml` parts for external-workbook,

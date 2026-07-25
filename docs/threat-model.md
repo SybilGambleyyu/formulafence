@@ -29,6 +29,10 @@ financial correctness or replace model review.
   macro assignments, text links, descriptions, relationship identifiers, and
   targets are compared through private fingerprints only. Profiles and reports
   retain structural counts, never the underlying shape content.
+- Worksheet cell-hyperlink targets, locations, display overrides, ScreenTips,
+  references, relationship identifiers, and revision UIDs are compared through
+  private fingerprints only. Profiles and reports retain structural counts,
+  never the underlying link material, and the CLI never follows a target.
 - Legacy Excel Note text, authors, cell associations, comment properties,
   threaded-comment placeholder links, VML visibility/layout, relationship
   identifiers, targets, and GUIDs are compared through private fingerprints
@@ -280,6 +284,32 @@ review prompt, not proof of an error.
   [shared-string-table guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-shared-string-table),
   the Open XML `r` [rich-text-run definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.run?view=openxml-3.0.1),
   and `is` [inline-string definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.inlinestring?view=openxml-3.0.1).
+- An ordinary worksheet cell can retain the same friendly value while its stored
+  hyperlink changes an external/file target, in-workbook location, display
+  override, or ScreenTip. FormulaFence reads raw standard SpreadsheetML
+  `hyperlink` and Office 2016 `xr:hyperlink` declarations plus their selected
+  worksheet relationships before the ordinary reader can normalize them. It
+  privately compares binding, declaration material, location, display/ScreenTip,
+  and relationship type/target/mode semantics. A material change emits
+  `FF047` and `no_cell_hyperlink_changes` blocks it as `FFP047`. Profiles and
+  reports expose only aggregate worksheet/hyperlink,
+  location/display/ScreenTip, relationship/external-relationship, and
+  malformed-metadata counts; targets, references, locations, display strings,
+  ScreenTips, relationship IDs, and revision UIDs remain private.
+  Writer-chosen relationship IDs/revision UIDs, relationship ordering, and
+  equivalent internal target spelling normalize away. Missing, duplicate,
+  malformed, unbound, unsafe, unreadable, oversized, or over-budget metadata
+  becomes a visible coverage warning; raw worksheet XML reads are bounded to
+  16 MiB per worksheet, 64 MiB per workbook, and 512 parts. The ordinary reader
+  receives a hyperlink-removed temporary copy only after raw inspection, so
+  malformed markup cannot suppress the evidence. FormulaFence does **not**
+  render, resolve, fetch, follow, or test a link; inspect linked content; infer
+  reputation/trust-zone/client behavior; or interpret `HYPERLINK()` formulas
+  beyond ordinary formula comparison. This boundary follows the Open XML
+  [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.hyperlink?view=openxml-3.0.1)
+  and Office 2016
+  [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2016.excel.hyperlink?view=openxml-3.0.1)
+  definitions.
 - Traditional Excel Notes are stored in worksheet-associated SpreadsheetML
   comments parts and their display declarations live in worksheet
   `legacyDrawing` VML parts. FormulaFence follows the worksheet bindings and
@@ -581,9 +611,10 @@ review prompt, not proof of an error.
   Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and
   Scenario Manager declarations, worksheet/Table AutoFilter and row/column-
   visibility controls, ignored-error warning suppressions, relationship-backed Named Sheet
-  View controls, legacy Excel Note/comments/VML and threaded-placeholder
-  package chains, modern threaded-comment/person package chains, non-chart
-  Worksheet DrawingML regular/group shape controls, DrawingML chart
+  View controls, ordinary worksheet-cell hyperlink declarations/relationships,
+  legacy Excel Note/comments/VML and threaded-placeholder package chains,
+  modern threaded-comment/person package chains, non-chart Worksheet DrawingML
+  regular/group shape controls, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link
@@ -594,11 +625,11 @@ review prompt, not proof of an error.
   `chartEx` or nested-chart semantics; future Named Sheet View extension/rich-
   sort or full differential-format semantics; worksheet pictures, connectors,
   graphic frames, SmartArt, and other non-`xdr:sp` drawing objects or
-  chart-to-cell impact; Ribbon image payloads; VML/drawing control layout or
-  comment content; embedded OLE/package formats; worksheet-scoped Web Add-in
-  markup; Power Query runtime behavior or returned data; ordinary styles beyond
-  direct protection assignments; complete Excel style-cascade results; or every
-  OOXML part.
+  chart-to-cell impact; Ribbon image payloads; general VML/drawing-control
+  layout beyond supported Note shapes; embedded OLE/package formats;
+  worksheet-scoped Web Add-in markup; Power Query runtime behavior or returned
+  data; ordinary styles beyond direct protection assignments; complete Excel
+  style-cascade results; or every OOXML part.
 - The tool preserves Excel formula text and uses a limited A1-reference
   normalizer for peer-pattern detection; it is not an Excel-compatible parser
   or calculation engine.

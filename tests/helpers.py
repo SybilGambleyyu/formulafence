@@ -81,6 +81,304 @@ def make_legacy_comment_model(path: Path) -> Path:
     return path
 
 
+def _cell_hyperlink_part_names(contents: dict[str, bytes]) -> tuple[str, str]:
+    """Return the worksheet and relationship members used by cell hyperlinks."""
+    worksheet_member = "xl/worksheets/sheet1.xml"
+    relationships_member = _relationship_member(worksheet_member)
+    if (
+        worksheet_member not in contents
+        or relationships_member not in contents
+    ):
+        raise ValueError("Fixture does not contain a worksheet cell hyperlink package")
+    return worksheet_member, relationships_member
+
+
+def make_cell_hyperlink_model(path: Path) -> Path:
+    """Create private external and in-workbook cell hyperlink declarations."""
+    make_model(path)
+    workbook = load_workbook(path)
+    worksheet = workbook["Inputs"]
+    worksheet["A1"] = "Open approved source"
+    worksheet["A1"].hyperlink = "https://approved.example.test/PRIVATE-LINK-BASELINE"
+    worksheet["A1"].hyperlink.tooltip = "PRIVATE-EXTERNAL-LINK-TOOLTIP"
+    worksheet["A1"].style = "Hyperlink"
+    worksheet["A2"] = "Jump to source"
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member, _relationships_member = _cell_hyperlink_part_names(contents)
+        worksheet_root = ElementTree.fromstring(contents[worksheet_member])
+        hyperlinks_tag = f"{{{_SPREADSHEETML_NS}}}hyperlinks"
+        hyperlink_tag = f"{{{_SPREADSHEETML_NS}}}hyperlink"
+        hyperlinks = worksheet_root.find(hyperlinks_tag)
+        if hyperlinks is None:
+            hyperlinks = ElementTree.SubElement(worksheet_root, hyperlinks_tag)
+        ElementTree.SubElement(
+            hyperlinks,
+            hyperlink_tag,
+            {
+                "ref": "A2",
+                "location": "'Inputs'!A1",
+                "display": "PRIVATE-INTERNAL-LINK-DISPLAY",
+                "tooltip": "PRIVATE-INTERNAL-LINK-TOOLTIP",
+            },
+        )
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".cell-hyperlink-model.tmp.xlsx")
+
+
+def _cell_hyperlink_element(
+    worksheet: ElementTree.Element,
+    reference: str,
+) -> ElementTree.Element:
+    """Return one standard hyperlink fixture declaration by its private ref."""
+    hyperlink_tag = f"{{{_SPREADSHEETML_NS}}}hyperlink"
+    hyperlink = next(
+        (
+            current
+            for current in worksheet.iter(hyperlink_tag)
+            if current.get("ref") == reference
+        ),
+        None,
+    )
+    if hyperlink is None:
+        raise ValueError(f"Fixture does not contain cell hyperlink {reference}")
+    return hyperlink
+
+
+def change_cell_hyperlink_target(path: Path) -> Path:
+    """Change an external cell hyperlink target without changing its cell value."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _worksheet_member, relationships_member = _cell_hyperlink_part_names(contents)
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            (
+                current
+                for current in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if (current.get("Type") or "").endswith("/hyperlink")
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain a hyperlink relationship")
+        relationship.set("Target", "https://review.example.test/PRIVATE-LINK-CANDIDATE")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".cell-hyperlink-target.tmp.xlsx")
+
+
+def change_cell_hyperlink_tooltip(path: Path) -> Path:
+    """Change only a private ScreenTip on an ordinary cell hyperlink."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member, _relationships_member = _cell_hyperlink_part_names(contents)
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        _cell_hyperlink_element(worksheet, "A1").set(
+            "tooltip",
+            "PRIVATE-EXTERNAL-LINK-TOOLTIP-CANDIDATE",
+        )
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".cell-hyperlink-tooltip.tmp.xlsx")
+
+
+def change_cell_hyperlink_display(path: Path) -> Path:
+    """Change a private display override without changing the cell's value."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member, _relationships_member = _cell_hyperlink_part_names(contents)
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        _cell_hyperlink_element(worksheet, "A2").set(
+            "display",
+            "PRIVATE-INTERNAL-LINK-DISPLAY-CANDIDATE",
+        )
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".cell-hyperlink-display.tmp.xlsx")
+
+
+def change_cell_hyperlink_location(path: Path) -> Path:
+    """Retarget an in-workbook cell hyperlink without changing visible text."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member, _relationships_member = _cell_hyperlink_part_names(contents)
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        _cell_hyperlink_element(worksheet, "A2").set(
+            "location",
+            "'Inputs'!B2",
+        )
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".cell-hyperlink-location.tmp.xlsx")
+
+
+def renumber_cell_hyperlink_identifiers(path: Path) -> Path:
+    """Rewrite a package relationship ID and optional writer UID consistently."""
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    revision = _OFFICE_2014_REVISION_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member, relationships_member = _cell_hyperlink_part_names(contents)
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        relationship_attribute = f"{{{document_relationships}}}id"
+        hyperlink = _cell_hyperlink_element(worksheet, "A1")
+        old_identifier = hyperlink.get(relationship_attribute)
+        if old_identifier is None:
+            raise ValueError("Fixture hyperlink is missing a relationship identifier")
+        hyperlink.set(relationship_attribute, "rIdFenceCellHyperlink")
+        hyperlink.set(f"{{{revision}}}uid", "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}")
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            (
+                current
+                for current in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if current.get("Id") == old_identifier
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture relationship identifier is missing")
+        relationship.set("Id", "rIdFenceCellHyperlink")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".cell-hyperlink-identifiers.tmp.xlsx")
+
+
+def rewrite_cell_hyperlink_as_revision_declaration(path: Path) -> Path:
+    """Move one stored link into Excel's Office 2016 revision namespace."""
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    revision = _OFFICE_2014_REVISION_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member, _relationships_member = _cell_hyperlink_part_names(contents)
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        hyperlinks_tag = f"{{{_SPREADSHEETML_NS}}}hyperlinks"
+        ext_list_tag = f"{{{_SPREADSHEETML_NS}}}extLst"
+        ext_tag = f"{{{_SPREADSHEETML_NS}}}ext"
+        hyperlinks = worksheet.find(hyperlinks_tag)
+        if hyperlinks is None:
+            raise ValueError("Fixture does not contain a hyperlink container")
+        original = _cell_hyperlink_element(worksheet, "A1")
+        relationship_attribute = f"{{{document_relationships}}}id"
+        relationship_id = original.get(relationship_attribute)
+        if relationship_id is None:
+            raise ValueError("Fixture hyperlink is missing a relationship identifier")
+        hyperlinks.remove(original)
+        revision_link = ElementTree.Element(
+            f"{{{revision}}}hyperlink",
+            {
+                "ref": "A1",
+                relationship_attribute: relationship_id,
+                "tooltip": "PRIVATE-EXTERNAL-LINK-TOOLTIP",
+            },
+        )
+        ext_list = worksheet.find(ext_list_tag)
+        if ext_list is None:
+            ext_list = ElementTree.SubElement(worksheet, ext_list_tag)
+        extension = ElementTree.SubElement(
+            ext_list,
+            ext_tag,
+            {"uri": "{C11C4282-8D77-4AC7-B5A1-96BCB966B2A4}"},
+        )
+        extension.append(revision_link)
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".cell-hyperlink-revision.tmp.xlsx")
+
+
+def corrupt_cell_hyperlink_reference(path: Path) -> Path:
+    """Inject a malformed reference that the ordinary reader must not parse."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member, _relationships_member = _cell_hyperlink_part_names(contents)
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        _cell_hyperlink_element(worksheet, "A1").set(
+            "ref",
+            "PRIVATE-NOT-A-CELL-REFERENCE",
+        )
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".cell-hyperlink-corrupt.tmp.xlsx")
+
+
+def unbind_cell_hyperlink_relationship(path: Path) -> Path:
+    """Remove a referenced hyperlink relationship to exercise fail-closed parsing."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member, relationships_member = _cell_hyperlink_part_names(contents)
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIPS_NS}}}id"
+        relationship_id = _cell_hyperlink_element(worksheet, "A1").get(
+            relationship_attribute
+        )
+        if relationship_id is None:
+            raise ValueError("Fixture hyperlink is missing a relationship identifier")
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            (
+                current
+                for current in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if current.get("Id") == relationship_id
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture relationship identifier is missing")
+        relationships.remove(relationship)
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".cell-hyperlink-unbound.tmp.xlsx")
+
+
 def _legacy_comment_part_names(contents: dict[str, bytes]) -> tuple[str, str, str]:
     """Return the comments, VML, and worksheet relationship members for a Note."""
     comment_members = sorted(

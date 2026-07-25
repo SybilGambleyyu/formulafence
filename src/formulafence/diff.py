@@ -10,6 +10,7 @@ from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
 
 from formulafence.formulas import resolve_3d_reference
 from formulafence.models import (
+    CellHyperlinkSnapshot,
     CellKey,
     CellSnapshot,
     Change,
@@ -1949,6 +1950,61 @@ def _legacy_comment_controls_changed(
     return [change], [finding]
 
 
+def _cell_hyperlink_controls_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag stored cell hyperlink changes that ordinary values cannot expose."""
+    old_hyperlinks: CellHyperlinkSnapshot = before.cell_hyperlinks
+    new_hyperlinks: CellHyperlinkSnapshot = after.cell_hyperlinks
+    if old_hyperlinks == new_hyperlinks:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_hyperlinks.to_dict(),
+        "after": new_hyperlinks.to_dict(),
+    }
+    if old_hyperlinks.declaration_signature != new_hyperlinks.declaration_signature:
+        details["cell_hyperlink_binding_changed"] = True
+    if old_hyperlinks.definition_signature != new_hyperlinks.definition_signature:
+        details["cell_hyperlink_definition_material_changed"] = True
+    if old_hyperlinks.relationship_signature != new_hyperlinks.relationship_signature:
+        details["cell_hyperlink_relationships_changed"] = True
+    if (
+        old_hyperlinks.unrecognized_cell_hyperlink_count
+        != new_hyperlinks.unrecognized_cell_hyperlink_count
+        or (
+            (
+                old_hyperlinks.unrecognized_cell_hyperlink_count
+                or new_hyperlinks.unrecognized_cell_hyperlink_count
+            )
+            and (
+                old_hyperlinks.definition_signature
+                != new_hyperlinks.definition_signature
+                or old_hyperlinks.relationship_signature
+                != new_hyperlinks.relationship_signature
+            )
+        )
+    ):
+        details["unrecognized_cell_hyperlink_metadata_changed"] = True
+    change = Change(
+        "cell_hyperlink_controls_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF047",
+        "high",
+        (
+            "Worksheet cell hyperlinks changed; a reviewer may be redirected or "
+            "shown a different target outside the ordinary cell value."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _threaded_comment_controls_changed(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
@@ -2130,6 +2186,13 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(rich_text_run_changes)
     findings.extend(rich_text_run_findings)
+
+    cell_hyperlink_changes, cell_hyperlink_findings = _cell_hyperlink_controls_changed(
+        before,
+        after,
+    )
+    changes.extend(cell_hyperlink_changes)
+    findings.extend(cell_hyperlink_findings)
 
     legacy_comment_changes, legacy_comment_findings = _legacy_comment_controls_changed(
         before,

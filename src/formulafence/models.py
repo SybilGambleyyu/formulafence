@@ -1885,6 +1885,53 @@ class RichTextRunSnapshot:
 
 
 @dataclass(frozen=True)
+class CellHyperlinkSnapshot:
+    """Safe aggregate of worksheet cell hyperlink controls.
+
+    A SpreadsheetML cell hyperlink can retain a private target, internal
+    location, display override, or ScreenTip outside the ordinary cell value.
+    Private signatures preserve those declarations and package bindings for
+    comparison without serialising link targets, locations, text, or
+    relationship identifiers into a profile or change report.
+    """
+
+    worksheet_hyperlink_sheet_count: int = 0
+    hyperlink_count: int = 0
+    hyperlink_with_location_count: int = 0
+    hyperlink_with_display_count: int = 0
+    hyperlink_with_tooltip_count: int = 0
+    binding_relationship_count: int = 0
+    external_relationship_count: int = 0
+    unrecognized_cell_hyperlink_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(self.hyperlink_count or self.unrecognized_cell_hyperlink_count)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural hyperlink evidence without targets or locations."""
+        return {
+            "present": self.present,
+            "worksheet_hyperlink_sheet_count": self.worksheet_hyperlink_sheet_count,
+            "hyperlink_count": self.hyperlink_count,
+            "hyperlink_with_location_count": self.hyperlink_with_location_count,
+            "hyperlink_with_display_count": self.hyperlink_with_display_count,
+            "hyperlink_with_tooltip_count": self.hyperlink_with_tooltip_count,
+            "binding_relationship_count": self.binding_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+            "unrecognized_cell_hyperlink_count": (
+                self.unrecognized_cell_hyperlink_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class LegacyCommentSnapshot:
     """Safe aggregate of legacy Excel note and placeholder controls.
 
@@ -2499,6 +2546,9 @@ class WorkbookSnapshot:
         default_factory=FormulaCachedResultSnapshot
     )
     rich_text_runs: RichTextRunSnapshot = field(default_factory=RichTextRunSnapshot)
+    cell_hyperlinks: CellHyperlinkSnapshot = field(
+        default_factory=CellHyperlinkSnapshot
+    )
     legacy_comments: LegacyCommentSnapshot = field(
         default_factory=LegacyCommentSnapshot
     )
@@ -2560,6 +2610,11 @@ class WorkbookSnapshot:
             "rich_text_run_count": self.rich_text_runs.rich_text_run_count,
             "phonetic_run_count": self.rich_text_runs.phonetic_run_count,
             "has_rich_text_runs": self.rich_text_runs.present,
+            "cell_hyperlink_count": self.cell_hyperlinks.hyperlink_count,
+            "cell_hyperlink_external_relationship_count": (
+                self.cell_hyperlinks.external_relationship_count
+            ),
+            "has_cell_hyperlinks": self.cell_hyperlinks.present,
             "legacy_comment_count": self.legacy_comments.comment_count,
             "legacy_comment_author_count": self.legacy_comments.comment_author_count,
             "legacy_comment_note_shape_count": self.legacy_comments.note_shape_count,

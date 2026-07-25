@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.44.0/formulafence-0.44.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.45.0/formulafence-0.45.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -79,6 +79,7 @@ rules:
   no_cell_fill_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
+  no_cell_hyperlink_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -119,7 +120,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, character-level rich-text runs/phonetic hints, unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -742,6 +743,44 @@ stored presentation declarations only. The boundary follows Microsoft's
 [shared-string-table guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-shared-string-table),
 the Open XML `r` [rich-text-run definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.run?view=openxml-3.0.1),
 and the `is` [inline-string definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.inlinestring?view=openxml-3.0.1).
+
+FormulaFence also inventories ordinary **worksheet cell hyperlinks**. A cell's
+friendly value can stay unchanged while its hyperlink redirects a reviewer to a
+different external URL or file, jumps to a different in-workbook location,
+changes its separate display override, or changes its ScreenTip. Standard
+SpreadsheetML stores those declarations in worksheet `hyperlink` elements,
+with an external target normally resolved through the worksheet relationship
+part; Excel can additionally retain Office 2016 `xr:hyperlink` declarations.
+
+FormulaFence reads the raw worksheet and relationship declarations before the
+ordinary workbook reader can normalize them. It privately compares cell/range
+binding, standard and revision declaration material, location, display and
+ScreenTip values, and selected relationship type/target/mode semantics. A
+material change emits `FF047`; enable `no_cell_hyperlink_changes` to make that
+boundary `FFP047` in CI.
+
+Profiles and `FF047` details expose only aggregate worksheet/hyperlink,
+location/display/ScreenTip, relationship/external-relationship, and
+malformed-metadata counts. Targets, cell references, locations, display
+strings, ScreenTips, relationship IDs, and revision UIDs never enter profiles,
+Markdown, JSON, or SARIF. Writer-chosen relationship IDs and revision UIDs,
+relationship ordering, and equivalent internal-part target spelling are
+normalized. Missing, duplicate, unbound, malformed, unsafe, unreadable,
+oversized, or over-budget metadata becomes a visible coverage warning; XML
+reads are bounded to 16 MiB per worksheet, 64 MiB per workbook, and 512 parts.
+After raw inspection, the ordinary reader receives a hyperlink-removed
+temporary copy so a malformed declaration cannot erase the review evidence.
+
+This is a stored-declaration boundary, not link execution or reputation
+analysis. FormulaFence does not render a hyperlink, resolve or fetch a target,
+test availability, follow redirects, inspect linked content, infer trust-zone
+or client behavior, or treat a `HYPERLINK()` formula as more than the ordinary
+formula diff. The scope follows the Open XML
+[Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.hyperlink?view=openxml-3.0.1)
+and Office 2016
+[Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2016.excel.hyperlink?view=openxml-3.0.1)
+definitions, plus Microsoft's guidance for
+[working with links in Excel](https://support.microsoft.com/en-US/Excel/work-with-links-in-excel).
 
 FormulaFence also inventories legacy **Excel Notes** and the legacy placeholders
 that can accompany modern threaded comments. Conventional Notes keep author

@@ -8,6 +8,7 @@ from formulafence.policy import evaluate_policy, parse_policy
 from formulafence.workbook import load_snapshot
 
 from .helpers import (
+    change_cell_hyperlink_target,
     change_chart_definition_material,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
@@ -35,6 +36,7 @@ from .helpers import (
     change_worksheet_embedded_control_controls,
     change_xlm_macro_sheet_controls,
     change_zero_dimension_visibility_controls,
+    make_cell_hyperlink_model,
     make_chart_definition_model,
     make_conditional_formatting_model,
     make_data_validation_model,
@@ -545,6 +547,21 @@ def test_policy_can_block_rich_text_run_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP043"}
+
+
+def test_policy_can_block_cell_hyperlink_changes(tmp_path) -> None:
+    baseline = make_cell_hyperlink_model(tmp_path / "baseline.xlsx")
+    candidate = make_cell_hyperlink_model(tmp_path / "candidate.xlsx")
+    change_cell_hyperlink_target(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_cell_hyperlink_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP047"
+    }
 
 
 def test_policy_can_block_threaded_comment_changes(tmp_path) -> None:

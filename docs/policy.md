@@ -29,6 +29,7 @@ rules:
   no_cell_fill_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
+  no_cell_hyperlink_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -102,6 +103,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
 | `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
+| `no_cell_hyperlink_changes` | boolean | A standard or Office 2016 revision worksheet-cell hyperlink binding, location, display override, ScreenTip, or selected relationship target/type/mode changes. Targets, cell references, locations, display strings, ScreenTips, relationship IDs, and revision UIDs are compared privately. |
 | `no_legacy_comment_changes` | boolean | A legacy Excel Note/comments binding, author association, Note text/rich-text/property declaration, threaded-comment placeholder reconciliation declaration, Note VML visibility/layout, or related relationship changes. Note text, authors, locations, VML, targets, IDs, and GUIDs are compared privately. |
 | `no_threaded_comment_changes` | boolean | A modern Excel threaded-comment/person package binding, comment/reply graph, text, stored cell/timestamp/resolution declaration, mention range/person association, extension material, or person definition changes. Comment bodies, locations, timestamps, parent links, names, user IDs, provider IDs, relationship IDs, and GUIDs are compared privately. |
 | `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp` or nested `xdr:grpSp` anchor/layout, text/presentation declaration, macro/text link, or referenced click/hover relationship changes. Shape text, formatting, formulas, anchors, IDs, and targets are compared privately. |
@@ -591,6 +593,37 @@ Malformed, unsupported, or unreadable rich-text metadata becomes an explicit
 coverage warning. FormulaFence does not render cells, resolve theme colours,
 calculate contrast, determine visibility, preserve rich text, or guarantee
 cross-version Excel rendering equivalence.
+
+An ordinary worksheet-cell hyperlink can keep the same friendly cell value
+while changing its external target, file target, in-workbook location, display
+override, or ScreenTip. FormulaFence reads standard SpreadsheetML
+`hyperlink` declarations and Office 2016 `xr:hyperlink` declarations directly
+from worksheet XML, then resolves the selected raw worksheet relationship
+semantics without following a target. It privately compares the cell/range
+binding, declaration material, location, display/ScreenTip, and selected
+relationship type, target, and mode. A material change emits `FF047`; enable
+`no_cell_hyperlink_changes` to make it `FFP047` in CI.
+
+Profiles and `FF047` details expose only worksheet/hyperlink,
+location/display/ScreenTip, relationship/external-relationship, and
+malformed-metadata counts. Targets, references, locations, display strings,
+ScreenTips, relationship IDs, and revision UIDs remain private. Consistent
+writer-generated relationship-ID/revision-UID rewrites, relationship ordering,
+and equivalent internal-part target spelling stay quiet. Missing, duplicate,
+unbound, malformed, unsafe, unreadable, oversized, or over-budget metadata
+becomes a visible coverage warning; raw worksheet reads are bounded to 16 MiB
+per worksheet, 64 MiB per workbook, and 512 parts. After raw inspection,
+FormulaFence uses a hyperlink-removed reader copy so a malformed declaration
+cannot turn the package evidence into a reader failure.
+
+FormulaFence does not render, resolve, fetch, or follow a link; test target
+availability; inspect linked content; infer trust-zone or client behavior; or
+interpret a `HYPERLINK()` formula beyond the ordinary formula diff. This scope
+follows the Open XML
+[Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.hyperlink?view=openxml-3.0.1)
+and Office 2016
+[Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2016.excel.hyperlink?view=openxml-3.0.1)
+definitions.
 
 Traditional Excel Notes are stored in worksheet-associated SpreadsheetML
 comments parts, not in ordinary cells. Their author association, text, cell

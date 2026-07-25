@@ -1497,6 +1497,41 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Character-level text, formatting, phonetic hints, shared-string indexes, "
             "and cell locations are compared privately and intentionally omitted."
         )
+    cell_hyperlinks = profile["cell_hyperlinks"]
+    if cell_hyperlinks["present"]:
+        lines.extend(
+            [
+                "",
+                "## Worksheet cell hyperlinks",
+                "",
+                (
+                    "- **Worksheets / hyperlinks:** "
+                    f"{cell_hyperlinks['worksheet_hyperlink_sheet_count']} / "
+                    f"{cell_hyperlinks['hyperlink_count']}"
+                ),
+                (
+                    "- **With location / display override / ScreenTip:** "
+                    f"{cell_hyperlinks['hyperlink_with_location_count']} / "
+                    f"{cell_hyperlinks['hyperlink_with_display_count']} / "
+                    f"{cell_hyperlinks['hyperlink_with_tooltip_count']}"
+                ),
+                (
+                    "- **Package binding relationships:** "
+                    f"{cell_hyperlinks['binding_relationship_count']} "
+                    f"({cell_hyperlinks['external_relationship_count']} external)"
+                ),
+            ]
+        )
+        if cell_hyperlinks["unrecognized_cell_hyperlink_count"]:
+            lines.append(
+                "- **Unrecognized or malformed cell-hyperlink metadata:** "
+                f"{cell_hyperlinks['unrecognized_cell_hyperlink_count']}"
+            )
+        lines.append(
+            "Hyperlink targets, cell references, locations, display strings, "
+            "ScreenTips, and relationship IDs are compared privately and intentionally "
+            "omitted."
+        )
     legacy_comments = profile["legacy_comments"]
     if legacy_comments["present"]:
         lines.extend(

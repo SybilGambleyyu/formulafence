@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import warnings
+from xml.etree import ElementTree
+from zipfile import ZipFile
 
+from openpyxl import load_workbook
 from openpyxl.styles import Protection
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -18,6 +21,10 @@ from .helpers import (
     add_power_pivot_data_model_direct_relationship,
     add_protected_range,
     break_slicer_timeline_pivot_cache_binding,
+    change_cell_hyperlink_display,
+    change_cell_hyperlink_location,
+    change_cell_hyperlink_target,
+    change_cell_hyperlink_tooltip,
     change_chart_cached_data,
     change_chart_definition_material,
     change_default_fill_definition,
@@ -71,6 +78,7 @@ from .helpers import (
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
     change_zero_dimension_visibility_controls,
+    corrupt_cell_hyperlink_reference,
     corrupt_chart_definition_root,
     corrupt_default_zero_dimension_visibility_controls,
     corrupt_fill_column_control,
@@ -110,6 +118,7 @@ from .helpers import (
     externalize_slicer_timeline_cache_relationship,
     externalize_threaded_comment_relationship,
     lowercase_legacy_threaded_placeholder_identifiers,
+    make_cell_hyperlink_model,
     make_chart_definition_model,
     make_conditional_formatting_model,
     make_current_row_table_model,
@@ -177,6 +186,7 @@ from .helpers import (
     rebind_slicer_timeline_cache,
     remove_power_pivot_data_model_workbook_binding,
     remove_xlm_macro_sheet_related_part_payload,
+    renumber_cell_hyperlink_identifiers,
     renumber_chart_relationships,
     renumber_external_link_declaration_relationships,
     renumber_legacy_comment_identifiers,
@@ -195,6 +205,7 @@ from .helpers import (
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
     rewrite,
+    rewrite_cell_hyperlink_as_revision_declaration,
     rewrite_chart_internal_target_spelling,
     rewrite_legacy_vml_control_internal_target_spelling,
     rewrite_office_web_addin_internal_target_spelling,
@@ -210,6 +221,7 @@ from .helpers import (
     set_sheet_protection_defaults,
     set_sheet_protection_modern_verifier,
     set_slicer_timeline_equivalent_defaults,
+    unbind_cell_hyperlink_relationship,
     use_slicer_timeline_2011_relationship_type,
 )
 
@@ -5156,6 +5168,220 @@ def test_rich_text_run_malformed_metadata_fails_closed(tmp_path) -> None:
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
 
 
+def test_cell_hyperlinks_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_cell_hyperlink_model(tmp_path / "baseline.xlsx")
+    target_candidate = make_cell_hyperlink_model(tmp_path / "target-candidate.xlsx")
+    tooltip_candidate = make_cell_hyperlink_model(tmp_path / "tooltip-candidate.xlsx")
+    display_candidate = make_cell_hyperlink_model(tmp_path / "display-candidate.xlsx")
+    location_candidate = make_cell_hyperlink_model(tmp_path / "location-candidate.xlsx")
+    renumbered = make_cell_hyperlink_model(tmp_path / "renumbered.xlsx")
+    change_cell_hyperlink_target(target_candidate)
+    change_cell_hyperlink_tooltip(tooltip_candidate)
+    change_cell_hyperlink_display(display_candidate)
+    change_cell_hyperlink_location(location_candidate)
+    renumber_cell_hyperlink_identifiers(renumbered)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    target_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(target_candidate),
+    )
+    tooltip_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(tooltip_candidate),
+    )
+    display_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(display_candidate),
+    )
+    location_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(location_candidate),
+    )
+    renumbered_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(renumbered),
+    )
+    target_change = next(
+        change
+        for change in target_report.changes
+        if change.kind == "cell_hyperlink_controls_changed"
+    )
+    tooltip_change = next(
+        change
+        for change in tooltip_report.changes
+        if change.kind == "cell_hyperlink_controls_changed"
+    )
+    display_change = next(
+        change
+        for change in display_report.changes
+        if change.kind == "cell_hyperlink_controls_changed"
+    )
+    location_change = next(
+        change
+        for change in location_report.changes
+        if change.kind == "cell_hyperlink_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["cell_hyperlink_count"] == 2
+    assert baseline_snapshot.summary()["cell_hyperlink_external_relationship_count"] == 1
+    assert baseline_snapshot.summary()["has_cell_hyperlinks"] is True
+    assert profile["cell_hyperlinks"] == {
+        "present": True,
+        "worksheet_hyperlink_sheet_count": 1,
+        "hyperlink_count": 2,
+        "hyperlink_with_location_count": 1,
+        "hyperlink_with_display_count": 1,
+        "hyperlink_with_tooltip_count": 2,
+        "binding_relationship_count": 1,
+        "external_relationship_count": 1,
+        "unrecognized_cell_hyperlink_count": 0,
+    }
+    assert "## Worksheet cell hyperlinks" in markdown
+    assert target_change.details["cell_hyperlink_binding_changed"] is True
+    assert target_change.details["cell_hyperlink_relationships_changed"] is True
+    assert tooltip_change.details["cell_hyperlink_definition_material_changed"] is True
+    assert "cell_hyperlink_relationships_changed" not in tooltip_change.details
+    assert display_change.details["cell_hyperlink_definition_material_changed"] is True
+    assert "cell_hyperlink_relationships_changed" not in display_change.details
+    assert location_change.details["cell_hyperlink_binding_changed"] is True
+    assert "cell_hyperlink_relationships_changed" not in location_change.details
+    assert "FF047" in {finding.rule_id for finding in target_report.findings}
+    assert "FF047" in {finding.rule_id for finding in tooltip_report.findings}
+    assert "FF047" in {finding.rule_id for finding in display_report.findings}
+    assert "FF047" in {finding.rule_id for finding in location_report.findings}
+    assert "cell_hyperlink_controls_changed" not in {
+        change.kind for change in renumbered_report.changes
+    }
+    assert "FF047" not in {finding.rule_id for finding in renumbered_report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(target_report.to_dict()),
+        report_to_markdown(target_report),
+        json.dumps(report_to_sarif(target_report)),
+        json.dumps(tooltip_report.to_dict()),
+        report_to_markdown(tooltip_report),
+        json.dumps(report_to_sarif(tooltip_report)),
+        json.dumps(display_report.to_dict()),
+        report_to_markdown(display_report),
+        json.dumps(report_to_sarif(display_report)),
+        json.dumps(location_report.to_dict()),
+        report_to_markdown(location_report),
+        json.dumps(report_to_sarif(location_report)),
+    )
+    for sensitive_value in (
+        "https://approved.example.test/PRIVATE-LINK-BASELINE",
+        "https://review.example.test/PRIVATE-LINK-CANDIDATE",
+        "PRIVATE-EXTERNAL-LINK-TOOLTIP",
+        "PRIVATE-INTERNAL-LINK-DISPLAY",
+        "PRIVATE-INTERNAL-LINK-DISPLAY-CANDIDATE",
+        "A1",
+        "A2",
+        "B2",
+        "rIdFenceCellHyperlink",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_revision_cell_hyperlinks_are_guarded_without_reader_loss(tmp_path) -> None:
+    baseline = make_cell_hyperlink_model(tmp_path / "baseline.xlsx")
+    candidate = make_cell_hyperlink_model(tmp_path / "candidate.xlsx")
+    rewrite_cell_hyperlink_as_revision_declaration(baseline)
+    rewrite_cell_hyperlink_as_revision_declaration(candidate)
+    change_cell_hyperlink_target(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert baseline_snapshot.cell_hyperlinks.hyperlink_count == 2
+    assert baseline_snapshot.cell_hyperlinks.unrecognized_cell_hyperlink_count == 0
+    assert candidate_snapshot.cell_hyperlinks.unrecognized_cell_hyperlink_count == 0
+    assert "cell_hyperlink_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF047" in {finding.rule_id for finding in report.findings}
+
+
+def test_unbound_cell_hyperlink_relationship_fails_closed_and_is_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_cell_hyperlink_model(tmp_path / "baseline.xlsx")
+    candidate = make_cell_hyperlink_model(tmp_path / "candidate.xlsx")
+    unbind_cell_hyperlink_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "cell_hyperlink_controls_changed"
+    )
+
+    assert candidate_snapshot.cell_hyperlinks.unrecognized_cell_hyperlink_count >= 1
+    assert any(
+        "malformed, unbound, or unsupported cell-hyperlink metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert change.details["unrecognized_cell_hyperlink_metadata_changed"] is True
+    assert "FF047" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "https://approved.example.test/PRIVATE-LINK-BASELINE",
+        "PRIVATE-EXTERNAL-LINK-TOOLTIP",
+        "A1",
+        "rId",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_malformed_cell_hyperlink_reference_is_quarantined_for_reader(tmp_path) -> None:
+    baseline = make_cell_hyperlink_model(tmp_path / "baseline.xlsx")
+    candidate = make_cell_hyperlink_model(tmp_path / "candidate.xlsx")
+    corrupt_cell_hyperlink_reference(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.cell_hyperlinks.unrecognized_cell_hyperlink_count >= 1
+    assert any(
+        "malformed, unbound, or unsupported cell-hyperlink metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "cell_hyperlink_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert {"FF010", "FF047"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_cell_hyperlink_xml_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    baseline = make_cell_hyperlink_model(tmp_path / "baseline.xlsx")
+    candidate = make_cell_hyperlink_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    monkeypatch.setattr(workbook_module, "_CELL_HYPERLINK_MAX_WORKSHEET_XML_BYTES", 1)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.cell_hyperlinks.unrecognized_cell_hyperlink_count >= 1
+    assert any(
+        "oversized worksheet XML part while inspecting cell hyperlinks" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF047"} <= {finding.rule_id for finding in report.findings}
+
+
 def test_legacy_excel_notes_are_profiled_diffed_and_redacted(tmp_path) -> None:
     baseline = make_legacy_comment_model(tmp_path / "baseline.xlsx")
     text_candidate = make_legacy_comment_model(tmp_path / "text-candidate.xlsx")
@@ -5328,6 +5554,52 @@ def test_unsafe_legacy_note_vml_relationship_is_quarantined_for_reader(
         change.kind for change in report.changes
     }
     assert "FF046" in {finding.rule_id for finding in report.findings}
+
+
+def test_hyperlink_reader_overlay_preserves_legacy_note_isolation(tmp_path) -> None:
+    """Safe-reader overlays compose when one worksheet has both feature types."""
+    candidate = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    workbook = load_workbook(candidate)
+    worksheet = workbook["Inputs"]
+    worksheet["B2"].hyperlink = "https://approved.example.test/private-link"
+    workbook.save(candidate)
+    externalize_legacy_note_vml_relationship(candidate)
+
+    reader_source, temporary_path, _warnings = workbook_module._openpyxl_safe_source(
+        candidate
+    )
+    try:
+        with ZipFile(reader_source) as archive:
+            relationships = ElementTree.fromstring(
+                archive.read("xl/worksheets/_rels/sheet1.xml.rels")
+            )
+            relationship_types = {
+                relationship.get("Type", "")
+                for relationship in relationships
+            }
+            worksheet_root = ElementTree.fromstring(
+                archive.read("xl/worksheets/sheet1.xml")
+            )
+
+        assert not any(
+            relationship_type.endswith("/vmlDrawing")
+            for relationship_type in relationship_types
+        )
+        assert not any(
+            relationship_type.endswith("/hyperlink")
+            for relationship_type in relationship_types
+        )
+        assert not any(
+            element.tag.endswith("legacyDrawing")
+            for element in worksheet_root.iter()
+        )
+        assert not any(
+            element.tag.endswith("hyperlink")
+            for element in worksheet_root.iter()
+        )
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def test_threaded_comment_placeholders_are_guarded_without_duplicating_threads(

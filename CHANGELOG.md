@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.45.0 — 2026-07-24
+
+- Inspect raw standard SpreadsheetML and Office 2016 revision worksheet-cell
+  hyperlink declarations before ordinary workbook readers can normalize their
+  target bindings. FormulaFence privately compares cell/range binding, external
+  and internal relationship semantics, location, display override, and
+  ScreenTip material while profiles, Markdown, JSON, and SARIF expose aggregate
+  counts only—never targets, cell references, locations, display strings,
+  ScreenTips, relationship IDs, or revision UIDs.
+- Emit `FF047` for a material worksheet-cell hyperlink control change and add
+  the fail-closed `no_cell_hyperlink_changes` policy rule (`FFP047`). This closes
+  the review gap where a familiar cell label can redirect a reviewer to a
+  different URL, file, or in-workbook destination without changing the ordinary
+  cell value.
+- Normalize writer-chosen relationship IDs/revision UIDs, relationship ordering,
+  and equivalent internal target spelling. Missing, duplicate, malformed,
+  unsafe, unbound, unreadable, oversized, or over-budget metadata produces a
+  visible coverage warning. The ordinary workbook reader receives a
+  hyperlink-removed temporary copy only after raw inspection, so malformed
+  package metadata cannot suppress evidence; FormulaFence does not render,
+  resolve, fetch, follow, reputation-check, or execute a link, inspect linked
+  content, or interpret `HYPERLINK()` formulas beyond the ordinary formula
+  diff.
+
 ## 0.44.0 — 2026-07-24
 
 - Inspect raw legacy Excel Note comments parts and their worksheet-bound VML

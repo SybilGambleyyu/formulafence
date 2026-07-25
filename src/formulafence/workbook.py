@@ -15,7 +15,7 @@ import tempfile
 import warnings
 from collections import defaultdict
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from xml.etree import ElementTree
@@ -39,6 +39,7 @@ from formulafence.formulas import (
 )
 from formulafence.models import (
     ArrayFormulaRange,
+    CellHyperlinkSnapshot,
     CellKey,
     CellProtectionAssignmentSnapshot,
     CellProtectionDefaultSnapshot,
@@ -243,6 +244,10 @@ _LEGACY_COMMENT_PLACEHOLDER_AUTHOR_PATTERN = re.compile(
     r"^tc=(\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\})$"
 )
+_CELL_HYPERLINK_MAX_WORKSHEET_XML_BYTES = 16 * 1024 * 1024
+_CELL_HYPERLINK_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_CELL_HYPERLINK_TOTAL_XML_MAX_COUNT = 512
+_CELL_HYPERLINK_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/hyperlink"
 _PIVOT_TABLE_PART_PATTERN = re.compile(r"^xl/pivotTables/[^/]+\.xml$", re.IGNORECASE)
 _PIVOT_CACHE_DEFINITION_PART_PATTERN = re.compile(
     r"^xl/pivotCache/pivotCacheDefinition[^/]*\.xml$", re.IGNORECASE
@@ -595,6 +600,14 @@ class _RichTextRunMetadata:
     """Raw character-level string presentation retained before reader loss."""
 
     controls: RichTextRunSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _CellHyperlinkMetadata:
+    """Raw cell-hyperlink evidence retained before the workbook reader omits it."""
+
+    hyperlinks: CellHyperlinkSnapshot
     warnings: tuple[str, ...]
 
 
@@ -10939,14 +10952,133 @@ def _legacy_note_reader_relationship_replacements(
     return replacements, tuple(sorted(reader_warnings))
 
 
+def _cell_hyperlink_reader_replacements(
+    path: Path,
+    prior_replacements: Mapping[str, bytes] | None = None,
+) -> tuple[dict[str, bytes], tuple[str, ...]]:
+    """Keep raw cell-hyperlink markup out of the ordinary workbook reader.
+
+    FormulaFence records hyperlinks from the original package before this
+    temporary reader copy is made. Removing the declarations here prevents a
+    malformed link reference or relationship from making an otherwise
+    reviewable workbook unloadable through the underlying workbook library.
+    """
+    replacements: dict[str, bytes] = {}
+    reader_warnings: set[str] = set()
+    prior_replacements = prior_replacements or {}
+    try:
+        with ZipFile(path) as archive:
+            def reader_xml_root(member: str) -> ElementTree.Element:
+                """Read an earlier safe overlay before falling back to the package."""
+                if (payload := prior_replacements.get(member)) is not None:
+                    return _xml_root_from_payload(payload)
+                return _xml_root(archive, member)
+
+            sheet_parts = _sheet_xml_parts(archive)
+            relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+            hyperlink_container_tag = f"{{{_SPREADSHEETML_NS}}}hyperlinks"
+            standard_hyperlink_tag = f"{{{_SPREADSHEETML_NS}}}hyperlink"
+            revision_hyperlink_tag = f"{{{_OFFICE_2014_REVISION_NS}}}hyperlink"
+            for _sheet, (member, sheet_kind) in sheet_parts.items():
+                if sheet_kind != "worksheet":
+                    continue
+                try:
+                    worksheet = reader_xml_root(member)
+                except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError):
+                    continue
+                if (
+                    _xml_namespace(worksheet.tag) != _SPREADSHEETML_NS
+                    or _xml_local_name(worksheet.tag) != "worksheet"
+                ):
+                    continue
+                changed_worksheet = False
+                for container in list(worksheet.findall(hyperlink_container_tag)):
+                    worksheet.remove(container)
+                    changed_worksheet = True
+                parent_by_child = {
+                    child: parent
+                    for parent in worksheet.iter()
+                    for child in parent
+                }
+                for hyperlink in list(worksheet.iter(standard_hyperlink_tag)):
+                    parent = parent_by_child.get(hyperlink)
+                    if parent is not None:
+                        parent.remove(hyperlink)
+                        changed_worksheet = True
+                for hyperlink in list(worksheet.iter(revision_hyperlink_tag)):
+                    parent = parent_by_child.get(hyperlink)
+                    if parent is not None:
+                        parent.remove(hyperlink)
+                        changed_worksheet = True
+                if changed_worksheet:
+                    replacements[member] = ElementTree.tostring(
+                        worksheet,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+
+                relationship_member = _relationship_part_path(member)
+                try:
+                    relationships = reader_xml_root(relationship_member)
+                except KeyError:
+                    continue
+                except (
+                    ElementTree.ParseError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ):
+                    continue
+                if (
+                    _xml_namespace(relationships.tag) != _PACKAGE_RELATIONSHIP_NS
+                    or _xml_local_name(relationships.tag) != "Relationships"
+                ):
+                    continue
+                removed_relationship = False
+                for relationship in list(relationships.findall(relationship_tag)):
+                    if (
+                        relationship.get("Type", "").casefold()
+                        != _CELL_HYPERLINK_RELATIONSHIP.casefold()
+                    ):
+                        continue
+                    relationships.remove(relationship)
+                    removed_relationship = True
+                if removed_relationship:
+                    replacements[relationship_member] = ElementTree.tostring(
+                        relationships,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        reader_warnings.add(
+            "FormulaFence could not isolate cell hyperlinks before the underlying "
+            f"workbook reader ran ({type(error).__name__}); raw hyperlink metadata "
+            "remains fail-closed."
+        )
+    return replacements, tuple(sorted(reader_warnings))
+
+
 def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...]]:
     """Return a temporary source that limits unsafe ordinary-reader behavior."""
     replacements, reader_warnings = _pivot_reader_cache_record_replacements(path)
     legacy_replacements, legacy_reader_warnings = (
         _legacy_note_reader_relationship_replacements(path)
     )
+    prior_replacements = {**replacements, **legacy_replacements}
+    cell_hyperlink_replacements, cell_hyperlink_reader_warnings = (
+        _cell_hyperlink_reader_replacements(path, prior_replacements)
+    )
     replacements.update(legacy_replacements)
-    reader_warnings = tuple(sorted({*reader_warnings, *legacy_reader_warnings}))
+    replacements.update(cell_hyperlink_replacements)
+    reader_warnings = tuple(
+        sorted(
+            {
+                *reader_warnings,
+                *legacy_reader_warnings,
+                *cell_hyperlink_reader_warnings,
+            }
+        )
+    )
     if not replacements:
         return path, None, reader_warnings
 
@@ -18631,6 +18763,691 @@ def _rich_text_run_metadata(path: Path) -> _RichTextRunMetadata:
     return _RichTextRunMetadata(snapshot, tuple(sorted(warnings)))
 
 
+@dataclass
+class _CellHyperlinkBudget:
+    """Bounded raw worksheet XML reads for cell-hyperlink inspection."""
+
+    remaining_bytes: int = _CELL_HYPERLINK_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _CELL_HYPERLINK_TOTAL_XML_MAX_COUNT
+
+
+@dataclass(frozen=True)
+class _CellHyperlinkRawRelationship:
+    """One private relationship referenced by a worksheet cell hyperlink."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+    unknown_attributes: tuple[tuple[str, str], ...] = field(
+        default=(), repr=False
+    )
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return target semantics while ignoring a writer-selected relationship ID."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        return (
+            self.relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
+@dataclass(frozen=True)
+class _CellHyperlinkWorksheetInspection:
+    """Private result of parsing one worksheet's stored hyperlink declarations."""
+
+    sheet: str
+    member: str
+    hyperlink_count: int = 0
+    hyperlink_with_location_count: int = 0
+    hyperlink_with_display_count: int = 0
+    hyperlink_with_tooltip_count: int = 0
+    binding_relationship_count: int = 0
+    external_relationship_count: int = 0
+    unrecognized_count: int = 0
+    declaration_signature: str | None = None
+    definition_signature: str | None = None
+    relationship_signature: str | None = None
+
+    @property
+    def present(self) -> bool:
+        return bool(self.hyperlink_count or self.unrecognized_count)
+
+
+def _cell_hyperlink_xml_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _CellHyperlinkBudget,
+) -> tuple[bytes | None, str | None]:
+    """Read one bounded worksheet part before a reader can normalize links."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded cell-hyperlink worksheet XML part "
+            "count budget; affected hyperlinks have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("cell-hyperlink-part-count-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a worksheet XML part while inspecting "
+            "cell hyperlinks; affected hyperlinks were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("missing-cell-hyperlink-worksheet", member),)
+        )
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _CELL_HYPERLINK_MAX_WORKSHEET_XML_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized worksheet XML part while "
+            "inspecting cell hyperlinks; affected hyperlinks have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("oversized-cell-hyperlink-worksheet", metadata),)
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded cell-hyperlink worksheet XML read "
+            "budget; affected hyperlinks have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("cell-hyperlink-read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a worksheet XML part while inspecting "
+            f"cell hyperlinks ({type(error).__name__}); affected hyperlinks were "
+            "not compared."
+        )
+        return None, _private_external_data_signature(
+            (("unreadable-cell-hyperlink-worksheet", metadata),)
+        )
+
+
+def _cell_hyperlink_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+) -> tuple[_CellHyperlinkRawRelationship, ...] | None:
+    """Read worksheet relationships without following hyperlink targets."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect worksheet relationships for cell "
+            f"hyperlinks ({type(error).__name__}); affected hyperlinks were not "
+            "compared."
+        )
+        return None
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected worksheet relationship root while "
+            "inspecting cell hyperlinks; affected hyperlinks were not compared."
+        )
+        return None
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    known_attributes = frozenset({"Id", "Type", "Target", "TargetMode"})
+    relationships: list[_CellHyperlinkRawRelationship] = []
+    for child in root:
+        if child.tag != relationship_tag:
+            warnings.add(
+                "FormulaFence found unmodelled relationship XML while inspecting "
+                "cell hyperlinks; affected hyperlinks have a coverage gap."
+            )
+            return None
+        target = child.get("Target")
+        target_mode = child.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _CellHyperlinkRawRelationship(
+                relationship_id=child.get("Id"),
+                relationship_type=child.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+                unknown_attributes=tuple(
+                    sorted(
+                        (attribute, value)
+                        for attribute, value in child.attrib.items()
+                        if attribute not in known_attributes
+                    )
+                ),
+            )
+        )
+    return tuple(relationships)
+
+
+def _cell_hyperlink_reference(value: str | None) -> str | None:
+    """Normalize a worksheet-local cell or range reference for one hyperlink."""
+    if value is None or not (candidate := value.strip()):
+        return None
+    try:
+        min_column, min_row, max_column, max_row = range_boundaries(candidate)
+    except ValueError:
+        return None
+    if (
+        min_column is None
+        or min_row is None
+        or max_column is None
+        or max_row is None
+        or min_column < 1
+        or min_row < 1
+        or max_column > MAX_EXCEL_COLUMN
+        or max_row > MAX_EXCEL_ROW
+    ):
+        return None
+    start = f"{get_column_letter(min_column)}{min_row}"
+    end = f"{get_column_letter(max_column)}{max_row}"
+    return start if start == end else f"{start}:{end}"
+
+
+def _cell_hyperlink_worksheet_inspection(
+    archive: ZipFile,
+    *,
+    sheet: str,
+    member: str,
+    archive_members: set[str],
+    warnings: set[str],
+    budget: _CellHyperlinkBudget,
+) -> _CellHyperlinkWorksheetInspection:
+    """Inspect one worksheet's standard and revision cell hyperlinks privately."""
+    payload, fallback_signature = _cell_hyperlink_xml_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+    )
+    if payload is None:
+        return _CellHyperlinkWorksheetInspection(
+            sheet=sheet,
+            member=member,
+            unrecognized_count=1,
+            declaration_signature=fallback_signature,
+            definition_signature=fallback_signature,
+        )
+    try:
+        worksheet = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect worksheet XML for cell hyperlinks "
+            f"({type(error).__name__}); affected hyperlinks were not compared."
+        )
+        return _CellHyperlinkWorksheetInspection(
+            sheet=sheet,
+            member=member,
+            unrecognized_count=1,
+            declaration_signature=_private_payload_signature(payload),
+            definition_signature=_private_payload_signature(payload),
+        )
+    if (
+        _xml_namespace(worksheet.tag) != _SPREADSHEETML_NS
+        or _xml_local_name(worksheet.tag) != "worksheet"
+    ):
+        warnings.add(
+            "FormulaFence found a worksheet part with an unexpected root while "
+            "inspecting cell hyperlinks; affected hyperlinks were not compared."
+        )
+        return _CellHyperlinkWorksheetInspection(
+            sheet=sheet,
+            member=member,
+            unrecognized_count=1,
+            declaration_signature=_private_payload_signature(payload),
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    hyperlink_container_tag = f"{{{_SPREADSHEETML_NS}}}hyperlinks"
+    standard_hyperlink_tag = f"{{{_SPREADSHEETML_NS}}}hyperlink"
+    revision_hyperlink_tag = f"{{{_OFFICE_2014_REVISION_NS}}}hyperlink"
+    relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+    revision_uid_attribute = f"{{{_OFFICE_2014_REVISION_NS}}}uid"
+    candidates: list[tuple[str, ElementTree.Element]] = []
+    contained_standard_elements: set[int] = set()
+    coverage_entries: list[tuple[str, str]] = []
+    containers = list(worksheet.findall(hyperlink_container_tag))
+    if len(containers) > 1:
+        coverage_entries.append(
+            ("multiple-cell-hyperlink-containers", str(len(containers)))
+        )
+    for container_index, container in enumerate(containers):
+        if container.attrib or (
+            container.text is not None and container.text.strip()
+        ):
+            coverage_entries.append(
+                (
+                    "malformed-cell-hyperlink-container",
+                    repr((container_index, tuple(sorted(container.attrib.items())))),
+                )
+            )
+        for child_index, child in enumerate(container):
+            if child.tag != standard_hyperlink_tag:
+                coverage_entries.append(
+                    (
+                        "unexpected-cell-hyperlink-container-child",
+                        repr((container_index, child_index, _xml_display_name(child.tag))),
+                    )
+                )
+                continue
+            contained_standard_elements.add(id(child))
+            candidates.append(("standard", child))
+    for element in worksheet.iter(standard_hyperlink_tag):
+        if id(element) in contained_standard_elements:
+            continue
+        coverage_entries.append(
+            (
+                "out-of-container-standard-cell-hyperlink",
+                _private_payload_signature(
+                    ElementTree.tostring(element, encoding="utf-8")
+                ),
+            )
+        )
+        candidates.append(("standard", element))
+    for element in worksheet.iter(revision_hyperlink_tag):
+        candidates.append(("revision", element))
+
+    if not candidates and not coverage_entries:
+        return _CellHyperlinkWorksheetInspection(sheet=sheet, member=member)
+
+    has_relationship_reference = any(
+        element.get(relationship_attribute) is not None
+        for _kind, element in candidates
+    )
+    relationships: tuple[_CellHyperlinkRawRelationship, ...] | None = ()
+    if has_relationship_reference:
+        relationships = _cell_hyperlink_raw_relationships(archive, member, warnings)
+        if relationships is None:
+            coverage_entries.append(
+                ("unreadable-cell-hyperlink-relationships", member)
+            )
+            relationships = ()
+
+    relationships_by_id: dict[str, list[_CellHyperlinkRawRelationship]] = defaultdict(
+        list
+    )
+    for relationship in relationships:
+        if relationship.relationship_id:
+            relationships_by_id[relationship.relationship_id].append(relationship)
+    for relationship_id, matches in relationships_by_id.items():
+        if len(matches) > 1:
+            coverage_entries.append(
+                (
+                    "duplicate-cell-hyperlink-relationship-id",
+                    repr((relationship_id, len(matches))),
+                )
+            )
+
+    known_attributes = frozenset(
+        {
+            "ref",
+            "location",
+            "display",
+            "tooltip",
+            relationship_attribute,
+            revision_uid_attribute,
+        }
+    )
+    definition_entries: list[tuple[str, str]] = []
+    declaration_entries: list[tuple[str, str]] = []
+    relationship_entries: list[tuple[str, str]] = []
+    selected_relationships: dict[str, _CellHyperlinkRawRelationship] = {}
+    seen_references: dict[tuple[str, str], int] = defaultdict(int)
+    hyperlink_with_location_count = 0
+    hyperlink_with_display_count = 0
+    hyperlink_with_tooltip_count = 0
+
+    for index, (kind, hyperlink) in enumerate(candidates):
+        raw_reference = hyperlink.get("ref")
+        reference = _cell_hyperlink_reference(raw_reference)
+        if reference is None:
+            coverage_entries.append(
+                (
+                    "invalid-cell-hyperlink-reference",
+                    repr((kind, index, raw_reference or "")),
+                )
+            )
+            reference_material: object = ("invalid", raw_reference or "")
+        else:
+            reference_material = reference
+            seen_references[(kind, reference)] += 1
+
+        location = hyperlink.get("location")
+        display = hyperlink.get("display")
+        tooltip = hyperlink.get("tooltip")
+        relationship_id = hyperlink.get(relationship_attribute)
+        if location is not None:
+            hyperlink_with_location_count += 1
+        if display is not None:
+            hyperlink_with_display_count += 1
+        if tooltip is not None:
+            hyperlink_with_tooltip_count += 1
+        if not relationship_id and not location:
+            coverage_entries.append(
+                (
+                    "cell-hyperlink-without-target",
+                    repr((kind, index, reference_material)),
+                )
+            )
+        if relationship_id and relationship_id not in relationships_by_id:
+            coverage_entries.append(
+                (
+                    "unbound-cell-hyperlink-relationship",
+                    repr((kind, index, relationship_id)),
+                )
+            )
+
+        relationship_material: object = None
+        if relationship_id and (matches := relationships_by_id.get(relationship_id)):
+            relationship = matches[0]
+            selected_relationships[relationship_id] = relationship
+            relationship_material = relationship.semantic_key()
+            if (
+                relationship.relationship_type.casefold()
+                != _CELL_HYPERLINK_RELATIONSHIP.casefold()
+            ):
+                coverage_entries.append(
+                    (
+                        "wrong-cell-hyperlink-relationship-type",
+                        repr((kind, index, relationship.semantic_key())),
+                    )
+                )
+            if relationship.target is None:
+                coverage_entries.append(
+                    (
+                        "cell-hyperlink-relationship-without-target",
+                        repr((kind, index, relationship.semantic_key())),
+                    )
+                )
+            if relationship.target_mode.casefold() not in {"internal", "external"}:
+                coverage_entries.append(
+                    (
+                        "invalid-cell-hyperlink-target-mode",
+                        repr((kind, index, relationship.semantic_key())),
+                    )
+                )
+            if (
+                relationship.target_mode.casefold() == "internal"
+                and (
+                    relationship.safe_target is None
+                    or relationship.safe_target not in archive_members
+                )
+            ):
+                coverage_entries.append(
+                    (
+                        "unsafe-internal-cell-hyperlink-relationship",
+                        repr((kind, index, relationship.semantic_key())),
+                    )
+                )
+            if relationship.unknown_attributes:
+                coverage_entries.append(
+                    (
+                        "unsupported-cell-hyperlink-relationship-attributes",
+                        repr(
+                            (
+                                kind,
+                                index,
+                                relationship.semantic_key(),
+                                relationship.unknown_attributes,
+                            )
+                        ),
+                    )
+                )
+
+        unknown_attributes = tuple(
+            sorted(
+                (attribute, value)
+                for attribute, value in hyperlink.attrib.items()
+                if attribute not in known_attributes
+            )
+        )
+        if unknown_attributes:
+            coverage_entries.append(
+                (
+                    "unsupported-cell-hyperlink-attributes",
+                    repr((kind, index, unknown_attributes)),
+                )
+            )
+        if list(hyperlink) or (
+            hyperlink.text is not None and hyperlink.text.strip()
+        ):
+            coverage_entries.append(
+                (
+                    "nonleaf-cell-hyperlink",
+                    _private_payload_signature(
+                        ElementTree.tostring(hyperlink, encoding="utf-8")
+                    ),
+                )
+            )
+
+        binding_material = (
+            kind,
+            reference_material,
+            relationship_material,
+            location or "",
+        )
+        declaration_entries.append(
+            ("cell-hyperlink-binding", repr((sheet, binding_material)))
+        )
+        definition_entries.append(
+            (
+                "cell-hyperlink-definition",
+                repr(
+                    (
+                        sheet,
+                        binding_material,
+                        display or "",
+                        tooltip or "",
+                        unknown_attributes,
+                    )
+                ),
+            )
+        )
+
+    for (kind, reference), count in seen_references.items():
+        if count > 1:
+            coverage_entries.append(
+                (
+                    "duplicate-cell-hyperlink-reference",
+                    repr((kind, reference, count)),
+                )
+            )
+    selected_relationship_ids = set(selected_relationships)
+    for relationship in relationships:
+        if (
+            relationship.relationship_type.casefold()
+            == _CELL_HYPERLINK_RELATIONSHIP.casefold()
+            and relationship.relationship_id not in selected_relationship_ids
+        ):
+            coverage_entries.append(
+                (
+                    "unbound-cell-hyperlink-relationship",
+                    repr(relationship.semantic_key()),
+                )
+            )
+    relationship_entries.extend(
+        (
+            "cell-hyperlink-relationship",
+            repr(relationship.semantic_key()),
+        )
+        for relationship in selected_relationships.values()
+    )
+    declaration_entries.extend(coverage_entries)
+    definition_entries.extend(coverage_entries)
+    return _CellHyperlinkWorksheetInspection(
+        sheet=sheet,
+        member=member,
+        hyperlink_count=len(candidates),
+        hyperlink_with_location_count=hyperlink_with_location_count,
+        hyperlink_with_display_count=hyperlink_with_display_count,
+        hyperlink_with_tooltip_count=hyperlink_with_tooltip_count,
+        binding_relationship_count=len(selected_relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() == "external"
+            for relationship in selected_relationships.values()
+        ),
+        unrecognized_count=len(coverage_entries),
+        declaration_signature=_private_external_data_signature(
+            tuple(sorted(declaration_entries))
+        ),
+        definition_signature=_private_external_data_signature(
+            tuple(sorted(definition_entries))
+        ),
+        relationship_signature=_private_external_data_signature(
+            tuple(sorted(relationship_entries))
+        ),
+    )
+
+
+def _cell_hyperlink_metadata(path: Path) -> _CellHyperlinkMetadata:
+    """Inspect raw cell hyperlinks before the ordinary reader normalizes them."""
+    warnings: set[str] = set()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                sheet_parts = _sheet_xml_parts(archive)
+            except (
+                KeyError,
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                return _CellHyperlinkMetadata(
+                    CellHyperlinkSnapshot(
+                        unrecognized_cell_hyperlink_count=1,
+                        definition_signature=_private_external_data_signature(
+                            (("cell-hyperlink-sheet-part-scan-failure", type(error).__name__),)
+                        ),
+                    ),
+                    (
+                        "FormulaFence could not inspect worksheet OOXML parts for "
+                        f"cell hyperlinks ({type(error).__name__}); affected "
+                        "hyperlinks were not compared.",
+                    ),
+                )
+
+            budget = _CellHyperlinkBudget()
+            archive_members = set(archive.namelist())
+            inspections = [
+                _cell_hyperlink_worksheet_inspection(
+                    archive,
+                    sheet=sheet,
+                    member=member,
+                    archive_members=archive_members,
+                    warnings=warnings,
+                    budget=budget,
+                )
+                for sheet, (member, sheet_kind) in sorted(
+                    sheet_parts.items(),
+                    key=lambda item: item[0].casefold(),
+                )
+                if sheet_kind == "worksheet"
+            ]
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _CellHyperlinkMetadata(
+            CellHyperlinkSnapshot(
+                unrecognized_cell_hyperlink_count=1,
+                definition_signature=_private_external_data_signature(
+                    (("cell-hyperlink-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect cell-hyperlink OOXML "
+                f"({type(error).__name__}); affected hyperlinks were not compared.",
+            ),
+        )
+
+    if any(inspection.unrecognized_count for inspection in inspections):
+        warnings.add(
+            "FormulaFence found malformed, unbound, or unsupported cell-hyperlink "
+            "metadata; affected hyperlinks have a coverage gap."
+        )
+    present_inspections = [inspection for inspection in inspections if inspection.present]
+    snapshot = CellHyperlinkSnapshot(
+        worksheet_hyperlink_sheet_count=len(present_inspections),
+        hyperlink_count=sum(
+            inspection.hyperlink_count for inspection in present_inspections
+        ),
+        hyperlink_with_location_count=sum(
+            inspection.hyperlink_with_location_count
+            for inspection in present_inspections
+        ),
+        hyperlink_with_display_count=sum(
+            inspection.hyperlink_with_display_count
+            for inspection in present_inspections
+        ),
+        hyperlink_with_tooltip_count=sum(
+            inspection.hyperlink_with_tooltip_count
+            for inspection in present_inspections
+        ),
+        binding_relationship_count=sum(
+            inspection.binding_relationship_count
+            for inspection in present_inspections
+        ),
+        external_relationship_count=sum(
+            inspection.external_relationship_count
+            for inspection in present_inspections
+        ),
+        unrecognized_cell_hyperlink_count=sum(
+            inspection.unrecognized_count for inspection in present_inspections
+        ),
+        declaration_signature=_private_external_data_signature(
+            tuple(
+                sorted(
+                    (
+                        "cell-hyperlink-worksheet",
+                        repr((inspection.sheet, inspection.declaration_signature)),
+                    )
+                    for inspection in present_inspections
+                )
+            )
+        ),
+        definition_signature=_private_external_data_signature(
+            tuple(
+                sorted(
+                    (
+                        "cell-hyperlink-definition",
+                        repr((inspection.sheet, inspection.definition_signature)),
+                    )
+                    for inspection in present_inspections
+                )
+            )
+        ),
+        relationship_signature=_private_external_data_signature(
+            tuple(
+                sorted(
+                    (
+                        "cell-hyperlink-relationships",
+                        repr((inspection.sheet, inspection.relationship_signature)),
+                    )
+                    for inspection in present_inspections
+                )
+            )
+        ),
+    )
+    return _CellHyperlinkMetadata(snapshot, tuple(sorted(warnings)))
+
+
 @dataclass(frozen=True)
 class _LegacyCommentRawRelationship:
     """One private package relationship used to locate legacy notes."""
@@ -22758,6 +23575,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     fill_metadata = _fill_metadata(source)
     formula_cached_result_metadata = _formula_cached_result_metadata(source)
     rich_text_run_metadata = _rich_text_run_metadata(source)
+    cell_hyperlink_metadata = _cell_hyperlink_metadata(source)
     legacy_comment_metadata = _legacy_comment_metadata(source)
     threaded_comment_metadata = _threaded_comment_metadata(source)
     worksheet_drawing_shape_metadata = _worksheet_drawing_shape_metadata(source)
@@ -22803,6 +23621,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(fill_metadata.warnings)
     parser_warnings.update(formula_cached_result_metadata.warnings)
     parser_warnings.update(rich_text_run_metadata.warnings)
+    parser_warnings.update(cell_hyperlink_metadata.warnings)
     parser_warnings.update(legacy_comment_metadata.warnings)
     parser_warnings.update(threaded_comment_metadata.warnings)
     parser_warnings.update(worksheet_drawing_shape_metadata.warnings)
@@ -23032,6 +23851,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         fill_controls=fill_metadata.controls,
         formula_cached_results=formula_cached_result_metadata.results,
         rich_text_runs=rich_text_run_metadata.controls,
+        cell_hyperlinks=cell_hyperlink_metadata.hyperlinks,
         legacy_comments=legacy_comment_metadata.comments,
         threaded_comments=threaded_comment_metadata.comments,
         worksheet_drawing_shapes=worksheet_drawing_shape_metadata.shapes,
@@ -23114,6 +23934,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "fill_controls": snapshot.fill_controls.profile_dict(),
         "formula_cached_results": snapshot.formula_cached_results.profile_dict(),
         "rich_text_runs": snapshot.rich_text_runs.profile_dict(),
+        "cell_hyperlinks": snapshot.cell_hyperlinks.profile_dict(),
         "legacy_comments": snapshot.legacy_comments.profile_dict(),
         "threaded_comments": snapshot.threaded_comments.profile_dict(),
         "worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.profile_dict(),
@@ -23148,6 +23969,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_fill_controls": snapshot.fill_controls.present,
             "has_formula_cached_results": snapshot.formula_cached_results.present,
             "has_rich_text_runs": snapshot.rich_text_runs.present,
+            "has_cell_hyperlinks": snapshot.cell_hyperlinks.present,
             "has_legacy_comments": snapshot.legacy_comments.present,
             "has_threaded_comments": snapshot.threaded_comments.present,
             "has_worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.present,

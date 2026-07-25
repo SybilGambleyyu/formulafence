@@ -14,6 +14,7 @@ from formulafence.workbook import load_snapshot, profile_snapshot
 
 from .helpers import (
     add_conditional_formatting_databar_extension,
+    add_ordinary_dimension_resize,
     add_power_pivot_data_model_direct_relationship,
     add_protected_range,
     break_slicer_timeline_pivot_cache_binding,
@@ -21,6 +22,7 @@ from .helpers import (
     change_chart_definition_material,
     change_default_fill_definition,
     change_default_font_definition,
+    change_default_zero_dimension_visibility_controls,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
     change_fill_definition,
@@ -55,7 +57,9 @@ from .helpers import (
     change_worksheet_embedded_control_payload,
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
+    change_zero_dimension_visibility_controls,
     corrupt_chart_definition_root,
+    corrupt_default_zero_dimension_visibility_controls,
     corrupt_fill_column_control,
     corrupt_fill_definition,
     corrupt_filter_visibility_column_control,
@@ -75,6 +79,7 @@ from .helpers import (
     corrupt_what_if_data_table_input,
     corrupt_worksheet_embedded_control_activex_root,
     corrupt_xlm_macro_sheet_root,
+    corrupt_zero_dimension_visibility_controls,
     delete_what_if_data_table_input,
     duplicate_external_link_definition,
     duplicate_external_link_sheet_names,
@@ -118,6 +123,7 @@ from .helpers import (
     make_what_if_data_table_model,
     make_worksheet_embedded_control_model,
     make_xlm_macro_sheet_model,
+    make_zero_dimension_visibility_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
     normalize_fill_control_spelling,
@@ -132,6 +138,7 @@ from .helpers import (
     normalize_number_format_inheritance,
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
+    normalize_zero_dimension_visibility_control_spelling,
     overlap_what_if_data_table_outputs,
     rebind_external_link_declaration,
     rebind_pivot_table_cache_records,
@@ -4112,11 +4119,15 @@ def test_filter_visibility_controls_are_profiled_diffed_and_redacted(tmp_path) -
         "sort_state_count": 2,
         "sort_condition_count": 2,
         "default_hidden_sheet_count": 1,
+        "default_zero_height_sheet_count": 0,
+        "default_zero_width_sheet_count": 0,
         "hidden_row_count": 2,
+        "zero_height_row_count": 0,
         "outlined_row_count": 2,
         "collapsed_row_count": 1,
         "visible_row_override_count": 1,
         "hidden_column_count": 3,
+        "zero_width_column_count": 0,
         "outlined_column_count": 4,
         "collapsed_column_count": 1,
         "unrecognized_control_count": 0,
@@ -4160,6 +4171,172 @@ def test_filter_visibility_writer_noise_is_normalized(tmp_path) -> None:
         change.kind for change in report.changes
     }
     assert "FF036" not in {finding.rule_id for finding in report.findings}
+
+
+def test_zero_dimension_visibility_controls_are_profiled_diffed_and_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_zero_dimension_visibility_model(tmp_path / "baseline.xlsx")
+    candidate = make_zero_dimension_visibility_model(tmp_path / "candidate.xlsx")
+    default_candidate = make_zero_dimension_visibility_model(
+        tmp_path / "default-candidate.xlsx"
+    )
+    default_revealed = make_zero_dimension_visibility_model(
+        tmp_path / "default-revealed.xlsx"
+    )
+    ordinary_resize = make_zero_dimension_visibility_model(
+        tmp_path / "ordinary-resize.xlsx"
+    )
+    change_zero_dimension_visibility_controls(candidate)
+    change_default_zero_dimension_visibility_controls(default_candidate)
+    change_default_zero_dimension_visibility_controls(default_revealed)
+    add_ordinary_dimension_resize(default_revealed)
+    add_ordinary_dimension_resize(ordinary_resize)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    default_snapshot = load_snapshot(default_candidate)
+    default_revealed_snapshot = load_snapshot(default_revealed)
+    profile = profile_snapshot(candidate_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    default_report = compare_snapshots(baseline_snapshot, default_snapshot)
+    default_override_report = compare_snapshots(
+        default_snapshot,
+        default_revealed_snapshot,
+    )
+    ordinary_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(ordinary_resize),
+    )
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "filter_visibility_controls_changed"
+    )
+
+    assert candidate_snapshot.summary()["filter_visibility_zero_height_row_count"] == 1
+    assert candidate_snapshot.summary()["filter_visibility_zero_width_column_count"] == 1
+    assert profile["filter_visibility_controls"] == {
+        "present": True,
+        "worksheet_auto_filter_count": 0,
+        "table_auto_filter_count": 0,
+        "filter_column_count": 0,
+        "filter_criterion_count": 0,
+        "sort_state_count": 0,
+        "sort_condition_count": 0,
+        "default_hidden_sheet_count": 0,
+        "default_zero_height_sheet_count": 0,
+        "default_zero_width_sheet_count": 0,
+        "hidden_row_count": 0,
+        "zero_height_row_count": 1,
+        "outlined_row_count": 0,
+        "collapsed_row_count": 0,
+        "visible_row_override_count": 0,
+        "hidden_column_count": 0,
+        "zero_width_column_count": 1,
+        "outlined_column_count": 0,
+        "collapsed_column_count": 0,
+        "unrecognized_control_count": 0,
+    }
+    assert default_snapshot.filter_visibility_controls.default_zero_height_sheet_count == 1
+    assert default_snapshot.filter_visibility_controls.default_zero_width_sheet_count == 1
+    assert default_snapshot.filter_visibility_controls.zero_width_column_count == 16_384
+    assert default_revealed_snapshot.filter_visibility_controls.zero_width_column_count == 16_383
+    assert default_revealed_snapshot.filter_visibility_controls.visible_row_override_count == 1
+    assert "FF036" in {finding.rule_id for finding in report.findings}
+    assert "FF036" in {finding.rule_id for finding in default_report.findings}
+    assert "FF036" in {finding.rule_id for finding in default_override_report.findings}
+    assert "filter_visibility_controls_changed" not in {
+        change.kind for change in ordinary_report.changes
+    }
+    assert "FF036" not in {finding.rule_id for finding in ordinary_report.findings}
+    assert "zero-height rows" in markdown
+    assert "zero-width columns" in markdown
+    assert change.details["filter_visibility_definition_material_changed"] is True
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for private_value in ("customHeight", "customWidth", '"min": "2"', '"r": "3"'):
+        assert all(private_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_zero_dimension_visibility_normalizes_equivalent_zero_spellings(tmp_path) -> None:
+    baseline = make_zero_dimension_visibility_model(tmp_path / "baseline.xlsx")
+    equivalent = make_zero_dimension_visibility_model(tmp_path / "equivalent.xlsx")
+    change_zero_dimension_visibility_controls(baseline)
+    change_zero_dimension_visibility_controls(equivalent)
+    normalize_zero_dimension_visibility_control_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert "filter_visibility_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF036" not in {finding.rule_id for finding in report.findings}
+
+
+def test_zero_dimension_visibility_malformed_controls_fail_closed(tmp_path) -> None:
+    baseline = make_zero_dimension_visibility_model(tmp_path / "baseline.xlsx")
+    malformed = make_zero_dimension_visibility_model(tmp_path / "malformed.xlsx")
+    corrupt_zero_dimension_visibility_controls(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.filter_visibility_controls.unrecognized_control_count >= 1
+    assert malformed_snapshot.filter_visibility_controls.zero_width_column_count == 0
+    assert any(
+        "malformed or unsupported filter, sort, or visibility" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF036"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for private_value in (
+        '"width": "0_0"',
+        '"ht": "NaN"',
+        "customHeight",
+        "customWidth",
+    ):
+        assert all(private_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_zero_dimension_default_controls_fail_closed(tmp_path) -> None:
+    baseline = make_zero_dimension_visibility_model(tmp_path / "baseline.xlsx")
+    malformed = make_zero_dimension_visibility_model(tmp_path / "malformed.xlsx")
+    corrupt_default_zero_dimension_visibility_controls(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.filter_visibility_controls.unrecognized_control_count >= 1
+    assert any(
+        "malformed or unsupported filter, sort, or visibility" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF036"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for private_value in ('"defaultRowHeight": "-1"', '"defaultColWidth": "256"'):
+        assert all(private_value not in artifact for artifact in rendered_artifacts)
 
 
 def test_filter_visibility_malformed_control_fails_closed(tmp_path) -> None:

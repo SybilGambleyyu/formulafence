@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel zero-dimension visibility controls — 2026-07-24
+
+FormulaFence 0.39.0 was validated with controlled raw-OOXML `.xlsx` packages
+containing a zero-height populated row, a zero-width populated column range with
+a later positive-width override, zero worksheet-default row and column
+dimensions, and ordinary positive resizes. The safe profile records only
+zero-height/zero-width/default-zero counts and visible-row overrides; raw dimensions,
+row/column targets, and raw declarations stay private. The suite verifies a
+zero-change self-diff, `FF036` and `FFP036` for direct zero dimensions, an
+effective all-column zero-width default with a later positive-width reveal,
+equivalent zero spellings, and no `FF036` for ordinary positive resizes.
+
+Negative, non-finite, and out-of-range dimensions produce an explicit
+parser-coverage warning, `FF010`, and `FF036` rather than a silent omission.
+Raw dimension values, `customHeight`/`customWidth` flags, and row/column targets are
+verified absent from JSON, Markdown, ordinary reports, and SARIF. The scanner
+compares the documented zero-sized concealment states only; the tests do not
+assert Excel rendering, near-zero display behavior, text overflow, arbitrary
+positive layout changes, formula calculation, or print layout.
+
+As an independent package-compatibility check, FormulaFence used XlsxWriter
+3.2.9's public
+[`tutorial2.py`](https://github.com/jmcnamara/XlsxWriter/blob/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011/examples/tutorial2.py)
+example at commit `cf3fe78d3eab5e4c7d825d4451af3a60e2a04011`, generated locally
+and not bundled with this repository. The baseline `Expenses02.xlsx` SHA-256
+was `272036dfdfc75257483b8a8509827cb677c2bd641c0e1f6059825391d0893225`.
+A controlled raw-package mutation added only an effective `width="0"` column
+declaration for the money column, without a `hidden` attribute or an ordinary
+cell/formula edit; its SHA-256 was
+`710cb371c9775064ef2a1a5f9c2c24e8d3f74829fb89f4862b25c92730d4a503`.
+The published 0.38.0 wheel (SHA-256
+`a07f638f9afd6861cd6b2127b62f572e2285174a6c7e2f7eace82ac8a18a83b0`)
+reported `0` changes and no findings. A fresh 0.39.0 wheel emits exactly one
+`filter_visibility_controls_changed` change and `FF036` (wheel SHA-256
+`bff31fb99a49c0f257156dba35819ca408828ab50635b752d4c4ac16d706c4c3`);
+the starter policy exits `1` with `FF036` and `FFP036`.
+
 ## Excel cell-fill controls — 2026-07-24
 
 FormulaFence 0.38.0 was validated with controlled raw-OOXML `.xlsx` packages

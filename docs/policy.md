@@ -89,7 +89,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_power_pivot_data_model_changes` | boolean | An embedded Power Pivot/Data Model workbook binding, `x15:dataModel` declaration, direct model-part relationship, or bounded raw model payload changes. |
 | `no_what_if_data_table_changes` | boolean | An Excel What-If Data Table master changes its output range, one-/two-variable mode, orientation, input references, deleted-input state, recalculation request, or supported raw formula metadata. This is unrelated to an Excel table definition. |
 | `no_scenario_manager_changes` | boolean | An Excel Scenario Manager worksheet changes its selected/shown scenario state, result-summary references, scenario definition, protection flags, comments/users, stored input values/references, deleted/undone state, or input display number formats. Scenario names, comments, users, values, and references are compared privately. |
-| `no_filter_visibility_changes` | boolean | A worksheet/Table AutoFilter, stored filter criterion, filter sort state, explicitly hidden/outlined/collapsed row or column, or hidden-by-default sheet setting changes. Criteria, selected values, sort keys/lists, table names, and row/column ranges are compared privately. |
+| `no_filter_visibility_changes` | boolean | A worksheet/Table AutoFilter, stored filter criterion, filter sort state, explicitly hidden/zero-height/outlined/collapsed row, hidden/zero-width/outlined/collapsed column, or hidden/zero-dimension-by-default worksheet setting changes. Criteria, selected values, sort keys/lists, raw dimensions, table names, and row/column ranges are compared privately. |
 | `no_ignored_error_changes` | boolean | A standard or Office 2010 extension ignored-error declaration changes a per-range suppression of Excel evaluation, formula-consistency, range-omission, unlocked-formula, empty-reference, list-validation, calculated-column, text-number, or two-digit-year warnings. Targets and exact suppressions are compared privately. |
 | `no_named_sheet_view_changes` | boolean | A relationship-backed Excel Named Sheet View, alternate AutoFilter criterion, sort rule, or reconciled base-filter binding changes. View names, IDs, criteria, ranges, table bindings, and sort keys are compared privately. |
 | `no_number_format_changes` | boolean | An effective default, direct-cell, row, or column number-format control changes. Format codes, style IDs, and cell/row/column targets are compared privately. |
@@ -414,26 +414,29 @@ cell-diff boundary.
 Excel filters and column controls can change which records or fields a reviewer
 sees while leaving cell contents and formulas unchanged. FormulaFence reads worksheet-level
 `<autoFilter>` / `<sortState>` metadata, AutoFilters and sort state retained in
-Table Definition parts, explicit row `hidden`, `outlineLevel`, and `collapsed`
-attributes, and `sheetFormatPr@zeroHeight` (the hidden-by-default row
-optimization). It also reads raw `<cols>/<col>` `hidden`, `outlineLevel`, and
-`collapsed` controls, applying overlapping column declarations in file order so
-only present later attributes override an earlier declaration. A material change emits `FF036`; enable
+Table Definition parts, explicit row `hidden`, `outlineLevel`, `collapsed`, and
+zero `ht` attributes, `sheetFormatPr@zeroHeight` (the hidden-by-default row
+optimization), and zero `defaultRowHeight` / `defaultColWidth` worksheet
+dimensions. It also reads raw `<cols>/<col>` `hidden`, `outlineLevel`,
+`collapsed`, and zero `width` controls, applying overlapping column declarations
+in file order so only present later attributes override an earlier declaration.
+A material change emits `FF036`; enable
 `no_filter_visibility_changes` to make it `FFP036` in CI.
 
 Profiles and `FF036` details contain only structural counts: worksheet/table
 filters, filter columns and criterion groups, sort states/conditions,
-default-hidden sheets, explicitly hidden/outlined/collapsed rows, visible-row
-overrides, explicitly hidden/outlined/collapsed columns, and malformed controls.
-Criteria, selected values, custom lists, table names, sort keys, and row/column
-ranges remain private. Local A1 case/absolute-reference spelling,
-Boolean/default spelling, unsigned-integer spelling, and equivalent column-range
-segmentation are normalized. Unsupported extensions, malformed declarations,
-exhausted control-update limits, and unsafe or missing table relationships are
-explicit coverage warnings.
+default-hidden/default-zero-dimension sheets, explicitly hidden/zero-height/
+outlined/collapsed rows, visible-row overrides, explicitly hidden/zero-width/
+outlined/collapsed columns, and malformed controls. Criteria, selected values,
+custom lists, table names, sort keys, raw dimensions, and row/column ranges remain
+private. Local A1 case/absolute-reference spelling, Boolean/default spelling,
+unsigned-integer spelling, equivalent zero-dimension spelling, and equivalent
+column-range segmentation are normalized. Unsupported extensions, malformed
+declarations, exhausted control-update limits, and unsafe or missing table
+relationships are explicit coverage warnings.
 FormulaFence does not apply a filter, evaluate `SUBTOTAL`/`AGGREGATE`, infer
-which formulas are visibility-sensitive, render a report, track widths/styles,
-or model outline-display settings.
+which formulas are visibility-sensitive, render a report, track arbitrary
+positive dimensions or styles, or model overflow or outline-display settings.
 
 Excel's per-range ignored-error declarations can suppress warnings a reviewer
 would otherwise see without changing a formula or ordinary cell. FormulaFence

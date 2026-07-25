@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.39.0 — 2026-07-24
+
+- Extend the existing filter, sort, and row/column-visibility boundary to the
+  documented zero-sized states that hide worksheet content without changing a
+  cell: direct row `ht="0"`, column `width="0"`, and worksheet-default
+  `defaultRowHeight="0"` / `defaultColWidth="0"` controls. Retain dimensions,
+  row/column targets, and raw declarations only in private signatures; profiles,
+  `FF036`, and SARIF expose structural counts only.
+- Resolve worksheet-default zero dimensions before direct row and layered column
+  declarations, so a later positive height or width is compared as an effective
+  override while an equivalent inherited zero stays quiet. Positive ordinary
+  resizes remain outside this narrow concealment boundary.
+- Extend `FF036` / `no_filter_visibility_changes` (`FFP036`) without adding a
+  new policy switch. Invalid, negative, non-finite, or application-out-of-range
+  dimensions become explicit parser-coverage warnings rather than silent
+  omissions. FormulaFence does not render widths/heights, infer overflow, or
+  track arbitrary nonzero layout changes.
+
 ## 0.38.0 — 2026-07-24
 
 - Inspect raw workbook cell-fill controls that can change what a reviewer sees

@@ -1448,11 +1448,15 @@ class FilterVisibilitySnapshot:
     sort_state_count: int = 0
     sort_condition_count: int = 0
     default_hidden_sheet_count: int = 0
+    default_zero_height_sheet_count: int = 0
+    default_zero_width_sheet_count: int = 0
     hidden_row_count: int = 0
+    zero_height_row_count: int = 0
     outlined_row_count: int = 0
     collapsed_row_count: int = 0
     visible_row_override_count: int = 0
     hidden_column_count: int = 0
+    zero_width_column_count: int = 0
     outlined_column_count: int = 0
     collapsed_column_count: int = 0
     unrecognized_control_count: int = 0
@@ -1464,11 +1468,15 @@ class FilterVisibilitySnapshot:
             self.worksheet_auto_filter_count
             or self.table_auto_filter_count
             or self.default_hidden_sheet_count
+            or self.default_zero_height_sheet_count
+            or self.default_zero_width_sheet_count
             or self.hidden_row_count
+            or self.zero_height_row_count
             or self.outlined_row_count
             or self.collapsed_row_count
             or self.visible_row_override_count
             or self.hidden_column_count
+            or self.zero_width_column_count
             or self.outlined_column_count
             or self.collapsed_column_count
             or self.unrecognized_control_count
@@ -1485,11 +1493,15 @@ class FilterVisibilitySnapshot:
             "sort_state_count": self.sort_state_count,
             "sort_condition_count": self.sort_condition_count,
             "default_hidden_sheet_count": self.default_hidden_sheet_count,
+            "default_zero_height_sheet_count": self.default_zero_height_sheet_count,
+            "default_zero_width_sheet_count": self.default_zero_width_sheet_count,
             "hidden_row_count": self.hidden_row_count,
+            "zero_height_row_count": self.zero_height_row_count,
             "outlined_row_count": self.outlined_row_count,
             "collapsed_row_count": self.collapsed_row_count,
             "visible_row_override_count": self.visible_row_override_count,
             "hidden_column_count": self.hidden_column_count,
+            "zero_width_column_count": self.zero_width_column_count,
             "outlined_column_count": self.outlined_column_count,
             "collapsed_column_count": self.collapsed_column_count,
             "unrecognized_control_count": self.unrecognized_control_count,
@@ -2208,8 +2220,20 @@ class WorkbookSnapshot:
             "filter_visibility_hidden_row_count": (
                 self.filter_visibility_controls.hidden_row_count
             ),
+            "filter_visibility_zero_height_row_count": (
+                self.filter_visibility_controls.zero_height_row_count
+            ),
             "filter_visibility_hidden_column_count": (
                 self.filter_visibility_controls.hidden_column_count
+            ),
+            "filter_visibility_zero_width_column_count": (
+                self.filter_visibility_controls.zero_width_column_count
+            ),
+            "filter_visibility_default_zero_height_sheet_count": (
+                self.filter_visibility_controls.default_zero_height_sheet_count
+            ),
+            "filter_visibility_default_zero_width_sheet_count": (
+                self.filter_visibility_controls.default_zero_width_sheet_count
             ),
             "has_filter_visibility_controls": self.filter_visibility_controls.present,
             "ignored_error_rule_count": self.ignored_error_controls.ignored_error_rule_count,

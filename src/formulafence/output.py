@@ -87,10 +87,13 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['scenario_manager_input_cell_count']}"
         ),
         (
-            "- **Filter declarations / hidden rows / hidden columns:** "
+            "- **Filter declarations / hidden rows / zero-height rows / hidden columns / "
+            "zero-width columns:** "
             f"{workbook['filter_visibility_auto_filter_count']} / "
             f"{workbook['filter_visibility_hidden_row_count']} / "
-            f"{workbook['filter_visibility_hidden_column_count']}"
+            f"{workbook['filter_visibility_zero_height_row_count']} / "
+            f"{workbook['filter_visibility_hidden_column_count']} / "
+            f"{workbook['filter_visibility_zero_width_column_count']}"
         ),
         (
             "- **Cell number-format controls / custom assignments:** "
@@ -1224,10 +1227,17 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     f"{filter_visibility_controls['sort_condition_count']}"
                 ),
                 (
-                    "- **Default-hidden sheets / hidden rows / hidden columns:** "
+                    "- **Default-hidden / default-zero-height / default-zero-width sheets:** "
                     f"{filter_visibility_controls['default_hidden_sheet_count']} / "
+                    f"{filter_visibility_controls['default_zero_height_sheet_count']} / "
+                    f"{filter_visibility_controls['default_zero_width_sheet_count']}"
+                ),
+                (
+                    "- **Hidden / zero-height rows / hidden / zero-width columns:** "
                     f"{filter_visibility_controls['hidden_row_count']} / "
-                    f"{filter_visibility_controls['hidden_column_count']}"
+                    f"{filter_visibility_controls['zero_height_row_count']} / "
+                    f"{filter_visibility_controls['hidden_column_count']} / "
+                    f"{filter_visibility_controls['zero_width_column_count']}"
                 ),
                 (
                     "- **Outlined rows / columns:** "

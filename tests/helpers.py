@@ -5972,6 +5972,202 @@ def make_filter_visibility_model(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".filter-visibility.tmp.xlsx")
 
 
+def make_zero_dimension_visibility_model(path: Path) -> Path:
+    """Create a workbook whose rows and columns can be concealed by size alone."""
+    workbook = Workbook()
+    report = workbook.active
+    report.title = "Dimension Report"
+    report.append(["Metric", "Private amount", "Visible amount"])
+    report.append(["Revenue", 1200, 700])
+    report.append(["Costs", 750, 350])
+    report.append(["Profit", "=B2-B3", "=C2-C3"])
+    workbook.save(path)
+    return path
+
+
+def change_zero_dimension_visibility_controls(path: Path) -> Path:
+    """Hide one populated row and column through raw zero-size declarations."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+        row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        columns = report_xml.find(cols_tag)
+        if columns is None:
+            columns = ElementTree.Element(cols_tag)
+            sheet_data_index = next(
+                index
+                for index, child in enumerate(report_xml)
+                if child.tag == sheet_data_tag
+            )
+            report_xml.insert(sheet_data_index, columns)
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "2", "max": "3", "width": "0", "customWidth": "1"},
+        )
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "3", "max": "3", "width": "12", "customWidth": "1"},
+        )
+        row = next(row for row in report_xml.iter(row_tag) if row.get("r") == "3")
+        row.set("ht", "0")
+        row.set("customHeight", "true")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".zero-dimension-visibility.tmp.xlsx")
+
+
+def change_default_zero_dimension_visibility_controls(path: Path) -> Path:
+    """Set worksheet-default row and column dimensions to Excel's hidden size."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        sheet_format_tag = f"{{{_SPREADSHEETML_NS}}}sheetFormatPr"
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        sheet_format = report_xml.find(sheet_format_tag)
+        if sheet_format is None:
+            sheet_format = ElementTree.Element(sheet_format_tag)
+            report_xml.insert(0, sheet_format)
+        sheet_format.set("defaultRowHeight", "0")
+        sheet_format.set("defaultColWidth", "0")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".default-zero-dimension-visibility.tmp.xlsx")
+
+
+def add_ordinary_dimension_resize(path: Path) -> Path:
+    """Change positive dimensions, which remain outside the concealment boundary."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+        row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        columns = report_xml.find(cols_tag)
+        if columns is None:
+            columns = ElementTree.Element(cols_tag)
+            sheet_data_index = next(
+                index
+                for index, child in enumerate(report_xml)
+                if child.tag == sheet_data_tag
+            )
+            report_xml.insert(sheet_data_index, columns)
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "2", "max": "2", "width": "24", "customWidth": "1"},
+        )
+        row = next(row for row in report_xml.iter(row_tag) if row.get("r") == "3")
+        row.set("ht", "22")
+        row.set("customHeight", "1")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".ordinary-dimension-resize.tmp.xlsx")
+
+
+def normalize_zero_dimension_visibility_control_spelling(path: Path) -> Path:
+    """Use equivalent zero-size spellings without changing effective visibility."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        columns = report_xml.find(cols_tag)
+        if columns is None:
+            raise ValueError("Could not find zero-dimension column fixture")
+        zero_width_column = next(
+            column
+            for column in columns.findall(col_tag)
+            if column.get("min") == "2" and column.get("max") == "3"
+        )
+        zero_width_column.set("width", "-0.0")
+        row = next(row for row in report_xml.iter(row_tag) if row.get("r") == "3")
+        row.set("ht", "0e-4")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".zero-dimension-visibility-noise.tmp.xlsx")
+
+
+def corrupt_zero_dimension_visibility_controls(path: Path) -> Path:
+    """Inject malformed sizes to ensure visibility parsing fails closed."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+        row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        columns = report_xml.find(cols_tag)
+        if columns is None:
+            columns = ElementTree.Element(cols_tag)
+            sheet_data_index = next(
+                index
+                for index, child in enumerate(report_xml)
+                if child.tag == sheet_data_tag
+            )
+            report_xml.insert(sheet_data_index, columns)
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {"min": "2", "max": "2", "width": "0_0", "customWidth": "1"},
+        )
+        row = next(row for row in report_xml.iter(row_tag) if row.get("r") == "3")
+        row.set("ht", "NaN")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".zero-dimension-visibility-corrupt.tmp.xlsx")
+
+
+def corrupt_default_zero_dimension_visibility_controls(path: Path) -> Path:
+    """Inject malformed worksheet-default sizes to exercise fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        sheet_format_tag = f"{{{_SPREADSHEETML_NS}}}sheetFormatPr"
+        report_xml = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        sheet_format = report_xml.find(sheet_format_tag)
+        if sheet_format is None:
+            sheet_format = ElementTree.Element(sheet_format_tag)
+            report_xml.insert(0, sheet_format)
+        sheet_format.set("defaultRowHeight", "-1")
+        sheet_format.set("defaultColWidth", "256")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            report_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(
+        path,
+        mutate,
+        ".default-zero-dimension-visibility-corrupt.tmp.xlsx",
+    )
+
+
 def change_filter_visibility_criterion(path: Path) -> Path:
     """Change a worksheet filter member without touching a cell or formula."""
 

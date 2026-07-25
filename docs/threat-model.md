@@ -129,20 +129,23 @@ review prompt, not proof of an error.
   without changing a formula or ordinary cell value. FormulaFence reads
   worksheet `<autoFilter>` and `<sortState>` elements, the same controls in
   relationship-backed Table Definition parts, explicit row `hidden`,
-  `outlineLevel`, and `collapsed` attributes, `sheetFormatPr@zeroHeight`, and
-  raw `<cols>/<col>` `hidden`, `outlineLevel`, and `collapsed` declarations.
-  Column declarations are applied in file order and only attributes present in a
-  later declaration override earlier effective state, normalizing equivalent
-  range splitting. Criteria, selected values, custom sort lists, sort keys, and
-  row/column ranges remain private; profiles and `FF036` expose structural
-  counts only. Local A1 case/absolute-reference, Boolean/default,
-  unsigned-integer, and equivalent column-range spellings are normalized.
+  `outlineLevel`, `collapsed`, and zero `ht` attributes,
+  `sheetFormatPr@zeroHeight`, zero worksheet-default row/column dimensions, and
+  raw `<cols>/<col>` `hidden`, `outlineLevel`, `collapsed`, and zero `width`
+  declarations. Column declarations are applied in file order and only
+  attributes present in a later declaration override earlier effective state,
+  including a positive-width override of an inherited zero width. Criteria,
+  selected values, custom sort lists, sort keys, raw dimension values, and row/column
+  ranges remain private; profiles and `FF036` expose structural counts only.
+  Local A1 case/absolute-reference, Boolean/default, unsigned-integer,
+  equivalent zero-dimension, and equivalent column-range spellings are
+  normalized.
   Unsupported extensions, malformed controls, exhausted column-update limits,
   and unsafe/missing table relationships remain visible coverage warnings, and
   `no_filter_visibility_changes` can block the change as `FFP036`.
   FormulaFence does not apply filters, calculate `SUBTOTAL`/`AGGREGATE`, infer
-  formula sensitivity, render views, track widths/styles, or model
-  outline-display settings.
+  formula sensitivity, render views, track ordinary positive widths/heights or
+  styles, or model outline-display settings.
 - Excel ignored-error declarations can suppress evaluation, inconsistent-formula,
   omitted-range, unlocked-formula, empty-reference, list-validation,
   calculated-column, text-number, and two-digit-year warnings without changing

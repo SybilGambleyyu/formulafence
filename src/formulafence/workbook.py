@@ -13469,6 +13469,11 @@ _FILTER_VISIBILITY_UNSIGNED_INT_MAXIMUM = 4_294_967_295
 _FILTER_VISIBILITY_OUTLINE_LEVEL_MAXIMUM = 255
 _FILTER_VISIBILITY_COLUMN_OUTLINE_LEVEL_MAXIMUM = 7
 _FILTER_VISIBILITY_COLUMN_UPDATE_BUDGET = 16_777_216
+_FILTER_VISIBILITY_MAX_COLUMN_WIDTH = Decimal("255")
+_FILTER_VISIBILITY_MAX_ROW_HEIGHT = Decimal("409")
+_FILTER_VISIBILITY_DIMENSION_PATTERN = re.compile(
+    r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[Ee][+-]?[0-9]+)?"
+)
 _FILTER_VISIBILITY_COLUMN_KNOWN_ATTRIBUTES = frozenset(
     {
         "min",
@@ -13517,6 +13522,33 @@ def _filter_visibility_unsigned_int(
         if parsed <= maximum:
             return parsed, str(parsed)
     return None, f"invalid:{value}"
+
+
+def _filter_visibility_zero_dimension(
+    value: str | None,
+    *,
+    maximum: Decimal,
+) -> tuple[bool | None, str]:
+    """Classify a finite OOXML dimension without retaining its private size.
+
+    FormulaFence's visibility boundary intentionally distinguishes only the
+    documented zero-sized state, which Excel treats as hidden. Ordinary positive
+    resize operations remain outside the boundary, but a malformed dimension is
+    a coverage issue rather than a silent omission.
+    """
+    if value is None:
+        return None, "none"
+    candidate = value.strip()
+    if not _FILTER_VISIBILITY_DIMENSION_PATTERN.fullmatch(candidate):
+        return None, f"invalid:{value}"
+    try:
+        parsed = Decimal(candidate)
+        invalid = not parsed.is_finite() or parsed < 0 or parsed > maximum
+    except (InvalidOperation, ValueError):
+        return None, f"invalid:{value}"
+    if invalid:
+        return None, f"invalid:{value}"
+    return parsed == 0, "zero" if parsed == 0 else "nonzero"
 
 
 def _filter_visibility_reference(
@@ -13967,10 +13999,11 @@ def _filter_visibility_row_signature(
     row: ElementTree.Element,
     *,
     default_hidden: bool,
+    default_zero_height: bool,
     issues: set[str],
-) -> tuple[tuple[object, ...], bool, bool, bool, bool] | None:
+) -> tuple[tuple[object, ...], bool, bool, bool, bool, bool] | None:
     """Capture a semantically relevant row visibility record without its cells."""
-    visibility_attributes = {"hidden", "outlineLevel", "collapsed"}
+    visibility_attributes = {"hidden", "outlineLevel", "collapsed", "ht"}
     if not any(attribute in row.attrib for attribute in visibility_attributes):
         return None
     raw_row_index = row.get("r")
@@ -13995,20 +14028,48 @@ def _filter_visibility_row_signature(
     collapsed, collapsed_signature = _filter_visibility_boolean(row.get("collapsed"), False)
     if collapsed is None:
         issues.add("invalid-row-collapsed")
+    zero_height: bool | None = False
+    zero_height_signature = "none"
+    if "ht" in row.attrib:
+        zero_height, zero_height_signature = _filter_visibility_zero_dimension(
+            row.get("ht"),
+            maximum=_FILTER_VISIBILITY_MAX_ROW_HEIGHT,
+        )
+        if zero_height is None:
+            issues.add("invalid-row-height")
+    has_explicit_hidden = "hidden" in row.attrib
+    has_explicit_height = "ht" in row.attrib
+    effective_hidden = (
+        hidden if has_explicit_hidden and hidden is not None else default_hidden
+    )
+    effective_zero_height = (
+        zero_height
+        if has_explicit_height and zero_height is not None
+        else default_zero_height
+    )
     is_hidden = hidden is True
+    is_zero_height = zero_height is True and not default_zero_height
     is_outlined = bool(outline_level)
     is_collapsed = collapsed is True
     is_visible_override = (
-        default_hidden and "hidden" in row.attrib and hidden is False
+        (default_hidden or default_zero_height)
+        and not effective_hidden
+        and not effective_zero_height
+        and (
+            (has_explicit_hidden and hidden is False)
+            or (has_explicit_height and zero_height is False)
+        )
     )
     if not (
         is_hidden
+        or is_zero_height
         or is_outlined
         or is_collapsed
         or is_visible_override
         or row_index is None
         or row_index < 1
         or hidden is None
+        or zero_height is None
         or outline_level is None
         or collapsed is None
     ):
@@ -14019,11 +14080,13 @@ def _filter_visibility_row_signature(
             (
                 ("r", row_index_signature),
                 ("hidden", hidden_signature),
+                ("zeroHeight", zero_height_signature),
                 ("outlineLevel", outline_level_signature),
                 ("collapsed", collapsed_signature),
             ),
         ),
         is_hidden,
+        is_zero_height,
         is_outlined,
         is_collapsed,
         is_visible_override,
@@ -14034,16 +14097,18 @@ def _filter_visibility_column_control(
     column: ElementTree.Element,
     *,
     issues: set[str],
-) -> tuple[int, int, bool | None, int | None, bool | None] | None:
+) -> tuple[int, int, bool | None, int | None, bool | None, bool | None] | None:
     """Parse one layered column-visibility declaration from raw SpreadsheetML.
 
     SpreadsheetML ``<col>`` declarations can overlap. Writers such as Apache
     POI merge a later record's *present* attributes into the earlier record, so
     an omitted ``hidden``/``outlineLevel``/``collapsed`` flag must not erase an
-    existing visibility setting. Callers therefore apply only the non-``None``
-    attributes from this return value in XML order.
+    existing visibility setting. The same applies to a ``width`` declaration:
+    a later positive width can reveal an earlier zero-width column without
+    altering its hidden or outline flags. Callers therefore apply only the
+    non-``None`` attributes from this return value in XML order.
     """
-    visibility_attributes = {"hidden", "outlineLevel", "collapsed"}
+    visibility_attributes = {"hidden", "outlineLevel", "collapsed", "width"}
     has_visibility_attribute = any(
         attribute in column.attrib for attribute in visibility_attributes
     )
@@ -14093,25 +14158,36 @@ def _filter_visibility_column_control(
         collapsed, _ = _filter_visibility_boolean(column.get("collapsed"), False)
         if collapsed is None:
             issues.add("invalid-column-collapsed")
-    return minimum, maximum, hidden, outline_level, collapsed
+
+    zero_width: bool | None = None
+    if "width" in column.attrib:
+        zero_width, _ = _filter_visibility_zero_dimension(
+            column.get("width"),
+            maximum=_FILTER_VISIBILITY_MAX_COLUMN_WIDTH,
+        )
+        if zero_width is None:
+            issues.add("invalid-column-width")
+    return minimum, maximum, hidden, outline_level, collapsed, zero_width
 
 
 def _filter_visibility_column_state_signature(
     hidden_columns: bytearray,
     outline_levels: bytearray,
     collapsed_columns: bytearray,
-) -> tuple[tuple[int, int, bool, int, bool], ...]:
+    zero_width_columns: bytearray,
+) -> tuple[tuple[int, int, bool, int, bool, bool], ...]:
     """Compress effective column controls into a private canonical signature."""
-    segments: list[tuple[int, int, bool, int, bool]] = []
+    segments: list[tuple[int, int, bool, int, bool, bool]] = []
     start: int | None = None
-    previous_state: tuple[bool, int, bool] | None = None
+    previous_state: tuple[bool, int, bool, bool] | None = None
     for index in range(1, MAX_EXCEL_COLUMN + 1):
         state = (
             bool(hidden_columns[index]),
             int(outline_levels[index]),
             bool(collapsed_columns[index]),
+            bool(zero_width_columns[index]),
         )
-        if state == (False, 0, False):
+        if state == (False, 0, False, False):
             if start is not None and previous_state is not None:
                 segments.append((start, index - 1, *previous_state))
             start = None
@@ -14147,11 +14223,15 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
     sort_state_count = 0
     sort_condition_count = 0
     default_hidden_sheet_count = 0
+    default_zero_height_sheet_count = 0
+    default_zero_width_sheet_count = 0
     hidden_row_count = 0
+    zero_height_row_count = 0
     outlined_row_count = 0
     collapsed_row_count = 0
     visible_row_override_count = 0
     hidden_column_count = 0
+    zero_width_column_count = 0
     outlined_column_count = 0
     collapsed_column_count = 0
     column_update_count = 0
@@ -14214,6 +14294,8 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
                 worksheet = _xml_root(archive, member)
                 sheet_formats = worksheet.findall(sheet_format_tag)
                 default_hidden = False
+                default_zero_height = False
+                default_zero_width = False
                 if sheet_formats:
                     sheet_format_issues: set[str] = set()
                     if len(sheet_formats) > 1:
@@ -14228,7 +14310,38 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
                         sheet_format_issues.add("invalid-default-row-hidden")
                     else:
                         default_hidden = default_hidden_value
-                    if default_hidden or sheet_format_issues:
+                    default_zero_height_value, default_zero_height_signature = (
+                        _filter_visibility_zero_dimension(
+                            sheet_formats[0].get("defaultRowHeight"),
+                            maximum=_FILTER_VISIBILITY_MAX_ROW_HEIGHT,
+                        )
+                    )
+                    if (
+                        "defaultRowHeight" in sheet_formats[0].attrib
+                        and default_zero_height_value is None
+                    ):
+                        sheet_format_issues.add("invalid-default-row-height")
+                    elif default_zero_height_value is not None:
+                        default_zero_height = default_zero_height_value
+                    default_zero_width_value, default_zero_width_signature = (
+                        _filter_visibility_zero_dimension(
+                            sheet_formats[0].get("defaultColWidth"),
+                            maximum=_FILTER_VISIBILITY_MAX_COLUMN_WIDTH,
+                        )
+                    )
+                    if (
+                        "defaultColWidth" in sheet_formats[0].attrib
+                        and default_zero_width_value is None
+                    ):
+                        sheet_format_issues.add("invalid-default-column-width")
+                    elif default_zero_width_value is not None:
+                        default_zero_width = default_zero_width_value
+                    if (
+                        default_hidden
+                        or default_zero_height
+                        or default_zero_width
+                        or sheet_format_issues
+                    ):
                         entries.append(
                             (
                                 f"default-row-visibility:{sheet.casefold()}",
@@ -14236,11 +14349,21 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
                                     (
                                         "sheetFormatPr",
                                         ("zeroHeight", default_hidden_signature),
+                                        (
+                                            "defaultRowHeight",
+                                            default_zero_height_signature,
+                                        ),
+                                        (
+                                            "defaultColWidth",
+                                            default_zero_width_signature,
+                                        ),
                                     )
                                 ),
                             )
                         )
                     default_hidden_sheet_count += default_hidden
+                    default_zero_height_sheet_count += default_zero_height
+                    default_zero_width_sheet_count += default_zero_width
                     unrecognized_control_count += bool(sheet_format_issues)
 
                 column_issues: set[str] = set()
@@ -14248,6 +14371,9 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
                 hidden_columns = bytearray(MAX_EXCEL_COLUMN + 1)
                 outline_levels = bytearray(MAX_EXCEL_COLUMN + 1)
                 collapsed_columns = bytearray(MAX_EXCEL_COLUMN + 1)
+                zero_width_columns = bytearray(MAX_EXCEL_COLUMN + 1)
+                if default_zero_width:
+                    zero_width_columns[1:] = bytes([1]) * MAX_EXCEL_COLUMN
                 for columns in column_sets:
                     if not list(columns):
                         column_issues.add("empty-column-information")
@@ -14269,10 +14395,11 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
                             hidden,
                             outline_level,
                             collapsed,
+                            zero_width,
                         ) = captured_column
                         attribute_count = sum(
                             value is not None
-                            for value in (hidden, outline_level, collapsed)
+                            for value in (hidden, outline_level, collapsed, zero_width)
                         )
                         if not attribute_count:
                             continue
@@ -14295,11 +14422,16 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
                             collapsed_columns[minimum : maximum + 1] = (
                                 bytes([int(collapsed)]) * span
                             )
+                        if zero_width is not None:
+                            zero_width_columns[minimum : maximum + 1] = (
+                                bytes([int(zero_width)]) * span
+                            )
                         column_update_count += span * attribute_count
                 column_signature = _filter_visibility_column_state_signature(
                     hidden_columns,
                     outline_levels,
                     collapsed_columns,
+                    zero_width_columns,
                 )
                 if column_signature:
                     entries.append(
@@ -14309,6 +14441,7 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
                         )
                     )
                 hidden_column_count += sum(hidden_columns)
+                zero_width_column_count += sum(zero_width_columns)
                 outlined_column_count += sum(level > 0 for level in outline_levels)
                 collapsed_column_count += sum(collapsed_columns)
                 if column_issues:
@@ -14350,11 +14483,19 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
                         captured = _filter_visibility_row_signature(
                             row,
                             default_hidden=default_hidden,
+                            default_zero_height=default_zero_height,
                             issues=row_issues,
                         )
                         if captured is None:
                             continue
-                        signature, hidden, outlined, collapsed, visible_override = captured
+                        (
+                            signature,
+                            hidden,
+                            zero_height,
+                            outlined,
+                            collapsed,
+                            visible_override,
+                        ) = captured
                         entries.append(
                             (
                                 f"row-visibility:{sheet.casefold()}",
@@ -14362,6 +14503,7 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
                             )
                         )
                         hidden_row_count += hidden
+                        zero_height_row_count += zero_height
                         outlined_row_count += outlined
                         collapsed_row_count += collapsed
                         visible_row_override_count += visible_override
@@ -14515,11 +14657,15 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
         sort_state_count=sort_state_count,
         sort_condition_count=sort_condition_count,
         default_hidden_sheet_count=default_hidden_sheet_count,
+        default_zero_height_sheet_count=default_zero_height_sheet_count,
+        default_zero_width_sheet_count=default_zero_width_sheet_count,
         hidden_row_count=hidden_row_count,
+        zero_height_row_count=zero_height_row_count,
         outlined_row_count=outlined_row_count,
         collapsed_row_count=collapsed_row_count,
         visible_row_override_count=visible_row_override_count,
         hidden_column_count=hidden_column_count,
+        zero_width_column_count=zero_width_column_count,
         outlined_column_count=outlined_column_count,
         collapsed_column_count=collapsed_column_count,
         unrecognized_control_count=unrecognized_control_count,

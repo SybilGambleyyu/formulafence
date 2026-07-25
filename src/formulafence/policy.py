@@ -39,6 +39,7 @@ _RULE_FIELDS = {
     "no_xml_mapping_changes",
     "no_digital_signature_changes",
     "no_rich_data_changes",
+    "no_custom_data_store_changes",
     "no_legacy_comment_changes",
     "no_threaded_comment_changes",
     "no_worksheet_drawing_shape_changes",
@@ -114,6 +115,7 @@ class Policy:
     no_xml_mapping_changes: bool = False
     no_digital_signature_changes: bool = False
     no_rich_data_changes: bool = False
+    no_custom_data_store_changes: bool = False
     no_legacy_comment_changes: bool = False
     no_threaded_comment_changes: bool = False
     no_worksheet_drawing_shape_changes: bool = False
@@ -171,6 +173,7 @@ rules:
   no_xml_mapping_changes: true
   no_digital_signature_changes: true
   no_rich_data_changes: true
+  no_custom_data_store_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -320,6 +323,9 @@ def parse_policy(data: object) -> Policy:
             rules, "no_digital_signature_changes"
         ),
         no_rich_data_changes=_boolean_rule(rules, "no_rich_data_changes"),
+        no_custom_data_store_changes=_boolean_rule(
+            rules, "no_custom_data_store_changes"
+        ),
         no_legacy_comment_changes=_boolean_rule(rules, "no_legacy_comment_changes"),
         no_threaded_comment_changes=_boolean_rule(rules, "no_threaded_comment_changes"),
         no_worksheet_drawing_shape_changes=_boolean_rule(
@@ -809,6 +815,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP051",
                     "high",
                     "Policy forbids rich-data control changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_custom_data_store_changes:
+        for finding in _rule_triggered(report, "FF052"):
+            violations.append(
+                Finding(
+                    "FFP052",
+                    "high",
+                    "Policy forbids custom workbook data-store changes.",
                     details=finding.details,
                 )
             )

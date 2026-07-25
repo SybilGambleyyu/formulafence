@@ -383,6 +383,30 @@ review prompt, not proof of an error.
   [Rich Value Types](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/5d213b66-3196-4516-b63c-eef80d926f4a),
   and [Rich Value Web Image](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/4f3a80fd-1776-407f-8807-2497a4692dea)
   definitions.
+- Generic Custom XML, workbook-bound Custom Data, and custom document
+  properties can retain an add-in's workbook-specific approval, workflow, or
+  integration state outside ordinary cells. FormulaFence reads generic
+  `customXml/item*.xml` data, its property/schema parts and relationships,
+  workbook-linked `xl/customData` property/binary parts, and
+  `docProps/custom.xml` before ordinary readers can omit them. Power Query
+  `DataMashup` remains exclusively under the Power Query control boundary. A
+  material persisted-state change emits `FF052` and
+  `no_custom_data_store_changes` blocks it as `FFP052`. Profiles and reports
+  expose aggregate part/schema/relationship/payload/document-property and
+  malformed-metadata counts only; custom XML, schema URIs, property names and
+  values, storage IDs, binary payloads, relationship IDs, and targets remain
+  private. Writer-selected relationship IDs/order and document-property `pid`
+  normalize away; Custom XML `itemID` and Custom Data `id` storage identities
+  are compared privately because add-ins can bind state to them. Missing,
+  duplicate, malformed, unsafe, unbound, unreadable, oversized, or over-budget
+  metadata becomes a coverage warning; reads are bounded to 16 MiB per part,
+  64 MiB per workbook, and 512 parts. FormulaFence does **not** execute an
+  add-in, resolve a property, follow or fetch a target, interpret a binary
+  payload, calculate formulas, or infer Excel client behavior. This boundary
+  follows Microsoft's guidance on
+  [persisting add-in state](https://learn.microsoft.com/en-us/office/dev/add-ins/develop/persisting-add-in-state-and-settings),
+  [Custom Data](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/7c53f6f4-fea8-43f7-a4b0-ba6e14d0eb78),
+  and [Custom Data Properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1f4aa666-c966-4ecf-8399-28390399c891).
 - OPC package signatures and VBA project signatures are distinct stored
   integrity/provenance surfaces. A workbook can preserve ordinary cells and
   even `xl/vbaProject.bin` while the package-root signature origin, XML signature

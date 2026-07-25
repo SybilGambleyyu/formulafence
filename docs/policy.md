@@ -34,6 +34,7 @@ rules:
   no_xml_mapping_changes: true
   no_digital_signature_changes: true
   no_rich_data_changes: true
+  no_custom_data_store_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -112,6 +113,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_xml_mapping_changes` | boolean | An XML Map schema, mapping/refresh behavior, table-column or single-cell binding, or map-related workbook/worksheet relationship changes. Schemas, map names, XPath expressions, table identities, target cells, connection identities, and relationship targets are compared privately. |
 | `no_digital_signature_changes` | boolean | An OPC package signature origin/XML-signature/certificate relationship or payload, XMLDSIG envelope/reference, or VBA project signature payload/relationship changes. Signature XML, reference URIs, certificate identities and contents, binary payloads, relationship IDs, and targets are compared privately; FormulaFence inventories envelopes but does not validate cryptography or trust. |
 | `no_rich_data_changes` | boolean | An Excel rich-value data/structure/type/array/property-bag/style declaration, provider-associated value, web-image/rich-value relationship, or `XLRICHVALUE` metadata/cell binding changes. Entity values, provider data, field names, identifiers, URLs, image references, relationship IDs, and bound-cell locations are compared privately. |
+| `no_custom_data_store_changes` | boolean | Generic Custom XML data/property/schema material or relationships, workbook-bound Custom Data Properties or opaque binary Custom Data payloads, or custom document properties change. Custom XML, schema URIs, property names/values, storage IDs, binary payloads, relationship IDs, and targets are compared privately. Power Query `DataMashup` remains under `no_power_query_changes`. |
 | `no_legacy_comment_changes` | boolean | A legacy Excel Note/comments binding, author association, Note text/rich-text/property declaration, threaded-comment placeholder reconciliation declaration, Note VML visibility/layout, or related relationship changes. Note text, authors, locations, VML, targets, IDs, and GUIDs are compared privately. |
 | `no_threaded_comment_changes` | boolean | A modern Excel threaded-comment/person package binding, comment/reply graph, text, stored cell/timestamp/resolution declaration, mention range/person association, extension material, or person definition changes. Comment bodies, locations, timestamps, parent links, names, user IDs, provider IDs, relationship IDs, and GUIDs are compared privately. |
 | `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp` or nested `xdr:grpSp` anchor/layout, text/presentation declaration, macro/text link, or referenced click/hover relationship changes. Shape text, formatting, formulas, anchors, IDs, and targets are compared privately. |
@@ -719,6 +721,40 @@ Microsoft's [Rich Value Data](https://learn.microsoft.com/en-us/openspecs/office
 [Rich Value Types](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/5d213b66-3196-4516-b63c-eef80d926f4a),
 and [Rich Value Web Image](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/4f3a80fd-1776-407f-8807-2497a4692dea)
 definitions.
+
+Generic Custom XML, workbook-bound Custom Data, and custom document properties
+are three separate places Excel add-ins can persist workbook-specific state.
+They can carry an approval decision, workflow state, integration identifier, or
+another add-in setting without changing a worksheet cell or formula.
+
+FormulaFence reads generic `customXml/item*.xml` data, Custom XML
+property/schema parts and relationships, workbook-linked `xl/customData`
+property/binary parts, and custom document properties. Power Query
+`DataMashup` Custom XML remains under the Power Query controls and is not
+double counted. Such a change emits `FF052`. Enable
+`no_custom_data_store_changes` to block it as `FFP052`.
+
+Profiles and findings expose only aggregate custom-XML, schema,
+relationship/external-relationship, Custom Data property/payload, custom
+document-property, linked-property, and malformed-metadata counts. Custom XML,
+schema URIs, property names and values, storage IDs, binary payloads,
+relationship IDs, and relationship targets stay private. Equivalent
+relationship IDs/order and writer-selected document-property `pid` values
+normalize away. Custom XML `itemID` and Custom Data `id` storage identities
+are compared privately because an add-in can bind state to them. Missing,
+duplicate, malformed, unsafe, unbound, unreadable, oversized, or over-budget
+metadata produces a coverage warning; reads are bounded to 16 MiB per part, 64
+MiB per workbook, and 512 parts.
+
+This policy guards persisted package state only. FormulaFence does **not**
+execute an add-in, resolve a property, follow or fetch a target, interpret a
+binary payload, calculate formulas, or infer Excel client behavior. The
+boundary follows Microsoft's guidance on
+[persisting add-in state](https://learn.microsoft.com/en-us/office/dev/add-ins/develop/persisting-add-in-state-and-settings),
+[Custom Data](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/7c53f6f4-fea8-43f7-a4b0-ba6e14d0eb78),
+[Custom Data Properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1f4aa666-c966-4ecf-8399-28390399c891),
+and Excel's
+[CustomDocumentProperties](https://learn.microsoft.com/en-us/office/vba/api/excel.workbook.customdocumentproperties).
 
 Package/content signatures and VBA project code signatures are separate Excel
 trust surfaces. A workbook can therefore retain identical formulas, values, and

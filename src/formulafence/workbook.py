@@ -13,7 +13,7 @@ import shutil
 import struct
 import tempfile
 import warnings
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
@@ -47,6 +47,7 @@ from formulafence.models import (
     ChartDefinitionSnapshot,
     ConditionalFormattingExtensionSnapshot,
     ConditionalFormattingSnapshot,
+    CustomDataStoreSnapshot,
     DataValidationSnapshot,
     DigitalSignatureSnapshot,
     DynamicArrayOutputReference,
@@ -126,6 +127,12 @@ _OFFICE_2015_REVISION2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2
 _EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
 _NAMED_SHEET_VIEW_NS = "http://schemas.microsoft.com/office/spreadsheetml/2019/namedsheetviews"
 _DATA_MASHUP_NS = "http://schemas.microsoft.com/DataMashup"
+_CUSTOM_DATA_PROPERTIES_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+)
+_CUSTOM_DOCUMENT_PROPERTIES_NS = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
+)
 _MARKUP_COMPATIBILITY_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 _XML_DIGITAL_SIGNATURE_NS = "http://www.w3.org/2000/09/xmldsig#"
 _RICH_DATA_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata"
@@ -150,6 +157,25 @@ _GUID_PATTERN = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}"
 )
 _CUSTOM_XML_ITEM_PATTERN = re.compile(r"^customXml/item(?:\d+)?\.xml$", re.IGNORECASE)
+_CUSTOM_XML_ITEM_PROPERTIES_PATTERN = re.compile(
+    r"^customXml/itemProps(?:\d+)?\.xml$",
+    re.IGNORECASE,
+)
+_CUSTOM_XML_RELATIONSHIP_PATTERN = re.compile(
+    r"^customXml/_rels/item(?:\d+)?\.xml\.rels$",
+    re.IGNORECASE,
+)
+_CUSTOM_DATA_PROPERTIES_RELATIONSHIP = (
+    f"{_DOCUMENT_RELATIONSHIP_NS}/customDataProps"
+)
+_CUSTOM_DATA_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/customData"
+_CUSTOM_DOCUMENT_PROPERTIES_RELATIONSHIP = (
+    f"{_DOCUMENT_RELATIONSHIP_NS}/custom-properties"
+)
+_CUSTOM_DOCUMENT_PROPERTIES_MEMBER = "docProps/custom.xml"
+_CUSTOM_DATA_STORE_MAX_PART_BYTES = 16 * 1024 * 1024
+_CUSTOM_DATA_STORE_TOTAL_BYTES = 64 * 1024 * 1024
+_CUSTOM_DATA_STORE_TOTAL_PARTS = 512
 _XML_MAPPING_MAP_PART_PATTERN = re.compile(
     r"^xl/xmlMaps(?:\d+)?\.xml$", re.IGNORECASE
 )
@@ -792,6 +818,14 @@ class _RichDataMetadata:
     """Raw rich-data evidence retained before the workbook reader omits it."""
 
     rich_data: RichDataSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _CustomDataStoreMetadata:
+    """Raw custom workbook state retained before ordinary readers omit it."""
+
+    stores: CustomDataStoreSnapshot
     warnings: tuple[str, ...]
 
 
@@ -24442,6 +24476,1068 @@ def _rich_data_metadata(path: Path) -> _RichDataMetadata:
         )
     return _RichDataMetadata(snapshot, tuple(sorted(warnings)))
 
+
+@dataclass
+class _CustomDataStoreBudget:
+    """Bound raw reads across custom workbook data-store package parts."""
+
+    remaining_parts: int = _CUSTOM_DATA_STORE_TOTAL_PARTS
+    remaining_bytes: int = _CUSTOM_DATA_STORE_TOTAL_BYTES
+
+
+def _custom_data_store_issue(
+    issues: list[tuple[str, str]],
+    context: str,
+    detail: object,
+) -> None:
+    """Record private custom-store coverage evidence without exposing content."""
+    issues.append((context, repr(detail)))
+
+
+def _custom_data_store_bounded_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _CustomDataStoreBudget,
+    *,
+    report_failure: bool = True,
+) -> tuple[bytes | None, str | None]:
+    """Read one custom workbook data-store part within fixed scan budgets."""
+    if budget.remaining_parts <= 0:
+        if report_failure:
+            warnings.add(
+                "FormulaFence reached its bounded custom data-store part count "
+                "budget; affected persisted state was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("custom-data-store-part-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not locate a custom data-store package part; "
+                "affected persisted state was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("missing-custom-data-store-member", member),)
+        )
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _CUSTOM_DATA_STORE_MAX_PART_BYTES:
+        if report_failure:
+            warnings.add(
+                "FormulaFence did not fully read an oversized custom data-store "
+                "part; affected persisted state has a coverage gap."
+            )
+        return None, _private_external_data_signature(
+            (("oversized-custom-data-store-part", metadata),)
+        )
+    if info.file_size > budget.remaining_bytes:
+        if report_failure:
+            warnings.add(
+                "FormulaFence reached its bounded custom data-store read budget; "
+                "affected persisted state was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("custom-data-store-read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, KeyError, OSError, RuntimeError, ValueError) as error:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not read a custom data-store package part "
+                f"({type(error).__name__}); affected persisted state was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("unreadable-custom-data-store-member", metadata),)
+        )
+
+
+def _custom_data_store_bounded_root(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _CustomDataStoreBudget,
+    *,
+    report_failure: bool = True,
+) -> tuple[ElementTree.Element | None, str | None]:
+    """Return one bounded custom-store XML root or a private failure signature."""
+    payload, fallback_signature = _custom_data_store_bounded_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        report_failure=report_failure,
+    )
+    if payload is None:
+        return None, fallback_signature
+    try:
+        return _xml_root_from_payload(payload), None
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not parse a custom data-store XML package "
+                f"part ({type(error).__name__}); affected persisted state was not compared."
+            )
+        return None, _private_payload_signature(payload)
+
+
+def _custom_data_store_part_relationships(
+    archive: ZipFile,
+    source_member: str,
+    members: set[str],
+    warnings: set[str],
+    budget: _CustomDataStoreBudget,
+    issues: list[tuple[str, str]],
+    *,
+    required: bool,
+    context: str,
+) -> tuple[_PackageRelationship, ...]:
+    """Read a custom-store relationship part without following target endpoints."""
+    relationship_member = _relationship_part_path(source_member)
+    if relationship_member not in members:
+        if required:
+            _custom_data_store_issue(
+                issues,
+                f"missing-{context}-relationship-part",
+                relationship_member,
+            )
+        return ()
+    root, fallback_signature = _custom_data_store_bounded_root(
+        archive,
+        relationship_member,
+        warnings,
+        budget,
+    )
+    if root is None:
+        _custom_data_store_issue(
+            issues,
+            f"unreadable-{context}-relationship-part",
+            (relationship_member, fallback_signature),
+        )
+        return ()
+    if (
+        _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+        or _xml_local_name(root.tag) != "Relationships"
+    ):
+        _custom_data_store_issue(
+            issues,
+            f"unexpected-{context}-relationship-root",
+            _xml_display_name(root.tag),
+        )
+        return ()
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_PackageRelationship] = []
+    identifiers: list[str] = []
+    for child in root:
+        if child.tag != relationship_tag:
+            _custom_data_store_issue(
+                issues,
+                f"unexpected-{context}-relationship-child",
+                _xml_fragment(child).sort_key(),
+            )
+            continue
+        relationship_id = child.get("Id")
+        if not relationship_id:
+            _custom_data_store_issue(
+                issues,
+                f"missing-{context}-relationship-id",
+                _xml_fragment(child).sort_key(),
+            )
+        else:
+            identifiers.append(relationship_id)
+        relationship_type = child.get("Type")
+        raw_target = child.get("Target")
+        target_mode = child.get("TargetMode", "Internal")
+        if relationship_type is None or raw_target is None:
+            _custom_data_store_issue(
+                issues,
+                f"malformed-{context}-relationship",
+                _xml_fragment(child).sort_key(),
+            )
+        relationships.append(
+            _PackageRelationship(
+                relationship_id=relationship_id,
+                relationship_type=relationship_type or "",
+                target=(
+                    _normalise_part_target(source_member, raw_target)
+                    if raw_target is not None
+                    and target_mode.casefold() == "internal"
+                    else None
+                ),
+                target_mode=target_mode,
+                raw_target=raw_target,
+            )
+        )
+    if len(identifiers) != len(set(identifiers)):
+        _custom_data_store_issue(
+            issues,
+            f"duplicate-{context}-relationship-id",
+            tuple(sorted(identifiers)),
+        )
+    return tuple(relationships)
+
+
+def _custom_data_store_relationship_semantic(
+    relationship: _PackageRelationship,
+    *,
+    target_kind: str | None = None,
+) -> tuple[str, str, str | None]:
+    """Return private relationship semantics while ignoring writer-selected IDs."""
+    target = target_kind
+    if target is None:
+        target = (
+            relationship.target
+            if relationship.target is not None
+            else relationship.raw_target
+        )
+    return (
+        relationship.relationship_type.casefold(),
+        relationship.target_mode.casefold(),
+        target,
+    )
+
+
+def _custom_data_store_xml_fragment(
+    element: ElementTree.Element,
+    *,
+    omit_root_attribute_names: frozenset[str] = frozenset(),
+) -> tuple[object, ...]:
+    """Canonicalise private XML while optionally ignoring writer-assigned IDs."""
+
+    def fragment(
+        current: ElementTree.Element,
+        *,
+        is_root: bool,
+    ) -> tuple[object, ...]:
+        attributes = tuple(
+            sorted(
+                (
+                    _xml_display_name(attribute),
+                    value,
+                )
+                for attribute, value in current.attrib.items()
+                if not (
+                    is_root
+                    and _xml_local_name(attribute).casefold()
+                    in omit_root_attribute_names
+                )
+            )
+        )
+        children = tuple(fragment(child, is_root=False) for child in current)
+        text = current.text
+        if children and text is not None and not text.strip():
+            text = None
+        return (
+            _xml_display_name(current.tag),
+            attributes,
+            text,
+            children,
+        )
+
+    return fragment(element, is_root=True)
+
+
+def _custom_xml_property_member_for_item(member: str) -> str | None:
+    """Return the conventional item-properties part for one custom XML item."""
+    match = re.fullmatch(r"customXml/item(\d*)\.xml", member, re.IGNORECASE)
+    if match is None:
+        return None
+    return f"customXml/itemProps{match.group(1)}.xml"
+
+
+def _custom_data_store_document_property_entries(
+    root: ElementTree.Element,
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+) -> tuple[tuple[str, ...], int, int]:
+    """Fingerprint custom properties without exporting names or values."""
+    if (
+        _xml_namespace(root.tag) != _CUSTOM_DOCUMENT_PROPERTIES_NS
+        or _xml_local_name(root.tag) != "Properties"
+    ):
+        _custom_data_store_issue(
+            issues,
+            f"unexpected-{context}-root",
+            _xml_display_name(root.tag),
+        )
+    properties = [
+        child
+        for child in root
+        if _xml_local_name(child.tag) == "property"
+    ]
+    if len(properties) != len(root):
+        _custom_data_store_issue(
+            issues,
+            f"unexpected-{context}-child",
+            len(root) - len(properties),
+        )
+    entries = tuple(
+        sorted(
+            repr(
+                _custom_data_store_xml_fragment(
+                    property_element,
+                    omit_root_attribute_names=frozenset({"pid"}),
+                )
+            )
+            for property_element in properties
+        )
+    )
+    linked_count = sum(
+        1
+        for property_element in properties
+        for child in property_element
+        if _xml_local_name(child.tag) == "linkTarget"
+    )
+    return entries, len(properties), linked_count
+
+
+def _custom_data_store_metadata(path: Path) -> _CustomDataStoreMetadata:
+    """Inspect persisted add-in state without loading it into the workbook model.
+
+    Generic custom XML, binary custom data, and custom document properties can
+    carry workbook-specific state for add-ins while being absent from ordinary
+    cells and openpyxl's public workbook model. This scanner compares that
+    state only through bounded private fingerprints. It does not execute an
+    add-in, resolve a property, follow a relationship, fetch a target, or emit
+    XML, property names or values, storage IDs, binary payloads, URLs, or
+    relationship IDs.
+    """
+    warnings: set[str] = set()
+    issues: list[tuple[str, str]] = []
+    custom_xml_entries: list[tuple[str, str]] = []
+    custom_data_entries: list[tuple[str, str]] = []
+    document_property_entries: list[tuple[str, str]] = []
+    relationship_entries: list[tuple[str, str]] = []
+    try:
+        with ZipFile(path) as archive:
+            raw_members = archive.namelist()
+            members = set(raw_members)
+            member_counts = Counter(raw_members)
+            budget = _CustomDataStoreBudget()
+            custom_xml_item_members = sorted(
+                member
+                for member in members
+                if _CUSTOM_XML_ITEM_PATTERN.fullmatch(member)
+            )
+            custom_xml_property_members = {
+                member
+                for member in members
+                if _CUSTOM_XML_ITEM_PROPERTIES_PATTERN.fullmatch(member)
+            }
+            custom_xml_relationship_members = {
+                member
+                for member in members
+                if _CUSTOM_XML_RELATIONSHIP_PATTERN.fullmatch(member)
+            }
+            custom_data_members = {
+                member
+                for member in members
+                if member.casefold().startswith("xl/customdata/")
+                and "/_rels/" not in member.casefold()
+                and not member.endswith("/")
+            }
+
+            root_probe_warnings: set[str] = set()
+            root_probe_issues: list[tuple[str, str]] = []
+            root_relationships = _custom_data_store_part_relationships(
+                archive,
+                "",
+                members,
+                root_probe_warnings,
+                budget,
+                root_probe_issues,
+                required=False,
+                context="package-root",
+            )
+            workbook_probe_warnings: set[str] = set()
+            workbook_probe_issues: list[tuple[str, str]] = []
+            workbook_relationships = _custom_data_store_part_relationships(
+                archive,
+                "xl/workbook.xml",
+                members,
+                workbook_probe_warnings,
+                budget,
+                workbook_probe_issues,
+                required=False,
+                context="workbook",
+            )
+            root_custom_xml_relationships = tuple(
+                relationship
+                for relationship in root_relationships
+                if relationship.relationship_type.casefold().endswith("/customxml")
+            )
+            root_document_property_relationships = tuple(
+                relationship
+                for relationship in root_relationships
+                if relationship.relationship_type.casefold().endswith(
+                    "/custom-properties"
+                )
+            )
+            workbook_custom_data_property_relationships = tuple(
+                relationship
+                for relationship in workbook_relationships
+                if relationship.relationship_type.casefold().endswith(
+                    "/customdataprops"
+                )
+            )
+            candidate = bool(
+                custom_xml_item_members
+                or custom_xml_property_members
+                or custom_xml_relationship_members
+                or custom_data_members
+                or _CUSTOM_DOCUMENT_PROPERTIES_MEMBER in members
+                or root_custom_xml_relationships
+                or root_document_property_relationships
+                or workbook_custom_data_property_relationships
+            )
+            if not candidate:
+                return _CustomDataStoreMetadata(CustomDataStoreSnapshot(), ())
+
+            warnings.update(root_probe_warnings)
+            warnings.update(workbook_probe_warnings)
+            issues.extend(root_probe_issues)
+            issues.extend(workbook_probe_issues)
+            relevant_members = (
+                set(custom_xml_item_members)
+                | custom_xml_property_members
+                | custom_xml_relationship_members
+                | custom_data_members
+            )
+            for relationship_member in (
+                _relationship_part_path(""),
+                _relationship_part_path("xl/workbook.xml"),
+            ):
+                if relationship_member in members:
+                    relevant_members.add(relationship_member)
+            if _CUSTOM_DOCUMENT_PROPERTIES_MEMBER in members:
+                relevant_members.add(_CUSTOM_DOCUMENT_PROPERTIES_MEMBER)
+            for member in sorted(relevant_members):
+                if member_counts[member] > 1:
+                    _custom_data_store_issue(
+                        issues,
+                        "duplicate-custom-data-store-archive-member",
+                        (member, member_counts[member]),
+                    )
+
+            power_query_item_members: set[str] = set()
+            generic_custom_xml_item_members: set[str] = set()
+            item_property_targets: dict[str, set[str]] = defaultdict(set)
+            inspected_custom_xml_relationship_members: set[str] = set()
+            custom_xml_relationship_count = 0
+            external_custom_xml_relationship_count = 0
+            for member in custom_xml_item_members:
+                root, fallback_signature = _custom_data_store_bounded_root(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                if root is None:
+                    _custom_data_store_issue(
+                        issues,
+                        "unreadable-custom-xml-data-part",
+                        (member, fallback_signature),
+                    )
+                    custom_xml_entries.append(
+                        (
+                            "unreadable-custom-xml-data-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                if _xml_namespace(root.tag) == _DATA_MASHUP_NS:
+                    power_query_item_members.add(member)
+                else:
+                    generic_custom_xml_item_members.add(member)
+                    custom_xml_entries.append(
+                        (
+                            "custom-xml-data",
+                            repr(_xml_fragment(root).sort_key()),
+                        )
+                    )
+
+                relationships = _custom_data_store_part_relationships(
+                    archive,
+                    member,
+                    members,
+                    warnings,
+                    budget,
+                    issues,
+                    required=False,
+                    context="custom-xml-item",
+                )
+                relationship_member = _relationship_part_path(member)
+                if relationship_member in members:
+                    inspected_custom_xml_relationship_members.add(relationship_member)
+                property_relationships = [
+                    relationship
+                    for relationship in relationships
+                    if relationship.relationship_type.casefold().endswith(
+                        "/customxmlprops"
+                    )
+                ]
+                for relationship in property_relationships:
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.target is None
+                    ):
+                        if member in generic_custom_xml_item_members:
+                            _custom_data_store_issue(
+                                issues,
+                                "unsafe-custom-xml-properties-relationship",
+                                _custom_data_store_relationship_semantic(
+                                    relationship
+                                ),
+                            )
+                        continue
+                    item_property_targets[member].add(relationship.target)
+                    if (
+                        member in generic_custom_xml_item_members
+                        and relationship.target not in members
+                    ):
+                        _custom_data_store_issue(
+                            issues,
+                            "missing-custom-xml-properties-part",
+                            relationship.target,
+                        )
+                if member not in generic_custom_xml_item_members:
+                    continue
+                custom_xml_relationship_count += len(relationships)
+                external_custom_xml_relationship_count += sum(
+                    relationship.target_mode.casefold() == "external"
+                    for relationship in relationships
+                )
+                relationship_entries.append(
+                    (
+                        "custom-xml-item-relationships",
+                        repr(
+                            tuple(
+                                sorted(
+                                    _custom_data_store_relationship_semantic(
+                                        relationship,
+                                        target_kind=(
+                                            "custom-xml-properties"
+                                            if relationship
+                                            in property_relationships
+                                            else None
+                                        ),
+                                    )
+                                    for relationship in relationships
+                                )
+                            )
+                        ),
+                    )
+                )
+                for relationship in relationships:
+                    if relationship not in property_relationships:
+                        _custom_data_store_issue(
+                            issues,
+                            "unsupported-custom-xml-item-relationship",
+                            _custom_data_store_relationship_semantic(relationship),
+                        )
+
+            power_query_property_members = {
+                target
+                for member, targets in item_property_targets.items()
+                if member in power_query_item_members
+                for target in targets
+            }
+            power_query_property_members.update(
+                property_member
+                for member in power_query_item_members
+                if (property_member := _custom_xml_property_member_for_item(member))
+                is not None
+            )
+            generic_property_targets = {
+                target
+                for member, targets in item_property_targets.items()
+                if member in generic_custom_xml_item_members
+                for target in targets
+            }
+            generic_custom_xml_property_members = (
+                custom_xml_property_members | generic_property_targets
+            ) - power_query_property_members
+            actual_generic_custom_xml_property_members = {
+                member
+                for member in generic_custom_xml_property_members
+                if member in members
+            }
+            custom_xml_schema_reference_count = 0
+            for member in sorted(actual_generic_custom_xml_property_members):
+                root, fallback_signature = _custom_data_store_bounded_root(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                if root is None:
+                    _custom_data_store_issue(
+                        issues,
+                        "unreadable-custom-xml-properties-part",
+                        (member, fallback_signature),
+                    )
+                    custom_xml_entries.append(
+                        (
+                            "unreadable-custom-xml-properties-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                if _xml_local_name(root.tag) != "datastoreItem":
+                    _custom_data_store_issue(
+                        issues,
+                        "unexpected-custom-xml-properties-root",
+                        _xml_display_name(root.tag),
+                    )
+                custom_xml_schema_reference_count += sum(
+                    _xml_local_name(element.tag) == "schemaRef"
+                    for element in root.iter()
+                )
+                custom_xml_entries.append(
+                    (
+                        "custom-xml-properties",
+                        repr(_custom_data_store_xml_fragment(root)),
+                    )
+                )
+            for member in sorted(actual_generic_custom_xml_property_members):
+                if member not in generic_property_targets:
+                    _custom_data_store_issue(
+                        issues,
+                        "unbound-custom-xml-properties-part",
+                        member,
+                    )
+            for member in sorted(custom_xml_relationship_members):
+                if member not in inspected_custom_xml_relationship_members:
+                    _custom_data_store_issue(
+                        issues,
+                        "unbound-custom-xml-relationship-part",
+                        member,
+                    )
+
+            for relationship in root_custom_xml_relationships:
+                if (
+                    relationship.target_mode.casefold() == "internal"
+                    and relationship.target in power_query_item_members
+                ):
+                    continue
+                custom_xml_relationship_count += 1
+                external_custom_xml_relationship_count += (
+                    relationship.target_mode.casefold() == "external"
+                )
+                target_kind = (
+                    "custom-xml-data"
+                    if relationship.target in generic_custom_xml_item_members
+                    else None
+                )
+                relationship_entries.append(
+                    (
+                        "package-root-custom-xml-relationship",
+                        repr(
+                            _custom_data_store_relationship_semantic(
+                                relationship,
+                                target_kind=target_kind,
+                            )
+                        ),
+                    )
+                )
+                if (
+                    relationship.target_mode.casefold() != "internal"
+                    or relationship.target is None
+                    or relationship.target not in generic_custom_xml_item_members
+                ):
+                    _custom_data_store_issue(
+                        issues,
+                        "unsafe-or-unrecognized-package-root-custom-xml-relationship",
+                        _custom_data_store_relationship_semantic(relationship),
+                    )
+
+            custom_data_property_targets: set[str] = set()
+            for relationship in workbook_custom_data_property_relationships:
+                if (
+                    relationship.target_mode.casefold() != "internal"
+                    or relationship.target is None
+                ):
+                    _custom_data_store_issue(
+                        issues,
+                        "unsafe-custom-data-properties-workbook-relationship",
+                        _custom_data_store_relationship_semantic(relationship),
+                    )
+                    relationship_entries.append(
+                        (
+                            "workbook-custom-data-properties-relationship",
+                            repr(
+                                _custom_data_store_relationship_semantic(
+                                    relationship
+                                )
+                            ),
+                        )
+                    )
+                    continue
+                custom_data_property_targets.add(relationship.target)
+                relationship_entries.append(
+                    (
+                        "workbook-custom-data-properties-relationship",
+                        repr(
+                            _custom_data_store_relationship_semantic(
+                                relationship,
+                                target_kind="custom-data-properties",
+                            )
+                        ),
+                    )
+                )
+                if relationship.target not in members:
+                    _custom_data_store_issue(
+                        issues,
+                        "missing-custom-data-properties-part",
+                        relationship.target,
+                    )
+            discovered_custom_data_property_members = {
+                member
+                for member in custom_data_members
+                if member.casefold().endswith(".xml")
+            }
+            custom_data_property_members = (
+                custom_data_property_targets | discovered_custom_data_property_members
+            )
+            actual_custom_data_property_members = {
+                member
+                for member in custom_data_property_members
+                if member in members
+            }
+            for member in sorted(actual_custom_data_property_members):
+                if member not in custom_data_property_targets:
+                    _custom_data_store_issue(
+                        issues,
+                        "unbound-custom-data-properties-part",
+                        member,
+                    )
+
+            custom_data_payload_targets: set[str] = set()
+            inspected_custom_data_relationship_members: set[str] = set()
+            for member in sorted(actual_custom_data_property_members):
+                root, fallback_signature = _custom_data_store_bounded_root(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                if root is None:
+                    _custom_data_store_issue(
+                        issues,
+                        "unreadable-custom-data-properties-part",
+                        (member, fallback_signature),
+                    )
+                    custom_data_entries.append(
+                        (
+                            "unreadable-custom-data-properties-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                if (
+                    _xml_namespace(root.tag) != _CUSTOM_DATA_PROPERTIES_NS
+                    or _xml_local_name(root.tag) != "datastoreItem"
+                ):
+                    _custom_data_store_issue(
+                        issues,
+                        "unexpected-custom-data-properties-root",
+                        _xml_display_name(root.tag),
+                    )
+                custom_data_entries.append(
+                    (
+                        "custom-data-properties",
+                        repr(_custom_data_store_xml_fragment(root)),
+                    )
+                )
+                relationships = _custom_data_store_part_relationships(
+                    archive,
+                    member,
+                    members,
+                    warnings,
+                    budget,
+                    issues,
+                    required=True,
+                    context="custom-data-properties",
+                )
+                relationship_member = _relationship_part_path(member)
+                if relationship_member in members:
+                    inspected_custom_data_relationship_members.add(relationship_member)
+                data_relationships = [
+                    relationship
+                    for relationship in relationships
+                    if relationship.relationship_type.casefold().endswith(
+                        "/customdata"
+                    )
+                ]
+                if len(data_relationships) > 1:
+                    _custom_data_store_issue(
+                        issues,
+                        "multiple-custom-data-payload-relationships",
+                        len(data_relationships),
+                    )
+                for relationship in data_relationships:
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.target is None
+                    ):
+                        _custom_data_store_issue(
+                            issues,
+                            "unsafe-custom-data-payload-relationship",
+                            _custom_data_store_relationship_semantic(relationship),
+                        )
+                        continue
+                    custom_data_payload_targets.add(relationship.target)
+                    if relationship.target not in members:
+                        _custom_data_store_issue(
+                            issues,
+                            "missing-custom-data-payload-part",
+                            relationship.target,
+                        )
+                relationship_entries.append(
+                    (
+                        "custom-data-properties-relationships",
+                        repr(
+                            tuple(
+                                sorted(
+                                    _custom_data_store_relationship_semantic(
+                                        relationship,
+                                        target_kind=(
+                                            "custom-data-payload"
+                                            if relationship
+                                            in data_relationships
+                                            else None
+                                        ),
+                                    )
+                                    for relationship in relationships
+                                )
+                            )
+                        ),
+                    )
+                )
+                for relationship in relationships:
+                    if relationship not in data_relationships:
+                        _custom_data_store_issue(
+                            issues,
+                            "unsupported-custom-data-properties-relationship",
+                            _custom_data_store_relationship_semantic(relationship),
+                        )
+            custom_data_relationship_members = {
+                member
+                for member in members
+                if member.casefold().startswith("xl/customdata/_rels/")
+                and member.casefold().endswith(".rels")
+            }
+            for member in sorted(custom_data_relationship_members):
+                if member not in inspected_custom_data_relationship_members:
+                    _custom_data_store_issue(
+                        issues,
+                        "unbound-custom-data-relationship-part",
+                        member,
+                    )
+
+            discovered_custom_data_payload_members = (
+                custom_data_members - actual_custom_data_property_members
+            )
+            custom_data_payload_members = (
+                custom_data_payload_targets | discovered_custom_data_payload_members
+            ) - actual_custom_data_property_members
+            actual_custom_data_payload_members = {
+                member
+                for member in custom_data_payload_members
+                if member in members
+            }
+            for member in sorted(discovered_custom_data_payload_members):
+                if member not in custom_data_payload_targets:
+                    _custom_data_store_issue(
+                        issues,
+                        "unbound-custom-data-payload-part",
+                        member,
+                    )
+            for member in sorted(actual_custom_data_payload_members):
+                payload, fallback_signature = _custom_data_store_bounded_payload(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                if payload is None:
+                    _custom_data_store_issue(
+                        issues,
+                        "unreadable-custom-data-payload-part",
+                        (member, fallback_signature),
+                    )
+                    custom_data_entries.append(
+                        (
+                            "unreadable-custom-data-payload-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                custom_data_entries.append(
+                    (
+                        "custom-data-payload",
+                        _private_payload_signature(payload),
+                    )
+                )
+
+            document_property_targets: set[str] = set()
+            for relationship in root_document_property_relationships:
+                if (
+                    relationship.target_mode.casefold() != "internal"
+                    or relationship.target is None
+                ):
+                    _custom_data_store_issue(
+                        issues,
+                        "unsafe-custom-document-properties-relationship",
+                        _custom_data_store_relationship_semantic(relationship),
+                    )
+                    relationship_entries.append(
+                        (
+                            "package-root-custom-document-properties-relationship",
+                            repr(
+                                _custom_data_store_relationship_semantic(
+                                    relationship
+                                )
+                            ),
+                        )
+                    )
+                    continue
+                document_property_targets.add(relationship.target)
+                relationship_entries.append(
+                    (
+                        "package-root-custom-document-properties-relationship",
+                        repr(
+                            _custom_data_store_relationship_semantic(
+                                relationship,
+                                target_kind="custom-document-properties",
+                            )
+                        ),
+                    )
+                )
+                if relationship.target not in members:
+                    _custom_data_store_issue(
+                        issues,
+                        "missing-custom-document-properties-part",
+                        relationship.target,
+                    )
+            document_property_members = set(document_property_targets)
+            if _CUSTOM_DOCUMENT_PROPERTIES_MEMBER in members:
+                document_property_members.add(_CUSTOM_DOCUMENT_PROPERTIES_MEMBER)
+            actual_document_property_members = {
+                member
+                for member in document_property_members
+                if member in members
+            }
+            for member in sorted(actual_document_property_members):
+                if member not in document_property_targets:
+                    _custom_data_store_issue(
+                        issues,
+                        "unbound-custom-document-properties-part",
+                        member,
+                    )
+            document_custom_property_count = 0
+            linked_document_custom_property_count = 0
+            for member in sorted(actual_document_property_members):
+                root, fallback_signature = _custom_data_store_bounded_root(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                if root is None:
+                    _custom_data_store_issue(
+                        issues,
+                        "unreadable-custom-document-properties-part",
+                        (member, fallback_signature),
+                    )
+                    document_property_entries.append(
+                        (
+                            "unreadable-custom-document-properties-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                entries, count, linked_count = (
+                    _custom_data_store_document_property_entries(
+                        root,
+                        issues,
+                        context="custom-document-properties",
+                    )
+                )
+                document_custom_property_count += count
+                linked_document_custom_property_count += linked_count
+                document_property_entries.extend(
+                    ("custom-document-property", entry)
+                    for entry in entries
+                )
+
+            issue_entries = [
+                ("custom-data-store-issue", repr(issue))
+                for issue in sorted(issues)
+            ]
+            if issues:
+                warnings.add(
+                    "FormulaFence found malformed, unsupported, or incomplete "
+                    "custom workbook data-store metadata; affected persisted "
+                    "state has a coverage gap."
+                )
+            snapshot = CustomDataStoreSnapshot(
+                custom_xml_part_count=len(generic_custom_xml_item_members),
+                custom_xml_property_part_count=len(
+                    actual_generic_custom_xml_property_members
+                ),
+                custom_xml_schema_reference_count=custom_xml_schema_reference_count,
+                custom_xml_relationship_count=custom_xml_relationship_count,
+                external_custom_xml_relationship_count=(
+                    external_custom_xml_relationship_count
+                ),
+                custom_data_properties_part_count=len(
+                    actual_custom_data_property_members
+                ),
+                custom_data_part_count=len(actual_custom_data_payload_members),
+                document_custom_property_part_count=len(
+                    actual_document_property_members
+                ),
+                document_custom_property_count=document_custom_property_count,
+                linked_document_custom_property_count=(
+                    linked_document_custom_property_count
+                ),
+                unrecognized_custom_data_store_count=len(issues),
+                custom_xml_signature=_private_external_data_signature(
+                    tuple(sorted(custom_xml_entries))
+                ),
+                custom_data_signature=_private_external_data_signature(
+                    tuple(sorted(custom_data_entries))
+                ),
+                document_property_signature=_private_external_data_signature(
+                    tuple(sorted(document_property_entries))
+                ),
+                relationship_signature=_private_external_data_signature(
+                    tuple(sorted(relationship_entries + issue_entries))
+                ),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _CustomDataStoreMetadata(
+            CustomDataStoreSnapshot(
+                unrecognized_custom_data_store_count=1,
+                relationship_signature=_private_external_data_signature(
+                    (("custom-data-store-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect custom workbook data-store "
+                f"OOXML ({type(error).__name__}); affected persisted state was not compared.",
+            ),
+        )
+    return _CustomDataStoreMetadata(snapshot, tuple(sorted(warnings)))
+
+
 @dataclass(frozen=True)
 class _LegacyCommentRawRelationship:
     """One private package relationship used to locate legacy notes."""
@@ -28574,6 +29670,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     xml_mapping_metadata = _xml_mapping_metadata(source)
     digital_signature_metadata = _digital_signature_metadata(source)
     rich_data_metadata = _rich_data_metadata(source)
+    custom_data_store_metadata = _custom_data_store_metadata(source)
     legacy_comment_metadata = _legacy_comment_metadata(source)
     threaded_comment_metadata = _threaded_comment_metadata(source)
     worksheet_drawing_shape_metadata = _worksheet_drawing_shape_metadata(source)
@@ -28624,6 +29721,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(xml_mapping_metadata.warnings)
     parser_warnings.update(digital_signature_metadata.warnings)
     parser_warnings.update(rich_data_metadata.warnings)
+    parser_warnings.update(custom_data_store_metadata.warnings)
     parser_warnings.update(legacy_comment_metadata.warnings)
     parser_warnings.update(threaded_comment_metadata.warnings)
     parser_warnings.update(worksheet_drawing_shape_metadata.warnings)
@@ -28858,6 +29956,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         xml_mapping_controls=xml_mapping_metadata.controls,
         digital_signatures=digital_signature_metadata.signatures,
         rich_data=rich_data_metadata.rich_data,
+        custom_data_stores=custom_data_store_metadata.stores,
         legacy_comments=legacy_comment_metadata.comments,
         threaded_comments=threaded_comment_metadata.comments,
         worksheet_drawing_shapes=worksheet_drawing_shape_metadata.shapes,
@@ -28945,6 +30044,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "xml_mapping_controls": snapshot.xml_mapping_controls.profile_dict(),
         "digital_signatures": snapshot.digital_signatures.profile_dict(),
         "rich_data": snapshot.rich_data.profile_dict(),
+        "custom_data_stores": snapshot.custom_data_stores.profile_dict(),
         "legacy_comments": snapshot.legacy_comments.profile_dict(),
         "threaded_comments": snapshot.threaded_comments.profile_dict(),
         "worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.profile_dict(),
@@ -28983,6 +30083,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_worksheet_sparklines": snapshot.worksheet_sparklines.present,
             "has_xml_mapping_controls": snapshot.xml_mapping_controls.present,
             "has_rich_data": snapshot.rich_data.present,
+            "has_custom_data_stores": snapshot.custom_data_stores.present,
             "has_legacy_comments": snapshot.legacy_comments.present,
             "has_threaded_comments": snapshot.threaded_comments.present,
             "has_worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.present,

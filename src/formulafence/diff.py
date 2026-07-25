@@ -17,6 +17,7 @@ from formulafence.models import (
     ChartDefinitionSnapshot,
     ConditionalFormattingExtensionSnapshot,
     ConditionalFormattingSnapshot,
+    CustomDataStoreSnapshot,
     DataValidationSnapshot,
     DiffReport,
     DigitalSignatureSnapshot,
@@ -2246,6 +2247,73 @@ def _rich_data_controls_changed(
     return [change], [finding]
 
 
+def _custom_data_store_controls_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag persisted custom workbook state that ordinary cells do not expose."""
+    old_stores: CustomDataStoreSnapshot = before.custom_data_stores
+    new_stores: CustomDataStoreSnapshot = after.custom_data_stores
+    if old_stores == new_stores:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_stores.to_dict(),
+        "after": new_stores.to_dict(),
+    }
+    if old_stores.custom_xml_signature != new_stores.custom_xml_signature:
+        details["custom_xml_state_changed"] = True
+    if old_stores.custom_data_signature != new_stores.custom_data_signature:
+        details["custom_data_material_changed"] = True
+    if (
+        old_stores.document_property_signature
+        != new_stores.document_property_signature
+    ):
+        details["document_custom_properties_changed"] = True
+    if old_stores.relationship_signature != new_stores.relationship_signature:
+        details["custom_data_store_relationships_changed"] = True
+    if (
+        old_stores.unrecognized_custom_data_store_count
+        != new_stores.unrecognized_custom_data_store_count
+        or (
+            (
+                old_stores.unrecognized_custom_data_store_count
+                or new_stores.unrecognized_custom_data_store_count
+            )
+            and (
+                old_stores.custom_xml_signature != new_stores.custom_xml_signature
+                or old_stores.custom_data_signature != new_stores.custom_data_signature
+                or (
+                    old_stores.document_property_signature
+                    != new_stores.document_property_signature
+                )
+                or (
+                    old_stores.relationship_signature
+                    != new_stores.relationship_signature
+                )
+            )
+        )
+    ):
+        details["unrecognized_custom_data_store_metadata_changed"] = True
+    change = Change(
+        "custom_data_store_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF052",
+        "high",
+        (
+            "Custom workbook data stores changed; persisted add-in state, "
+            "custom binary data, or custom document properties may have been "
+            "added, removed, or altered outside ordinary cells."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _threaded_comment_controls_changed(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
@@ -2457,6 +2525,12 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     rich_data_changes, rich_data_findings = _rich_data_controls_changed(before, after)
     changes.extend(rich_data_changes)
     findings.extend(rich_data_findings)
+
+    custom_data_store_changes, custom_data_store_findings = (
+        _custom_data_store_controls_changed(before, after)
+    )
+    changes.extend(custom_data_store_changes)
+    findings.extend(custom_data_store_findings)
 
     legacy_comment_changes, legacy_comment_findings = _legacy_comment_controls_changed(
         before,

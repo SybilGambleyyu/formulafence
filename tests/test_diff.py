@@ -27,6 +27,10 @@ from .helpers import (
     change_cell_hyperlink_tooltip,
     change_chart_cached_data,
     change_chart_definition_material,
+    change_custom_data_payload,
+    change_custom_data_store_storage_identifiers,
+    change_custom_document_property_value,
+    change_custom_xml_data_store_value,
     change_default_fill_definition,
     change_default_font_definition,
     change_default_zero_dimension_visibility_controls,
@@ -90,6 +94,7 @@ from .helpers import (
     change_zero_dimension_visibility_controls,
     corrupt_cell_hyperlink_reference,
     corrupt_chart_definition_root,
+    corrupt_custom_data_properties_root,
     corrupt_default_zero_dimension_visibility_controls,
     corrupt_fill_column_control,
     corrupt_fill_definition,
@@ -139,6 +144,7 @@ from .helpers import (
     make_chart_definition_model,
     make_conditional_formatting_model,
     make_current_row_table_model,
+    make_custom_data_store_model,
     make_data_validation_model,
     make_digital_signature_model,
     make_external_data_refresh_model,
@@ -184,6 +190,7 @@ from .helpers import (
     make_zero_dimension_visibility_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
+    normalize_custom_data_store_identifiers,
     normalize_digital_signature_control_spelling,
     normalize_fill_control_spelling,
     normalize_fill_inert_pattern_declarations,
@@ -6225,6 +6232,220 @@ def test_rich_data_read_budget_fails_closed(tmp_path, monkeypatch) -> None:
         for warning in candidate_snapshot.parser_warnings
     )
     assert {"FF010", "FF051"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_custom_data_stores_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_custom_data_store_model(tmp_path / "baseline.xlsx")
+    xml_candidate = make_custom_data_store_model(tmp_path / "xml-candidate.xlsx")
+    binary_candidate = make_custom_data_store_model(
+        tmp_path / "binary-candidate.xlsx"
+    )
+    storage_identifier_candidate = make_custom_data_store_model(
+        tmp_path / "storage-identifier-candidate.xlsx"
+    )
+    property_candidate = make_custom_data_store_model(
+        tmp_path / "property-candidate.xlsx"
+    )
+    normalised = make_custom_data_store_model(tmp_path / "normalised.xlsx")
+    ordinary = make_model(tmp_path / "ordinary.xlsx")
+    change_custom_xml_data_store_value(xml_candidate)
+    change_custom_data_payload(binary_candidate)
+    change_custom_data_store_storage_identifiers(storage_identifier_candidate)
+    change_custom_document_property_value(property_candidate)
+    normalize_custom_data_store_identifiers(normalised)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    xml_snapshot = load_snapshot(xml_candidate)
+    binary_snapshot = load_snapshot(binary_candidate)
+    storage_identifier_snapshot = load_snapshot(storage_identifier_candidate)
+    property_snapshot = load_snapshot(property_candidate)
+    xml_report = compare_snapshots(baseline_snapshot, xml_snapshot)
+    binary_report = compare_snapshots(baseline_snapshot, binary_snapshot)
+    storage_identifier_report = compare_snapshots(
+        baseline_snapshot,
+        storage_identifier_snapshot,
+    )
+    property_report = compare_snapshots(baseline_snapshot, property_snapshot)
+    normalised_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(normalised),
+    )
+    xml_change = next(
+        change
+        for change in xml_report.changes
+        if change.kind == "custom_data_store_changed"
+    )
+    binary_change = next(
+        change
+        for change in binary_report.changes
+        if change.kind == "custom_data_store_changed"
+    )
+    storage_identifier_change = next(
+        change
+        for change in storage_identifier_report.changes
+        if change.kind == "custom_data_store_changed"
+    )
+    property_change = next(
+        change
+        for change in property_report.changes
+        if change.kind == "custom_data_store_changed"
+    )
+
+    assert baseline_snapshot.cells == xml_snapshot.cells
+    assert baseline_snapshot.cells == binary_snapshot.cells
+    assert baseline_snapshot.cells == storage_identifier_snapshot.cells
+    assert baseline_snapshot.cells == property_snapshot.cells
+    assert baseline_snapshot.summary()["custom_xml_part_count"] == 1
+    assert baseline_snapshot.summary()["custom_data_part_count"] == 1
+    assert baseline_snapshot.summary()["document_custom_property_count"] == 1
+    assert baseline_snapshot.summary()["has_custom_data_stores"] is True
+    assert profile["custom_data_stores"] == {
+        "present": True,
+        "custom_xml_part_count": 1,
+        "custom_xml_property_part_count": 1,
+        "custom_xml_schema_reference_count": 1,
+        "custom_xml_relationship_count": 2,
+        "external_custom_xml_relationship_count": 0,
+        "custom_data_properties_part_count": 1,
+        "custom_data_part_count": 1,
+        "document_custom_property_part_count": 1,
+        "document_custom_property_count": 1,
+        "linked_document_custom_property_count": 0,
+        "unrecognized_custom_data_store_count": 0,
+    }
+    assert "## Custom workbook data stores" in markdown
+    assert xml_change.details["custom_xml_state_changed"] is True
+    assert binary_change.details["custom_data_material_changed"] is True
+    assert storage_identifier_change.details["custom_xml_state_changed"] is True
+    assert storage_identifier_change.details["custom_data_material_changed"] is True
+    assert property_change.details["document_custom_properties_changed"] is True
+    assert "FF052" in {finding.rule_id for finding in xml_report.findings}
+    assert "FF052" in {finding.rule_id for finding in binary_report.findings}
+    assert "FF052" in {
+        finding.rule_id for finding in storage_identifier_report.findings
+    }
+    assert "FF052" in {finding.rule_id for finding in property_report.findings}
+    assert "custom_data_store_changed" not in {
+        change.kind for change in normalised_report.changes
+    }
+    assert "FF052" not in {finding.rule_id for finding in normalised_report.findings}
+    assert load_snapshot(ordinary).custom_data_stores.to_dict() == {
+        "present": False,
+        "custom_xml_part_count": 0,
+        "custom_xml_property_part_count": 0,
+        "custom_xml_schema_reference_count": 0,
+        "custom_xml_relationship_count": 0,
+        "external_custom_xml_relationship_count": 0,
+        "custom_data_properties_part_count": 0,
+        "custom_data_part_count": 0,
+        "document_custom_property_part_count": 0,
+        "document_custom_property_count": 0,
+        "linked_document_custom_property_count": 0,
+        "unrecognized_custom_data_store_count": 0,
+    }
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(xml_report.to_dict()),
+        report_to_markdown(xml_report),
+        json.dumps(report_to_sarif(xml_report)),
+        json.dumps(binary_report.to_dict()),
+        report_to_markdown(binary_report),
+        json.dumps(report_to_sarif(binary_report)),
+        json.dumps(storage_identifier_report.to_dict()),
+        report_to_markdown(storage_identifier_report),
+        json.dumps(report_to_sarif(storage_identifier_report)),
+        json.dumps(property_report.to_dict()),
+        report_to_markdown(property_report),
+        json.dumps(report_to_sarif(property_report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-CUSTOM-XML-BASELINE",
+        "PRIVATE-CUSTOM-XML-CANDIDATE",
+        "PRIVATE-CUSTOM-XML-ID",
+        "PRIVATE-CUSTOM-XML-ID-CANDIDATE",
+        "PRIVATE-CUSTOM-DATA-BASELINE",
+        "PRIVATE-CUSTOM-DATA-CANDIDATE",
+        "PRIVATE-CUSTOM-DATA-ID",
+        "PRIVATE-CUSTOM-DATA-ID-CANDIDATE",
+        "PRIVATE-CUSTOM-DOCUMENT-PROPERTY-NAME",
+        "PRIVATE-CUSTOM-DOCUMENT-PROPERTY-BASELINE",
+        "PRIVATE-CUSTOM-DOCUMENT-PROPERTY-CANDIDATE",
+        "rIdFenceCustomDataPayload",
+        "urn:formulafence:private-custom-xml-schema",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_custom_data_store_metadata_fails_closed_and_is_redacted(tmp_path) -> None:
+    baseline = make_custom_data_store_model(tmp_path / "baseline.xlsx")
+    candidate = make_custom_data_store_model(tmp_path / "candidate.xlsx")
+    corrupt_custom_data_properties_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "custom_data_store_changed"
+    )
+
+    assert candidate_snapshot.custom_data_stores.unrecognized_custom_data_store_count >= 1
+    assert any(
+        "malformed, unsupported, or incomplete custom workbook data-store metadata"
+        in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert change.details["custom_data_material_changed"] is True
+    assert change.details["unrecognized_custom_data_store_metadata_changed"] is True
+    assert {"FF010", "FF052"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "privateUnexpectedCustomDataProperties",
+        "PRIVATE-CUSTOM-DATA-ID",
+        "PRIVATE-CUSTOM-DATA-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_custom_data_store_read_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    baseline = make_custom_data_store_model(tmp_path / "baseline.xlsx")
+    candidate = make_custom_data_store_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    monkeypatch.setattr(workbook_module, "_CUSTOM_DATA_STORE_MAX_PART_BYTES", 1)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.custom_data_stores.unrecognized_custom_data_store_count >= 1
+    assert any(
+        "oversized custom data-store part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF052"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_power_query_custom_xml_is_not_double_counted_as_generic_state(tmp_path) -> None:
+    baseline = make_power_query_model(tmp_path / "baseline.xlsx")
+    candidate = make_power_query_model(tmp_path / "candidate.xlsx")
+    change_power_query_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+
+    assert baseline_snapshot.custom_data_stores.present is False
+    assert "custom_data_store_changed" not in {change.kind for change in report.changes}
+    assert "FF052" not in {finding.rule_id for finding in report.findings}
 
 
 def test_legacy_excel_notes_are_profiled_diffed_and_redacted(tmp_path) -> None:

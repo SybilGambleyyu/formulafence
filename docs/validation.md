@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Custom workbook data stores — 2026-07-26
+
+FormulaFence 0.50.0 was validated against the independently maintained
+[`NoExtDataE6.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/v2FxTestFiles/spreadsheet/NoExtDataE6.xlsx)
+fixture from the Open XML SDK at commit
+`cd2b359ef824737edb93f1c6157c19551aae1e52`. The downloaded baseline SHA-256
+was `f2a375a46ec133bed66dccc28ca5914800d049aadb1326b19204ebf64ecb6287`.
+FormulaFence inspected two real generic Custom XML parts, two Custom XML
+property parts with six schema references, and one custom document-properties
+part with two properties, with no custom-store coverage warnings.
+
+A standalone raw-ZIP script outside this repository created a candidate with
+identical ordinary cells, formulas, and package graph. A ZIP-member comparison
+confirmed that exactly one uncompressed member changed:
+`customXml/item2.xml`. The candidate SHA-256 was
+`e6062a9e302db465b8d3c83b2252eea25876181f6cd419ea9fa747797e8bfde4`.
+
+A clean Python virtual environment installed the staged 0.50.0 wheel
+(SHA-256 `13313f994dd1de7b4713f829359b5b62b54eb1dc7484a24879c2ef5cbb1d5543`).
+It emitted exactly one `custom_data_store_changed` change and `FF052`. A
+policy enabling `no_custom_data_store_changes` emitted `FFP052`. JSON profile,
+diff, and policy artifacts were checked to ensure the changed custom XML,
+property names and values, identifiers, and relationship material were absent.
+
+The suite separately validates generic Custom XML, Custom XML
+property/schema/relationship material, workbook-bound Custom Data properties
+and opaque binary payloads, custom document properties, identifier
+normalization for relationship IDs and document-property `pid` values,
+private storage-identity changes, malformed metadata, bounded reads, redaction,
+policy enforcement, and Power Query `DataMashup` isolation. FormulaFence
+compares stored package state only: it does not execute an add-in, resolve a
+property, fetch a target, or interpret a binary payload.
+
 ## Excel rich-data controls — 2026-07-24
 
 FormulaFence 0.49.0 was validated against the independently maintained

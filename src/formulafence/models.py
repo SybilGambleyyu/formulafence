@@ -2225,6 +2225,82 @@ class RichDataSnapshot:
 
 
 @dataclass(frozen=True)
+class CustomDataStoreSnapshot:
+    """Safe aggregate of custom workbook data stores and properties.
+
+    Excel add-ins can retain workbook-specific state in generic custom XML,
+    custom binary data, and custom document properties outside ordinary cells.
+    Private signatures compare that state without serialising property names,
+    values, custom XML, storage identifiers, binary payloads, or targets into
+    review artifacts.
+    """
+
+    custom_xml_part_count: int = 0
+    custom_xml_property_part_count: int = 0
+    custom_xml_schema_reference_count: int = 0
+    custom_xml_relationship_count: int = 0
+    external_custom_xml_relationship_count: int = 0
+    custom_data_properties_part_count: int = 0
+    custom_data_part_count: int = 0
+    document_custom_property_part_count: int = 0
+    document_custom_property_count: int = 0
+    linked_document_custom_property_count: int = 0
+    unrecognized_custom_data_store_count: int = 0
+    custom_xml_signature: str | None = field(default=None, repr=False)
+    custom_data_signature: str | None = field(default=None, repr=False)
+    document_property_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.custom_xml_part_count
+            or self.custom_xml_property_part_count
+            or self.custom_xml_schema_reference_count
+            or self.custom_xml_relationship_count
+            or self.external_custom_xml_relationship_count
+            or self.custom_data_properties_part_count
+            or self.custom_data_part_count
+            or self.document_custom_property_part_count
+            or self.document_custom_property_count
+            or self.linked_document_custom_property_count
+            or self.unrecognized_custom_data_store_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate state-store evidence without stored content."""
+        return {
+            "present": self.present,
+            "custom_xml_part_count": self.custom_xml_part_count,
+            "custom_xml_property_part_count": self.custom_xml_property_part_count,
+            "custom_xml_schema_reference_count": (
+                self.custom_xml_schema_reference_count
+            ),
+            "custom_xml_relationship_count": self.custom_xml_relationship_count,
+            "external_custom_xml_relationship_count": (
+                self.external_custom_xml_relationship_count
+            ),
+            "custom_data_properties_part_count": (
+                self.custom_data_properties_part_count
+            ),
+            "custom_data_part_count": self.custom_data_part_count,
+            "document_custom_property_part_count": (
+                self.document_custom_property_part_count
+            ),
+            "document_custom_property_count": self.document_custom_property_count,
+            "linked_document_custom_property_count": (
+                self.linked_document_custom_property_count
+            ),
+            "unrecognized_custom_data_store_count": (
+                self.unrecognized_custom_data_store_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class LegacyCommentSnapshot:
     """Safe aggregate of legacy Excel note and placeholder controls.
 
@@ -2852,6 +2928,9 @@ class WorkbookSnapshot:
         default_factory=DigitalSignatureSnapshot
     )
     rich_data: RichDataSnapshot = field(default_factory=RichDataSnapshot)
+    custom_data_stores: CustomDataStoreSnapshot = field(
+        default_factory=CustomDataStoreSnapshot
+    )
     legacy_comments: LegacyCommentSnapshot = field(
         default_factory=LegacyCommentSnapshot
     )
@@ -2948,6 +3027,12 @@ class WorkbookSnapshot:
                 + self.rich_data.external_rich_value_relationship_count
             ),
             "has_rich_data": self.rich_data.present,
+            "custom_xml_part_count": self.custom_data_stores.custom_xml_part_count,
+            "custom_data_part_count": self.custom_data_stores.custom_data_part_count,
+            "document_custom_property_count": (
+                self.custom_data_stores.document_custom_property_count
+            ),
+            "has_custom_data_stores": self.custom_data_stores.present,
             "legacy_comment_count": self.legacy_comments.comment_count,
             "legacy_comment_author_count": self.legacy_comments.comment_author_count,
             "legacy_comment_note_shape_count": self.legacy_comments.note_shape_count,

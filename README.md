@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.49.0/formulafence-0.49.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.50.0/formulafence-0.50.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -84,6 +84,7 @@ rules:
   no_xml_mapping_changes: true
   no_digital_signature_changes: true
   no_rich_data_changes: true
+  no_custom_data_store_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -887,6 +888,41 @@ content, or infer Excel client behavior. The scope follows Microsoft's
 [Rich Value Types](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/5d213b66-3196-4516-b63c-eef80d926f4a),
 and [Rich Value Web Image](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/4f3a80fd-1776-407f-8807-2497a4692dea)
 definitions.
+
+FormulaFence also inventories **custom workbook data stores**. Generic Custom
+XML, add-in-owned opaque Custom Data, and custom document properties can retain
+workbook-specific state while ordinary cells and formulas stay unchanged. That
+state may contain an approval gate, a workflow decision, an integration
+identifier, or another add-in setting that materially changes how a workbook
+is used.
+
+FormulaFence reads generic `customXml/item*.xml` data and their property/schema
+parts and relationships, workbook-bound `xl/customData` property and binary
+parts, and `docProps/custom.xml`. Power Query `DataMashup` Custom XML remains
+under the existing Power Query guard, so it is not double counted. A material
+change emits `FF052`; enable `no_custom_data_store_changes` to make that
+boundary `FFP052` in CI.
+
+Profiles and `FF052` details expose only aggregate custom-XML,
+relationship/external-relationship, binary-data, document-property, and
+malformed-metadata counts. Custom XML, schema URIs, property names and values,
+storage IDs, binary payloads, relationship IDs, and targets never enter
+profiles, Markdown, JSON, or SARIF. Writer-selected relationship IDs/order and
+document-property `pid` stay quiet. Custom XML `itemID` and Custom Data `id`
+storage identities are compared privately because an add-in can bind state to
+them. Missing, duplicate, malformed, unsafe, unbound, unreadable, oversized,
+or over-budget metadata becomes a visible coverage warning; raw reads are
+bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts.
+
+This is a stored-state boundary, not add-in execution. FormulaFence does not
+execute an add-in, resolve a property, follow or fetch a relationship target,
+interpret a binary payload, calculate formulas, or infer Excel client
+behavior. The scope follows Microsoft's guidance on
+[persisting add-in state](https://learn.microsoft.com/en-us/office/dev/add-ins/develop/persisting-add-in-state-and-settings),
+[Custom Data](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/7c53f6f4-fea8-43f7-a4b0-ba6e14d0eb78),
+[Custom Data Properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1f4aa666-c966-4ecf-8399-28390399c891),
+and Excel's
+[CustomDocumentProperties](https://learn.microsoft.com/en-us/office/vba/api/excel.workbook.customdocumentproperties).
 
 FormulaFence also inventories **digital-signature controls** that can change
 outside ordinary cells and outside the `xl/vbaProject.bin` macro payload.

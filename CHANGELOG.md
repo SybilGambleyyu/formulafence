@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.50.0 — 2026-07-26
+
+- Inspect raw custom workbook data stores before ordinary workbook readers can
+  omit them: generic Custom XML data and property/schema declarations,
+  package/item relationships, workbook-bound Custom Data Properties and opaque
+  binary Custom Data payloads, and custom document properties. Power Query
+  `DataMashup` Custom XML remains exclusively under the existing Power Query
+  controls. Profiles, Markdown, JSON, and SARIF expose aggregate counts only;
+  custom XML, property names and values, storage IDs, binary payloads,
+  relationship IDs, and targets remain private.
+- Emit `FF052` for a material persisted custom-data-store change and add the
+  fail-closed `no_custom_data_store_changes` policy rule (`FFP052`). This
+  closes the review gap where add-in state, opaque binary data, or custom
+  document properties can change while ordinary cells, formulas, and Power
+  Query controls remain fixed.
+- Normalize writer-selected relationship IDs/order and document-property
+  `pid` values. Custom XML `itemID` and Custom Data `id` storage identities are
+  compared privately because add-ins can bind state to them. Missing, duplicate,
+  malformed, unsafe, unbound, unreadable, oversized, or over-budget metadata
+  emits a visible coverage warning; reads are bounded to 16 MiB per part, 64
+  MiB per workbook, and 512 parts. FormulaFence does not execute an add-in,
+  resolve a property, follow or fetch a target, interpret a binary payload,
+  calculate formulas, or infer Excel client behavior.
+
 ## 0.49.0 — 2026-07-24
 
 - Inspect raw Excel rich-data controls before ordinary workbook readers can omit

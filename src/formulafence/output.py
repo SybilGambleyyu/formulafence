@@ -195,6 +195,18 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "- **Power Query metadata items:** "
             f"{workbook['power_query_metadata_item_count']}"
         ),
+        (
+            "- **Custom XML state-store parts:** "
+            f"{workbook['custom_xml_part_count']}"
+        ),
+        (
+            "- **Custom binary-data state-store parts:** "
+            f"{workbook['custom_data_part_count']}"
+        ),
+        (
+            "- **Custom document properties:** "
+            f"{workbook['document_custom_property_count']}"
+        ),
         f"- **3-D reference formulas:** {workbook['three_d_reference_cells']}",
         f"- **Spill-reference formulas:** {workbook['spill_reference_cells']}",
         (
@@ -1701,6 +1713,48 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "references, relationship IDs, and bound-cell locations are compared "
             "privately and intentionally omitted. FormulaFence does not contact "
             "providers, refresh data, fetch image targets, or validate their content."
+        )
+    custom_data_stores = profile["custom_data_stores"]
+    if custom_data_stores["present"]:
+        lines.extend(
+            [
+                "",
+                "## Custom workbook data stores",
+                "",
+                (
+                    "- **Custom XML data / property parts / schema references:** "
+                    f"{custom_data_stores['custom_xml_part_count']} / "
+                    f"{custom_data_stores['custom_xml_property_part_count']} / "
+                    f"{custom_data_stores['custom_xml_schema_reference_count']}"
+                ),
+                (
+                    "- **Custom XML relationships / external relationships:** "
+                    f"{custom_data_stores['custom_xml_relationship_count']} / "
+                    f"{custom_data_stores['external_custom_xml_relationship_count']}"
+                ),
+                (
+                    "- **Custom binary-data property parts / payload parts:** "
+                    f"{custom_data_stores['custom_data_properties_part_count']} / "
+                    f"{custom_data_stores['custom_data_part_count']}"
+                ),
+                (
+                    "- **Custom document property parts / values / linked values:** "
+                    f"{custom_data_stores['document_custom_property_part_count']} / "
+                    f"{custom_data_stores['document_custom_property_count']} / "
+                    f"{custom_data_stores['linked_document_custom_property_count']}"
+                ),
+            ]
+        )
+        if custom_data_stores["unrecognized_custom_data_store_count"]:
+            lines.append(
+                "- **Unrecognized or malformed custom data-store metadata:** "
+                f"{custom_data_stores['unrecognized_custom_data_store_count']}"
+            )
+        lines.append(
+            "Custom XML, document-property names and values, storage IDs, binary "
+            "payloads, relationship IDs, and targets are compared privately and "
+            "intentionally omitted. FormulaFence does not execute an add-in, resolve "
+            "a property, fetch a target, or interpret a payload."
         )
     legacy_comments = profile["legacy_comments"]
     if legacy_comments["present"]:

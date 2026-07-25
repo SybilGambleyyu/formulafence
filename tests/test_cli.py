@@ -91,6 +91,7 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
     assert "no_xml_mapping_changes: true" in content
     assert "no_digital_signature_changes: true" in content
     assert "no_rich_data_changes: true" in content
+    assert "no_custom_data_store_changes: true" in content
     assert "no_legacy_comment_changes: true" in content
     assert "no_threaded_comment_changes: true" in content
     assert "no_worksheet_drawing_shape_changes: true" in content

@@ -30,6 +30,18 @@ _PACKAGE_RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/rela
 _DOCUMENT_RELATIONSHIPS_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 )
+_CUSTOM_XML_DATA_PROPERTIES_NS = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/customXmlDataProps"
+)
+_CUSTOM_DATA_PROPERTIES_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+)
+_CUSTOM_DOCUMENT_PROPERTIES_NS = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
+)
+_DOCUMENT_PROPERTY_TYPES_NS = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
+)
 _SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 _XML_SCHEMA_NS = "http://www.w3.org/2001/XMLSchema"
@@ -1904,6 +1916,284 @@ def corrupt_rich_data_value_root(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".rich-data-corrupt.tmp.xlsx")
+
+
+def make_custom_data_store_model(path: Path) -> Path:
+    """Create generic custom XML, binary data, and custom-property stores."""
+    make_model(path)
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_override(
+        content_types: ElementTree.Element,
+        member: str,
+        content_type: str,
+    ) -> None:
+        ElementTree.SubElement(
+            content_types,
+            f"{{{_CONTENT_TYPES_NS}}}Override",
+            {"PartName": f"/{member}", "ContentType": content_type},
+        )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+
+        root_relationships = ElementTree.fromstring(contents["_rels/.rels"])
+        ElementTree.SubElement(
+            root_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceCustomXml",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/customXml",
+                "Target": "customXml/item1.xml",
+            },
+        )
+        ElementTree.SubElement(
+            root_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceCustomDocumentProperties",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/custom-properties",
+                "Target": "docProps/custom.xml",
+            },
+        )
+        contents["_rels/.rels"] = serialize(root_relationships)
+
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceCustomDataProperties",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/customDataProps",
+                "Target": "customData/itemProps1.xml",
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
+
+        custom_xml = ElementTree.Element("{urn:formulafence:test}reviewState")
+        ElementTree.SubElement(
+            custom_xml,
+            "{urn:formulafence:test}reviewGate",
+        ).text = "PRIVATE-CUSTOM-XML-BASELINE"
+        contents["customXml/item1.xml"] = serialize(custom_xml)
+        custom_xml_properties = ElementTree.Element(
+            f"{{{_CUSTOM_XML_DATA_PROPERTIES_NS}}}datastoreItem",
+            {f"{{{_CUSTOM_XML_DATA_PROPERTIES_NS}}}itemID": "{PRIVATE-CUSTOM-XML-ID}"},
+        )
+        schema_references = ElementTree.SubElement(
+            custom_xml_properties,
+            f"{{{_CUSTOM_XML_DATA_PROPERTIES_NS}}}schemaRefs",
+        )
+        ElementTree.SubElement(
+            schema_references,
+            f"{{{_CUSTOM_XML_DATA_PROPERTIES_NS}}}schemaRef",
+            {"uri": "urn:formulafence:private-custom-xml-schema"},
+        )
+        contents["customXml/itemProps1.xml"] = serialize(custom_xml_properties)
+        custom_xml_relationships = ElementTree.Element(
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships"
+        )
+        ElementTree.SubElement(
+            custom_xml_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceCustomXmlProperties",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/customXmlProps",
+                "Target": "itemProps1.xml",
+            },
+        )
+        contents["customXml/_rels/item1.xml.rels"] = serialize(custom_xml_relationships)
+
+        custom_data_properties = ElementTree.Element(
+            f"{{{_CUSTOM_DATA_PROPERTIES_NS}}}datastoreItem",
+            {"id": "{PRIVATE-CUSTOM-DATA-ID}"},
+        )
+        contents["xl/customData/itemProps1.xml"] = serialize(custom_data_properties)
+        custom_data_relationships = ElementTree.Element(
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships"
+        )
+        ElementTree.SubElement(
+            custom_data_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceCustomDataPayload",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/customData",
+                "Target": "item1.bin",
+            },
+        )
+        contents["xl/customData/_rels/itemProps1.xml.rels"] = serialize(
+            custom_data_relationships
+        )
+        contents["xl/customData/item1.bin"] = b"PRIVATE-CUSTOM-DATA-BASELINE"
+
+        document_properties = ElementTree.Element(
+            f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}Properties"
+        )
+        document_property = ElementTree.SubElement(
+            document_properties,
+            f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}property",
+            {
+                "fmtid": "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}",
+                "pid": "2",
+                "name": "PRIVATE-CUSTOM-DOCUMENT-PROPERTY-NAME",
+            },
+        )
+        ElementTree.SubElement(
+            document_property,
+            f"{{{_DOCUMENT_PROPERTY_TYPES_NS}}}lpwstr",
+        ).text = "PRIVATE-CUSTOM-DOCUMENT-PROPERTY-BASELINE"
+        contents["docProps/custom.xml"] = serialize(document_properties)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        add_override(
+            content_types,
+            "customXml/itemProps1.xml",
+            "application/vnd.openxmlformats-officedocument.customXmlProperties+xml",
+        )
+        add_override(
+            content_types,
+            "xl/customData/itemProps1.xml",
+            "application/vnd.openxmlformats-officedocument.customDataProperties+xml",
+        )
+        add_override(content_types, "xl/customData/item1.bin", "application/binary")
+        add_override(
+            content_types,
+            "docProps/custom.xml",
+            "application/vnd.openxmlformats-officedocument.custom-properties+xml",
+        )
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+    return _rewrite_archive(path, mutate, ".custom-data-store-model.tmp.xlsx")
+
+
+def change_custom_xml_data_store_value(path: Path) -> Path:
+    """Change persisted generic custom XML without changing a worksheet cell."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = ElementTree.fromstring(contents["customXml/item1.xml"])
+        gate = root.find("{urn:formulafence:test}reviewGate")
+        if gate is None:
+            raise ValueError("Fixture custom XML does not contain its review gate")
+        gate.text = "PRIVATE-CUSTOM-XML-CANDIDATE"
+        contents["customXml/item1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".custom-xml-data-store-change.tmp.xlsx")
+
+
+def change_custom_data_payload(path: Path) -> Path:
+    """Change opaque custom binary data without changing a worksheet cell."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["xl/customData/item1.bin"] = b"PRIVATE-CUSTOM-DATA-CANDIDATE"
+
+    return _rewrite_archive(path, mutate, ".custom-data-payload-change.tmp.xlsx")
+
+
+def change_custom_document_property_value(path: Path) -> Path:
+    """Change a private custom document property without changing a worksheet cell."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = ElementTree.fromstring(contents["docProps/custom.xml"])
+        value = root.find(
+            f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}property/"
+            f"{{{_DOCUMENT_PROPERTY_TYPES_NS}}}lpwstr"
+        )
+        if value is None:
+            raise ValueError("Fixture does not contain a custom document property")
+        value.text = "PRIVATE-CUSTOM-DOCUMENT-PROPERTY-CANDIDATE"
+        contents["docProps/custom.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".custom-document-property-change.tmp.xlsx")
+
+
+def normalize_custom_data_store_identifiers(path: Path) -> Path:
+    """Rewrite nonsemantic relationship and document-property IDs."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        for member in (
+            "_rels/.rels",
+            "xl/_rels/workbook.xml.rels",
+            "customXml/_rels/item1.xml.rels",
+            "xl/customData/_rels/itemProps1.xml.rels",
+        ):
+            root = ElementTree.fromstring(contents[member])
+            relationships = list(
+                root.findall(f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship")
+            )
+            for index, relationship in enumerate(relationships, start=801):
+                if (relationship.get("Id") or "").startswith("rIdFence"):
+                    relationship.set("Id", f"rIdFenceCustomStoreNormalised{index}")
+            contents[member] = ElementTree.tostring(
+                root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+        document_properties = ElementTree.fromstring(contents["docProps/custom.xml"])
+        property_element = document_properties.find(
+            f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}property"
+        )
+        if property_element is None:
+            raise ValueError("Fixture does not contain a custom document property")
+        property_element.set("pid", "901")
+        contents["docProps/custom.xml"] = ElementTree.tostring(
+            document_properties,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".custom-data-store-ids.tmp.xlsx")
+
+
+def change_custom_data_store_storage_identifiers(path: Path) -> Path:
+    """Change private storage identities that can bind persisted add-in state."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        custom_xml_properties = ElementTree.fromstring(
+            contents["customXml/itemProps1.xml"]
+        )
+        custom_xml_properties.set(
+            f"{{{_CUSTOM_XML_DATA_PROPERTIES_NS}}}itemID",
+            "{PRIVATE-CUSTOM-XML-ID-CANDIDATE}",
+        )
+        contents["customXml/itemProps1.xml"] = ElementTree.tostring(
+            custom_xml_properties,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        custom_data_properties = ElementTree.fromstring(
+            contents["xl/customData/itemProps1.xml"]
+        )
+        custom_data_properties.set("id", "{PRIVATE-CUSTOM-DATA-ID-CANDIDATE}")
+        contents["xl/customData/itemProps1.xml"] = ElementTree.tostring(
+            custom_data_properties,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".custom-data-store-storage-id-change.tmp.xlsx")
+
+
+def corrupt_custom_data_properties_root(path: Path) -> Path:
+    """Corrupt custom-data properties to exercise fail-closed coverage."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = ElementTree.fromstring(contents["xl/customData/itemProps1.xml"])
+        root.tag = "privateUnexpectedCustomDataProperties"
+        contents["xl/customData/itemProps1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".custom-data-store-corrupt.tmp.xlsx")
 
 
 def make_table_model(path: Path) -> Path:

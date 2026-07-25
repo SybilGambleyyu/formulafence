@@ -1476,6 +1476,43 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Alignment definitions, style indexes, and cell/row/column targets are "
             "compared privately and intentionally omitted."
         )
+    worksheet_display_controls = profile["worksheet_display_controls"]
+    if worksheet_display_controls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Worksheet display controls",
+                "",
+                (
+                    "- **Zero-hidden / formula / gridlines-hidden / custom-gridline-color / "
+                    "headers-hidden / outline-symbols-hidden views:** "
+                    f"{worksheet_display_controls['zero_hidden_view_count']} / "
+                    f"{worksheet_display_controls['formula_view_count']} / "
+                    f"{worksheet_display_controls['gridlines_hidden_view_count']} / "
+                    f"{worksheet_display_controls['custom_gridline_color_view_count']} / "
+                    f"{worksheet_display_controls['headers_hidden_view_count']} / "
+                    f"{worksheet_display_controls['outline_symbols_hidden_view_count']}"
+                ),
+                (
+                    "- **Ruler-hidden / page-whitespace-hidden / right-to-left / "
+                    "non-normal views / split-or-frozen panes:** "
+                    f"{worksheet_display_controls['ruler_hidden_view_count']} / "
+                    f"{worksheet_display_controls['white_space_hidden_view_count']} / "
+                    f"{worksheet_display_controls['right_to_left_view_count']} / "
+                    f"{worksheet_display_controls['non_normal_view_count']} / "
+                    f"{worksheet_display_controls['split_or_frozen_pane_count']}"
+                ),
+            ]
+        )
+        if worksheet_display_controls["unrecognized_display_control_count"]:
+            lines.append(
+                "- **Unrecognized or malformed display controls:** "
+                f"{worksheet_display_controls['unrecognized_display_control_count']}"
+            )
+        lines.append(
+            "Sheet names, view targets, and raw display XML are compared privately "
+            "and intentionally omitted."
+        )
     workbook_theme = profile["workbook_theme"]
     if workbook_theme["present"]:
         lines.extend(

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.53.0 — 2026-07-26
+
+- Inspect material raw transitional and strict SpreadsheetML worksheet-display
+  controls before ordinary readers normalize them: hidden zeroes, formula display,
+  gridlines/custom gridline colour, row/column headers, outline symbols, rulers,
+  page whitespace/margins, right-to-left layout, page-oriented view modes, and
+  split/frozen panes. Profiles, Markdown, JSON, and SARIF expose
+  structural counts only; sheet names, targets, and raw view XML remain private.
+- Emit `FF055` for a material worksheet-display control change and add
+  the fail-closed `no_worksheet_display_control_changes` policy rule
+  (`FFP055`). This closes the review gap where unchanged values can
+  appear blank, controls can be obscured, or the saved workbook surface can be
+  materially reframed without an ordinary cell diff.
+- Normalize omitted/default controls, Boolean and active custom-gridline-colour
+  spellings, finite pane-split decimals, and ordinary selection/top-left/zoom
+  navigation churn. Malformed or
+  unsupported display metadata produces a visible coverage warning rather than a
+  silent omission. FormulaFence compares stored declarations only: it does not
+  render Excel, resolve an effective palette colour, calculate viewport geometry,
+  decide final visibility, inspect print settings, or compose view controls with
+  styles, objects, or client state.
+
 ## 0.52.0 — 2026-07-26
 
 - Inspect effective raw SpreadsheetML cell-alignment controls before ordinary

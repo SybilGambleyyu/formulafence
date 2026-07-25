@@ -5,6 +5,46 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Material worksheet-display controls — 2026-07-26
+
+FormulaFence 0.53.0 was validated against the independently maintained
+[`Styles.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/v2FxTestFiles/spreadsheet/Styles.xlsx)
+fixture from the Open XML SDK at commit
+`cd2b359ef824737edb93f1c6157c19551aae1e52`. The downloaded transitional
+baseline SHA-256 was
+`a1ca7e60befe2ca550cd4729d68028de2a96aa163574892ed6a0890595b26468`.
+A standalone raw-ZIP script outside this repository made a candidate with
+identical ordinary cells and formulas, changing only
+`xl/worksheets/sheet1.xml` to hide displayed zeroes. The candidate SHA-256 was
+`c9f73b774b2f5d3a8438325dc2e8e42885901668176fa640726f056f58e4a548`.
+
+The same proof was repeated on the independently maintained strict-OOXML
+[`2D Rotation-O12-XL-OartEffects.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/O14ISOStrict/Excel/2D%20Rotation-O12-XL-OartEffects.xlsx)
+fixture at that commit. Its baseline and candidate SHA-256 values were
+`0e0017c70a5362ef3c49be3fb82c3e80210cfda0e813413c2b28a5ee141c0ad3` and
+`4245d8358761c90b89dd1a2eb781458a0a7d7f071776063493dc52bc8545fbca`.
+Its raw-ZIP candidate changed only `xl/worksheets/sheet2.xml` to hide zeroes;
+ordinary cells and formulas remained identical.
+
+A clean Python virtual environment installed the staged 0.53.0 wheel
+(SHA-256 `6e4e4c9b1725e7850da587b5a3297ef600801add22c156fb197066f782780d42`).
+For each candidate it emitted exactly one
+`worksheet_display_controls_changed` change and `FF055`; a policy enabling
+`no_worksheet_display_control_changes` emitted `FFP055`. No worksheet-display
+coverage warning was introduced. JSON/Markdown profile and diff plus SARIF
+were checked to ensure raw `sheetView` control names, pane/selection targets,
+gridline colour IDs, and worksheet-member names were absent.
+
+The suite separately validates transitional and strict namespaces; hidden
+zeroes, formula display, gridlines and custom gridline colours, headers,
+outline symbols, rulers, page whitespace, direction, non-normal views, and
+split/frozen panes; default/Boolean/unsigned-integer/decimal spelling;
+navigation and zoom noise; malformed metadata; redaction; policy enforcement;
+and isolation from ordinary cells. FormulaFence compares stored declarations
+only: it does not render Excel, resolve the effective palette colour, calculate
+viewport geometry or final visibility, inspect print settings, or interpret
+extension-specific client behavior.
+
 ## Effective cell-alignment controls — 2026-07-26
 
 FormulaFence 0.52.0 was validated against the independently maintained

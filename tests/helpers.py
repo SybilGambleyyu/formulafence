@@ -46,6 +46,7 @@ _DOCUMENT_PROPERTY_TYPES_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
 )
 _SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_STRICT_SPREADSHEETML_NS = "http://purl.oclc.org/ooxml/spreadsheetml/main"
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 _XML_SCHEMA_NS = "http://www.w3.org/2001/XMLSchema"
 _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
@@ -10365,6 +10366,284 @@ def corrupt_alignment_definition(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".alignment-malformed.tmp.xlsx")
+
+
+def make_worksheet_display_model(path: Path) -> Path:
+    """Create private worksheet-view controls without changing stored cells."""
+    workbook = Workbook()
+    review = workbook.active
+    review.title = "Private Display Review"
+    review["A1"] = "PRIVATE-DISPLAY-HEADER"
+    review["B2"] = 0
+    review["C4"] = "PRIVATE-DISPLAY-FOCUS"
+    review["D5"] = "=B2+1"
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        sheet_views_tag = f"{{{_SPREADSHEETML_NS}}}sheetViews"
+        sheet_view_tag = f"{{{_SPREADSHEETML_NS}}}sheetView"
+        pane_tag = f"{{{_SPREADSHEETML_NS}}}pane"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        sheet_views = worksheet.find(sheet_views_tag)
+        if sheet_views is None:
+            sheet_views = ElementTree.Element(sheet_views_tag)
+            worksheet.insert(0, sheet_views)
+        sheet_view = sheet_views.find(sheet_view_tag)
+        if sheet_view is None:
+            sheet_view = ElementTree.SubElement(
+                sheet_views,
+                sheet_view_tag,
+                {"workbookViewId": "0"},
+            )
+        sheet_view.set("showZeros", "0")
+        sheet_view.set("showFormulas", "true")
+        sheet_view.set("showGridLines", "false")
+        sheet_view.set("defaultGridColor", "false")
+        sheet_view.set("colorId", "63")
+        sheet_view.set("showRowColHeaders", "0")
+        sheet_view.set("showOutlineSymbols", "false")
+        sheet_view.set("showRuler", "0")
+        sheet_view.set("showWhiteSpace", "false")
+        sheet_view.set("rightToLeft", "1")
+        sheet_view.set("view", "pageLayout")
+        pane = sheet_view.find(pane_tag)
+        if pane is None:
+            pane = ElementTree.SubElement(sheet_view, pane_tag)
+        pane.attrib.clear()
+        pane.attrib.update(
+            {
+                "xSplit": "2.0",
+                "ySplit": "3",
+                "topLeftCell": "C4",
+                "activePane": "bottomRight",
+                "state": "frozen",
+            }
+        )
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-display.tmp.xlsx")
+
+
+def make_strict_worksheet_display_model(path: Path) -> Path:
+    """Create a strict-SpreadsheetML worksheet-display fixture."""
+    make_worksheet_display_model(path)
+
+    def strict_name(name: str, source_namespace: str, target_namespace: str) -> str:
+        prefix = f"{{{source_namespace}}}"
+        if name.startswith(prefix):
+            return f"{{{target_namespace}}}{name[len(prefix):]}"
+        return name
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook_member = "xl/workbook.xml"
+        workbook = ElementTree.fromstring(contents[workbook_member])
+        for element in workbook.iter():
+            element.tag = strict_name(
+                element.tag,
+                _SPREADSHEETML_NS,
+                _STRICT_SPREADSHEETML_NS,
+            )
+            attributes = {
+                strict_name(
+                    name,
+                    _DOCUMENT_RELATIONSHIPS_NS,
+                    _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                ): value
+                for name, value in element.attrib.items()
+            }
+            element.attrib.clear()
+            element.attrib.update(attributes)
+        contents[workbook_member] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        for relationship in relationships.findall(relationship_tag):
+            if (relationship.get("Type") or "").casefold().endswith("/worksheet"):
+                relationship.set(
+                    "Type",
+                    f"{_STRICT_DOCUMENT_RELATIONSHIPS_NS}/worksheet",
+                )
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        for member in sorted(
+            name
+            for name in contents
+            if name.startswith("xl/worksheets/") and name.endswith(".xml")
+        ):
+            worksheet = ElementTree.fromstring(contents[member])
+            for element in worksheet.iter():
+                element.tag = strict_name(
+                    element.tag,
+                    _SPREADSHEETML_NS,
+                    _STRICT_SPREADSHEETML_NS,
+                )
+            contents[member] = ElementTree.tostring(
+                worksheet,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".strict-worksheet-display.tmp.xlsx")
+
+
+def _worksheet_display_sheet_view(
+    contents: dict[str, bytes],
+) -> ElementTree.Element:
+    """Return the raw worksheet display view used by display-control fixtures."""
+    sheet_view_tag = f"{{{_SPREADSHEETML_NS}}}sheetView"
+    worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+    sheet_view = worksheet.find(f".//{sheet_view_tag}")
+    if sheet_view is None:
+        raise ValueError("Could not find worksheet display fixture")
+    return sheet_view
+
+
+def change_worksheet_display_controls(path: Path) -> Path:
+    """Reveal stored zeroes without editing their cells."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        sheet_view = _worksheet_display_sheet_view(contents)
+        sheet_view.set("showZeros", "true")
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        replacement = worksheet.find(
+            f".//{{{_SPREADSHEETML_NS}}}sheetView"
+        )
+        if replacement is None:
+            raise ValueError("Could not replace worksheet display fixture")
+        replacement.attrib.clear()
+        replacement.attrib.update(sheet_view.attrib)
+        for child in list(replacement):
+            replacement.remove(child)
+        for child in sheet_view:
+            replacement.append(child)
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-display-change.tmp.xlsx")
+
+
+def change_strict_worksheet_display_controls(path: Path) -> Path:
+    """Reveal stored zeroes in a strict-SpreadsheetML worksheet view."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        sheet_view = next(
+            (
+                element
+                for element in worksheet.iter()
+                if element.tag == f"{{{_STRICT_SPREADSHEETML_NS}}}sheetView"
+            ),
+            None,
+        )
+        if sheet_view is None:
+            raise ValueError("Could not find strict worksheet display fixture")
+        sheet_view.set("showZeros", "true")
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".strict-worksheet-display-change.tmp.xlsx")
+
+
+def normalize_worksheet_display_control_spelling(path: Path) -> Path:
+    """Use equivalent Boolean, decimal, and navigation spellings."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        sheet_view = _worksheet_display_sheet_view(contents)
+        pane_tag = f"{{{_SPREADSHEETML_NS}}}pane"
+        selection_tag = f"{{{_SPREADSHEETML_NS}}}selection"
+        sheet_view.set("showZeros", "false")
+        sheet_view.set("showFormulas", "1")
+        sheet_view.set("showGridLines", "0")
+        sheet_view.set("defaultGridColor", "0")
+        sheet_view.set("colorId", "0063")
+        sheet_view.set("showRowColHeaders", "false")
+        sheet_view.set("showOutlineSymbols", "0")
+        sheet_view.set("showRuler", "false")
+        sheet_view.set("showWhiteSpace", "0")
+        sheet_view.set("rightToLeft", "true")
+        sheet_view.set("topLeftCell", "Z999")
+        sheet_view.set("zoomScale", "15")
+        pane = sheet_view.find(pane_tag)
+        if pane is None:
+            raise ValueError("Could not find worksheet display pane fixture")
+        pane.set("xSplit", "002.000")
+        pane.set("ySplit", "+003.0")
+        pane.set("topLeftCell", "Z999")
+        selection = ElementTree.SubElement(
+            sheet_view,
+            selection_tag,
+            {"activeCell": "Z999", "sqref": "Z999"},
+        )
+        selection.tail = "\n"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        replacement = worksheet.find(
+            f".//{{{_SPREADSHEETML_NS}}}sheetView"
+        )
+        if replacement is None:
+            raise ValueError("Could not replace worksheet display fixture")
+        replacement.attrib.clear()
+        replacement.attrib.update(sheet_view.attrib)
+        for child in list(replacement):
+            replacement.remove(child)
+        for child in sheet_view:
+            replacement.append(child)
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-display-noise.tmp.xlsx")
+
+
+def corrupt_worksheet_display_control(path: Path) -> Path:
+    """Inject a negative raw pane split for fail-closed display parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        sheet_view = _worksheet_display_sheet_view(contents)
+        pane_tag = f"{{{_SPREADSHEETML_NS}}}pane"
+        pane = sheet_view.find(pane_tag)
+        if pane is None:
+            raise ValueError("Could not find worksheet display pane fixture")
+        pane.set("xSplit", "-987.5")
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        replacement = worksheet.find(
+            f".//{{{_SPREADSHEETML_NS}}}sheetView"
+        )
+        if replacement is None:
+            raise ValueError("Could not replace worksheet display fixture")
+        replacement.attrib.clear()
+        replacement.attrib.update(sheet_view.attrib)
+        for child in list(replacement):
+            replacement.remove(child)
+        for child in sheet_view:
+            replacement.append(child)
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-display-malformed.tmp.xlsx")
 
 
 def _formula_cached_result_cell(

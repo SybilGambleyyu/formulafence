@@ -78,6 +78,7 @@ from .helpers import (
     change_rich_text_run_text_only,
     change_scenario_manager_input_value,
     change_slicer_timeline_filter_material,
+    change_strict_worksheet_display_controls,
     change_table_filter_visibility_criterion,
     change_threaded_comment_person_identity,
     change_threaded_comment_reply,
@@ -85,6 +86,7 @@ from .helpers import (
     change_what_if_data_table_input,
     change_workbook_theme_colour,
     change_workbook_theme_image_payload,
+    change_worksheet_display_controls,
     change_worksheet_drawing_shape_hyperlink,
     change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
@@ -126,6 +128,7 @@ from .helpers import (
     corrupt_threaded_comment_root,
     corrupt_what_if_data_table_input,
     corrupt_workbook_theme_root,
+    corrupt_worksheet_display_control,
     corrupt_worksheet_drawing_shape_root,
     corrupt_worksheet_embedded_control_activex_root,
     corrupt_worksheet_sparkline_destination,
@@ -187,11 +190,13 @@ from .helpers import (
     make_slicer_timeline_cache_model,
     make_spill_model,
     make_strict_workbook_theme_image_model,
+    make_strict_worksheet_display_model,
     make_table_model,
     make_threaded_comment_model,
     make_three_d_model,
     make_what_if_data_table_model,
     make_workbook_theme_image_model,
+    make_worksheet_display_model,
     make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
     make_worksheet_sparkline_model,
@@ -220,6 +225,7 @@ from .helpers import (
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
     normalize_workbook_theme_relationship_identifiers,
+    normalize_worksheet_display_control_spelling,
     normalize_worksheet_sparkline_control_spelling,
     normalize_xml_mapping_control_spelling,
     normalize_zero_dimension_visibility_control_spelling,
@@ -5110,6 +5116,133 @@ def test_ordinary_workbook_has_no_alignment_inventory(tmp_path) -> None:
     assert snapshot.alignment_controls.present is False
     assert snapshot.alignment_controls.cell_alignment_assignment_count == 0
     assert not any("cell-alignment" in warning for warning in snapshot.parser_warnings)
+
+
+def test_worksheet_display_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_worksheet_display_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_display_model(tmp_path / "candidate.xlsx")
+    change_worksheet_display_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_display_controls_changed"
+    )
+
+    assert baseline_snapshot.cells == candidate_snapshot.cells
+    assert baseline_snapshot.summary()["worksheet_display_control_count"] == 11
+    assert baseline_snapshot.summary()["has_worksheet_display_controls"] is True
+    assert profile["worksheet_display_controls"] == {
+        "present": True,
+        "zero_hidden_view_count": 1,
+        "formula_view_count": 1,
+        "gridlines_hidden_view_count": 1,
+        "custom_gridline_color_view_count": 1,
+        "headers_hidden_view_count": 1,
+        "outline_symbols_hidden_view_count": 1,
+        "ruler_hidden_view_count": 1,
+        "white_space_hidden_view_count": 1,
+        "right_to_left_view_count": 1,
+        "non_normal_view_count": 1,
+        "split_or_frozen_pane_count": 1,
+        "unrecognized_display_control_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Worksheet display controls" in markdown
+    assert change.details["worksheet_display_definition_material_changed"] is True
+    assert "FF055" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-DISPLAY-HEADER",
+        "PRIVATE-DISPLAY-FOCUS",
+        "C4",
+        "showZeros",
+        "defaultGridColor",
+        "colorId",
+        "showRuler",
+        "showWhiteSpace",
+        "topLeftCell",
+        "xSplit",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_display_control_noise_is_normalized(tmp_path) -> None:
+    baseline = make_worksheet_display_model(tmp_path / "baseline.xlsx")
+    equivalent = make_worksheet_display_model(tmp_path / "equivalent.xlsx")
+    normalize_worksheet_display_control_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+
+
+def test_worksheet_display_malformed_controls_fail_closed_and_redact_values(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_display_model(tmp_path / "baseline.xlsx")
+    malformed = make_worksheet_display_model(tmp_path / "malformed.xlsx")
+    corrupt_worksheet_display_control(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.worksheet_display_controls.unrecognized_display_control_count == 1
+    assert any(
+        "malformed or unsupported worksheet-display" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF055"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(malformed_snapshot)),
+        profile_to_markdown(profile_snapshot(malformed_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("-987.5" not in artifact for artifact in rendered_artifacts)
+
+
+def test_ordinary_workbook_has_no_worksheet_display_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.worksheet_display_controls.present is False
+    assert snapshot.worksheet_display_controls.zero_hidden_view_count == 0
+    assert not any(
+        "worksheet-display" in warning for warning in snapshot.parser_warnings
+    )
+
+
+def test_strict_worksheet_display_controls_are_supported(tmp_path) -> None:
+    baseline = make_strict_worksheet_display_model(tmp_path / "baseline.xlsx")
+    candidate = make_strict_worksheet_display_model(tmp_path / "candidate.xlsx")
+    change_strict_worksheet_display_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+
+    assert baseline_snapshot.worksheet_display_controls.zero_hidden_view_count == 1
+    assert baseline_snapshot.worksheet_display_controls.unrecognized_display_control_count == 0
+    assert not any(
+        "worksheet-display" in warning
+        for warning in baseline_snapshot.parser_warnings
+    )
+    assert "FF055" in {finding.rule_id for finding in report.findings}
 
 
 def test_workbook_themes_are_profiled_diffed_and_redacted(tmp_path) -> None:

@@ -51,6 +51,7 @@ from formulafence.models import (
     WhatIfDataTableSnapshot,
     WorkbookSnapshot,
     WorkbookThemeSnapshot,
+    WorksheetDisplaySnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
     WorksheetSparklineSnapshot,
@@ -1620,6 +1621,50 @@ def _workbook_control_changes(
                     "Cell alignment controls changed; values, warnings, or visual "
                     "classifications may be repositioned, rotated, wrapped, shrunk, "
                     "or made less legible."
+                ),
+                details=details,
+            )
+        )
+    if before.worksheet_display_controls != after.worksheet_display_controls:
+        old_controls: WorksheetDisplaySnapshot = before.worksheet_display_controls
+        new_controls: WorksheetDisplaySnapshot = after.worksheet_display_controls
+        details = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.definition_signature != new_controls.definition_signature:
+            details["worksheet_display_definition_material_changed"] = True
+        if (
+            old_controls.unrecognized_display_control_count
+            != new_controls.unrecognized_display_control_count
+            or (
+                (
+                    old_controls.unrecognized_display_control_count
+                    or new_controls.unrecognized_display_control_count
+                )
+                and (
+                    old_controls.definition_signature
+                    != new_controls.definition_signature
+                )
+            )
+        ):
+            details["unrecognized_worksheet_display_metadata_changed"] = True
+        changes.append(
+            Change(
+                "worksheet_display_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF055",
+                "high",
+                (
+                    "Worksheet display controls changed; zeroes, formulas, gridline "
+                    "colour, headers, page whitespace, rulers, outline symbols, or "
+                    "saved views and panes may alter the reviewer-visible surface."
                 ),
                 details=details,
             )

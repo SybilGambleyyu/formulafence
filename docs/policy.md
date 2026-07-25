@@ -29,6 +29,7 @@ rules:
   no_cell_fill_changes: true
   no_workbook_theme_changes: true
   no_cell_alignment_changes: true
+  no_worksheet_display_control_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
@@ -110,6 +111,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
 | `no_workbook_theme_changes` | boolean | A workbook Theme binding, stored colour/font/format scheme, direct Theme-image relationship, or direct Theme-image payload changes. Theme XML, scheme names, colours, font names, image bytes, relationship IDs, and targets are compared privately. |
 | `no_cell_alignment_changes` | boolean | An effective default, direct-cell, row, or column alignment control changes. Alignment values, style IDs, and cell/row/column targets are compared privately. |
+| `no_worksheet_display_control_changes` | boolean | A material raw worksheet view changes hidden-zero, formula-display, gridline/gridline-colour, row/column-header, outline-symbol, ruler, page-whitespace, right-to-left, non-normal-view, or split/frozen-pane controls. Sheet names, targets, pane positions, and raw view XML are compared privately. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
 | `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
 | `no_cell_hyperlink_changes` | boolean | A standard or Office 2016 revision worksheet-cell hyperlink binding, location, display override, ScreenTip, or selected relationship target/type/mode changes. Targets, cell references, locations, display strings, ScreenTips, relationship IDs, and revision UIDs are compared privately. |
@@ -593,6 +595,35 @@ calculate width, height, merged-cell layout, overflow, final visibility,
 font/fill/conditional-format composition, or Excel client rendering. A raw
 column `style` is compared as a declaration/default for unallocated/new
 cells; it is not treated as a renderer that restyles allocated cells.
+
+Worksheet-display controls can change a reviewer's saved surface without a
+formula or value edit. FormulaFence reads raw transitional and strict
+SpreadsheetML `sheetViews/sheetView` declarations and compares non-default
+`showZeros`, `showFormulas`, `showGridLines`, custom gridline-colour
+(`defaultGridColor`/`colorId`), `showRowColHeaders`, `showOutlineSymbols`,
+`showRuler`, `showWhiteSpace`, and `rightToLeft` flags; non-normal view modes;
+and material split/frozen pane state. A material declaration change emits
+`FF055`; enable
+`no_worksheet_display_control_changes` to make it `FFP055`
+in CI.
+
+Profiles and `FF055` details expose only structural counts for
+hidden-zero, formula, gridline/gridline-colour, header, outline, ruler,
+page-whitespace, direction, view-mode, pane, and malformed controls. Sheet
+names, target cells, pane positions, and raw XML remain private.
+Omitted/default controls, Boolean and active custom-gridline-colour spellings,
+and finite non-negative pane-split decimal spellings are normalized. Active-cell,
+selection, top-left navigation, and zoom state are intentionally excluded so
+ordinary navigation does not become a policy event. Missing, duplicate,
+malformed, or unsupported material is an explicit coverage warning rather than
+a silent omission. FormulaFence compares declarations, not rendering: it does
+not resolve the effective palette colour, calculate viewport geometry or final
+visibility, inspect print settings, interpret extension-specific views, or
+infer Excel client state. The boundary
+follows the Open XML SDK [`SheetView` schema
+surface](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.sheetview?view=openxml-3.0.1)
+and Microsoft’s [worksheet display
+guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/excel-add-ins-worksheet-display).
 
 Workbook-level DrawingML Theme controls can change the colour, font, and effect
 schemes used by themed cells, charts, and drawing objects without changing a

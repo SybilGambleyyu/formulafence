@@ -1805,6 +1805,75 @@ class AlignmentSnapshot:
 
 
 @dataclass(frozen=True)
+class WorksheetDisplaySnapshot:
+    """Safe aggregate of material worksheet display controls.
+
+    A worksheet view can hide zeroes, gridlines, row and column headers, page
+    margins, or outline symbols without changing a cell. It can also show
+    formulas, alter gridline colour, switch to a page-oriented view, or
+    split/freeze a review surface. Private signatures retain canonical
+    non-default declarations only; public output exposes structural counts
+    without sheet names, target cells, or raw XML.
+    """
+
+    zero_hidden_view_count: int = 0
+    formula_view_count: int = 0
+    gridlines_hidden_view_count: int = 0
+    custom_gridline_color_view_count: int = 0
+    headers_hidden_view_count: int = 0
+    outline_symbols_hidden_view_count: int = 0
+    ruler_hidden_view_count: int = 0
+    white_space_hidden_view_count: int = 0
+    right_to_left_view_count: int = 0
+    non_normal_view_count: int = 0
+    split_or_frozen_pane_count: int = 0
+    unrecognized_display_control_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.zero_hidden_view_count
+            or self.formula_view_count
+            or self.gridlines_hidden_view_count
+            or self.custom_gridline_color_view_count
+            or self.headers_hidden_view_count
+            or self.outline_symbols_hidden_view_count
+            or self.ruler_hidden_view_count
+            or self.white_space_hidden_view_count
+            or self.right_to_left_view_count
+            or self.non_normal_view_count
+            or self.split_or_frozen_pane_count
+            or self.unrecognized_display_control_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural display evidence without sheet targets or XML."""
+        return {
+            "present": self.present,
+            "zero_hidden_view_count": self.zero_hidden_view_count,
+            "formula_view_count": self.formula_view_count,
+            "gridlines_hidden_view_count": self.gridlines_hidden_view_count,
+            "custom_gridline_color_view_count": (
+                self.custom_gridline_color_view_count
+            ),
+            "headers_hidden_view_count": self.headers_hidden_view_count,
+            "outline_symbols_hidden_view_count": self.outline_symbols_hidden_view_count,
+            "ruler_hidden_view_count": self.ruler_hidden_view_count,
+            "white_space_hidden_view_count": self.white_space_hidden_view_count,
+            "right_to_left_view_count": self.right_to_left_view_count,
+            "non_normal_view_count": self.non_normal_view_count,
+            "split_or_frozen_pane_count": self.split_or_frozen_pane_count,
+            "unrecognized_display_control_count": (
+                self.unrecognized_display_control_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorkbookThemeSnapshot:
     """Safe aggregate of workbook-wide DrawingML theme controls.
 
@@ -3026,6 +3095,9 @@ class WorkbookSnapshot:
     alignment_controls: AlignmentSnapshot = field(
         default_factory=AlignmentSnapshot
     )
+    worksheet_display_controls: WorksheetDisplaySnapshot = field(
+        default_factory=WorksheetDisplaySnapshot
+    )
     workbook_theme: WorkbookThemeSnapshot = field(
         default_factory=WorkbookThemeSnapshot
     )
@@ -3233,6 +3305,22 @@ class WorkbookSnapshot:
                 + self.alignment_controls.column_alignment_assignment_count
             ),
             "has_alignment_controls": self.alignment_controls.present,
+            "worksheet_display_control_count": (
+                self.worksheet_display_controls.zero_hidden_view_count
+                + self.worksheet_display_controls.formula_view_count
+                + self.worksheet_display_controls.gridlines_hidden_view_count
+                + self.worksheet_display_controls.custom_gridline_color_view_count
+                + self.worksheet_display_controls.headers_hidden_view_count
+                + self.worksheet_display_controls.outline_symbols_hidden_view_count
+                + self.worksheet_display_controls.ruler_hidden_view_count
+                + self.worksheet_display_controls.white_space_hidden_view_count
+                + self.worksheet_display_controls.right_to_left_view_count
+                + self.worksheet_display_controls.non_normal_view_count
+                + self.worksheet_display_controls.split_or_frozen_pane_count
+            ),
+            "has_worksheet_display_controls": (
+                self.worksheet_display_controls.present
+            ),
             "workbook_theme_part_count": self.workbook_theme.theme_part_count,
             "workbook_theme_image_part_count": self.workbook_theme.theme_image_part_count,
             "has_workbook_theme": self.workbook_theme.present,

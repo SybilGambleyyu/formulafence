@@ -275,6 +275,27 @@ review prompt, not proof of an error.
   allocated cells. This boundary follows Microsoft's
   [SpreadsheetML alignment definition](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/e4ad6e3e-7702-4dbe-8c44-f5a4c686c440)
   and [CellFormat alignment semantics](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/68362a4b-5589-4504-b566-e8154dce1de3).
+- A stored worksheet view can change a reviewer’s surface while leaving values
+  and formulas untouched: zeroes can appear blank; formulas, gridlines,
+  row/column headers, outline symbols, rulers, or page margins can be
+  hidden/shown; gridlines can be recoloured; the view can be right-to-left or
+  page-oriented; and panes can be split/frozen. FormulaFence
+  privately compares raw non-default transitional and strict SpreadsheetML
+  `sheetViews/sheetView` declarations
+  for those controls and emits `FF055`;
+  `no_worksheet_display_control_changes` blocks it as `FFP055`.
+  Profiles and reports expose only structural counts; sheet names, target
+  cells, pane positions, and raw XML remain private. Omitted/default controls,
+  Boolean and active custom-gridline-colour spelling, and finite non-negative
+  split decimals normalize away.
+  Active-cell, selection, top-left navigation, and zoom remain deliberately
+  outside this boundary to avoid routine writer churn. Missing, duplicate,
+  malformed, or unsupported material yields coverage evidence. FormulaFence
+  does **not** render Excel, resolve the effective palette colour, calculate
+  viewport geometry/final visibility, inspect print settings, interpret
+  extension-specific views, or infer client state. This boundary follows the Open XML SDK
+  [`SheetView` schema surface](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.sheetview?view=openxml-3.0.1)
+  and Microsoft’s [worksheet display guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/excel-add-ins-worksheet-display).
 - A workbook-level DrawingML Theme can alter colour, font, and effect schemes
   used by themed cells, charts, and drawing objects without a local style
   change. FormulaFence inspects the raw workbook Theme binding, Theme XML, and
@@ -771,7 +792,8 @@ review prompt, not proof of an error.
   record chains, Slicer and Timeline cache filter-definition chains, embedded
   Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and
   Scenario Manager declarations, worksheet/Table AutoFilter and row/column-
-  visibility controls, ignored-error warning suppressions, relationship-backed Named Sheet
+  visibility controls, material worksheet-display controls, ignored-error
+  warning suppressions, relationship-backed Named Sheet
   View controls, ordinary worksheet-cell hyperlink declarations/relationships,
   Office 2010 worksheet sparkline declarations, SpreadsheetML XML Map schema,
   refresh/export, table-column, single-cell, and relationship declarations,

@@ -34,6 +34,7 @@ _RULE_FIELDS = {
     "no_cell_fill_changes",
     "no_workbook_theme_changes",
     "no_cell_alignment_changes",
+    "no_worksheet_display_control_changes",
     "no_formula_cached_result_changes",
     "no_rich_text_run_changes",
     "no_cell_hyperlink_changes",
@@ -112,6 +113,7 @@ class Policy:
     no_cell_fill_changes: bool = False
     no_workbook_theme_changes: bool = False
     no_cell_alignment_changes: bool = False
+    no_worksheet_display_control_changes: bool = False
     no_formula_cached_result_changes: bool = False
     no_rich_text_run_changes: bool = False
     no_cell_hyperlink_changes: bool = False
@@ -172,6 +174,7 @@ rules:
   no_cell_fill_changes: true
   no_workbook_theme_changes: true
   no_cell_alignment_changes: true
+  no_worksheet_display_control_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
@@ -319,6 +322,9 @@ def parse_policy(data: object) -> Policy:
         ),
         no_cell_alignment_changes=_boolean_rule(
             rules, "no_cell_alignment_changes"
+        ),
+        no_worksheet_display_control_changes=_boolean_rule(
+            rules, "no_worksheet_display_control_changes"
         ),
         no_formula_cached_result_changes=_boolean_rule(
             rules, "no_formula_cached_result_changes"
@@ -777,6 +783,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP054",
                     "high",
                     "Policy forbids cell-alignment control changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_worksheet_display_control_changes:
+        for finding in _rule_triggered(report, "FF055"):
+            violations.append(
+                Finding(
+                    "FFP055",
+                    "high",
+                    "Policy forbids material worksheet-display control changes.",
                     details=finding.details,
                 )
             )

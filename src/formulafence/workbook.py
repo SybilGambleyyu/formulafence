@@ -91,6 +91,7 @@ from formulafence.models import (
     WorkbookProtectionSnapshot,
     WorkbookSnapshot,
     WorkbookThemeSnapshot,
+    WorksheetDisplaySnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
     WorksheetSparklineSnapshot,
@@ -117,6 +118,7 @@ _CALCULATION_FIELDS = (
     "forceFullCalc",
 )
 _SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_STRICT_SPREADSHEETML_NS = "http://purl.oclc.org/ooxml/spreadsheetml/main"
 _PACKAGE_RELATIONSHIP_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _DOCUMENT_RELATIONSHIP_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -810,6 +812,14 @@ class _AlignmentMetadata:
     """Raw cell-alignment evidence retained before reader normalization."""
 
     controls: AlignmentSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _WorksheetDisplayMetadata:
+    """Raw material worksheet-display evidence retained before reader loss."""
+
+    controls: WorksheetDisplaySnapshot
     warnings: tuple[str, ...]
 
 
@@ -1948,6 +1958,42 @@ def _worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
         for title, (member, sheet_type) in _sheet_xml_parts(archive).items()
         if sheet_type == "worksheet"
     }
+
+
+def _worksheet_display_xml_paths(archive: ZipFile) -> tuple[str, ...]:
+    """Return worksheet parts in workbook order for both SpreadsheetML variants.
+
+    Most worksheet readers only understand transitional SpreadsheetML, but the
+    display boundary is raw OOXML and can safely inspect the equivalent strict
+    declarations too. This stays deliberately separate from
+    :func:`_worksheet_xml_paths` so it does not broaden the behavior of the
+    workbook/cell reader or unrelated raw-control boundaries.
+    """
+    workbook = _xml_root(archive, "xl/workbook.xml")
+    relationship_targets = {
+        relationship.relationship_id: relationship.target
+        for relationship in _package_relationships(archive, "xl/workbook.xml")
+        if (
+            relationship.relationship_id
+            and relationship.target is not None
+            and relationship.relationship_type.rsplit("/", maxsplit=1)[-1]
+            == "worksheet"
+        )
+    }
+    members: list[str] = []
+    for sheet in workbook.iter():
+        if (
+            _xml_local_name(sheet.tag) != "sheet"
+            or _xml_namespace(sheet.tag)
+            not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+        ):
+            continue
+        relationship_id = sheet.get(f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id")
+        if relationship_id is None:
+            relationship_id = sheet.get(f"{{{_STRICT_DOCUMENT_RELATIONSHIP_NS}}}id")
+        if relationship_id and (member := relationship_targets.get(relationship_id)):
+            members.append(member)
+    return tuple(members)
 
 
 def _xml_local_name(tag: str) -> str:
@@ -18973,6 +19019,320 @@ def _alignment_metadata(path: Path) -> _AlignmentMetadata:
     return _AlignmentMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_WORKSHEET_DISPLAY_SHEET_VIEW_KNOWN_ATTRIBUTES = frozenset(
+    {
+        "colorId",
+        "defaultGridColor",
+        "rightToLeft",
+        "showFormulas",
+        "showGridLines",
+        "showOutlineSymbols",
+        "showRowColHeaders",
+        "showRuler",
+        "showWhiteSpace",
+        "showZeros",
+        "tabSelected",
+        "topLeftCell",
+        "view",
+        "windowProtection",
+        "workbookViewId",
+        "zoomScale",
+        "zoomScaleNormal",
+        "zoomScalePageLayoutView",
+        "zoomScaleSheetLayoutView",
+    }
+)
+_WORKSHEET_DISPLAY_PANE_KNOWN_ATTRIBUTES = frozenset(
+    {"activePane", "state", "topLeftCell", "xSplit", "ySplit"}
+)
+_WORKSHEET_DISPLAY_IGNORED_CHILDREN = frozenset(
+    {"extLst", "pivotSelection", "selection"}
+)
+_WORKSHEET_DISPLAY_VIEW_VALUES = frozenset(
+    {"normal", "pageBreakPreview", "pageLayout"}
+)
+_WORKSHEET_DISPLAY_PANE_STATES = frozenset(
+    {"split", "frozen", "frozenSplit"}
+)
+
+
+def _worksheet_display_decimal(value: str | None) -> str | None:
+    """Normalize one finite, non-negative pane split without evaluating it."""
+    normalized = _font_decimal(value)
+    if normalized is None:
+        return None
+    try:
+        return normalized if Decimal(normalized) >= 0 else None
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _worksheet_display_view_signature(
+    view: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[tuple[str, str], ...], frozenset[str]]:
+    """Canonicalize material visibility controls in one sheetView element.
+
+    Active-cell, selection, top-left navigation, and zoom state are deliberately
+    ignored: writers change them during ordinary navigation and they do not by
+    themselves hide stored values. Material defaults are normalized so omitted
+    controls and explicit default spellings compare equal.
+    """
+    signature: list[tuple[str, str]] = []
+    active_controls: set[str] = set()
+    for attribute, value in sorted(view.attrib.items()):
+        local_name = _xml_local_name(attribute)
+        if (
+            _xml_namespace(attribute)
+            or local_name not in _WORKSHEET_DISPLAY_SHEET_VIEW_KNOWN_ATTRIBUTES
+        ):
+            note_issue(f"{context}:unsupported-attribute:{attribute}", value)
+            signature.append(
+                (
+                    "unsupported-attribute",
+                    repr((attribute, value)),
+                )
+            )
+
+    def material_boolean(name: str, default: bool) -> bool | None:
+        parsed = _number_format_boolean(view.get(name), default)
+        if parsed is None:
+            note_issue(f"{context}:invalid-{name}", view.get(name))
+            signature.append((name, repr(("invalid", view.get(name)))))
+            return None
+        if parsed != default:
+            signature.append((name, "true" if parsed else "false"))
+            active_controls.add(name)
+        return parsed
+
+    material_boolean("showZeros", True)
+    material_boolean("showFormulas", False)
+    material_boolean("showGridLines", True)
+    default_grid_color = material_boolean("defaultGridColor", True)
+    if default_grid_color is False:
+        raw_color_id = view.get("colorId", "64")
+        color_id = _number_format_unsigned_int(raw_color_id)
+        if color_id is None:
+            note_issue(f"{context}:invalid-colorId", raw_color_id)
+            signature.append(("gridline-color", repr(("invalid", raw_color_id))))
+        else:
+            signature.append(("gridline-color", str(color_id)))
+            active_controls.add("gridlineColor")
+    elif default_grid_color is None and view.get("colorId") is not None:
+        # A malformed default-grid-color declaration leaves the color's effect
+        # ambiguous. Retain the otherwise private raw declaration so changes
+        # remain detectable alongside the coverage warning.
+        raw_color_id = view.get("colorId")
+        color_id = _number_format_unsigned_int(raw_color_id)
+        signature.append(
+            (
+                "gridline-color-ambiguous",
+                repr(("invalid" if color_id is None else "value", raw_color_id)),
+            )
+        )
+        if color_id is None:
+            note_issue(f"{context}:invalid-colorId", raw_color_id)
+    material_boolean("showRowColHeaders", True)
+    material_boolean("showOutlineSymbols", True)
+    material_boolean("showRuler", True)
+    material_boolean("showWhiteSpace", True)
+    material_boolean("rightToLeft", False)
+
+    view_type = view.get("view", "normal")
+    if view_type not in _WORKSHEET_DISPLAY_VIEW_VALUES:
+        note_issue(f"{context}:invalid-view", view_type)
+        signature.append(("view", repr(("invalid", view_type))))
+    elif view_type != "normal":
+        signature.append(("view", view_type))
+        active_controls.add("view")
+
+    view_namespace = _xml_namespace(view.tag) or _SPREADSHEETML_NS
+    pane_tag = f"{{{view_namespace}}}pane"
+    panes = [child for child in view if child.tag == pane_tag]
+    if len(panes) > 1:
+        note_issue(f"{context}:multiple-pane-children", len(panes))
+    for child_index, child in enumerate(view):
+        if (
+            child.tag == pane_tag
+            or (
+                _xml_namespace(child.tag) == view_namespace
+                and _xml_local_name(child.tag) in _WORKSHEET_DISPLAY_IGNORED_CHILDREN
+            )
+        ):
+            continue
+        note_issue(f"{context}:unsupported-child:{child_index}", child.tag)
+        signature.append(("unsupported-child", repr(_xml_fragment(child).sort_key())))
+
+    for pane_index, pane in enumerate(panes):
+        pane_context = f"{context}:pane:{pane_index}"
+        for attribute, value in sorted(pane.attrib.items()):
+            local_name = _xml_local_name(attribute)
+            if (
+                _xml_namespace(attribute)
+                or local_name not in _WORKSHEET_DISPLAY_PANE_KNOWN_ATTRIBUTES
+            ):
+                note_issue(f"{pane_context}:unsupported-attribute:{attribute}", value)
+                signature.append(
+                    (
+                        "unsupported-pane-attribute",
+                        repr((attribute, value)),
+                    )
+                )
+
+        state = pane.get("state", "split")
+        state_valid = state in _WORKSHEET_DISPLAY_PANE_STATES
+        if not state_valid:
+            note_issue(f"{pane_context}:invalid-state", state)
+            signature.append(("pane-state", repr(("invalid", state))))
+
+        splits: list[tuple[str, str]] = []
+        for attribute_name in ("xSplit", "ySplit"):
+            raw_value = pane.get(attribute_name)
+            if raw_value is None:
+                continue
+            normalized = _worksheet_display_decimal(raw_value)
+            if normalized is None:
+                note_issue(
+                    f"{pane_context}:invalid-{attribute_name}",
+                    raw_value,
+                )
+                signature.append(
+                    (
+                        f"pane-{attribute_name}",
+                        repr(("invalid", raw_value)),
+                    )
+                )
+                continue
+            if normalized != "0":
+                splits.append((attribute_name, normalized))
+
+        if state_valid and (state != "split" or splits):
+            signature.append(("pane", repr((state, tuple(splits)))))
+            active_controls.add("pane")
+
+    return tuple(sorted(signature)), frozenset(active_controls)
+
+
+def _worksheet_display_metadata(path: Path) -> _WorksheetDisplayMetadata:
+    """Inspect raw, material worksheet display controls without reader loss.
+
+    The boundary covers visibility and view-mode declarations that can change a
+    reviewer's surface while leaving values and formulas untouched. It excludes
+    ordinary navigation state such as active cells, selections, top-left scroll
+    positions, and zoom factors to avoid routine writer churn.
+    """
+    default_snapshot = WorksheetDisplaySnapshot()
+    warnings: set[str] = set()
+    issues: dict[str, str] = {}
+    entries: list[tuple[str, str]] = []
+    counts: Counter[str] = Counter()
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    try:
+        with ZipFile(path) as archive:
+            for sheet_index, member in enumerate(_worksheet_display_xml_paths(archive)):
+                worksheet = _xml_root(archive, member)
+                worksheet_context = f"worksheet:{sheet_index}"
+                worksheet_namespace = _xml_namespace(worksheet.tag)
+                if (
+                    _xml_local_name(worksheet.tag) != "worksheet"
+                    or worksheet_namespace
+                    not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+                ):
+                    note_issue(f"{worksheet_context}:unexpected-root", worksheet.tag)
+                    continue
+                sheet_views_tag = f"{{{worksheet_namespace}}}sheetViews"
+                sheet_view_tag = f"{{{worksheet_namespace}}}sheetView"
+                containers = worksheet.findall(sheet_views_tag)
+                if len(containers) > 1:
+                    note_issue(
+                        f"{worksheet_context}:multiple-sheet-views-containers",
+                        len(containers),
+                    )
+                for container_index, container in enumerate(containers):
+                    context = f"{worksheet_context}:sheet-views:{container_index}"
+                    if container.attrib:
+                        note_issue(
+                            f"{context}:unexpected-attributes",
+                            tuple(sorted(container.attrib.items())),
+                        )
+                    for child_index, child in enumerate(container):
+                        if child.tag != sheet_view_tag:
+                            note_issue(
+                                f"{context}:unsupported-child:{child_index}",
+                                child.tag,
+                            )
+                    for view_index, view in enumerate(
+                        child
+                        for child in container
+                        if child.tag == sheet_view_tag
+                    ):
+                        view_context = f"{context}:view:{view_index}"
+                        signature, active_controls = _worksheet_display_view_signature(
+                            view,
+                            context=view_context,
+                            note_issue=note_issue,
+                        )
+                        if signature:
+                            entries.append(
+                                (
+                                    (
+                                        "worksheet-display:"
+                                        f"{sheet_index}:{container_index}:{view_index}"
+                                    ),
+                                    repr(signature),
+                                )
+                            )
+                        counts.update(active_controls)
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _WorksheetDisplayMetadata(
+            default_snapshot,
+            (
+                "FormulaFence could not inspect worksheet-display OOXML "
+                f"({type(error).__name__}); affected display controls were not compared.",
+            ),
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported worksheet-display metadata; "
+            "affected display controls have a coverage gap."
+        )
+        entries.extend(
+            (f"worksheet-display-issue:{context}", detail)
+            for context, detail in sorted(issues.items())
+        )
+    snapshot = WorksheetDisplaySnapshot(
+        zero_hidden_view_count=counts["showZeros"],
+        formula_view_count=counts["showFormulas"],
+        gridlines_hidden_view_count=counts["showGridLines"],
+        custom_gridline_color_view_count=counts["gridlineColor"],
+        headers_hidden_view_count=counts["showRowColHeaders"],
+        outline_symbols_hidden_view_count=counts["showOutlineSymbols"],
+        ruler_hidden_view_count=counts["showRuler"],
+        white_space_hidden_view_count=counts["showWhiteSpace"],
+        right_to_left_view_count=counts["rightToLeft"],
+        non_normal_view_count=counts["view"],
+        split_or_frozen_pane_count=counts["pane"],
+        unrecognized_display_control_count=len(issues),
+        definition_signature=(
+            _private_external_data_signature(tuple(sorted(entries))) if entries else None
+        ),
+    )
+    return _WorksheetDisplayMetadata(snapshot, tuple(sorted(warnings)))
+
+
 @dataclass
 class _WorkbookThemeBudget:
     """Bound raw workbook-theme reads across XML and direct image parts."""
@@ -31117,6 +31477,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     font_metadata = _font_metadata(source)
     fill_metadata = _fill_metadata(source)
     alignment_metadata = _alignment_metadata(source)
+    worksheet_display_metadata = _worksheet_display_metadata(source)
     workbook_theme_metadata = _workbook_theme_metadata(source)
     formula_cached_result_metadata = _formula_cached_result_metadata(source)
     rich_text_run_metadata = _rich_text_run_metadata(source)
@@ -31170,6 +31531,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(font_metadata.warnings)
     parser_warnings.update(fill_metadata.warnings)
     parser_warnings.update(alignment_metadata.warnings)
+    parser_warnings.update(worksheet_display_metadata.warnings)
     parser_warnings.update(workbook_theme_metadata.warnings)
     parser_warnings.update(formula_cached_result_metadata.warnings)
     parser_warnings.update(rich_text_run_metadata.warnings)
@@ -31407,6 +31769,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         font_controls=font_metadata.controls,
         fill_controls=fill_metadata.controls,
         alignment_controls=alignment_metadata.controls,
+        worksheet_display_controls=worksheet_display_metadata.controls,
         workbook_theme=workbook_theme_metadata.theme,
         formula_cached_results=formula_cached_result_metadata.results,
         rich_text_runs=rich_text_run_metadata.controls,
@@ -31497,6 +31860,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "font_controls": snapshot.font_controls.profile_dict(),
         "fill_controls": snapshot.fill_controls.profile_dict(),
         "alignment_controls": snapshot.alignment_controls.profile_dict(),
+        "worksheet_display_controls": (
+            snapshot.worksheet_display_controls.profile_dict()
+        ),
         "workbook_theme": snapshot.workbook_theme.profile_dict(),
         "formula_cached_results": snapshot.formula_cached_results.profile_dict(),
         "rich_text_runs": snapshot.rich_text_runs.profile_dict(),
@@ -31539,6 +31905,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_font_controls": snapshot.font_controls.present,
             "has_fill_controls": snapshot.fill_controls.present,
             "has_alignment_controls": snapshot.alignment_controls.present,
+            "has_worksheet_display_controls": (
+                snapshot.worksheet_display_controls.present
+            ),
             "has_workbook_theme": snapshot.workbook_theme.present,
             "has_formula_cached_results": snapshot.formula_cached_results.present,
             "has_rich_text_runs": snapshot.rich_text_runs.present,

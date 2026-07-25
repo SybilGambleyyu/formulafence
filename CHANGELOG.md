@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.49.0 — 2026-07-24
+
+- Inspect raw Excel rich-data controls before ordinary workbook readers can omit
+  or normalize them: Rich Value Data, structures, types, arrays, supporting
+  property bags/structures, styles, web images, rich-value relationships,
+  workbook/package relationships, and `XLRICHVALUE` metadata/cell bindings.
+  Profiles, Markdown, JSON, and SARIF expose aggregate counts only; entity
+  values, provider data, field names, identifiers, URLs, image references,
+  relationship IDs, and bound-cell locations remain private.
+- Emit `FF051` for a material rich-data control change and add the fail-closed
+  `no_rich_data_changes` policy rule (`FFP051`). This closes the review gap
+  where provider-linked entities, attached data, or external image
+  associations can change while ordinary cell values and formulas stay fixed.
+- Normalize writer-selected relationship IDs/order and equivalent internal
+  target spelling. Missing, duplicate, malformed, unsafe, unreadable,
+  oversized, or over-budget metadata emits a visible coverage warning; reads
+  are bounded to 16 MiB per XML part, 64 MiB per workbook, and 512 parts.
+  FormulaFence does not contact providers, refresh data, calculate formulas,
+  fetch endpoints, validate target content, or infer Excel client behavior.
+
 ## 0.48.0 — 2026-07-24
 
 - Inspect raw OPC package-signature controls before ordinary workbook readers

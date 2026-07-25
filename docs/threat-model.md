@@ -361,6 +361,28 @@ review prompt, not proof of an error.
   [XmlProperties](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.xmlproperties.xpath?view=openxml-3.0.1),
   and [SingleXmlCells](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.singlexmlcells?view=openxml-3.0.1)
   definitions.
+- Excel rich data types can place linked entity values, provider-backed fields,
+  web-image associations, and worksheet value-metadata bindings outside normal
+  cells. FormulaFence reads Rich Value Data/structure/type/array/supporting
+  property-bag/style/web-image/rich-value-relationship parts, their
+  workbook/package relationships, and `XLRICHVALUE` bindings before normal
+  readers can omit them. A material change emits `FF051` and
+  `no_rich_data_changes` blocks it as `FFP051`. Profiles and reports expose
+  aggregate part/value/structure/array/property-bag/binding/bound-cell/image/
+  relationship/external-reference and malformed-metadata counts only; entity
+  values, provider data, field names, identifiers, URLs, image references,
+  relationship IDs, and bound-cell locations remain private. Writer-selected
+  relationship IDs/order and equivalent internal targets normalize away.
+  Missing, duplicate, malformed, unsafe, unreadable, oversized, or over-budget
+  metadata becomes a coverage warning; reads are bounded to 16 MiB per XML
+  part, 64 MiB per workbook, and 512 parts. FormulaFence does **not** contact
+  providers, refresh values, calculate formulas, fetch or validate targets, or
+  infer Excel client behavior. This boundary follows Microsoft's
+  [Rich Value Data](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/896934fd-8df7-43f4-b154-2d39371c270d),
+  [Rich Value Structure](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/d90f6d91-d868-4b94-9d26-ec3b1492cec6),
+  [Rich Value Types](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/5d213b66-3196-4516-b63c-eef80d926f4a),
+  and [Rich Value Web Image](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/4f3a80fd-1776-407f-8807-2497a4692dea)
+  definitions.
 - OPC package signatures and VBA project signatures are distinct stored
   integrity/provenance surfaces. A workbook can preserve ordinary cells and
   even `xl/vbaProject.bin` while the package-root signature origin, XML signature

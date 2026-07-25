@@ -75,6 +75,7 @@ from formulafence.models import (
     QueryTableRefreshSnapshot,
     RangeDependency,
     RibbonCustomizationSnapshot,
+    RichDataSnapshot,
     RichTextRunEntry,
     RichTextRunSnapshot,
     ScenarioManagerSnapshot,
@@ -127,6 +128,14 @@ _NAMED_SHEET_VIEW_NS = "http://schemas.microsoft.com/office/spreadsheetml/2019/n
 _DATA_MASHUP_NS = "http://schemas.microsoft.com/DataMashup"
 _MARKUP_COMPATIBILITY_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 _XML_DIGITAL_SIGNATURE_NS = "http://www.w3.org/2000/09/xmldsig#"
+_RICH_DATA_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata"
+_RICH_DATA_2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata2"
+_RICH_DATA_WEB_IMAGE_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2020/richdatawebimage"
+)
+_RICH_VALUE_REL_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel"
+)
 _XML_NAMESPACE_PREFIXES = {
     _SPREADSHEETML_NS: "",
     _OFFICE_2010_SPREADSHEET_NS: "x14:",
@@ -191,6 +200,91 @@ _VBA_PROJECT_SIGNATURE_PART_PATTERN = re.compile(
 _DIGITAL_SIGNATURE_MAX_PART_BYTES = 16 * 1024 * 1024
 _DIGITAL_SIGNATURE_TOTAL_BYTES = 64 * 1024 * 1024
 _DIGITAL_SIGNATURE_TOTAL_PARTS = 512
+_RICH_DATA_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_RICH_DATA_TOTAL_XML_BYTES = 64 * 1024 * 1024
+_RICH_DATA_TOTAL_XML_PARTS = 512
+_RICH_DATA_METADATA_TYPE_NAME = "XLRICHVALUE"
+_RICH_DATA_METADATA_EXTENSION_URI = "{3E2802C4-A4D2-4D8B-9148-E3BE6C30E623}"
+_RICH_DATA_PART_CONTENT_TYPES = {
+    "application/vnd.ms-excel.rdrichvalue+xml": "rich-value-data",
+    "application/vnd.ms-excel.rdrichvaluestructure+xml": "rich-value-structure",
+    "application/vnd.ms-excel.rdrichvaluetypes+xml": "rich-value-types",
+    "application/vnd.ms-excel.rdarray+xml": "rich-value-array",
+    "application/vnd.ms-excel.rdsupportingpropertybag+xml": (
+        "supporting-property-bag"
+    ),
+    "application/vnd.ms-excel.rdsupportingpropertybagstructure+xml": (
+        "supporting-property-bag-structure"
+    ),
+    "application/vnd.ms-excel.richstyles+xml": "rich-styles",
+    "application/vnd.ms-excel.rdrichvaluewebimage+xml": "rich-value-web-image",
+    "application/vnd.ms-excel.richvaluerel+xml": "rich-value-relationships",
+}
+_RICH_DATA_RELATIONSHIP_TYPES = {
+    "http://schemas.microsoft.com/office/2017/06/relationships/rdrichvalue": (
+        "rich-value-data"
+    ),
+    "http://schemas.microsoft.com/office/2017/06/relationships/rdrichvaluestructure": (
+        "rich-value-structure"
+    ),
+    "http://schemas.microsoft.com/office/2017/06/relationships/rdrichvaluetypes": (
+        "rich-value-types"
+    ),
+    "http://schemas.microsoft.com/office/2017/06/relationships/rdarray": (
+        "rich-value-array"
+    ),
+    "http://schemas.microsoft.com/office/2017/06/relationships/rdsupportingpropertybag": (
+        "supporting-property-bag"
+    ),
+    "http://schemas.microsoft.com/office/2017/06/relationships/"
+    "rdsupportingpropertybagstructure": "supporting-property-bag-structure",
+    "http://schemas.microsoft.com/office/2017/06/relationships/richstyles": (
+        "rich-styles"
+    ),
+    "http://schemas.microsoft.com/office/2020/07/relationships/"
+    "rdrichvaluewebimage": "rich-value-web-image",
+    "http://schemas.microsoft.com/office/2022/10/relationships/richvaluerel": (
+        "rich-value-relationships"
+    ),
+}
+_RICH_DATA_PART_BASENAMES = {
+    "rdrichvalue.xml": "rich-value-data",
+    "rdrichvaluestructure.xml": "rich-value-structure",
+    "rdrichvaluetypes.xml": "rich-value-types",
+    "rdarray.xml": "rich-value-array",
+    "rdsupportingpropertybag.xml": "supporting-property-bag",
+    "rdsupportingpropertybagstructure.xml": "supporting-property-bag-structure",
+    "richstyles.xml": "rich-styles",
+    "rdrichvaluewebimage.xml": "rich-value-web-image",
+    "richvaluerel.xml": "rich-value-relationships",
+}
+_RICH_DATA_UNSIGNED_PATTERN = re.compile(r"^\+?[0-9]+$")
+_RICH_DATA_PART_ROOTS = {
+    "rich-value-data": (_RICH_DATA_NS, "rvData"),
+    "rich-value-structure": (_RICH_DATA_NS, "rvStructures"),
+    "rich-value-types": (_RICH_DATA_2_NS, "rvTypesInfo"),
+    "rich-value-array": (_RICH_DATA_2_NS, "arrayData"),
+    "supporting-property-bag": (_RICH_DATA_2_NS, "supportingPropertyBags"),
+    "supporting-property-bag-structure": (_RICH_DATA_2_NS, "spbStructures"),
+    "rich-styles": (_RICH_DATA_2_NS, "richStyleSheet"),
+    "rich-value-web-image": (_RICH_DATA_WEB_IMAGE_NS, "webImagesSrd"),
+    "rich-value-relationships": (_RICH_VALUE_REL_NS, "richValueRels"),
+}
+_RICH_DATA_DEFINITION_CATEGORIES = frozenset(
+    {
+        "rich-value-structure",
+        "rich-value-types",
+        "supporting-property-bag-structure",
+        "rich-styles",
+    }
+)
+_RICH_DATA_VALUE_CATEGORIES = frozenset(
+    {
+        "rich-value-data",
+        "rich-value-array",
+        "supporting-property-bag",
+    }
+)
 _EXTERNAL_LINK_PART_PATTERN = re.compile(
     r"^xl/externalLinks/externalLink(?:\d+)?\.xml$", re.IGNORECASE
 )
@@ -690,6 +784,14 @@ class _DigitalSignatureMetadata:
     """Raw signature envelope evidence retained outside the workbook reader."""
 
     signatures: DigitalSignatureSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _RichDataMetadata:
+    """Raw rich-data evidence retained before the workbook reader omits it."""
+
+    rich_data: RichDataSnapshot
     warnings: tuple[str, ...]
 
 
@@ -22938,6 +23040,1408 @@ def _digital_signature_metadata(path: Path) -> _DigitalSignatureMetadata:
     return _DigitalSignatureMetadata(snapshot, tuple(sorted(warnings)))
 
 
+@dataclass
+class _RichDataBudget:
+    """Bound raw XML reads across rich-data package declarations."""
+
+    remaining_parts: int = _RICH_DATA_TOTAL_XML_PARTS
+    remaining_bytes: int = _RICH_DATA_TOTAL_XML_BYTES
+
+
+def _rich_data_issue(
+    issues: list[tuple[str, str]],
+    context: str,
+    detail: object,
+) -> None:
+    """Record private rich-data coverage evidence without exposing content."""
+    issues.append((context, repr(detail)))
+
+
+def _rich_data_bounded_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _RichDataBudget,
+    *,
+    report_failure: bool = True,
+) -> tuple[bytes | None, str | None]:
+    """Read one rich-data XML member within fixed scan budgets."""
+    if budget.remaining_parts <= 0:
+        if report_failure:
+            warnings.add(
+                "FormulaFence reached its bounded rich-data XML part count budget; "
+                "affected rich data was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("rich-data-part-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not locate a rich-data package part; "
+                "affected rich data was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("missing-rich-data-member", member),)
+        )
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _RICH_DATA_MAX_XML_PART_BYTES:
+        if report_failure:
+            warnings.add(
+                "FormulaFence did not fully read an oversized rich-data XML part; "
+                "affected rich data has a coverage gap."
+            )
+        return None, _private_external_data_signature(
+            (("oversized-rich-data-part", metadata),)
+        )
+    if info.file_size > budget.remaining_bytes:
+        if report_failure:
+            warnings.add(
+                "FormulaFence reached its bounded rich-data XML read budget; "
+                "affected rich data was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("rich-data-read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not read a rich-data XML package part "
+                f"({type(error).__name__}); affected rich data was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("unreadable-rich-data-member", metadata),)
+        )
+
+
+def _rich_data_bounded_root(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _RichDataBudget,
+    *,
+    report_failure: bool = True,
+) -> tuple[ElementTree.Element | None, str | None]:
+    """Return one bounded rich-data XML root or a private failure signature."""
+    payload, fallback_signature = _rich_data_bounded_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        report_failure=report_failure,
+    )
+    if payload is None:
+        return None, fallback_signature
+    try:
+        return _xml_root_from_payload(payload), None
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not parse a rich-data XML package part "
+                f"({type(error).__name__}); affected rich data was not compared."
+            )
+        return None, _private_payload_signature(payload)
+
+
+def _rich_data_unsigned(
+    value: str | None,
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+    required: bool = True,
+) -> int | None:
+    """Read one bounded unsigned rich-data index without accepting malformed input."""
+    if value is None:
+        if required:
+            _rich_data_issue(issues, f"missing-{context}", None)
+        return None
+    candidate = value.strip()
+    if not _RICH_DATA_UNSIGNED_PATTERN.fullmatch(candidate):
+        _rich_data_issue(issues, f"invalid-{context}", value)
+        return None
+    try:
+        parsed = int(candidate)
+    except ValueError:
+        _rich_data_issue(issues, f"invalid-{context}", value)
+        return None
+    if not 0 <= parsed <= 2_147_483_647:
+        _rich_data_issue(issues, f"out-of-range-{context}", value)
+        return None
+    return parsed
+
+
+def _rich_data_declared_count(
+    root: ElementTree.Element,
+    actual_count: int,
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+) -> None:
+    """Check a rich-data count attribute without treating an invalid count as safe."""
+    declared_count = _rich_data_unsigned(
+        root.get("count"),
+        issues,
+        context=f"{context}-count",
+        required=False,
+    )
+    if declared_count is not None and declared_count != actual_count:
+        _rich_data_issue(
+            issues,
+            f"mismatched-{context}-count",
+            (declared_count, actual_count),
+        )
+
+
+def _rich_data_content_type_declarations(
+    archive: ZipFile,
+    warnings: set[str],
+    budget: _RichDataBudget,
+    issues: list[tuple[str, str]],
+) -> tuple[dict[str, tuple[str, ...]], str | None]:
+    """Read rich-data-relevant OPC content types without exposing part content."""
+    root, fallback_signature = _rich_data_bounded_root(
+        archive,
+        "[Content_Types].xml",
+        warnings,
+        budget,
+        report_failure=False,
+    )
+    if root is None:
+        return {}, fallback_signature
+    if (
+        _xml_namespace(root.tag) != _CONTENT_TYPES_NS
+        or _xml_local_name(root.tag) != "Types"
+    ):
+        return {}, _private_external_data_signature(
+            (
+                (
+                    "unexpected-rich-data-content-types-root",
+                    _xml_display_name(root.tag),
+                ),
+            )
+        )
+    declarations: dict[str, list[str]] = defaultdict(list)
+    override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
+    for child in root:
+        if child.tag != override_tag:
+            continue
+        raw_member = child.get("PartName")
+        raw_content_type = child.get("ContentType")
+        member = (
+            _normalise_content_type_part_name(raw_member)
+            if raw_member is not None
+            else None
+        )
+        content_type = raw_content_type.casefold() if raw_content_type else None
+        raw_is_rich_path = bool(
+            raw_member
+            and raw_member.lstrip("/").casefold().startswith("xl/richdata/")
+        )
+        is_rich_path = bool(
+            member and member.casefold().startswith("xl/richdata/")
+        )
+        if (
+            not raw_is_rich_path
+            and not is_rich_path
+            and content_type not in _RICH_DATA_PART_CONTENT_TYPES
+        ):
+            continue
+        if member is None or content_type is None:
+            _rich_data_issue(
+                issues,
+                "malformed-rich-data-content-type-override",
+                (raw_member, raw_content_type),
+            )
+            continue
+        declarations[member].append(content_type)
+    return (
+        {
+            member: tuple(sorted(values))
+            for member, values in declarations.items()
+        },
+        None,
+    )
+
+
+def _rich_data_part_relationships(
+    archive: ZipFile,
+    source_member: str,
+    members: set[str],
+    warnings: set[str],
+    budget: _RichDataBudget,
+    issues: list[tuple[str, str]],
+    *,
+    required: bool,
+    context: str,
+    report_failure: bool = True,
+) -> tuple[_PackageRelationship, ...]:
+    """Read one rich-data relationship part without following target endpoints."""
+    relationship_member = _relationship_part_path(source_member)
+    if relationship_member not in members:
+        if required:
+            _rich_data_issue(
+                issues,
+                f"missing-{context}-relationship-part",
+                relationship_member,
+            )
+        return ()
+    root, fallback_signature = _rich_data_bounded_root(
+        archive,
+        relationship_member,
+        warnings,
+        budget,
+        report_failure=report_failure,
+    )
+    if root is None:
+        _rich_data_issue(
+            issues,
+            f"unreadable-{context}-relationship-part",
+            (relationship_member, fallback_signature),
+        )
+        return ()
+    if (
+        _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+        or _xml_local_name(root.tag) != "Relationships"
+    ):
+        _rich_data_issue(
+            issues,
+            f"unexpected-{context}-relationship-root",
+            _xml_display_name(root.tag),
+        )
+        return ()
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_PackageRelationship] = []
+    ids: list[str] = []
+    for child in root:
+        if child.tag != relationship_tag:
+            _rich_data_issue(
+                issues,
+                f"unexpected-{context}-relationship-child",
+                _xml_fragment(child).sort_key(),
+            )
+            continue
+        relationship_id = child.get("Id")
+        if relationship_id is None or not relationship_id:
+            _rich_data_issue(
+                issues,
+                f"missing-{context}-relationship-id",
+                _xml_fragment(child).sort_key(),
+            )
+        else:
+            ids.append(relationship_id)
+        relationship_type = child.get("Type")
+        raw_target = child.get("Target")
+        target_mode = child.get("TargetMode", "Internal")
+        if relationship_type is None or raw_target is None:
+            _rich_data_issue(
+                issues,
+                f"malformed-{context}-relationship",
+                _xml_fragment(child).sort_key(),
+            )
+        relationships.append(
+            _PackageRelationship(
+                relationship_id=relationship_id,
+                relationship_type=relationship_type or "",
+                target=(
+                    _normalise_part_target(source_member, raw_target)
+                    if raw_target is not None
+                    and target_mode.casefold() == "internal"
+                    else None
+                ),
+                target_mode=target_mode,
+                raw_target=raw_target,
+            )
+        )
+    if len(ids) != len(set(ids)):
+        _rich_data_issue(
+            issues,
+            f"duplicate-{context}-relationship-id",
+            tuple(sorted(ids)),
+        )
+    return tuple(relationships)
+
+
+def _rich_data_relationship_target(relationship: _PackageRelationship) -> str | None:
+    """Keep a relationship endpoint only inside a private rich-data signature."""
+    return (
+        relationship.target
+        if relationship.target is not None
+        else relationship.raw_target
+    )
+
+
+def _rich_data_relationship_semantic(
+    relationship: _PackageRelationship,
+) -> tuple[str, str, str | None]:
+    """Return relationship semantics while ignoring writer-selected IDs and order."""
+    return (
+        relationship.relationship_type.casefold(),
+        relationship.target_mode.casefold(),
+        _rich_data_relationship_target(relationship),
+    )
+
+
+def _rich_data_category_for_member(member: str) -> str | None:
+    """Classify a conventional rich-data part name without trusting its XML."""
+    if not member.casefold().startswith("xl/richdata/"):
+        return None
+    return _RICH_DATA_PART_BASENAMES.get(posixpath.basename(member).casefold())
+
+
+def _rich_data_relationship_lookup(
+    relationships: tuple[_PackageRelationship, ...],
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+) -> dict[str, _PackageRelationship]:
+    """Resolve unique relationship IDs while retaining duplicate IDs as gaps."""
+    relationships_by_id: dict[str, list[_PackageRelationship]] = defaultdict(list)
+    for relationship in relationships:
+        if relationship.relationship_id:
+            relationships_by_id[relationship.relationship_id].append(relationship)
+    result: dict[str, _PackageRelationship] = {}
+    for relationship_id, candidates in relationships_by_id.items():
+        if len(candidates) != 1:
+            _rich_data_issue(
+                issues,
+                f"duplicate-{context}-relationship-id",
+                relationship_id,
+            )
+            continue
+        result[relationship_id] = candidates[0]
+    return result
+
+
+def _rich_data_relationship_aware_fragment(
+    root: ElementTree.Element,
+    relationships_by_id: Mapping[str, _PackageRelationship],
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+) -> tuple[tuple[object, ...], tuple[str, ...]]:
+    """Canonicalise XML relationship references without retaining writer IDs.
+
+    The resolved endpoints remain only inside the private comparison signature.
+    Relationship declaration order and assigned `rId` values therefore do not
+    create a change by themselves.
+    """
+    references: list[str] = []
+
+    def fragment(element: ElementTree.Element) -> tuple[object, ...]:
+        attributes: list[tuple[str, object]] = []
+        for attribute, value in element.attrib.items():
+            if (
+                _xml_namespace(attribute) == _DOCUMENT_RELATIONSHIP_NS
+                and _xml_local_name(attribute) == "id"
+            ):
+                references.append(value)
+                relationship = relationships_by_id.get(value)
+                if relationship is None:
+                    _rich_data_issue(
+                        issues,
+                        f"unresolved-{context}-relationship-reference",
+                        value,
+                    )
+                    attributes.append(
+                        (
+                            _xml_display_name(attribute),
+                            ("unresolved-relationship-reference", value),
+                        )
+                    )
+                else:
+                    attributes.append(
+                        (
+                            _xml_display_name(attribute),
+                            (
+                                "relationship",
+                                *_rich_data_relationship_semantic(relationship),
+                            ),
+                        )
+                    )
+                continue
+            attributes.append((_xml_display_name(attribute), value))
+        children = tuple(fragment(child) for child in element)
+        text = element.text
+        if children and text is not None and not text.strip():
+            text = None
+        return (
+            _xml_display_name(element.tag),
+            tuple(sorted(attributes, key=repr)),
+            text,
+            children,
+        )
+
+    return fragment(root), tuple(references)
+
+
+def _rich_data_relationship_entries(
+    relationships: tuple[_PackageRelationship, ...],
+    *,
+    context: str,
+) -> list[tuple[str, str]]:
+    """Create order- and ID-independent private relationship evidence."""
+    return [
+        (
+            context,
+            repr(
+                tuple(
+                    sorted(
+                        _rich_data_relationship_semantic(relationship)
+                        for relationship in relationships
+                    )
+                )
+            ),
+        )
+    ]
+
+
+@dataclass(frozen=True)
+class _RichDataMetadataInspection:
+    """Private rich value-metadata bindings before worksheet-cell resolution."""
+
+    present: bool = False
+    binding_count: int = 0
+    value_metadata_indexes: frozenset[int] = frozenset()
+    rich_value_indexes: tuple[int, ...] = ()
+    signature_entries: tuple[tuple[str, str], ...] = ()
+
+
+def _rich_data_metadata_inspection(
+    root: ElementTree.Element,
+    issues: list[tuple[str, str]],
+) -> _RichDataMetadataInspection:
+    """Parse only XLRICHVALUE metadata records without exporting their values."""
+    if (
+        _xml_namespace(root.tag) != _SPREADSHEETML_NS
+        or _xml_local_name(root.tag) != "metadata"
+    ):
+        _rich_data_issue(
+            issues,
+            "unexpected-rich-data-metadata-root",
+            _xml_display_name(root.tag),
+        )
+        return _RichDataMetadataInspection()
+
+    metadata_types_tag = f"{{{_SPREADSHEETML_NS}}}metadataTypes"
+    metadata_type_tag = f"{{{_SPREADSHEETML_NS}}}metadataType"
+    future_metadata_tag = f"{{{_SPREADSHEETML_NS}}}futureMetadata"
+    value_metadata_tag = f"{{{_SPREADSHEETML_NS}}}valueMetadata"
+    block_tag = f"{{{_SPREADSHEETML_NS}}}bk"
+    record_tag = f"{{{_SPREADSHEETML_NS}}}rc"
+    extension_tag = f"{{{_SPREADSHEETML_NS}}}ext"
+    rich_value_binding_tag = f"{{{_RICH_DATA_NS}}}rvb"
+
+    metadata_types = root.find(metadata_types_tag)
+    rich_type_indexes: set[int] = set()
+    metadata_entries: list[tuple[str, str]] = []
+    if metadata_types is not None:
+        type_nodes = list(metadata_types.findall(metadata_type_tag))
+        _rich_data_declared_count(
+            metadata_types,
+            len(type_nodes),
+            issues,
+            context="rich-data-metadata-types",
+        )
+        for index, metadata_type in enumerate(type_nodes, start=1):
+            if (
+                metadata_type.get("name", "").casefold()
+                != _RICH_DATA_METADATA_TYPE_NAME.casefold()
+            ):
+                continue
+            rich_type_indexes.add(index)
+            metadata_entries.append(
+                (
+                    "rich-data-metadata-type",
+                    repr((index, _xml_fragment(metadata_type).sort_key())),
+                )
+            )
+
+    future_sections = [
+        section
+        for section in root.findall(future_metadata_tag)
+        if section.get("name", "").casefold()
+        == _RICH_DATA_METADATA_TYPE_NAME.casefold()
+    ]
+    if len(future_sections) > 1:
+        _rich_data_issue(
+            issues,
+            "duplicate-rich-data-future-metadata-sections",
+            len(future_sections),
+        )
+    rich_value_indexes: list[int] = []
+    for section_index, section in enumerate(future_sections):
+        blocks = list(section.findall(block_tag))
+        _rich_data_declared_count(
+            section,
+            len(blocks),
+            issues,
+            context="rich-data-future-metadata",
+        )
+        section_entries: list[tuple[int, tuple[object, ...]]] = []
+        for block_index, block in enumerate(blocks):
+            bindings: list[ElementTree.Element] = []
+            for extension in block.iter(extension_tag):
+                if (
+                    extension.get("uri", "").casefold()
+                    != _RICH_DATA_METADATA_EXTENSION_URI.casefold()
+                ):
+                    continue
+                bindings.extend(extension.findall(f".//{rich_value_binding_tag}"))
+            if len(bindings) != 1:
+                _rich_data_issue(
+                    issues,
+                    "invalid-rich-data-future-metadata-binding-count",
+                    (section_index, block_index, len(bindings)),
+                )
+                continue
+            rich_value_index = _rich_data_unsigned(
+                bindings[0].get("i"),
+                issues,
+                context="rich-data-value-index",
+            )
+            if rich_value_index is None:
+                continue
+            rich_value_indexes.append(rich_value_index)
+            section_entries.append((block_index, _xml_fragment(block).sort_key()))
+        if section_entries:
+            metadata_entries.append(
+                (
+                    "rich-data-future-metadata",
+                    repr((section_index, tuple(section_entries))),
+                )
+            )
+
+    value_metadata_sections = list(root.findall(value_metadata_tag))
+    if len(value_metadata_sections) > 1:
+        _rich_data_issue(
+            issues,
+            "duplicate-rich-data-value-metadata-sections",
+            len(value_metadata_sections),
+        )
+    value_metadata_indexes: set[int] = set()
+    binding_count = 0
+    for section_index, section in enumerate(value_metadata_sections):
+        blocks = list(section.findall(block_tag))
+        _rich_data_declared_count(
+            section,
+            len(blocks),
+            issues,
+            context="rich-data-value-metadata",
+        )
+        for block_index, block in enumerate(blocks, start=1):
+            records = list(block.findall(record_tag))
+            matching_records: list[tuple[object, ...]] = []
+            for record in records:
+                type_index = _rich_data_unsigned(
+                    record.get("t"),
+                    issues,
+                    context="rich-data-value-metadata-type-index",
+                )
+                if type_index is None or type_index not in rich_type_indexes:
+                    continue
+                future_index = _rich_data_unsigned(
+                    record.get("v"),
+                    issues,
+                    context="rich-data-value-metadata-value-index",
+                )
+                if future_index is None:
+                    continue
+                if future_index >= len(rich_value_indexes):
+                    _rich_data_issue(
+                        issues,
+                        "out-of-range-rich-data-value-metadata-value-index",
+                        (section_index, block_index, future_index),
+                    )
+                    continue
+                binding_count += 1
+                value_metadata_indexes.add(block_index)
+                matching_records.append(_xml_fragment(record).sort_key())
+            if matching_records:
+                metadata_entries.append(
+                    (
+                        "rich-data-value-metadata-binding",
+                        repr((section_index, block_index, tuple(matching_records))),
+                    )
+                )
+
+    present = bool(
+        rich_type_indexes
+        or future_sections
+        or value_metadata_indexes
+        or rich_value_indexes
+    )
+    if present and not rich_type_indexes:
+        _rich_data_issue(issues, "missing-rich-data-metadata-type", None)
+    if present and not future_sections:
+        _rich_data_issue(issues, "missing-rich-data-future-metadata", None)
+    return _RichDataMetadataInspection(
+        present=present,
+        binding_count=binding_count,
+        value_metadata_indexes=frozenset(value_metadata_indexes),
+        rich_value_indexes=tuple(rich_value_indexes),
+        signature_entries=tuple(sorted(metadata_entries)),
+    )
+
+
+def _rich_data_metadata(path: Path) -> _RichDataMetadata:
+    """Inventory Excel rich-data controls without resolving providers or URLs.
+
+    Rich values can contain provider-backed entities, attached fields, and web
+    image associations outside normal cells. This scanner records aggregate
+    counts and private semantic fingerprints only. It does not fetch external
+    targets, refresh values, calculate formulas, inspect provider services, or
+    emit entity data, field names, identifiers, URLs, relationship IDs, or
+    bound-cell locations.
+    """
+    warnings: set[str] = set()
+    issues: list[tuple[str, str]] = []
+    definition_entries: list[tuple[str, str]] = []
+    value_entries: list[tuple[str, str]] = []
+    metadata_entries: list[tuple[str, str]] = []
+    relationship_entries: list[tuple[str, str]] = []
+    try:
+        with ZipFile(path) as archive:
+            members = set(archive.namelist())
+            member_counts: dict[str, int] = defaultdict(int)
+            for entry in archive.infolist():
+                member_counts[entry.filename] += 1
+            budget = _RichDataBudget()
+
+            content_type_warnings: set[str] = set()
+            content_type_probe_issues: list[tuple[str, str]] = []
+            content_types, content_type_fallback = _rich_data_content_type_declarations(
+                archive,
+                content_type_warnings,
+                budget,
+                content_type_probe_issues,
+            )
+            category_members: dict[str, set[str]] = defaultdict(set)
+            rich_package_candidate = False
+            for member in sorted(members):
+                if not member.casefold().startswith("xl/richdata/"):
+                    continue
+                if "/_rels/" in member.casefold():
+                    continue
+                rich_package_candidate = True
+                category = _rich_data_category_for_member(member)
+                if category is None:
+                    _rich_data_issue(
+                        issues,
+                        "unrecognized-rich-data-package-member",
+                        member,
+                    )
+                    continue
+                category_members[category].add(member)
+
+            for member, declarations in sorted(content_types.items()):
+                rich_package_candidate = True
+                if len(declarations) != 1:
+                    _rich_data_issue(
+                        issues,
+                        "duplicate-rich-data-content-type-declaration",
+                        (member, declarations),
+                    )
+                if member not in members:
+                    _rich_data_issue(
+                        issues,
+                        "missing-rich-data-content-type-member",
+                        member,
+                    )
+                for declaration in declarations:
+                    category = _RICH_DATA_PART_CONTENT_TYPES.get(declaration)
+                    if category is None:
+                        _rich_data_issue(
+                            issues,
+                            "unrecognized-rich-data-content-type",
+                            (member, declaration),
+                        )
+                        continue
+                    category_members[category].add(member)
+                    definition_entries.append(
+                        (
+                            "rich-data-content-type",
+                            repr((category, member, declaration)),
+                        )
+                    )
+
+            relationship_probe_warnings: set[str] = set()
+            relationship_probe_issues: list[tuple[str, str]] = []
+            workbook_relationships = _rich_data_part_relationships(
+                archive,
+                "xl/workbook.xml",
+                members,
+                relationship_probe_warnings,
+                budget,
+                relationship_probe_issues,
+                required=False,
+                context="workbook-rich-data",
+                report_failure=False,
+            )
+            rich_workbook_relationships: list[
+                tuple[str, _PackageRelationship]
+            ] = []
+            metadata_workbook_relationships: list[_PackageRelationship] = []
+            for relationship in workbook_relationships:
+                relationship_type = relationship.relationship_type.casefold()
+                category = _RICH_DATA_RELATIONSHIP_TYPES.get(relationship_type)
+                if category is not None:
+                    rich_workbook_relationships.append((category, relationship))
+                    if relationship.target_mode.casefold() != "internal":
+                        _rich_data_issue(
+                            issues,
+                            "external-rich-data-workbook-relationship",
+                            (category, _rich_data_relationship_semantic(relationship)),
+                        )
+                        continue
+                    if relationship.target is None:
+                        _rich_data_issue(
+                            issues,
+                            "unsafe-rich-data-workbook-relationship-target",
+                            (
+                                category,
+                                _rich_data_relationship_semantic(relationship),
+                            ),
+                        )
+                        continue
+                    category_members[category].add(relationship.target)
+                    continue
+                if (
+                    relationship.target is not None
+                    and relationship.target.casefold().startswith("xl/richdata/")
+                ):
+                    rich_package_candidate = True
+                    _rich_data_issue(
+                        issues,
+                        "unrecognized-rich-data-workbook-relationship",
+                        _rich_data_relationship_semantic(relationship),
+                    )
+                if relationship_type.endswith("/sheetmetadata"):
+                    metadata_workbook_relationships.append(relationship)
+
+            metadata_probe_warnings: set[str] = set()
+            metadata_probe_issues: list[tuple[str, str]] = []
+            metadata_roots: dict[str, ElementTree.Element] = {}
+            metadata_failures: dict[str, str | None] = {}
+            canonical_metadata_member = "xl/metadata.xml"
+            if canonical_metadata_member in members:
+                metadata_root, metadata_fallback = _rich_data_bounded_root(
+                    archive,
+                    canonical_metadata_member,
+                    metadata_probe_warnings,
+                    budget,
+                    report_failure=False,
+                )
+                if metadata_root is not None:
+                    metadata_roots[canonical_metadata_member] = metadata_root
+                else:
+                    metadata_failures[canonical_metadata_member] = metadata_fallback
+
+            preliminary_rich_data = bool(
+                rich_package_candidate
+                or category_members
+                or rich_workbook_relationships
+                or content_type_probe_issues
+            )
+            probe_metadata_inspections: dict[str, _RichDataMetadataInspection] = {}
+            for member, metadata_root in metadata_roots.items():
+                inspection = _rich_data_metadata_inspection(
+                    metadata_root,
+                    metadata_probe_issues,
+                )
+                probe_metadata_inspections[member] = inspection
+                preliminary_rich_data = preliminary_rich_data or inspection.present
+
+            if not preliminary_rich_data:
+                return _RichDataMetadata(RichDataSnapshot(), ())
+
+            warnings.update(content_type_warnings)
+            warnings.update(relationship_probe_warnings)
+            warnings.update(metadata_probe_warnings)
+            issues.extend(content_type_probe_issues)
+            issues.extend(relationship_probe_issues)
+            issues.extend(metadata_probe_issues)
+            if content_type_fallback is not None:
+                _rich_data_issue(
+                    issues,
+                    "unreadable-rich-data-content-types",
+                    content_type_fallback,
+                )
+
+            for category, relationship in rich_workbook_relationships:
+                relationship_entries.extend(
+                    _rich_data_relationship_entries(
+                        (relationship,),
+                        context=f"workbook-rich-data-relationship:{category}",
+                    )
+                )
+                target = relationship.target
+                if target is None:
+                    continue
+                target_category = _rich_data_category_for_member(target)
+                if target_category is not None and target_category != category:
+                    _rich_data_issue(
+                        issues,
+                        "mismatched-rich-data-workbook-relationship-target",
+                        (category, target_category, target),
+                    )
+                if target not in members:
+                    _rich_data_issue(
+                        issues,
+                        "missing-rich-data-workbook-relationship-target",
+                        (category, target),
+                    )
+
+            metadata_members: set[str] = set(metadata_roots)
+            for relationship in metadata_workbook_relationships:
+                relationship_entries.extend(
+                    _rich_data_relationship_entries(
+                        (relationship,),
+                        context="workbook-rich-data-metadata-relationship",
+                    )
+                )
+                if relationship.target_mode.casefold() != "internal":
+                    _rich_data_issue(
+                        issues,
+                        "external-rich-data-metadata-relationship",
+                        _rich_data_relationship_semantic(relationship),
+                    )
+                    continue
+                if relationship.target is None:
+                    _rich_data_issue(
+                        issues,
+                        "unsafe-rich-data-metadata-relationship-target",
+                        _rich_data_relationship_semantic(relationship),
+                    )
+                    continue
+                metadata_members.add(relationship.target)
+                if relationship.target not in members:
+                    _rich_data_issue(
+                        issues,
+                        "missing-rich-data-metadata-relationship-target",
+                        relationship.target,
+                    )
+
+            if not metadata_workbook_relationships:
+                _rich_data_issue(
+                    issues,
+                    "missing-rich-data-metadata-workbook-relationship",
+                    None,
+                )
+
+            metadata_inspections: dict[str, _RichDataMetadataInspection] = {}
+            for metadata_member in sorted(metadata_members):
+                if metadata_member not in members:
+                    continue
+                metadata_root = metadata_roots.get(metadata_member)
+                if metadata_root is None:
+                    if metadata_member in metadata_failures:
+                        _rich_data_issue(
+                            issues,
+                            "unreadable-rich-data-metadata-member",
+                            (
+                                metadata_member,
+                                metadata_failures[metadata_member],
+                            ),
+                        )
+                        continue
+                    metadata_root, metadata_fallback = _rich_data_bounded_root(
+                        archive,
+                        metadata_member,
+                        warnings,
+                        budget,
+                    )
+                    if metadata_root is None:
+                        _rich_data_issue(
+                            issues,
+                            "unreadable-rich-data-metadata-member",
+                            (metadata_member, metadata_fallback),
+                        )
+                        continue
+                    metadata_roots[metadata_member] = metadata_root
+                inspection = probe_metadata_inspections.get(metadata_member)
+                if inspection is None:
+                    inspection = _rich_data_metadata_inspection(metadata_root, issues)
+                if not inspection.present:
+                    continue
+                metadata_inspections[metadata_member] = inspection
+                metadata_entries.extend(inspection.signature_entries)
+
+            actual_category_members: dict[str, set[str]] = {
+                category: {
+                    member
+                    for member in declared_members
+                    if member in members
+                }
+                for category, declared_members in category_members.items()
+            }
+            members_to_categories: dict[str, set[str]] = defaultdict(set)
+            for category, declared_members in actual_category_members.items():
+                for member in declared_members:
+                    members_to_categories[member].add(category)
+            for member, categories in members_to_categories.items():
+                if len(categories) > 1:
+                    _rich_data_issue(
+                        issues,
+                        "ambiguous-rich-data-part-category",
+                        (member, tuple(sorted(categories))),
+                    )
+
+            rich_value_count = 0
+            rich_value_structure_count = 0
+            linked_entity_structure_count = 0
+            rich_value_array_count = 0
+            supporting_property_bag_count = 0
+            web_image_count = 0
+            web_image_part_roots: list[tuple[str, ElementTree.Element]] = []
+            rich_value_relationship_part_roots: list[
+                tuple[str, ElementTree.Element]
+            ] = []
+
+            for category in sorted(actual_category_members):
+                declared_members = actual_category_members[category]
+                if len(declared_members) > 1:
+                    _rich_data_issue(
+                        issues,
+                        "duplicate-rich-data-category-part",
+                        (category, tuple(sorted(declared_members))),
+                    )
+                expected_content_types = {
+                    content_type
+                    for content_type, content_category in _RICH_DATA_PART_CONTENT_TYPES.items()
+                    if content_category == category
+                }
+                expected_root = _RICH_DATA_PART_ROOTS.get(category)
+                if expected_root is None:
+                    _rich_data_issue(
+                        issues,
+                        "unrecognized-rich-data-part-category",
+                        category,
+                    )
+                    continue
+                for member in sorted(declared_members):
+                    if member_counts[member] != 1:
+                        _rich_data_issue(
+                            issues,
+                            "duplicate-rich-data-archive-member",
+                            (member, member_counts[member]),
+                        )
+                    declarations = content_types.get(member, ())
+                    if not declarations:
+                        _rich_data_issue(
+                            issues,
+                            "unlisted-rich-data-content-type",
+                            (category, member),
+                        )
+                    elif any(
+                        declaration not in expected_content_types
+                        for declaration in declarations
+                    ):
+                        _rich_data_issue(
+                            issues,
+                            "mismatched-rich-data-content-type",
+                            (category, member, declarations),
+                        )
+                    root, fallback_signature = _rich_data_bounded_root(
+                        archive,
+                        member,
+                        warnings,
+                        budget,
+                    )
+                    if root is None:
+                        _rich_data_issue(
+                            issues,
+                            "unreadable-rich-data-part",
+                            (category, member, fallback_signature),
+                        )
+                        continue
+                    if (
+                        _xml_namespace(root.tag) != expected_root[0]
+                        or _xml_local_name(root.tag) != expected_root[1]
+                    ):
+                        _rich_data_issue(
+                            issues,
+                            "unexpected-rich-data-part-root",
+                            (category, member, _xml_display_name(root.tag)),
+                        )
+                    part_fragment = _xml_fragment(root).sort_key()
+                    if category in _RICH_DATA_DEFINITION_CATEGORIES:
+                        definition_entries.append(
+                            (
+                                "rich-data-definition",
+                                repr((category, member, part_fragment)),
+                            )
+                        )
+                    elif category in _RICH_DATA_VALUE_CATEGORIES:
+                        value_entries.append(
+                            (
+                                "rich-data-values",
+                                repr((category, member, part_fragment)),
+                            )
+                        )
+
+                    if category == "rich-value-data":
+                        value_tag = f"{{{_RICH_DATA_NS}}}rv"
+                        values = [child for child in root if child.tag == value_tag]
+                        _rich_data_declared_count(
+                            root,
+                            len(values),
+                            issues,
+                            context="rich-value-data",
+                        )
+                        if len(values) != len(root):
+                            _rich_data_issue(
+                                issues,
+                                "unexpected-rich-value-data-child",
+                                (member, len(root) - len(values)),
+                            )
+                        rich_value_count += len(values)
+                    elif category == "rich-value-structure":
+                        structure_tag = f"{{{_RICH_DATA_NS}}}s"
+                        structures = [
+                            child for child in root if child.tag == structure_tag
+                        ]
+                        _rich_data_declared_count(
+                            root,
+                            len(structures),
+                            issues,
+                            context="rich-value-structure",
+                        )
+                        if len(structures) != len(root):
+                            _rich_data_issue(
+                                issues,
+                                "unexpected-rich-value-structure-child",
+                                (member, len(root) - len(structures)),
+                            )
+                        rich_value_structure_count += len(structures)
+                        linked_entity_structure_count += sum(
+                            structure.get("t", "")
+                            .casefold()
+                            .startswith("_linkedentity")
+                            for structure in structures
+                        )
+                    elif category == "rich-value-array":
+                        array_tag = f"{{{_RICH_DATA_2_NS}}}a"
+                        arrays = [child for child in root if child.tag == array_tag]
+                        _rich_data_declared_count(
+                            root,
+                            len(arrays),
+                            issues,
+                            context="rich-value-array",
+                        )
+                        if len(arrays) != len(root):
+                            _rich_data_issue(
+                                issues,
+                                "unexpected-rich-value-array-child",
+                                (member, len(root) - len(arrays)),
+                            )
+                        rich_value_array_count += len(arrays)
+                    elif category == "supporting-property-bag":
+                        bag_tag = f"{{{_RICH_DATA_2_NS}}}a"
+                        supporting_property_bag_count += len(
+                            root.findall(f".//{bag_tag}")
+                        )
+                    elif category == "rich-value-web-image":
+                        image_tag = f"{{{_RICH_DATA_WEB_IMAGE_NS}}}webImageSrd"
+                        images = [child for child in root if child.tag == image_tag]
+                        if len(images) != len(root):
+                            _rich_data_issue(
+                                issues,
+                                "unexpected-rich-value-web-image-child",
+                                (member, len(root) - len(images)),
+                            )
+                        web_image_count += len(images)
+                        web_image_part_roots.append((member, root))
+                    elif category == "rich-value-relationships":
+                        rich_value_relationship_part_roots.append((member, root))
+
+            core_parts_present = bool(
+                actual_category_members.get("rich-value-data")
+                or actual_category_members.get("rich-value-structure")
+            )
+            related_parts_present = bool(actual_category_members)
+            if related_parts_present and not core_parts_present:
+                _rich_data_issue(issues, "missing-rich-data-core-parts", None)
+            if core_parts_present:
+                for category in ("rich-value-data", "rich-value-structure"):
+                    if not actual_category_members.get(category):
+                        _rich_data_issue(
+                            issues,
+                            "missing-required-rich-data-core-part",
+                            category,
+                        )
+            if related_parts_present and not metadata_inspections:
+                _rich_data_issue(issues, "missing-rich-data-metadata", None)
+            if metadata_inspections and not core_parts_present:
+                _rich_data_issue(
+                    issues,
+                    "rich-data-metadata-without-core-parts",
+                    None,
+                )
+
+            for metadata_member, inspection in metadata_inspections.items():
+                for rich_value_index in inspection.rich_value_indexes:
+                    if rich_value_index >= rich_value_count:
+                        _rich_data_issue(
+                            issues,
+                            "out-of-range-rich-data-value-metadata-index",
+                            (metadata_member, rich_value_index, rich_value_count),
+                        )
+
+            if len(metadata_inspections) > 1:
+                _rich_data_issue(
+                    issues,
+                    "multiple-rich-data-metadata-members",
+                    tuple(sorted(metadata_inspections)),
+                )
+
+            rich_value_bound_cell_count = 0
+            value_metadata_indexes = frozenset().union(
+                *(
+                    inspection.value_metadata_indexes
+                    for inspection in metadata_inspections.values()
+                )
+            )
+            if value_metadata_indexes:
+                worksheet_tag = f"{{{_SPREADSHEETML_NS}}}worksheet"
+                cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+                worksheet_members = sorted(
+                    member
+                    for member in members
+                    if member.casefold().startswith("xl/worksheets/")
+                    and member.casefold().endswith(".xml")
+                )
+                for worksheet_member in worksheet_members:
+                    worksheet_root, worksheet_fallback = _rich_data_bounded_root(
+                        archive,
+                        worksheet_member,
+                        warnings,
+                        budget,
+                    )
+                    if worksheet_root is None:
+                        _rich_data_issue(
+                            issues,
+                            "unreadable-rich-data-worksheet",
+                            (worksheet_member, worksheet_fallback),
+                        )
+                        continue
+                    if worksheet_root.tag != worksheet_tag:
+                        _rich_data_issue(
+                            issues,
+                            "unexpected-rich-data-worksheet-root",
+                            (worksheet_member, _xml_display_name(worksheet_root.tag)),
+                        )
+                        continue
+                    for cell in worksheet_root.iter(cell_tag):
+                        raw_value_metadata_index = cell.get("vm")
+                        if raw_value_metadata_index is None:
+                            continue
+                        value_metadata_index = _rich_data_unsigned(
+                            raw_value_metadata_index,
+                            issues,
+                            context="rich-data-cell-value-metadata-index",
+                        )
+                        if value_metadata_index is None:
+                            continue
+                        if value_metadata_index <= 0:
+                            _rich_data_issue(
+                                issues,
+                                "out-of-range-rich-data-cell-value-metadata-index",
+                                (worksheet_member, value_metadata_index),
+                            )
+                            continue
+                        if value_metadata_index not in value_metadata_indexes:
+                            continue
+                        coordinate = cell.get("r")
+                        if not coordinate:
+                            _rich_data_issue(
+                                issues,
+                                "missing-rich-data-bound-cell-coordinate",
+                                worksheet_member,
+                            )
+                            continue
+                        rich_value_bound_cell_count += 1
+                        metadata_entries.append(
+                            (
+                                "rich-data-cell-binding",
+                                repr(
+                                    (
+                                        worksheet_member,
+                                        coordinate,
+                                        value_metadata_index,
+                                    )
+                                ),
+                            )
+                        )
+
+            web_image_relationship_count = 0
+            external_web_image_relationship_count = 0
+            rich_value_relationship_reference_count = 0
+            external_rich_value_relationship_count = 0
+            for category, member, root in (
+                [
+                    ("rich-value-web-image", member, root)
+                    for member, root in web_image_part_roots
+                ]
+                + [
+                    ("rich-value-relationships", member, root)
+                    for member, root in rich_value_relationship_part_roots
+                ]
+            ):
+                relationships = _rich_data_part_relationships(
+                    archive,
+                    member,
+                    members,
+                    warnings,
+                    budget,
+                    issues,
+                    required=False,
+                    context=category,
+                )
+                relationships_by_id = _rich_data_relationship_lookup(
+                    relationships,
+                    issues,
+                    context=category,
+                )
+                fragment, references = _rich_data_relationship_aware_fragment(
+                    root,
+                    relationships_by_id,
+                    issues,
+                    context=category,
+                )
+                relationship_entries.append(
+                    (
+                        f"rich-data-{category}-references",
+                        repr((member, fragment)),
+                    )
+                )
+                relationship_entries.extend(
+                    _rich_data_relationship_entries(
+                        relationships,
+                        context=f"rich-data-{category}-relationships",
+                    )
+                )
+                if references and _relationship_part_path(member) not in members:
+                    _rich_data_issue(
+                        issues,
+                        f"missing-{category}-relationship-part",
+                        member,
+                    )
+                used_relationships = [
+                    relationships_by_id[reference]
+                    for reference in references
+                    if reference in relationships_by_id
+                ]
+                external_used_count = sum(
+                    relationship.target_mode.casefold() == "external"
+                    for relationship in used_relationships
+                )
+                if category == "rich-value-web-image":
+                    web_image_relationship_count += len(references)
+                    external_web_image_relationship_count += external_used_count
+                else:
+                    rich_value_relationship_reference_count += len(references)
+                    external_rich_value_relationship_count += external_used_count
+
+            issue_entries = [
+                ("rich-data-issue", repr(issue))
+                for issue in sorted(issues)
+            ]
+            definition_entries.extend(issue_entries)
+            if issues:
+                warnings.add(
+                    "FormulaFence found malformed, unsupported, or incomplete "
+                    "rich-data metadata; affected rich-data controls have a coverage gap."
+                )
+            snapshot = RichDataSnapshot(
+                rich_value_data_part_count=len(
+                    actual_category_members.get("rich-value-data", set())
+                ),
+                rich_value_structure_part_count=len(
+                    actual_category_members.get("rich-value-structure", set())
+                ),
+                rich_value_type_part_count=len(
+                    actual_category_members.get("rich-value-types", set())
+                ),
+                rich_value_array_part_count=len(
+                    actual_category_members.get("rich-value-array", set())
+                ),
+                supporting_property_bag_part_count=len(
+                    actual_category_members.get("supporting-property-bag", set())
+                ),
+                supporting_property_bag_structure_part_count=len(
+                    actual_category_members.get(
+                        "supporting-property-bag-structure",
+                        set(),
+                    )
+                ),
+                rich_style_part_count=len(
+                    actual_category_members.get("rich-styles", set())
+                ),
+                rich_value_web_image_part_count=len(
+                    actual_category_members.get("rich-value-web-image", set())
+                ),
+                rich_value_relationship_part_count=len(
+                    actual_category_members.get(
+                        "rich-value-relationships",
+                        set(),
+                    )
+                ),
+                rich_value_count=rich_value_count,
+                rich_value_structure_count=rich_value_structure_count,
+                linked_entity_structure_count=linked_entity_structure_count,
+                rich_value_array_count=rich_value_array_count,
+                supporting_property_bag_count=supporting_property_bag_count,
+                rich_value_metadata_binding_count=sum(
+                    inspection.binding_count
+                    for inspection in metadata_inspections.values()
+                ),
+                rich_value_bound_cell_count=rich_value_bound_cell_count,
+                web_image_count=web_image_count,
+                web_image_relationship_count=web_image_relationship_count,
+                external_web_image_relationship_count=(
+                    external_web_image_relationship_count
+                ),
+                rich_value_relationship_reference_count=(
+                    rich_value_relationship_reference_count
+                ),
+                external_rich_value_relationship_count=(
+                    external_rich_value_relationship_count
+                ),
+                unrecognized_rich_data_count=len(issues),
+                definition_signature=_private_external_data_signature(
+                    tuple(sorted(definition_entries))
+                ),
+                value_signature=_private_external_data_signature(
+                    tuple(sorted(value_entries))
+                ),
+                metadata_binding_signature=_private_external_data_signature(
+                    tuple(sorted(metadata_entries))
+                ),
+                relationship_signature=_private_external_data_signature(
+                    tuple(sorted(relationship_entries))
+                ),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _RichDataMetadata(
+            RichDataSnapshot(
+                unrecognized_rich_data_count=1,
+                definition_signature=_private_external_data_signature(
+                    (("rich-data-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect rich-data OOXML "
+                f"({type(error).__name__}); affected rich-data controls were not compared.",
+            ),
+        )
+    return _RichDataMetadata(snapshot, tuple(sorted(warnings)))
+
 @dataclass(frozen=True)
 class _LegacyCommentRawRelationship:
     """One private package relationship used to locate legacy notes."""
@@ -27069,6 +28573,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     worksheet_sparkline_metadata = _worksheet_sparkline_metadata(source)
     xml_mapping_metadata = _xml_mapping_metadata(source)
     digital_signature_metadata = _digital_signature_metadata(source)
+    rich_data_metadata = _rich_data_metadata(source)
     legacy_comment_metadata = _legacy_comment_metadata(source)
     threaded_comment_metadata = _threaded_comment_metadata(source)
     worksheet_drawing_shape_metadata = _worksheet_drawing_shape_metadata(source)
@@ -27118,6 +28623,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(worksheet_sparkline_metadata.warnings)
     parser_warnings.update(xml_mapping_metadata.warnings)
     parser_warnings.update(digital_signature_metadata.warnings)
+    parser_warnings.update(rich_data_metadata.warnings)
     parser_warnings.update(legacy_comment_metadata.warnings)
     parser_warnings.update(threaded_comment_metadata.warnings)
     parser_warnings.update(worksheet_drawing_shape_metadata.warnings)
@@ -27351,6 +28857,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         worksheet_sparklines=worksheet_sparkline_metadata.sparklines,
         xml_mapping_controls=xml_mapping_metadata.controls,
         digital_signatures=digital_signature_metadata.signatures,
+        rich_data=rich_data_metadata.rich_data,
         legacy_comments=legacy_comment_metadata.comments,
         threaded_comments=threaded_comment_metadata.comments,
         worksheet_drawing_shapes=worksheet_drawing_shape_metadata.shapes,
@@ -27437,6 +28944,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "worksheet_sparklines": snapshot.worksheet_sparklines.profile_dict(),
         "xml_mapping_controls": snapshot.xml_mapping_controls.profile_dict(),
         "digital_signatures": snapshot.digital_signatures.profile_dict(),
+        "rich_data": snapshot.rich_data.profile_dict(),
         "legacy_comments": snapshot.legacy_comments.profile_dict(),
         "threaded_comments": snapshot.threaded_comments.profile_dict(),
         "worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.profile_dict(),
@@ -27474,6 +28982,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_cell_hyperlinks": snapshot.cell_hyperlinks.present,
             "has_worksheet_sparklines": snapshot.worksheet_sparklines.present,
             "has_xml_mapping_controls": snapshot.xml_mapping_controls.present,
+            "has_rich_data": snapshot.rich_data.present,
             "has_legacy_comments": snapshot.legacy_comments.present,
             "has_threaded_comments": snapshot.threaded_comments.present,
             "has_worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.present,

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.48.0/formulafence-0.48.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.49.0/formulafence-0.49.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -83,6 +83,7 @@ rules:
   no_worksheet_sparkline_changes: true
   no_xml_mapping_changes: true
   no_digital_signature_changes: true
+  no_rich_data_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -851,6 +852,40 @@ Excel client behavior. The scope follows the Open XML
 [Map](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.map?view=openxml-3.0.1),
 [XmlProperties](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.xmlproperties.xpath?view=openxml-3.0.1),
 and [SingleXmlCells](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.singlexmlcells?view=openxml-3.0.1)
+definitions.
+
+FormulaFence also inventories Excel **rich data controls**. Rich data types can
+keep linked entity values, provider-backed fields, web-image associations, and
+worksheet value-metadata bindings outside ordinary cell values. Those
+declarations can change a workbook's operational data surface while the usual
+cell and formula diff stays quiet.
+
+FormulaFence reads the raw Rich Value Data, structure, type, array, supporting
+property-bag, style, web-image, and rich-value-relationship parts, along with
+their workbook/package relationships and `XLRICHVALUE` worksheet metadata
+bindings. It privately compares values, structures, provider-associated
+metadata, web-image and rich-value relationship endpoints, and bound-cell
+metadata. A material change emits `FF051`; enable
+`no_rich_data_changes` to make that boundary `FFP051` in CI.
+
+Profiles and `FF051` details expose only aggregate part, value, structure,
+array, property-bag, metadata-binding, bound-cell, web-image, relationship,
+external-reference, and malformed-metadata counts. Entity values, provider
+data, field names, identifiers, URLs, image references, relationship IDs, and
+bound-cell locations never enter profiles, Markdown, JSON, or SARIF.
+Writer-selected relationship IDs/order and equivalent internal-target spelling
+stay quiet. Missing, duplicate, malformed, unsafe, unreadable, oversized, or
+over-budget metadata becomes a visible coverage warning; raw reads are bounded
+to 16 MiB per XML part, 64 MiB per workbook, and 512 parts.
+
+This is a stored-data-control boundary, not provider execution or validation.
+FormulaFence does not contact providers, refresh entity values, calculate
+formulas, fetch web-image or other relationship targets, validate their
+content, or infer Excel client behavior. The scope follows Microsoft's
+[Rich Value Data](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/896934fd-8df7-43f4-b154-2d39371c270d),
+[Rich Value Structure](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/d90f6d91-d868-4b94-9d26-ec3b1492cec6),
+[Rich Value Types](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/5d213b66-3196-4516-b63c-eef80d926f4a),
+and [Rich Value Web Image](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/4f3a80fd-1776-407f-8807-2497a4692dea)
 definitions.
 
 FormulaFence also inventories **digital-signature controls** that can change

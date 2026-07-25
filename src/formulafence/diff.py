@@ -40,6 +40,7 @@ from formulafence.models import (
     ProtectionOpaqueMetadataSnapshot,
     QueryTableRefreshSnapshot,
     RibbonCustomizationSnapshot,
+    RichDataSnapshot,
     RichTextRunEntry,
     RichTextRunSnapshot,
     ScenarioManagerSnapshot,
@@ -2177,6 +2178,74 @@ def _digital_signature_controls_changed(
     return [change], [finding]
 
 
+def _rich_data_controls_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag rich entity data and related relationship changes outside cells."""
+    old_rich_data: RichDataSnapshot = before.rich_data
+    new_rich_data: RichDataSnapshot = after.rich_data
+    if old_rich_data == new_rich_data:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_rich_data.to_dict(),
+        "after": new_rich_data.to_dict(),
+    }
+    if old_rich_data.definition_signature != new_rich_data.definition_signature:
+        details["rich_data_definitions_changed"] = True
+    if old_rich_data.value_signature != new_rich_data.value_signature:
+        details["rich_data_values_changed"] = True
+    if (
+        old_rich_data.metadata_binding_signature
+        != new_rich_data.metadata_binding_signature
+    ):
+        details["rich_data_metadata_bindings_changed"] = True
+    if old_rich_data.relationship_signature != new_rich_data.relationship_signature:
+        details["rich_data_relationships_changed"] = True
+    if (
+        old_rich_data.unrecognized_rich_data_count
+        != new_rich_data.unrecognized_rich_data_count
+        or (
+            (
+                old_rich_data.unrecognized_rich_data_count
+                or new_rich_data.unrecognized_rich_data_count
+            )
+            and (
+                old_rich_data.definition_signature
+                != new_rich_data.definition_signature
+                or old_rich_data.value_signature != new_rich_data.value_signature
+                or (
+                    old_rich_data.metadata_binding_signature
+                    != new_rich_data.metadata_binding_signature
+                )
+                or (
+                    old_rich_data.relationship_signature
+                    != new_rich_data.relationship_signature
+                )
+            )
+        )
+    ):
+        details["unrecognized_rich_data_metadata_changed"] = True
+    change = Change(
+        "rich_data_controls_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF051",
+        "high",
+        (
+            "Rich data controls changed; workbook entity values, provider-linked "
+            "data, external image associations, or metadata bindings may have "
+            "been added, removed, or altered."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _threaded_comment_controls_changed(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
@@ -2384,6 +2453,10 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(digital_signature_changes)
     findings.extend(digital_signature_findings)
+
+    rich_data_changes, rich_data_findings = _rich_data_controls_changed(before, after)
+    changes.extend(rich_data_changes)
+    findings.extend(rich_data_findings)
 
     legacy_comment_changes, legacy_comment_findings = _legacy_comment_controls_changed(
         before,

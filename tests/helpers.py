@@ -57,6 +57,48 @@ _VBA_PROJECT_RELATIONSHIP = (
 _VBA_PROJECT_SIGNATURE_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignature"
 )
+_RICH_DATA_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata"
+_RICH_DATA_2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata2"
+_RICH_DATA_WEB_IMAGE_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2020/richdatawebimage"
+)
+_RICH_VALUE_REL_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel"
+)
+_RICH_DATA_METADATA_EXTENSION_URI = "{3E2802C4-A4D2-4D8B-9148-E3BE6C30E623}"
+_RICH_DATA_RELATIONSHIPS = {
+    "rich-value-data": (
+        "http://schemas.microsoft.com/office/2017/06/relationships/rdRichValue"
+    ),
+    "rich-value-structure": (
+        "http://schemas.microsoft.com/office/2017/06/relationships/"
+        "rdRichValueStructure"
+    ),
+    "rich-value-types": (
+        "http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueTypes"
+    ),
+    "rich-value-array": (
+        "http://schemas.microsoft.com/office/2017/06/relationships/rdArray"
+    ),
+    "supporting-property-bag": (
+        "http://schemas.microsoft.com/office/2017/06/relationships/"
+        "rdSupportingPropertyBag"
+    ),
+    "supporting-property-bag-structure": (
+        "http://schemas.microsoft.com/office/2017/06/relationships/"
+        "rdSupportingPropertyBagStructure"
+    ),
+    "rich-styles": (
+        "http://schemas.microsoft.com/office/2017/06/relationships/richStyles"
+    ),
+    "rich-value-web-image": (
+        "http://schemas.microsoft.com/office/2020/07/relationships/"
+        "rdRichValueWebImage"
+    ),
+    "rich-value-relationships": (
+        "http://schemas.microsoft.com/office/2022/10/relationships/richValueRel"
+    ),
+}
 
 
 def make_model(path: Path) -> Path:
@@ -1359,6 +1401,509 @@ def corrupt_package_signature_root(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".package-signature-corrupt.tmp.xlsx")
+
+
+def _rich_data_part_root(
+    contents: dict[str, bytes],
+    member: str,
+) -> ElementTree.Element:
+    """Return one raw rich-data fixture part."""
+    try:
+        return ElementTree.fromstring(contents[member])
+    except KeyError as error:
+        raise ValueError(f"Fixture does not contain rich-data part {member!r}") from error
+
+
+def _rich_data_relationship_root(
+    contents: dict[str, bytes],
+    member: str,
+) -> ElementTree.Element:
+    """Return the relationship part for one raw rich-data fixture part."""
+    return _rich_data_part_root(contents, _relationship_member(member))
+
+
+def make_rich_data_model(path: Path) -> Path:
+    """Create a rich-data package with private entity and endpoint sentinels."""
+    make_model(path)
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_override(
+        content_types: ElementTree.Element,
+        member: str,
+        content_type: str,
+    ) -> None:
+        ElementTree.SubElement(
+            content_types,
+            f"{{{_CONTENT_TYPES_NS}}}Override",
+            {"PartName": f"/{member}", "ContentType": content_type},
+        )
+
+    def relationship_root() -> ElementTree.Element:
+        return ElementTree.Element(f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships")
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIPS_NS}}}id"
+
+        worksheet = _inputs_worksheet_root(contents)
+        input_cell = next(
+            (
+                cell
+                for cell in worksheet.iter(f"{{{_SPREADSHEETML_NS}}}c")
+                if cell.get("r") == "B2"
+            ),
+            None,
+        )
+        if input_cell is None:
+            raise ValueError("Fixture Inputs worksheet does not contain B2")
+        input_cell.set("vm", "1")
+        _save_inputs_worksheet(contents, worksheet)
+
+        metadata = ElementTree.Element(f"{{{_SPREADSHEETML_NS}}}metadata")
+        metadata_types = ElementTree.SubElement(
+            metadata,
+            f"{{{_SPREADSHEETML_NS}}}metadataTypes",
+            {"count": "1"},
+        )
+        ElementTree.SubElement(
+            metadata_types,
+            f"{{{_SPREADSHEETML_NS}}}metadataType",
+            {"name": "XLRICHVALUE"},
+        )
+        future_metadata = ElementTree.SubElement(
+            metadata,
+            f"{{{_SPREADSHEETML_NS}}}futureMetadata",
+            {"name": "XLRICHVALUE", "count": "2"},
+        )
+        for index in range(2):
+            block = ElementTree.SubElement(
+                future_metadata,
+                f"{{{_SPREADSHEETML_NS}}}bk",
+            )
+            extensions = ElementTree.SubElement(
+                block,
+                f"{{{_SPREADSHEETML_NS}}}extLst",
+            )
+            extension = ElementTree.SubElement(
+                extensions,
+                f"{{{_SPREADSHEETML_NS}}}ext",
+                {"uri": _RICH_DATA_METADATA_EXTENSION_URI},
+            )
+            ElementTree.SubElement(
+                extension,
+                f"{{{_RICH_DATA_NS}}}rvb",
+                {"i": str(index)},
+            )
+        value_metadata = ElementTree.SubElement(
+            metadata,
+            f"{{{_SPREADSHEETML_NS}}}valueMetadata",
+            {"count": "2"},
+        )
+        for index in range(2):
+            block = ElementTree.SubElement(
+                value_metadata,
+                f"{{{_SPREADSHEETML_NS}}}bk",
+            )
+            ElementTree.SubElement(
+                block,
+                f"{{{_SPREADSHEETML_NS}}}rc",
+                {"t": "1", "v": str(index)},
+            )
+        contents["xl/metadata.xml"] = serialize(metadata)
+
+        rich_values = ElementTree.Element(
+            f"{{{_RICH_DATA_NS}}}rvData",
+            {"count": "2"},
+        )
+        for index, value in enumerate(
+            ("PRIVATE-RICH-ENTITY-BASELINE", "PRIVATE-RICH-ENTITY-SECOND"),
+        ):
+            rich_value = ElementTree.SubElement(
+                rich_values,
+                f"{{{_RICH_DATA_NS}}}rv",
+                {"s": str(index)},
+            )
+            ElementTree.SubElement(
+                rich_value,
+                f"{{{_RICH_DATA_NS}}}v",
+            ).text = value
+        contents["xl/richData/rdrichvalue.xml"] = serialize(rich_values)
+
+        structures = ElementTree.Element(
+            f"{{{_RICH_DATA_NS}}}rvStructures",
+            {"count": "2"},
+        )
+        entity_structure = ElementTree.SubElement(
+            structures,
+            f"{{{_RICH_DATA_NS}}}s",
+            {"t": "_linkedentity2"},
+        )
+        ElementTree.SubElement(
+            entity_structure,
+            f"{{{_RICH_DATA_NS}}}k",
+            {"n": "PRIVATE-RICH-FIELD", "t": "s"},
+        )
+        ElementTree.SubElement(
+            structures,
+            f"{{{_RICH_DATA_NS}}}s",
+            {"t": "_formattednumber"},
+        )
+        contents["xl/richData/rdrichvaluestructure.xml"] = serialize(structures)
+
+        types = ElementTree.Element(f"{{{_RICH_DATA_2_NS}}}rvTypesInfo")
+        ElementTree.SubElement(types, f"{{{_RICH_DATA_2_NS}}}types")
+        contents["xl/richData/rdRichValueTypes.xml"] = serialize(types)
+
+        arrays = ElementTree.Element(
+            f"{{{_RICH_DATA_2_NS}}}arrayData",
+            {"count": "1"},
+        )
+        array = ElementTree.SubElement(
+            arrays,
+            f"{{{_RICH_DATA_2_NS}}}a",
+            {"r": "1"},
+        )
+        ElementTree.SubElement(
+            array,
+            f"{{{_RICH_DATA_2_NS}}}v",
+            {"t": "s"},
+        ).text = "PRIVATE-RICH-ARRAY"
+        contents["xl/richData/rdarray.xml"] = serialize(arrays)
+
+        supporting_bags = ElementTree.Element(
+            f"{{{_RICH_DATA_2_NS}}}supportingPropertyBags"
+        )
+        bag_arrays = ElementTree.SubElement(
+            supporting_bags,
+            f"{{{_RICH_DATA_2_NS}}}spbArrays",
+            {"count": "1"},
+        )
+        bag = ElementTree.SubElement(
+            bag_arrays,
+            f"{{{_RICH_DATA_2_NS}}}a",
+            {"count": "1"},
+        )
+        ElementTree.SubElement(
+            bag,
+            f"{{{_RICH_DATA_2_NS}}}v",
+            {"t": "s"},
+        ).text = "PRIVATE-RICH-PROPERTY"
+        contents["xl/richData/rdsupportingpropertybag.xml"] = serialize(
+            supporting_bags
+        )
+
+        bag_structures = ElementTree.Element(
+            f"{{{_RICH_DATA_2_NS}}}spbStructures"
+        )
+        ElementTree.SubElement(
+            bag_structures,
+            f"{{{_RICH_DATA_2_NS}}}s",
+            {"n": "PRIVATE-RICH-BAG-STRUCTURE"},
+        )
+        contents["xl/richData/rdsupportingpropertybagstructure.xml"] = serialize(
+            bag_structures
+        )
+
+        styles = ElementTree.Element(f"{{{_RICH_DATA_2_NS}}}richStyleSheet")
+        ElementTree.SubElement(styles, f"{{{_RICH_DATA_2_NS}}}key")
+        contents["xl/richData/richStyles.xml"] = serialize(styles)
+
+        web_images = ElementTree.Element(
+            f"{{{_RICH_DATA_WEB_IMAGE_NS}}}webImagesSrd"
+        )
+        web_image = ElementTree.SubElement(
+            web_images,
+            f"{{{_RICH_DATA_WEB_IMAGE_NS}}}webImageSrd",
+        )
+        ElementTree.SubElement(
+            web_image,
+            f"{{{_RICH_DATA_WEB_IMAGE_NS}}}address",
+            {relationship_attribute: "rIdFenceRichImage"},
+        )
+        ElementTree.SubElement(
+            web_image,
+            f"{{{_RICH_DATA_WEB_IMAGE_NS}}}moreImagesAddress",
+            {relationship_attribute: "rIdFenceRichMoreImages"},
+        )
+        web_image_member = "xl/richData/rdRichValueWebImage.xml"
+        contents[web_image_member] = serialize(web_images)
+        web_image_relationships = relationship_root()
+        ElementTree.SubElement(
+            web_image_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceRichImage",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/hyperlink",
+                "Target": "https://private.example.test/PRIVATE-RICH-IMAGE-BASELINE",
+                "TargetMode": "External",
+            },
+        )
+        ElementTree.SubElement(
+            web_image_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceRichMoreImages",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/hyperlink",
+                "Target": (
+                    "https://private.example.test/PRIVATE-RICH-MORE-IMAGES-BASELINE"
+                ),
+                "TargetMode": "External",
+            },
+        )
+        contents[_relationship_member(web_image_member)] = serialize(
+            web_image_relationships
+        )
+
+        rich_value_relationships = ElementTree.Element(
+            f"{{{_RICH_VALUE_REL_NS}}}richValueRels"
+        )
+        ElementTree.SubElement(
+            rich_value_relationships,
+            f"{{{_RICH_VALUE_REL_NS}}}richValueRel",
+            {relationship_attribute: "rIdFenceRichRelationship"},
+        )
+        rich_value_relationship_member = "xl/richData/richValueRel.xml"
+        contents[rich_value_relationship_member] = serialize(rich_value_relationships)
+        rich_value_relationship_targets = relationship_root()
+        ElementTree.SubElement(
+            rich_value_relationship_targets,
+            relationship_tag,
+            {
+                "Id": "rIdFenceRichRelationship",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/hyperlink",
+                "Target": (
+                    "https://private.example.test/PRIVATE-RICH-RELATIONSHIP-BASELINE"
+                ),
+                "TargetMode": "External",
+            },
+        )
+        contents[_relationship_member(rich_value_relationship_member)] = serialize(
+            rich_value_relationship_targets
+        )
+
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceRichMetadata",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/sheetMetadata",
+                "Target": "metadata.xml",
+            },
+        )
+        rich_parts = {
+            "rich-value-data": (
+                "xl/richData/rdrichvalue.xml",
+                "application/vnd.ms-excel.rdrichvalue+xml",
+            ),
+            "rich-value-structure": (
+                "xl/richData/rdrichvaluestructure.xml",
+                "application/vnd.ms-excel.rdrichvaluestructure+xml",
+            ),
+            "rich-value-types": (
+                "xl/richData/rdRichValueTypes.xml",
+                "application/vnd.ms-excel.rdrichvaluetypes+xml",
+            ),
+            "rich-value-array": (
+                "xl/richData/rdarray.xml",
+                "application/vnd.ms-excel.rdarray+xml",
+            ),
+            "supporting-property-bag": (
+                "xl/richData/rdsupportingpropertybag.xml",
+                "application/vnd.ms-excel.rdsupportingpropertybag+xml",
+            ),
+            "supporting-property-bag-structure": (
+                "xl/richData/rdsupportingpropertybagstructure.xml",
+                "application/vnd.ms-excel.rdsupportingpropertybagstructure+xml",
+            ),
+            "rich-styles": (
+                "xl/richData/richStyles.xml",
+                "application/vnd.ms-excel.richstyles+xml",
+            ),
+            "rich-value-web-image": (
+                web_image_member,
+                "application/vnd.ms-excel.rdrichvaluewebimage+xml",
+            ),
+            "rich-value-relationships": (
+                rich_value_relationship_member,
+                "application/vnd.ms-excel.richvaluerel+xml",
+            ),
+        }
+        for index, (category, (member, _content_type)) in enumerate(
+            rich_parts.items(),
+            start=1,
+        ):
+            ElementTree.SubElement(
+                workbook_relationships,
+                relationship_tag,
+                {
+                    "Id": f"rIdFenceRichData{index}",
+                    "Type": _RICH_DATA_RELATIONSHIPS[category],
+                    "Target": member.removeprefix("xl/"),
+                },
+            )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        add_override(
+            content_types,
+            "xl/metadata.xml",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml",
+        )
+        for member, content_type in rich_parts.values():
+            add_override(content_types, member, content_type)
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+    return _rewrite_archive(path, mutate, ".rich-data-model.tmp.xlsx")
+
+
+def change_rich_data_value(path: Path) -> Path:
+    """Change one provider-backed rich value without changing a worksheet cell."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        member = "xl/richData/rdrichvalue.xml"
+        root = _rich_data_part_root(contents, member)
+        value = root.find(f"{{{_RICH_DATA_NS}}}rv/{{{_RICH_DATA_NS}}}v")
+        if value is None:
+            raise ValueError("Fixture does not contain a rich value")
+        value.text = "PRIVATE-RICH-ENTITY-CANDIDATE"
+        contents[member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".rich-data-value.tmp.xlsx")
+
+
+def change_rich_data_binding(path: Path) -> Path:
+    """Rebind a worksheet rich value metadata record without changing the cell."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = _inputs_worksheet_root(contents)
+        cell = next(
+            (
+                current
+                for current in worksheet.iter(f"{{{_SPREADSHEETML_NS}}}c")
+                if current.get("r") == "B2"
+            ),
+            None,
+        )
+        if cell is None:
+            raise ValueError("Fixture Inputs worksheet does not contain B2")
+        cell.set("vm", "2")
+        _save_inputs_worksheet(contents, worksheet)
+
+    return _rewrite_archive(path, mutate, ".rich-data-binding.tmp.xlsx")
+
+
+def change_rich_data_web_image_target(path: Path) -> Path:
+    """Retarget a rich web image without contacting its endpoint."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        member = _relationship_member("xl/richData/rdRichValueWebImage.xml")
+        relationships = _rich_data_part_root(contents, member)
+        relationship = next(
+            (
+                current
+                for current in relationships.findall(
+                    f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+                )
+                if current.get("Id") == "rIdFenceRichImage"
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain a rich web-image relationship")
+        relationship.set(
+            "Target",
+            "https://private.example.test/PRIVATE-RICH-IMAGE-CANDIDATE",
+        )
+        contents[member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".rich-data-web-image.tmp.xlsx")
+
+
+def normalize_rich_data_relationship_ids(path: Path) -> Path:
+    """Renumber and reorder rich-data relationships without changing targets."""
+
+    def rewrite_relationship_ids(
+        contents: dict[str, bytes],
+        member: str,
+        replacements: dict[str, str],
+    ) -> None:
+        relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIPS_NS}}}id"
+        relationship_root = _rich_data_relationship_root(contents, member)
+        relationships = list(
+            relationship_root.findall(f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship")
+        )
+        for relationship in relationships:
+            old_identifier = relationship.get("Id")
+            if old_identifier in replacements:
+                relationship.set("Id", replacements[old_identifier])
+        for relationship in relationships:
+            relationship_root.remove(relationship)
+        for relationship in reversed(relationships):
+            relationship_root.append(relationship)
+        contents[_relationship_member(member)] = ElementTree.tostring(
+            relationship_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        root = _rich_data_part_root(contents, member)
+        for element in root.iter():
+            identifier = element.get(relationship_attribute)
+            if identifier in replacements:
+                element.set(relationship_attribute, replacements[identifier])
+        contents[member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        rewrite_relationship_ids(
+            contents,
+            "xl/richData/rdRichValueWebImage.xml",
+            {
+                "rIdFenceRichImage": "rIdFenceRenumberedImage",
+                "rIdFenceRichMoreImages": "rIdFenceRenumberedMoreImages",
+            },
+        )
+        rewrite_relationship_ids(
+            contents,
+            "xl/richData/richValueRel.xml",
+            {
+                "rIdFenceRichRelationship": "rIdFenceRenumberedRelationship",
+            },
+        )
+
+    return _rewrite_archive(path, mutate, ".rich-data-relationship-ids.tmp.xlsx")
+
+
+def corrupt_rich_data_value_root(path: Path) -> Path:
+    """Corrupt a rich value root to exercise fail-closed inspection."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        member = "xl/richData/rdrichvalue.xml"
+        root = _rich_data_part_root(contents, member)
+        root.tag = "privateUnexpectedRichData"
+        contents[member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".rich-data-corrupt.tmp.xlsx")
 
 
 def make_table_model(path: Path) -> Path:

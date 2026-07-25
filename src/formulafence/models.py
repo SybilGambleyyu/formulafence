@@ -2113,6 +2113,118 @@ class DigitalSignatureSnapshot:
 
 
 @dataclass(frozen=True)
+class RichDataSnapshot:
+    """Safe aggregate of Excel rich-data values and relationship controls.
+
+    Rich data types can store entity values, supporting fields, web-image
+    associations, and worksheet value-metadata bindings outside ordinary cell
+    values. Private signatures retain those values and relationships for
+    comparison without serialising entity IDs, provider data, property names,
+    URLs, image references, or bound cells into reports.
+    """
+
+    rich_value_data_part_count: int = 0
+    rich_value_structure_part_count: int = 0
+    rich_value_type_part_count: int = 0
+    rich_value_array_part_count: int = 0
+    supporting_property_bag_part_count: int = 0
+    supporting_property_bag_structure_part_count: int = 0
+    rich_style_part_count: int = 0
+    rich_value_web_image_part_count: int = 0
+    rich_value_relationship_part_count: int = 0
+    rich_value_count: int = 0
+    rich_value_structure_count: int = 0
+    linked_entity_structure_count: int = 0
+    rich_value_array_count: int = 0
+    supporting_property_bag_count: int = 0
+    rich_value_metadata_binding_count: int = 0
+    rich_value_bound_cell_count: int = 0
+    web_image_count: int = 0
+    web_image_relationship_count: int = 0
+    external_web_image_relationship_count: int = 0
+    rich_value_relationship_reference_count: int = 0
+    external_rich_value_relationship_count: int = 0
+    unrecognized_rich_data_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+    value_signature: str | None = field(default=None, repr=False)
+    metadata_binding_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.rich_value_data_part_count
+            or self.rich_value_structure_part_count
+            or self.rich_value_type_part_count
+            or self.rich_value_array_part_count
+            or self.supporting_property_bag_part_count
+            or self.supporting_property_bag_structure_part_count
+            or self.rich_style_part_count
+            or self.rich_value_web_image_part_count
+            or self.rich_value_relationship_part_count
+            or self.rich_value_count
+            or self.rich_value_structure_count
+            or self.rich_value_array_count
+            or self.supporting_property_bag_count
+            or self.rich_value_metadata_binding_count
+            or self.rich_value_bound_cell_count
+            or self.web_image_count
+            or self.web_image_relationship_count
+            or self.external_web_image_relationship_count
+            or self.rich_value_relationship_reference_count
+            or self.external_rich_value_relationship_count
+            or self.unrecognized_rich_data_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate rich-data evidence without values or endpoints."""
+        return {
+            "present": self.present,
+            "rich_value_data_part_count": self.rich_value_data_part_count,
+            "rich_value_structure_part_count": self.rich_value_structure_part_count,
+            "rich_value_type_part_count": self.rich_value_type_part_count,
+            "rich_value_array_part_count": self.rich_value_array_part_count,
+            "supporting_property_bag_part_count": (
+                self.supporting_property_bag_part_count
+            ),
+            "supporting_property_bag_structure_part_count": (
+                self.supporting_property_bag_structure_part_count
+            ),
+            "rich_style_part_count": self.rich_style_part_count,
+            "rich_value_web_image_part_count": (
+                self.rich_value_web_image_part_count
+            ),
+            "rich_value_relationship_part_count": (
+                self.rich_value_relationship_part_count
+            ),
+            "rich_value_count": self.rich_value_count,
+            "rich_value_structure_count": self.rich_value_structure_count,
+            "linked_entity_structure_count": self.linked_entity_structure_count,
+            "rich_value_array_count": self.rich_value_array_count,
+            "supporting_property_bag_count": self.supporting_property_bag_count,
+            "rich_value_metadata_binding_count": (
+                self.rich_value_metadata_binding_count
+            ),
+            "rich_value_bound_cell_count": self.rich_value_bound_cell_count,
+            "web_image_count": self.web_image_count,
+            "web_image_relationship_count": self.web_image_relationship_count,
+            "external_web_image_relationship_count": (
+                self.external_web_image_relationship_count
+            ),
+            "rich_value_relationship_reference_count": (
+                self.rich_value_relationship_reference_count
+            ),
+            "external_rich_value_relationship_count": (
+                self.external_rich_value_relationship_count
+            ),
+            "unrecognized_rich_data_count": self.unrecognized_rich_data_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class LegacyCommentSnapshot:
     """Safe aggregate of legacy Excel note and placeholder controls.
 
@@ -2739,6 +2851,7 @@ class WorkbookSnapshot:
     digital_signatures: DigitalSignatureSnapshot = field(
         default_factory=DigitalSignatureSnapshot
     )
+    rich_data: RichDataSnapshot = field(default_factory=RichDataSnapshot)
     legacy_comments: LegacyCommentSnapshot = field(
         default_factory=LegacyCommentSnapshot
     )
@@ -2828,6 +2941,13 @@ class WorkbookSnapshot:
                 self.digital_signatures.vba_project_signature_count
             ),
             "has_digital_signatures": self.digital_signatures.present,
+            "rich_value_count": self.rich_data.rich_value_count,
+            "rich_value_bound_cell_count": self.rich_data.rich_value_bound_cell_count,
+            "rich_data_external_relationship_count": (
+                self.rich_data.external_web_image_relationship_count
+                + self.rich_data.external_rich_value_relationship_count
+            ),
+            "has_rich_data": self.rich_data.present,
             "legacy_comment_count": self.legacy_comments.comment_count,
             "legacy_comment_author_count": self.legacy_comments.comment_author_count,
             "legacy_comment_note_shape_count": self.legacy_comments.note_shape_count,

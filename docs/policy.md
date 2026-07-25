@@ -33,6 +33,7 @@ rules:
   no_worksheet_sparkline_changes: true
   no_xml_mapping_changes: true
   no_digital_signature_changes: true
+  no_rich_data_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -110,6 +111,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_worksheet_sparkline_changes` | boolean | An Office 2010 worksheet sparkline source or date-axis formula, destination cell, group membership, type/axis/display/marker control, line weight, or colour definition changes. Source formulas, destination cells, control values, and colours are compared privately. |
 | `no_xml_mapping_changes` | boolean | An XML Map schema, mapping/refresh behavior, table-column or single-cell binding, or map-related workbook/worksheet relationship changes. Schemas, map names, XPath expressions, table identities, target cells, connection identities, and relationship targets are compared privately. |
 | `no_digital_signature_changes` | boolean | An OPC package signature origin/XML-signature/certificate relationship or payload, XMLDSIG envelope/reference, or VBA project signature payload/relationship changes. Signature XML, reference URIs, certificate identities and contents, binary payloads, relationship IDs, and targets are compared privately; FormulaFence inventories envelopes but does not validate cryptography or trust. |
+| `no_rich_data_changes` | boolean | An Excel rich-value data/structure/type/array/property-bag/style declaration, provider-associated value, web-image/rich-value relationship, or `XLRICHVALUE` metadata/cell binding changes. Entity values, provider data, field names, identifiers, URLs, image references, relationship IDs, and bound-cell locations are compared privately. |
 | `no_legacy_comment_changes` | boolean | A legacy Excel Note/comments binding, author association, Note text/rich-text/property declaration, threaded-comment placeholder reconciliation declaration, Note VML visibility/layout, or related relationship changes. Note text, authors, locations, VML, targets, IDs, and GUIDs are compared privately. |
 | `no_threaded_comment_changes` | boolean | A modern Excel threaded-comment/person package binding, comment/reply graph, text, stored cell/timestamp/resolution declaration, mention range/person association, extension material, or person definition changes. Comment bodies, locations, timestamps, parent links, names, user IDs, provider IDs, relationship IDs, and GUIDs are compared privately. |
 | `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp` or nested `xdr:grpSp` anchor/layout, text/presentation declaration, macro/text link, or referenced click/hover relationship changes. Shape text, formatting, formulas, anchors, IDs, and targets are compared privately. |
@@ -685,6 +687,37 @@ data, calculate a refresh, or infer client behavior. The scope follows the
 Open XML [Map](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.map?view=openxml-3.0.1),
 [XmlProperties](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.xmlproperties.xpath?view=openxml-3.0.1),
 and [SingleXmlCells](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.singlexmlcells?view=openxml-3.0.1)
+definitions.
+
+Excel rich data types can retain linked entity values, provider-backed fields,
+web-image associations, and worksheet value-metadata bindings outside ordinary
+cell values. A stored rich-data change can therefore alter a workbook's
+operational data surface without a normal cell or formula diff.
+
+FormulaFence reads raw Rich Value Data, structure, type, array, supporting
+property-bag, style, web-image, and rich-value-relationship parts; their
+workbook/package relationships; and `XLRICHVALUE` metadata/cell bindings. It
+privately compares values, structures, web-image and rich-value endpoints, and
+bindings. Such a change emits `FF051`. Enable `no_rich_data_changes` to block
+it as `FFP051`.
+
+Profiles and findings expose aggregate part, value, structure, array,
+property-bag, metadata-binding, bound-cell, web-image, relationship,
+external-reference, and malformed-metadata counts only. Entity values,
+provider data, field names, identifiers, URLs, image references, relationship
+IDs, and bound-cell locations stay private. Equivalent relationship IDs/order
+and internal-target spelling normalize away. Missing, duplicate, malformed,
+unsafe, unreadable, oversized, or over-budget metadata produces a coverage
+warning; reads are bounded to 16 MiB per XML part, 64 MiB per workbook, and
+512 parts.
+
+This policy guards stored declarations only. It does **not** contact a
+provider, refresh entity values, calculate formulas, fetch or validate an image
+or relationship target, or infer Excel client behavior. The boundary follows
+Microsoft's [Rich Value Data](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/896934fd-8df7-43f4-b154-2d39371c270d),
+[Rich Value Structure](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/d90f6d91-d868-4b94-9d26-ec3b1492cec6),
+[Rich Value Types](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/5d213b66-3196-4516-b63c-eef80d926f4a),
+and [Rich Value Web Image](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/4f3a80fd-1776-407f-8807-2497a4692dea)
 definitions.
 
 Package/content signatures and VBA project code signatures are separate Excel

@@ -5,6 +5,44 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel rich-data controls — 2026-07-24
+
+FormulaFence 0.49.0 was validated against the independently maintained
+[`richData_datatypes.xlsx`](https://github.com/JanMarvin/openxlsx-data/raw/main/richData_datatypes.xlsx)
+fixture from the `openxlsx-data` project. The downloaded baseline SHA-256 was
+`c3064cba084e0d6d3aa1da246d0f4eb02ce270ea1fd0d39a16e501081659afaf`.
+It contains real Rich Value Data, structures, types, arrays, supporting
+property bags/structures, styles, rich-value metadata bindings, web-image
+references, and external web-image relationships.
+
+A standalone raw-ZIP script outside this repository created a candidate with
+the same ordinary cells, formulas, and package graph. A ZIP-member comparison
+confirmed that exactly one uncompressed member changed:
+`xl/richData/rdrichvalue.xml`. The candidate SHA-256 was
+`d9b89963f9ec55c4f0411cc3e95271694f7f28cfe9d6785915fb1a3b3316f3bd`.
+
+A clean Python virtual environment installed the staged 0.49.0 wheel
+(SHA-256 `267c6daffba81b4d57da7d477bd0a0433c66156246b3a336d681905a49d91f16`).
+It profiled one data/structure/type/array/property-bag/style/web-image part,
+362 rich values, 10 structures including 6 linked-entity structures, 20
+arrays, 4 supporting property bags, 12 metadata bindings and bound cells, 6
+web images, and 12 external web-image relationship references—with zero
+coverage warnings.
+
+The clean wheel emitted exactly one `rich_data_controls_changed` change and
+`FF051`. A policy enabling `no_rich_data_changes` exited 1 with `FF051` and
+`FFP051`. JSON profile, diff, and policy artifacts were checked to ensure rich
+value material, external endpoints, relationship identifiers, and bound-cell
+locations were absent.
+
+The suite separately validates value, metadata-binding, external web-image,
+and rich-value-relationship changes; relationship ID/order normalization;
+malformed metadata; bounded reads; redaction; policy enforcement; and
+isolation from ordinary cells. FormulaFence compares stored rich-data
+declarations only: it does not contact providers, refresh values, calculate
+formulas, fetch endpoints, validate target content, or infer Excel client
+behavior.
+
 ## Digital-signature controls — 2026-07-24
 
 FormulaFence 0.48.0 is validated with a controlled `.xlsx` pair built outside

@@ -1648,6 +1648,60 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "changes only: it does not validate cryptography, certificate trust, "
             "expiration, revocation, timestamps, or signed contents."
         )
+    rich_data = profile["rich_data"]
+    if rich_data["present"]:
+        lines.extend(
+            [
+                "",
+                "## Rich data controls",
+                "",
+                (
+                    "- **Rich value data / structures / type parts:** "
+                    f"{rich_data['rich_value_data_part_count']} / "
+                    f"{rich_data['rich_value_structure_part_count']} / "
+                    f"{rich_data['rich_value_type_part_count']}"
+                ),
+                (
+                    "- **Rich values / structures / linked-entity structures:** "
+                    f"{rich_data['rich_value_count']} / "
+                    f"{rich_data['rich_value_structure_count']} / "
+                    f"{rich_data['linked_entity_structure_count']}"
+                ),
+                (
+                    "- **Arrays / supporting property bags / styles:** "
+                    f"{rich_data['rich_value_array_count']} / "
+                    f"{rich_data['supporting_property_bag_count']} / "
+                    f"{rich_data['rich_style_part_count']}"
+                ),
+                (
+                    "- **Metadata bindings / bound cells:** "
+                    f"{rich_data['rich_value_metadata_binding_count']} / "
+                    f"{rich_data['rich_value_bound_cell_count']}"
+                ),
+                (
+                    "- **Web images / relationship references / external references:** "
+                    f"{rich_data['web_image_count']} / "
+                    f"{rich_data['web_image_relationship_count']} / "
+                    f"{rich_data['external_web_image_relationship_count']}"
+                ),
+                (
+                    "- **Rich-value relationship references / external references:** "
+                    f"{rich_data['rich_value_relationship_reference_count']} / "
+                    f"{rich_data['external_rich_value_relationship_count']}"
+                ),
+            ]
+        )
+        if rich_data["unrecognized_rich_data_count"]:
+            lines.append(
+                "- **Unrecognized or malformed rich-data metadata:** "
+                f"{rich_data['unrecognized_rich_data_count']}"
+            )
+        lines.append(
+            "Entity values, provider data, field names, identifiers, URLs, image "
+            "references, relationship IDs, and bound-cell locations are compared "
+            "privately and intentionally omitted. FormulaFence does not contact "
+            "providers, refresh data, fetch image targets, or validate their content."
+        )
     legacy_comments = profile["legacy_comments"]
     if legacy_comments["present"]:
         lines.extend(

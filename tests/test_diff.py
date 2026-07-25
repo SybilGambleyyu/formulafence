@@ -64,6 +64,9 @@ from .helpers import (
     change_protected_range,
     change_ribbon_customization_callback,
     change_ribbon_customization_controls,
+    change_rich_data_binding,
+    change_rich_data_value,
+    change_rich_data_web_image_target,
     change_rich_text_run_boundary,
     change_rich_text_run_color,
     change_rich_text_run_text_only,
@@ -105,6 +108,7 @@ from .helpers import (
     corrupt_package_signature_root,
     corrupt_pivot_table_definition_root,
     corrupt_ribbon_customization_root,
+    corrupt_rich_data_value_root,
     corrupt_rich_text_run,
     corrupt_scenario_manager_input,
     corrupt_slicer_timeline_cache_root,
@@ -162,6 +166,7 @@ from .helpers import (
     make_power_query_model,
     make_protection_model,
     make_ribbon_customization_model,
+    make_rich_data_model,
     make_rich_text_run_model,
     make_scenario_manager_model,
     make_scoped_named_lambda_model,
@@ -191,6 +196,7 @@ from .helpers import (
     normalize_named_sheet_view_control_spelling,
     normalize_number_format_control_spelling,
     normalize_number_format_inheritance,
+    normalize_rich_data_relationship_ids,
     normalize_rich_text_run_property_spelling,
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
@@ -6022,6 +6028,203 @@ def test_digital_signature_read_budget_fails_closed(tmp_path, monkeypatch) -> No
         for warning in candidate_snapshot.parser_warnings
     )
     assert {"FF010", "FF050"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_rich_data_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_rich_data_model(tmp_path / "baseline.xlsx")
+    value_candidate = make_rich_data_model(tmp_path / "value-candidate.xlsx")
+    binding_candidate = make_rich_data_model(tmp_path / "binding-candidate.xlsx")
+    web_image_candidate = make_rich_data_model(
+        tmp_path / "web-image-candidate.xlsx"
+    )
+    normalised = make_rich_data_model(tmp_path / "normalised.xlsx")
+    ordinary = make_model(tmp_path / "ordinary.xlsx")
+    change_rich_data_value(value_candidate)
+    change_rich_data_binding(binding_candidate)
+    change_rich_data_web_image_target(web_image_candidate)
+    normalize_rich_data_relationship_ids(normalised)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    value_snapshot = load_snapshot(value_candidate)
+    binding_snapshot = load_snapshot(binding_candidate)
+    web_image_snapshot = load_snapshot(web_image_candidate)
+    value_report = compare_snapshots(baseline_snapshot, value_snapshot)
+    binding_report = compare_snapshots(baseline_snapshot, binding_snapshot)
+    web_image_report = compare_snapshots(baseline_snapshot, web_image_snapshot)
+    normalised_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(normalised),
+    )
+
+    value_change = next(
+        change
+        for change in value_report.changes
+        if change.kind == "rich_data_controls_changed"
+    )
+    binding_change = next(
+        change
+        for change in binding_report.changes
+        if change.kind == "rich_data_controls_changed"
+    )
+    web_image_change = next(
+        change
+        for change in web_image_report.changes
+        if change.kind == "rich_data_controls_changed"
+    )
+
+    assert baseline_snapshot.cells == value_snapshot.cells
+    assert baseline_snapshot.cells == binding_snapshot.cells
+    assert baseline_snapshot.cells == web_image_snapshot.cells
+    assert baseline_snapshot.summary()["rich_value_count"] == 2
+    assert baseline_snapshot.summary()["rich_value_bound_cell_count"] == 1
+    assert baseline_snapshot.summary()["rich_data_external_relationship_count"] == 3
+    assert baseline_snapshot.summary()["has_rich_data"] is True
+    assert profile["rich_data"] == {
+        "present": True,
+        "rich_value_data_part_count": 1,
+        "rich_value_structure_part_count": 1,
+        "rich_value_type_part_count": 1,
+        "rich_value_array_part_count": 1,
+        "supporting_property_bag_part_count": 1,
+        "supporting_property_bag_structure_part_count": 1,
+        "rich_style_part_count": 1,
+        "rich_value_web_image_part_count": 1,
+        "rich_value_relationship_part_count": 1,
+        "rich_value_count": 2,
+        "rich_value_structure_count": 2,
+        "linked_entity_structure_count": 1,
+        "rich_value_array_count": 1,
+        "supporting_property_bag_count": 1,
+        "rich_value_metadata_binding_count": 2,
+        "rich_value_bound_cell_count": 1,
+        "web_image_count": 1,
+        "web_image_relationship_count": 2,
+        "external_web_image_relationship_count": 2,
+        "rich_value_relationship_reference_count": 1,
+        "external_rich_value_relationship_count": 1,
+        "unrecognized_rich_data_count": 0,
+    }
+    assert "## Rich data controls" in markdown
+    assert value_change.details["rich_data_values_changed"] is True
+    assert binding_change.details["rich_data_metadata_bindings_changed"] is True
+    assert web_image_change.details["rich_data_relationships_changed"] is True
+    assert "FF051" in {finding.rule_id for finding in value_report.findings}
+    assert "FF051" in {finding.rule_id for finding in binding_report.findings}
+    assert "FF051" in {finding.rule_id for finding in web_image_report.findings}
+    assert "rich_data_controls_changed" not in {
+        change.kind for change in normalised_report.changes
+    }
+    assert "FF051" not in {finding.rule_id for finding in normalised_report.findings}
+    assert load_snapshot(ordinary).rich_data.to_dict() == {
+        "present": False,
+        "rich_value_data_part_count": 0,
+        "rich_value_structure_part_count": 0,
+        "rich_value_type_part_count": 0,
+        "rich_value_array_part_count": 0,
+        "supporting_property_bag_part_count": 0,
+        "supporting_property_bag_structure_part_count": 0,
+        "rich_style_part_count": 0,
+        "rich_value_web_image_part_count": 0,
+        "rich_value_relationship_part_count": 0,
+        "rich_value_count": 0,
+        "rich_value_structure_count": 0,
+        "linked_entity_structure_count": 0,
+        "rich_value_array_count": 0,
+        "supporting_property_bag_count": 0,
+        "rich_value_metadata_binding_count": 0,
+        "rich_value_bound_cell_count": 0,
+        "web_image_count": 0,
+        "web_image_relationship_count": 0,
+        "external_web_image_relationship_count": 0,
+        "rich_value_relationship_reference_count": 0,
+        "external_rich_value_relationship_count": 0,
+        "unrecognized_rich_data_count": 0,
+    }
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(value_report.to_dict()),
+        report_to_markdown(value_report),
+        json.dumps(report_to_sarif(value_report)),
+        json.dumps(binding_report.to_dict()),
+        report_to_markdown(binding_report),
+        json.dumps(report_to_sarif(binding_report)),
+        json.dumps(web_image_report.to_dict()),
+        report_to_markdown(web_image_report),
+        json.dumps(report_to_sarif(web_image_report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-RICH-ENTITY-BASELINE",
+        "PRIVATE-RICH-ENTITY-CANDIDATE",
+        "PRIVATE-RICH-FIELD",
+        "PRIVATE-RICH-PROPERTY",
+        "PRIVATE-RICH-IMAGE-BASELINE",
+        "PRIVATE-RICH-IMAGE-CANDIDATE",
+        "PRIVATE-RICH-RELATIONSHIP-BASELINE",
+        "rIdFenceRichImage",
+        "B2",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_malformed_rich_data_metadata_fails_closed_and_is_redacted(tmp_path) -> None:
+    baseline = make_rich_data_model(tmp_path / "baseline.xlsx")
+    candidate = make_rich_data_model(tmp_path / "candidate.xlsx")
+    corrupt_rich_data_value_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "rich_data_controls_changed"
+    )
+
+    assert candidate_snapshot.rich_data.unrecognized_rich_data_count >= 1
+    assert any(
+        "malformed, unsupported, or incomplete rich-data metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert change.details["rich_data_values_changed"] is True
+    assert change.details["unrecognized_rich_data_metadata_changed"] is True
+    assert {"FF010", "FF051"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all(
+        sensitive_value not in artifact
+        for sensitive_value in (
+            "privateUnexpectedRichData",
+            "PRIVATE-RICH-ENTITY-BASELINE",
+            "PRIVATE-RICH-FIELD",
+        )
+        for artifact in rendered_artifacts
+    )
+
+
+def test_rich_data_read_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    baseline = make_rich_data_model(tmp_path / "baseline.xlsx")
+    candidate = make_rich_data_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    monkeypatch.setattr(workbook_module, "_RICH_DATA_MAX_XML_PART_BYTES", 1)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.rich_data.unrecognized_rich_data_count >= 1
+    assert any(
+        "oversized rich-data XML part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF051"} <= {finding.rule_id for finding in report.findings}
 
 
 def test_legacy_excel_notes_are_profiled_diffed_and_redacted(tmp_path) -> None:

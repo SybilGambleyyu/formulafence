@@ -38,6 +38,7 @@ from formulafence.formulas import (
     reference_lookup_key,
 )
 from formulafence.models import (
+    AlignmentSnapshot,
     ArrayFormulaRange,
     CellHyperlinkSnapshot,
     CellKey,
@@ -801,6 +802,14 @@ class _FillMetadata:
     """Raw cell-fill evidence retained before reader normalization."""
 
     controls: FillSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _AlignmentMetadata:
+    """Raw cell-alignment evidence retained before reader normalization."""
+
+    controls: AlignmentSnapshot
     warnings: tuple[str, ...]
 
 
@@ -18255,6 +18264,715 @@ def _fill_metadata(path: Path) -> _FillMetadata:
     return _FillMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_ALIGNMENT_COLUMN_UPDATE_BUDGET = 16_777_216
+_ALIGNMENT_HORIZONTAL_VALUES = frozenset(
+    {
+        "general",
+        "left",
+        "center",
+        "right",
+        "fill",
+        "justify",
+        "centerContinuous",
+        "distributed",
+    }
+)
+_ALIGNMENT_VERTICAL_VALUES = frozenset(
+    {"top", "center", "bottom", "justify", "distributed"}
+)
+_ALIGNMENT_ATTRIBUTES = frozenset(
+    {
+        "horizontal",
+        "vertical",
+        "textRotation",
+        "wrapText",
+        "shrinkToFit",
+        "indent",
+        "relativeIndent",
+        "justifyLastLine",
+        "readingOrder",
+        "mergeCell",
+    }
+)
+_ALIGNMENT_TEXT_ROTATION_VALUES = frozenset((*range(181), 255))
+_ALIGNMENT_INDENT_MAXIMUM = 255
+_ALIGNMENT_READING_ORDER_VALUES = frozenset({0, 1, 2})
+_ALIGNMENT_INT32_MINIMUM = -(2**31)
+_ALIGNMENT_INT32_MAXIMUM = 2**31 - 1
+
+
+@dataclass(frozen=True)
+class _AlignmentStyle:
+    """One effective cell alignment retained only for private comparison."""
+
+    category: str
+    value: str
+
+
+_DEFAULT_ALIGNMENT_STYLE = _AlignmentStyle("default", "0")
+
+
+def _alignment_private_digest(value: object) -> str:
+    """Hash private alignment material before it can reach an output model."""
+    payload = repr(value).encode("utf-8", errors="surrogatepass")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _alignment_unrecognized(*parts: object) -> _AlignmentStyle:
+    """Fingerprint unsupported alignment material without public retention."""
+    return _AlignmentStyle("unrecognized", _alignment_private_digest(parts))
+
+
+def _alignment_signed_int32(value: str | None) -> int | None:
+    """Read one bounded XML signed Int32 with schema whitespace normalized."""
+    if value is None:
+        return None
+    candidate = value.strip()
+    negative = candidate.startswith("-")
+    if candidate.startswith(("-", "+")):
+        candidate = candidate[1:]
+    if not candidate.isascii() or not candidate.isdecimal():
+        return None
+    significant_digits = candidate.lstrip("0") or "0"
+    maximum = (
+        _ALIGNMENT_INT32_MAXIMUM + 1
+        if negative
+        else _ALIGNMENT_INT32_MAXIMUM
+    )
+    if len(significant_digits) > len(str(maximum)):
+        return None
+    parsed = int(significant_digits)
+    if parsed > maximum:
+        return None
+    normalized = -parsed if negative else parsed
+    if not _ALIGNMENT_INT32_MINIMUM <= normalized <= _ALIGNMENT_INT32_MAXIMUM:
+        return None
+    return normalized
+
+
+def _alignment_definition_style(
+    alignment: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> _AlignmentStyle:
+    """Canonicalize one effective alignment element without exposing values."""
+    invalid = False
+    raw_attributes = tuple(
+        sorted(
+            (_xml_display_name(attribute), value)
+            for attribute, value in alignment.attrib.items()
+        )
+    )
+    for attribute, value in alignment.attrib.items():
+        local_name = _xml_local_name(attribute)
+        if (
+            _xml_namespace(attribute) is not None
+            or local_name not in _ALIGNMENT_ATTRIBUTES
+        ):
+            note_issue(
+                f"{context}:unsupported-attribute",
+                (_xml_display_name(attribute), value),
+            )
+            invalid = True
+    if alignment.text is not None and alignment.text.strip():
+        note_issue(f"{context}:unexpected-text", alignment.text)
+        invalid = True
+    if alignment.tail is not None and alignment.tail.strip():
+        note_issue(f"{context}:unexpected-tail", alignment.tail)
+        invalid = True
+    opaque_children: list[object] = []
+    for child_index, child in enumerate(alignment):
+        note_issue(f"{context}:child:{child_index}:unsupported-child", child.tag)
+        opaque_children.append(_xml_fragment(child).sort_key())
+        invalid = True
+
+    horizontal = (alignment.get("horizontal") or "general").strip()
+    if horizontal not in _ALIGNMENT_HORIZONTAL_VALUES:
+        note_issue(f"{context}:invalid-horizontal", alignment.get("horizontal"))
+        invalid = True
+
+    vertical = (alignment.get("vertical") or "bottom").strip()
+    if vertical not in _ALIGNMENT_VERTICAL_VALUES:
+        note_issue(f"{context}:invalid-vertical", alignment.get("vertical"))
+        invalid = True
+
+    text_rotation = _number_format_unsigned_int(alignment.get("textRotation"))
+    if text_rotation is None:
+        if alignment.get("textRotation") is None:
+            text_rotation = 0
+        else:
+            note_issue(
+                f"{context}:invalid-text-rotation",
+                alignment.get("textRotation"),
+            )
+            invalid = True
+            text_rotation = 0
+    elif text_rotation not in _ALIGNMENT_TEXT_ROTATION_VALUES:
+        note_issue(
+            f"{context}:out-of-range-text-rotation",
+            alignment.get("textRotation"),
+        )
+        invalid = True
+
+    wrap_text = _number_format_boolean(alignment.get("wrapText"), False)
+    if wrap_text is None:
+        note_issue(f"{context}:invalid-wrap-text", alignment.get("wrapText"))
+        invalid = True
+        wrap_text = False
+
+    shrink_to_fit = _number_format_boolean(alignment.get("shrinkToFit"), False)
+    if shrink_to_fit is None:
+        note_issue(
+            f"{context}:invalid-shrink-to-fit",
+            alignment.get("shrinkToFit"),
+        )
+        invalid = True
+        shrink_to_fit = False
+
+    indent = _number_format_unsigned_int(alignment.get("indent"))
+    if indent is None:
+        if alignment.get("indent") is None:
+            indent = 0
+        else:
+            note_issue(f"{context}:invalid-indent", alignment.get("indent"))
+            invalid = True
+            indent = 0
+    elif indent > _ALIGNMENT_INDENT_MAXIMUM:
+        note_issue(f"{context}:out-of-range-indent", alignment.get("indent"))
+        invalid = True
+
+    relative_indent = _alignment_signed_int32(alignment.get("relativeIndent"))
+    if relative_indent is None:
+        if alignment.get("relativeIndent") is None:
+            relative_indent = 0
+        else:
+            note_issue(
+                f"{context}:invalid-relative-indent",
+                alignment.get("relativeIndent"),
+            )
+            invalid = True
+            relative_indent = 0
+
+    justify_last_line = _number_format_boolean(
+        alignment.get("justifyLastLine"),
+        False,
+    )
+    if justify_last_line is None:
+        note_issue(
+            f"{context}:invalid-justify-last-line",
+            alignment.get("justifyLastLine"),
+        )
+        invalid = True
+        justify_last_line = False
+
+    reading_order = _number_format_unsigned_int(alignment.get("readingOrder"))
+    if reading_order is None:
+        if alignment.get("readingOrder") is None:
+            reading_order = 0
+        else:
+            note_issue(
+                f"{context}:invalid-reading-order",
+                alignment.get("readingOrder"),
+            )
+            invalid = True
+            reading_order = 0
+    elif reading_order not in _ALIGNMENT_READING_ORDER_VALUES:
+        note_issue(
+            f"{context}:out-of-range-reading-order",
+            alignment.get("readingOrder"),
+        )
+        invalid = True
+
+    # mergeCell is specified as an unused, non-interoperable compatibility
+    # flag. Validate its spelling for coverage, but omit it from effective
+    # visual semantics so inert writer noise cannot produce a finding.
+    merge_cell = _number_format_boolean(alignment.get("mergeCell"), False)
+    if merge_cell is None:
+        note_issue(f"{context}:invalid-merge-cell", alignment.get("mergeCell"))
+        invalid = True
+
+    definition = tuple(
+        entry
+        for entry in (
+            ("horizontal", horizontal) if horizontal != "general" else None,
+            ("vertical", vertical) if vertical != "bottom" else None,
+            (
+                ("textRotation", str(text_rotation))
+                if text_rotation != 0
+                else None
+            ),
+            ("wrapText", "true") if wrap_text else None,
+            ("shrinkToFit", "true") if shrink_to_fit else None,
+            ("indent", str(indent)) if indent != 0 else None,
+            (
+                ("relativeIndent", str(relative_indent))
+                if relative_indent != 0
+                else None
+            ),
+            ("justifyLastLine", "true") if justify_last_line else None,
+            ("readingOrder", str(reading_order)) if reading_order != 0 else None,
+        )
+        if entry is not None
+    )
+    if invalid:
+        return _alignment_unrecognized(
+            "alignment-definition",
+            context,
+            raw_attributes,
+            definition,
+            opaque_children,
+        )
+    if not definition:
+        return _DEFAULT_ALIGNMENT_STYLE
+    return _AlignmentStyle("alignment", _alignment_private_digest(definition))
+
+
+def _alignment_column_state_signature(
+    states: list[_AlignmentStyle],
+    default: _AlignmentStyle,
+) -> tuple[tuple[int, int, str, str], ...]:
+    """Compress effective alignments so equivalent range splitting stays quiet."""
+    segments: list[tuple[int, int, str, str]] = []
+    start: int | None = None
+    previous: _AlignmentStyle | None = None
+    for column in range(1, MAX_EXCEL_COLUMN + 1):
+        current = states[column]
+        if current == default:
+            if start is not None and previous is not None:
+                segments.append((start, column - 1, previous.category, previous.value))
+            start = None
+            previous = None
+            continue
+        if start is None:
+            start = column
+            previous = current
+            continue
+        if current != previous:
+            segments.append((start, column - 1, previous.category, previous.value))
+            start = column
+            previous = current
+    if start is not None and previous is not None:
+        segments.append((start, MAX_EXCEL_COLUMN, previous.category, previous.value))
+    return tuple(segments)
+
+
+def _alignment_metadata(path: Path) -> _AlignmentMetadata:
+    """Inspect effective cell, row, and column alignment from raw OOXML.
+
+    Alignment can reposition, rotate, wrap, indent, or shrink visible content
+    without changing a stored value. The scanner resolves xf inheritance and
+    applyAlignment before retaining a private signature. Alignment definitions,
+    style IDs, and target locations never leave this process.
+    """
+    warnings: set[str] = set()
+    default_snapshot = AlignmentSnapshot()
+    entries: list[tuple[str, str]] = []
+    issues: dict[str, str] = {}
+    default_alignment_definition_count = 0
+    cell_alignment_assignment_count = 0
+    row_alignment_assignment_count = 0
+    column_alignment_assignment_count = 0
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    try:
+        with ZipFile(path) as archive:
+            try:
+                styles = _xml_root(archive, "xl/styles.xml")
+            except KeyError:
+                styles = None
+            if styles is not None and (
+                _xml_namespace(styles.tag) != _SPREADSHEETML_NS
+                or _xml_local_name(styles.tag) != "styleSheet"
+            ):
+                note_issue("style-sheet-root", styles.tag)
+                styles = None
+
+            def parse_style_index(value: str | None, *, context: str) -> int | None:
+                if value is None:
+                    return None
+                parsed = _number_format_unsigned_int(value)
+                if parsed is None:
+                    note_issue(f"{context}:invalid-style-index", value)
+                return parsed
+
+            base_xfs: list[_AlignmentStyle] = []
+            effective_xfs: list[_AlignmentStyle] = []
+            if styles is not None:
+                xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+                alignment_tag = f"{{{_SPREADSHEETML_NS}}}alignment"
+
+                def resolve_xf(
+                    xf: ElementTree.Element,
+                    inherited: _AlignmentStyle,
+                    *,
+                    context: str,
+                ) -> _AlignmentStyle:
+                    applies = _number_format_boolean(xf.get("applyAlignment"), True)
+                    if applies is None:
+                        note_issue(
+                            f"{context}:invalid-apply-alignment",
+                            xf.get("applyAlignment"),
+                        )
+                        return _alignment_unrecognized(
+                            "invalid-apply-alignment",
+                            context,
+                            xf.get("applyAlignment"),
+                        )
+                    foreign_alignments = [
+                        child
+                        for child in xf
+                        if (
+                            _xml_local_name(child.tag) == "alignment"
+                            and child.tag != alignment_tag
+                        )
+                    ]
+                    if foreign_alignments:
+                        note_issue(
+                            f"{context}:unsupported-alignment-child",
+                            tuple(child.tag for child in foreign_alignments),
+                        )
+                        return _alignment_unrecognized(
+                            "unsupported-alignment-child",
+                            context,
+                            tuple(
+                                _xml_fragment(child).sort_key()
+                                for child in foreign_alignments
+                            ),
+                        )
+                    alignments = [
+                        child for child in xf if child.tag == alignment_tag
+                    ]
+                    if len(alignments) > 1:
+                        note_issue(
+                            f"{context}:multiple-alignment-children",
+                            len(alignments),
+                        )
+                        return _alignment_unrecognized(
+                            "multiple-alignment-children",
+                            context,
+                            tuple(
+                                _xml_fragment(child).sort_key() for child in alignments
+                            ),
+                        )
+                    if not applies or not alignments:
+                        return inherited
+                    return _alignment_definition_style(
+                        alignments[0],
+                        context=f"{context}:alignment",
+                        note_issue=note_issue,
+                    )
+
+                cell_style_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellStyleXfs"
+                cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+                base_containers = styles.findall(cell_style_xfs_tag)
+                if len(base_containers) > 1:
+                    note_issue("multiple-cell-style-xf-containers", len(base_containers))
+                for container_index, container in enumerate(base_containers):
+                    for index, xf in enumerate(container):
+                        if xf.tag != xf_tag:
+                            note_issue(
+                                f"base-xf:{container_index}:{index}:unsupported-child",
+                                xf.tag,
+                            )
+                            continue
+                        base_xfs.append(
+                            resolve_xf(
+                                xf,
+                                _DEFAULT_ALIGNMENT_STYLE,
+                                context=f"base-xf:{container_index}:{index}",
+                            )
+                        )
+                if not base_xfs:
+                    base_xfs.append(_DEFAULT_ALIGNMENT_STYLE)
+
+                cell_containers = styles.findall(cell_xfs_tag)
+                if len(cell_containers) > 1:
+                    note_issue("multiple-cell-xf-containers", len(cell_containers))
+                for container_index, container in enumerate(cell_containers):
+                    for index, xf in enumerate(container):
+                        if xf.tag != xf_tag:
+                            note_issue(
+                                f"cell-xf:{container_index}:{index}:unsupported-child",
+                                xf.tag,
+                            )
+                            continue
+                        xf_id_value = xf.get("xfId")
+                        inherited = _DEFAULT_ALIGNMENT_STYLE
+                        if xf_id_value is not None:
+                            xf_id = parse_style_index(
+                                xf_id_value,
+                                context=f"cell-xf:{container_index}:{index}:base",
+                            )
+                            if xf_id is None or xf_id >= len(base_xfs):
+                                note_issue(
+                                    f"cell-xf:{container_index}:{index}:unknown-base-style",
+                                    xf_id_value,
+                                )
+                                inherited = _alignment_unrecognized(
+                                    "unknown-alignment-base-style",
+                                    container_index,
+                                    index,
+                                    xf_id_value,
+                                )
+                            else:
+                                inherited = base_xfs[xf_id]
+                        effective_xfs.append(
+                            resolve_xf(
+                                xf,
+                                inherited,
+                                context=f"cell-xf:{container_index}:{index}",
+                            )
+                        )
+            if not effective_xfs:
+                effective_xfs.append(_DEFAULT_ALIGNMENT_STYLE)
+
+            default_style = effective_xfs[0]
+
+            def style_for_assignment(
+                value: str | None,
+                *,
+                context: str,
+            ) -> _AlignmentStyle | None:
+                index = parse_style_index(value, context=context)
+                if value is None:
+                    return None
+                if index is None or index >= len(effective_xfs):
+                    note_issue(f"{context}:unknown-style", value)
+                    return _alignment_unrecognized(
+                        "unknown-alignment-style",
+                        context,
+                        value,
+                    )
+                return effective_xfs[index]
+
+            if default_style != _DEFAULT_ALIGNMENT_STYLE:
+                default_alignment_definition_count = 1
+                entries.append(("default-alignment", repr(default_style)))
+
+            cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+            col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+            sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+            row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+            cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                column_states = [default_style] * (MAX_EXCEL_COLUMN + 1)
+                column_updates = 0
+                for columns_index, columns in enumerate(worksheet.findall(cols_tag)):
+                    for column_index, column in enumerate(columns):
+                        context = (
+                            f"column:{sheet.casefold()}:{columns_index}:{column_index}"
+                        )
+                        if column.tag != col_tag:
+                            note_issue(f"{context}:unsupported-child", column.tag)
+                            continue
+                        if column.get("style") is None:
+                            continue
+                        minimum = _number_format_unsigned_int(column.get("min"))
+                        maximum = _number_format_unsigned_int(column.get("max"))
+                        style = style_for_assignment(
+                            column.get("style"),
+                            context=context,
+                        )
+                        if (
+                            minimum is None
+                            or maximum is None
+                            or minimum < 1
+                            or maximum < minimum
+                            or maximum > MAX_EXCEL_COLUMN
+                            or style is None
+                        ):
+                            note_issue(
+                                f"{context}:invalid-column-span",
+                                (
+                                    column.get("min"),
+                                    column.get("max"),
+                                    column.get("style"),
+                                ),
+                            )
+                            continue
+                        span = maximum - minimum + 1
+                        if column_updates + span > _ALIGNMENT_COLUMN_UPDATE_BUDGET:
+                            note_issue(f"{context}:column-update-budget", span)
+                            continue
+                        column_states[minimum : maximum + 1] = [style] * span
+                        column_updates += span
+
+                column_signature = _alignment_column_state_signature(
+                    column_states,
+                    default_style,
+                )
+                if column_signature:
+                    entries.append(
+                        (
+                            f"column-alignments:{sheet.casefold()}",
+                            repr(column_signature),
+                        )
+                    )
+                    column_alignment_assignment_count += sum(
+                        maximum - minimum + 1
+                        for minimum, maximum, _category, _value in column_signature
+                    )
+
+                raw_rows: list[tuple[int, _AlignmentStyle]] = []
+                for sheet_data_index, sheet_data in enumerate(
+                    worksheet.findall(sheet_data_tag)
+                ):
+                    for row_index, row in enumerate(sheet_data):
+                        context = (
+                            f"row:{sheet.casefold()}:{sheet_data_index}:{row_index}"
+                        )
+                        if row.tag != row_tag:
+                            continue
+                        custom_format = _number_format_boolean(
+                            row.get("customFormat"),
+                            False,
+                        )
+                        if custom_format is None:
+                            note_issue(
+                                f"{context}:invalid-custom-format",
+                                row.get("customFormat"),
+                            )
+                            continue
+                        if not custom_format:
+                            continue
+                        row_number = _number_format_unsigned_int(row.get("r"))
+                        style = style_for_assignment(row.get("s"), context=context)
+                        if (
+                            row_number is None
+                            or row_number < 1
+                            or row_number > MAX_EXCEL_ROW
+                            or style is None
+                        ):
+                            note_issue(
+                                f"{context}:invalid-row-assignment",
+                                (row.get("r"), row.get("s")),
+                            )
+                            continue
+                        raw_rows.append((row_number, style))
+
+                relevant_rows = {
+                    row_number
+                    for row_number, style in raw_rows
+                    if style != default_style
+                }
+                has_relevant_columns = bool(column_signature)
+                for row_number, style in raw_rows:
+                    if style == default_style and not has_relevant_columns:
+                        continue
+                    entries.append(
+                        (
+                            f"row-alignment:{sheet.casefold()}:{row_number}",
+                            repr(style),
+                        )
+                    )
+                    row_alignment_assignment_count += 1
+
+                seen_cells: set[str] = set()
+                for cell in worksheet.iter(cell_tag):
+                    if cell.get("s") is None:
+                        continue
+                    context = f"cell:{sheet.casefold()}"
+                    coordinate = cell.get("r")
+                    style = style_for_assignment(cell.get("s"), context=context)
+                    match = (
+                        re.fullmatch(r"([A-Za-z]+)([1-9][0-9]*)", coordinate)
+                        if coordinate is not None
+                        else None
+                    )
+                    if style is None or match is None:
+                        note_issue(
+                            f"{context}:invalid-cell-assignment",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    column_letters, raw_row_number = match.groups()
+                    try:
+                        column_number = (
+                            column_index_from_string(column_letters)
+                            if len(column_letters) <= 3
+                            else 0
+                        )
+                    except ValueError:
+                        column_number = 0
+                    row_number = _number_format_unsigned_int(raw_row_number)
+                    if row_number is None:
+                        note_issue(
+                            f"{context}:invalid-cell-row",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    if (
+                        column_number < 1
+                        or column_number > MAX_EXCEL_COLUMN
+                        or row_number > MAX_EXCEL_ROW
+                    ):
+                        note_issue(
+                            f"{context}:out-of-bounds-cell",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    canonical_coordinate = coordinate.upper()
+                    if canonical_coordinate in seen_cells:
+                        note_issue(
+                            f"{context}:duplicate-cell",
+                            (canonical_coordinate, cell.get("s")),
+                        )
+                    seen_cells.add(canonical_coordinate)
+                    if (
+                        style == default_style
+                        and row_number not in relevant_rows
+                        and column_states[column_number] == default_style
+                    ):
+                        continue
+                    entries.append(
+                        (
+                            f"cell-alignment:{sheet.casefold()}:{canonical_coordinate}",
+                            repr(style),
+                        )
+                    )
+                    cell_alignment_assignment_count += 1
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _AlignmentMetadata(
+            default_snapshot,
+            (
+                "FormulaFence could not inspect cell-alignment OOXML "
+                f"({type(error).__name__}); affected display controls were not compared.",
+            ),
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported cell-alignment metadata; "
+            "affected display controls have a coverage gap."
+        )
+        entries.extend(
+            (f"alignment-issue:{context}", detail)
+            for context, detail in sorted(issues.items())
+        )
+    snapshot = AlignmentSnapshot(
+        default_alignment_definition_count=default_alignment_definition_count,
+        cell_alignment_assignment_count=cell_alignment_assignment_count,
+        row_alignment_assignment_count=row_alignment_assignment_count,
+        column_alignment_assignment_count=column_alignment_assignment_count,
+        unrecognized_alignment_count=len(issues),
+        definition_signature=(
+            _private_external_data_signature(tuple(sorted(entries))) if entries else None
+        ),
+    )
+    return _AlignmentMetadata(snapshot, tuple(sorted(warnings)))
+
+
 @dataclass
 class _WorkbookThemeBudget:
     """Bound raw workbook-theme reads across XML and direct image parts."""
@@ -30398,6 +31116,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     number_format_metadata = _number_format_metadata(source)
     font_metadata = _font_metadata(source)
     fill_metadata = _fill_metadata(source)
+    alignment_metadata = _alignment_metadata(source)
     workbook_theme_metadata = _workbook_theme_metadata(source)
     formula_cached_result_metadata = _formula_cached_result_metadata(source)
     rich_text_run_metadata = _rich_text_run_metadata(source)
@@ -30450,6 +31169,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(number_format_metadata.warnings)
     parser_warnings.update(font_metadata.warnings)
     parser_warnings.update(fill_metadata.warnings)
+    parser_warnings.update(alignment_metadata.warnings)
     parser_warnings.update(workbook_theme_metadata.warnings)
     parser_warnings.update(formula_cached_result_metadata.warnings)
     parser_warnings.update(rich_text_run_metadata.warnings)
@@ -30686,6 +31406,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         number_format_controls=number_format_metadata.controls,
         font_controls=font_metadata.controls,
         fill_controls=fill_metadata.controls,
+        alignment_controls=alignment_metadata.controls,
         workbook_theme=workbook_theme_metadata.theme,
         formula_cached_results=formula_cached_result_metadata.results,
         rich_text_runs=rich_text_run_metadata.controls,
@@ -30775,6 +31496,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "number_format_controls": snapshot.number_format_controls.profile_dict(),
         "font_controls": snapshot.font_controls.profile_dict(),
         "fill_controls": snapshot.fill_controls.profile_dict(),
+        "alignment_controls": snapshot.alignment_controls.profile_dict(),
         "workbook_theme": snapshot.workbook_theme.profile_dict(),
         "formula_cached_results": snapshot.formula_cached_results.profile_dict(),
         "rich_text_runs": snapshot.rich_text_runs.profile_dict(),
@@ -30816,6 +31538,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_number_format_controls": snapshot.number_format_controls.present,
             "has_font_controls": snapshot.font_controls.present,
             "has_fill_controls": snapshot.fill_controls.present,
+            "has_alignment_controls": snapshot.alignment_controls.present,
             "has_workbook_theme": snapshot.workbook_theme.present,
             "has_formula_cached_results": snapshot.formula_cached_results.present,
             "has_rich_text_runs": snapshot.rich_text_runs.present,

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.52.0 — 2026-07-26
+
+- Inspect effective raw SpreadsheetML cell-alignment controls before ordinary
+  readers can flatten their style inheritance: horizontal/vertical placement,
+  text rotation, wrapping, shrinking, indentation, relative indentation,
+  justification, and reading order across default, direct-cell, row, and
+  column-style assignments. Profiles, Markdown, JSON, and SARIF expose
+  structural counts only; alignment values, style IDs, and target locations
+  remain private.
+- Emit `FF054` for a material effective cell-alignment control change and add
+  the fail-closed `no_cell_alignment_changes` policy rule (`FFP054`). This
+  closes the review gap where an unchanged value, warning, or classification can
+  be moved, rotated, wrapped, shrunk, or indented without a normal cell diff.
+- Normalize equivalent explicit defaults, Boolean and integer spellings,
+  semantically inert `mergeCell` compatibility material, base-XF inheritance,
+  `applyAlignment` semantics, and effective column-range splitting.
+  Missing, duplicate, malformed, or unsupported alignment metadata produces a
+  visible coverage warning rather than a silent omission. FormulaFence compares
+  stored declarations only: it does not compute widths/heights, merge layout,
+  overflow, final text visibility, font/fill/conditional-format composition,
+  or Excel client rendering.
+
 ## 0.51.0 — 2026-07-26
 
 - Inspect the raw workbook-level DrawingML Theme before ordinary workbook

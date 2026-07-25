@@ -8,6 +8,7 @@ from formulafence.policy import evaluate_policy, parse_policy
 from formulafence.workbook import load_snapshot
 
 from .helpers import (
+    change_alignment_definition,
     change_cell_hyperlink_target,
     change_chart_definition_material,
     change_custom_xml_data_store_value,
@@ -42,6 +43,7 @@ from .helpers import (
     change_xlm_macro_sheet_controls,
     change_xml_mapping_xpath,
     change_zero_dimension_visibility_controls,
+    make_alignment_model,
     make_cell_hyperlink_model,
     make_chart_definition_model,
     make_conditional_formatting_model,
@@ -533,6 +535,21 @@ def test_policy_can_block_cell_fill_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP041"}
+
+
+def test_policy_can_block_cell_alignment_changes(tmp_path) -> None:
+    baseline = make_alignment_model(tmp_path / "baseline.xlsx")
+    candidate = make_alignment_model(tmp_path / "candidate.xlsx")
+    change_alignment_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_cell_alignment_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP054"
+    }
 
 
 def test_policy_can_block_formula_cached_result_changes(tmp_path) -> None:

@@ -28,6 +28,7 @@ rules:
   no_cell_font_changes: true
   no_cell_fill_changes: true
   no_workbook_theme_changes: true
+  no_cell_alignment_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
@@ -108,6 +109,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_cell_font_changes` | boolean | An effective default, direct-cell, row, or column font control changes. Font names, colours, effects, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
 | `no_workbook_theme_changes` | boolean | A workbook Theme binding, stored colour/font/format scheme, direct Theme-image relationship, or direct Theme-image payload changes. Theme XML, scheme names, colours, font names, image bytes, relationship IDs, and targets are compared privately. |
+| `no_cell_alignment_changes` | boolean | An effective default, direct-cell, row, or column alignment control changes. Alignment values, style IDs, and cell/row/column targets are compared privately. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
 | `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
 | `no_cell_hyperlink_changes` | boolean | A standard or Office 2016 revision worksheet-cell hyperlink binding, location, display override, ScreenTip, or selected relationship target/type/mode changes. Targets, cell references, locations, display strings, ScreenTips, relationship IDs, and revision UIDs are compared privately. |
@@ -519,7 +521,7 @@ Missing custom codes, invalid IDs/indexes/targets, conflicting definitions, and
 bounded parser failures are explicit coverage warnings. FormulaFence does not
 render or locale-resolve a number format, validate its syntax, calculate values,
 model widths/overflow, or track visual-style properties other than separately
-inventoried cell fonts and fills. A raw column `style` is compared as a declaration/default
+inventoried cell fonts, fills, and alignment. A raw column `style` is compared as a declaration/default
 for unallocated/new cells; it is not treated as a renderer that restyles
 allocated cells.
 
@@ -540,9 +542,9 @@ spelling, base-XF inheritance, and effective column-range splitting are
 normalized. Missing or malformed definitions, invalid IDs/indexes/targets, and
 bounded parser failures are explicit coverage warnings. FormulaFence does not
 render or resolve theme colours, decide whether a font is visible against a
-fill, calculate text/background contrast or values, track
-borders/alignment/rich-text run rendering/table styles, or claim arbitrary visual-style
-coverage. A raw column `style` is
+fill, calculate text/background contrast or values, compose alignment with
+other display controls, track borders/rich-text run rendering/table styles, or
+claim arbitrary visual-style coverage. A raw column `style` is
 compared as a declaration/default for unallocated/new cells; it is not treated
 as a renderer that restyles allocated cells.
 
@@ -568,6 +570,29 @@ contrast, evaluate conditional-format differential styles, apply table styles,
 calculate values, or claim arbitrary visual-style coverage. A raw column `style`
 is compared as a declaration/default for unallocated/new cells; it is not
 treated as a renderer that restyles allocated cells.
+
+Cell-alignment controls can reposition, rotate, wrap, shrink, or indent an
+unchanged value, warning, or visual classification. FormulaFence reads raw
+`alignment` children from base `cellStyleXfs` and effective
+`cellXfs` records, follows `xfId` and `applyAlignment`, and
+compares direct cell `s`, row `s` where `customFormat=1`, and raw
+`<cols>/<col style>` declarations. It covers horizontal/vertical placement,
+text rotation, wrapping, shrinking, indentation, relative indentation,
+justification, and reading order. A material effective control change emits
+`FF054`; enable `no_cell_alignment_changes` to make it `FFP054` in CI.
+
+Profiles and `FF054` details expose only counts for default definitions,
+direct cell, row, effective column, and unrecognized controls. Alignment
+values, style indexes, and targets remain private. Equivalent explicit defaults,
+Boolean/integer spellings, semantically inert `mergeCell` compatibility
+material, base-XF inheritance, `applyAlignment`, and effective
+column-range splitting are normalized. Missing, duplicate, malformed, or
+unsupported alignment metadata is an explicit coverage warning rather than a
+silent omission. FormulaFence compares declarations, not layout: it does not
+calculate width, height, merged-cell layout, overflow, final visibility,
+font/fill/conditional-format composition, or Excel client rendering. A raw
+column `style` is compared as a declaration/default for unallocated/new
+cells; it is not treated as a renderer that restyles allocated cells.
 
 Workbook-level DrawingML Theme controls can change the colour, font, and effect
 schemes used by themed cells, charts, and drawing objects without changing a

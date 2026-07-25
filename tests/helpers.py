@@ -19,7 +19,7 @@ from openpyxl.formatting.rule import (
     FormulaRule,
     IconSetRule,
 )
-from openpyxl.styles import Font, GradientFill, PatternFill, Protection
+from openpyxl.styles import Alignment, Font, GradientFill, PatternFill, Protection
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
@@ -10101,6 +10101,270 @@ def corrupt_fill_definition(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".fill-missing-definition.tmp.xlsx")
+
+
+def make_alignment_model(path: Path) -> Path:
+    """Create display-only alignment controls with private presentation values."""
+    workbook = Workbook()
+    report = workbook.active
+    report.title = "Alignment Report"
+    report["A1"] = "Default display"
+    report["A2"] = 1234.5
+    report["B1"] = "Private indented display"
+    report["B2"] = 1234567.89
+    report["B2"].alignment = Alignment(
+        horizontal="left",
+        indent=157,
+        wrapText=True,
+    )
+    report["C1"] = "Private rotated display"
+    report["C2"] = "PRIVATE-ROTATED-REVIEW-TEXT"
+    report["C2"].alignment = Alignment(
+        horizontal="right",
+        textRotation=255,
+        shrinkToFit=True,
+        readingOrder=2,
+    )
+    report["D1"] = "Column-default display"
+    report["D2"] = "=B2*A2"
+    report["A4"] = "Row-default display"
+    report.row_dimensions[4].alignment = Alignment(
+        vertical="top",
+        wrapText=True,
+    )
+    report.column_dimensions["D"].alignment = Alignment(
+        horizontal="center",
+        relativeIndent=7,
+    )
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        column = next(
+            current
+            for current in worksheet.iter(col_tag)
+            if current.get("min") == "4" and current.get("max") == "4"
+        )
+        # Column alignment is a default for unallocated/new cells. Keep the
+        # fixture span short so range canonicalization is testable without
+        # claiming an allocated formula cell adopts that default.
+        column.set("max", "5")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".alignment.tmp.xlsx")
+
+
+def _alignment_fixture_xf(styles: ElementTree.Element) -> ElementTree.Element:
+    """Return the direct indented alignment XF used by alignment fixtures."""
+    cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+    xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+    alignment_tag = f"{{{_SPREADSHEETML_NS}}}alignment"
+    cell_xfs = styles.find(cell_xfs_tag)
+    if cell_xfs is None:
+        raise ValueError("Could not find alignment XF fixture")
+    direct_xf = next(
+        (
+            current
+            for current in cell_xfs.findall(xf_tag)
+            if (
+                (alignment := current.find(alignment_tag)) is not None
+                and alignment.get("horizontal") == "left"
+                and alignment.get("indent") in {"157", "157.0"}
+            )
+        ),
+        None,
+    )
+    if direct_xf is None:
+        raise ValueError("Could not find direct alignment fixture")
+    return direct_xf
+
+
+def change_alignment_definition(path: Path) -> Path:
+    """Change a private direct-cell alignment without touching its value."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        alignment_tag = f"{{{_SPREADSHEETML_NS}}}alignment"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        alignment = _alignment_fixture_xf(styles).find(alignment_tag)
+        if alignment is None:
+            raise ValueError("Could not find direct alignment definition")
+        alignment.set("indent", "158")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".alignment-change.tmp.xlsx")
+
+
+def change_default_alignment_definition(path: Path) -> Path:
+    """Change the default cell alignment without editing any cell record."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        alignment_tag = f"{{{_SPREADSHEETML_NS}}}alignment"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        cell_xfs = styles.find(cell_xfs_tag)
+        if cell_xfs is None or not cell_xfs.findall(xf_tag):
+            raise ValueError("Could not find default alignment XF fixture")
+        default_xf = cell_xfs.findall(xf_tag)[0]
+        alignment = default_xf.find(alignment_tag)
+        if alignment is None:
+            alignment = ElementTree.SubElement(default_xf, alignment_tag)
+        alignment.set("horizontal", "center")
+        default_xf.set("applyAlignment", "true")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".alignment-default-change.tmp.xlsx")
+
+
+def normalize_alignment_control_spelling(path: Path) -> Path:
+    """Use equivalent defaults, Boolean spellings, and column range splitting."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        alignment_tag = f"{{{_SPREADSHEETML_NS}}}alignment"
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        direct_alignment = _alignment_fixture_xf(styles).find(alignment_tag)
+        if direct_alignment is None:
+            raise ValueError("Could not find direct alignment definition")
+        direct_alignment.set("vertical", "bottom")
+        direct_alignment.set("textRotation", "000")
+        direct_alignment.set("wrapText", "true")
+        direct_alignment.set("indent", "00157")
+        direct_alignment.set("relativeIndent", "+000")
+        direct_alignment.set("shrinkToFit", "false")
+        direct_alignment.set("justifyLastLine", "0")
+        direct_alignment.set("readingOrder", "0")
+        # mergeCell is valid but inert compatibility material.
+        direct_alignment.set("mergeCell", "1")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        columns = worksheet.find(cols_tag)
+        if columns is None:
+            raise ValueError("Could not find alignment column fixture")
+        column = next(
+            current
+            for current in columns.findall(col_tag)
+            if current.get("min") == "4" and current.get("max") == "5"
+        )
+        attributes = dict(column.attrib)
+        columns.remove(column)
+        for minimum, maximum in (("4", "4"), ("5", "5")):
+            split_attributes = {**attributes, "min": minimum, "max": maximum}
+            ElementTree.SubElement(columns, col_tag, split_attributes)
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".alignment-noise.tmp.xlsx")
+
+
+def normalize_alignment_inheritance(path: Path) -> Path:
+    """Move one direct alignment into its base XF without changing its effect."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cell_style_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellStyleXfs"
+        alignment_tag = f"{{{_SPREADSHEETML_NS}}}alignment"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        cell_style_xfs = styles.find(cell_style_xfs_tag)
+        if cell_style_xfs is None:
+            raise ValueError("Could not find alignment base XF fixture")
+        direct_xf = _alignment_fixture_xf(styles)
+        direct_alignment = direct_xf.find(alignment_tag)
+        if direct_alignment is None:
+            raise ValueError("Could not find direct alignment definition")
+        base_index = len(cell_style_xfs.findall(xf_tag))
+        base_xf = ElementTree.SubElement(
+            cell_style_xfs,
+            xf_tag,
+            {
+                "numFmtId": "0",
+                "fontId": "0",
+                "fillId": "0",
+                "borderId": "0",
+                "applyAlignment": "1",
+            },
+        )
+        base_xf.append(
+            ElementTree.fromstring(
+                ElementTree.tostring(direct_alignment, encoding="utf-8")
+            )
+        )
+        cell_style_xfs.set("count", str(base_index + 1))
+        direct_xf.remove(direct_alignment)
+        direct_xf.set("xfId", str(base_index))
+        direct_xf.set("applyAlignment", "false")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".alignment-inheritance.tmp.xlsx")
+
+
+def corrupt_alignment_column_control(path: Path) -> Path:
+    """Inject an out-of-bounds alignment-style span for fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        column = next(
+            current
+            for current in worksheet.iter(col_tag)
+            if current.get("min") == "4" and current.get("max") == "5"
+        )
+        column.set("max", "16385")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".alignment-corrupt.tmp.xlsx")
+
+
+def corrupt_alignment_definition(path: Path) -> Path:
+    """Inject invalid reading-order metadata into a used alignment definition."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        alignment_tag = f"{{{_SPREADSHEETML_NS}}}alignment"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        alignment = _alignment_fixture_xf(styles).find(alignment_tag)
+        if alignment is None:
+            raise ValueError("Could not find direct alignment definition")
+        # openpyxl only checks that readingOrder is nonnegative. SpreadsheetML
+        # limits it to 0, 1, or 2, so this remains readable for a fail-closed
+        # FormulaFence coverage test.
+        alignment.set("readingOrder", "424242")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".alignment-malformed.tmp.xlsx")
 
 
 def _formula_cached_result_cell(

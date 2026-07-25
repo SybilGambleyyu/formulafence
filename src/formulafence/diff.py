@@ -10,6 +10,7 @@ from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
 
 from formulafence.formulas import resolve_3d_reference
 from formulafence.models import (
+    AlignmentSnapshot,
     CellHyperlinkSnapshot,
     CellKey,
     CellSnapshot,
@@ -1575,6 +1576,50 @@ def _workbook_control_changes(
                 (
                     "Workbook theme controls changed; themed cell, chart, or drawing "
                     "appearance may have been altered outside ordinary cells."
+                ),
+                details=details,
+            )
+        )
+    if before.alignment_controls != after.alignment_controls:
+        old_controls: AlignmentSnapshot = before.alignment_controls
+        new_controls: AlignmentSnapshot = after.alignment_controls
+        details = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.definition_signature != new_controls.definition_signature:
+            details["alignment_definition_material_changed"] = True
+        if (
+            old_controls.unrecognized_alignment_count
+            != new_controls.unrecognized_alignment_count
+            or (
+                (
+                    old_controls.unrecognized_alignment_count
+                    or new_controls.unrecognized_alignment_count
+                )
+                and (
+                    old_controls.definition_signature
+                    != new_controls.definition_signature
+                )
+            )
+        ):
+            details["unrecognized_alignment_metadata_changed"] = True
+        changes.append(
+            Change(
+                "cell_alignment_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF054",
+                "high",
+                (
+                    "Cell alignment controls changed; values, warnings, or visual "
+                    "classifications may be repositioned, rotated, wrapped, shrunk, "
+                    "or made less legible."
                 ),
                 details=details,
             )

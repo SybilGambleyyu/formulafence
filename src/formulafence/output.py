@@ -102,6 +102,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         ),
         f"- **Cell font controls:** {workbook['font_assignment_count']}",
         f"- **Cell fill controls:** {workbook['fill_assignment_count']}",
+        f"- **Cell alignment controls:** {workbook['alignment_assignment_count']}",
         (
             "- **Workbook theme parts / image parts:** "
             f"{workbook['workbook_theme_part_count']} / "
@@ -1448,6 +1449,32 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Fill definitions, style indexes, and cell/row/column targets are compared "
             "privately and intentionally omitted."
+        )
+    alignment_controls = profile["alignment_controls"]
+    if alignment_controls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Cell alignment controls",
+                "",
+                (
+                    "- **Default definition / direct-cell assignments / row assignments / "
+                    "column assignments:** "
+                    f"{alignment_controls['default_alignment_definition_count']} / "
+                    f"{alignment_controls['cell_alignment_assignment_count']} / "
+                    f"{alignment_controls['row_alignment_assignment_count']} / "
+                    f"{alignment_controls['column_alignment_assignment_count']}"
+                ),
+            ]
+        )
+        if alignment_controls["unrecognized_alignment_count"]:
+            lines.append(
+                "- **Unrecognized or malformed alignment controls:** "
+                f"{alignment_controls['unrecognized_alignment_count']}"
+            )
+        lines.append(
+            "Alignment definitions, style indexes, and cell/row/column targets are "
+            "compared privately and intentionally omitted."
         )
     workbook_theme = profile["workbook_theme"]
     if workbook_theme["present"]:

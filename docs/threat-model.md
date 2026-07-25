@@ -212,8 +212,9 @@ review prompt, not proof of an error.
   Missing custom definitions, invalid IDs/indexes/targets, conflicting
   definitions, and bounded parser failures remain coverage warnings. FormulaFence
   does not render locale-specific output, validate format syntax, calculate
-  values, model width/overflow, or track fonts/fills/borders/alignment, quote
-  prefixes, table styles, or arbitrary visual formatting. Column styles
+  values, model width/overflow, or compose number formats with separately
+  inventoried font/fill/alignment controls, borders, quote prefixes, table
+  styles, or arbitrary visual formatting. Column styles
   are compared only as OOXML defaults for unallocated/new cells, not as a claim
   to restyle allocated cells.
 - Excel cell fonts can make an unchanged value or warning less visible, such as
@@ -229,9 +230,9 @@ review prompt, not proof of an error.
   are normalized. Missing or malformed definitions, invalid IDs/indexes/targets,
   and bounded parser failures remain visible coverage warnings. FormulaFence
   does not render or resolve theme colours, decide whether a font is visible
-  against a fill, calculate text/background contrast or values, track
-  borders/alignment, rich-text run rendering, table styles, width/overflow, or arbitrary
-  visual formatting. Column
+  against a fill, calculate text/background contrast or values, compose
+  alignment with other display controls, track borders, rich-text run
+  rendering, table styles, width/overflow, or arbitrary visual formatting. Column
   styles are compared only as OOXML defaults for unallocated/new cells, not as a
   claim to restyle allocated cells.
 - Excel cell fills can make unchanged text, warnings, or input/output cues less
@@ -252,6 +253,28 @@ review prompt, not proof of an error.
   styles, apply table styles, or claim arbitrary visual-style coverage. Column
   styles are compared only as OOXML defaults for unallocated/new cells, not as a
   claim to restyle allocated cells.
+- Cell alignment can reposition, rotate, wrap, shrink, or indent an unchanged
+  value, warning, or visual classification without a formula or value change.
+  FormulaFence privately resolves raw `alignment` children in base
+  `cellStyleXfs` and effective `cellXfs` records, follows `xfId`
+  and `applyAlignment`, and compares direct cell `s`,
+  `customFormat=1` row `s`, and raw `<cols>/<col style>`
+  assignments. It covers horizontal/vertical placement, text rotation,
+  wrapping, shrinking, indentation, relative indentation, justification, and
+  reading order. A material effective declaration change emits `FF054`;
+  `no_cell_alignment_changes` blocks it as `FFP054`. Profiles and
+  reports expose only default/direct/row/effective-column/malformed counts;
+  alignment values, style IDs, and targets remain private. Equivalent explicit
+  defaults, Boolean/integer spelling, inert `mergeCell` compatibility
+  material, base-XF inheritance, `applyAlignment`, and effective
+  column-range splitting normalize away. Missing, duplicate, malformed, or
+  unsupported metadata remains a visible coverage warning. FormulaFence does
+  not calculate width, height, merged layout, overflow, final visibility,
+  font/fill/conditional-format composition, or Excel rendering. Column styles
+  remain OOXML defaults for unallocated/new cells, not a renderer that restyles
+  allocated cells. This boundary follows Microsoft's
+  [SpreadsheetML alignment definition](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/e4ad6e3e-7702-4dbe-8c44-f5a4c686c440)
+  and [CellFormat alignment semantics](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/68362a4b-5589-4504-b566-e8154dce1de3).
 - A workbook-level DrawingML Theme can alter colour, font, and effect schemes
   used by themed cells, charts, and drawing objects without a local style
   change. FormulaFence inspects the raw workbook Theme binding, Theme XML, and

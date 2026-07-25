@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Effective cell-alignment controls — 2026-07-26
+
+FormulaFence 0.52.0 was validated against the independently maintained
+[`Styles.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/v2FxTestFiles/spreadsheet/Styles.xlsx)
+fixture from the Open XML SDK at commit
+`cd2b359ef824737edb93f1c6157c19551aae1e52`. The downloaded baseline
+SHA-256 was
+`a1ca7e60befe2ca550cd4729d68028de2a96aa163574892ed6a0890595b26468`.
+It includes used cell-alignment XFs in a real formatted workbook alongside
+unrelated presentation/control metadata.
+
+A standalone raw-ZIP script outside this repository made a candidate with
+identical ordinary cells, formulas, and logical package members except
+`xl/styles.xml`: it changed one already-used alignment record while preserving
+the source cell values and formulas. The candidate SHA-256 was
+`aca7f4eff8aff38d8b066b52008442b6b514c796ced2cbd27ec70d1fc007ba36`.
+
+A clean Python virtual environment installed the staged 0.52.0 wheel
+(SHA-256 `ce4852b729f4d956bc0fcb3a376e7ef9964301a6660176ae3bf69faef1414d30`).
+It emitted exactly one `cell_alignment_controls_changed` change and
+`FF054`. The generated starter policy exited 1 with `FF054` and
+`FFP054`. JSON and Markdown profile/diff, SARIF diff, and JSON policy
+artifacts were checked to ensure the changed alignment values, attribute name,
+target cell, and member name were absent.
+
+The suite separately validates direct-cell, row, and column assignments;
+default-XF controls; `xfId`/`applyAlignment` inheritance;
+equivalent default/Boolean/integer spelling; inert `mergeCell` material;
+malformed readable metadata; redaction; policy enforcement; and isolation from
+ordinary workbook cells. FormulaFence compares stored effective declarations
+only: it does not calculate layout/overflow/visibility, compose final visual
+styles, or render Excel.
+
 ## Workbook DrawingML Theme controls — 2026-07-26
 
 FormulaFence 0.51.0 was validated against the independently maintained

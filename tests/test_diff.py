@@ -21,6 +21,7 @@ from .helpers import (
     add_power_pivot_data_model_direct_relationship,
     add_protected_range,
     break_slicer_timeline_pivot_cache_binding,
+    change_alignment_definition,
     change_cell_hyperlink_display,
     change_cell_hyperlink_location,
     change_cell_hyperlink_target,
@@ -31,6 +32,7 @@ from .helpers import (
     change_custom_data_store_storage_identifiers,
     change_custom_document_property_value,
     change_custom_xml_data_store_value,
+    change_default_alignment_definition,
     change_default_fill_definition,
     change_default_font_definition,
     change_default_zero_dimension_visibility_controls,
@@ -94,6 +96,8 @@ from .helpers import (
     change_xml_mapping_refresh_behavior,
     change_xml_mapping_xpath,
     change_zero_dimension_visibility_controls,
+    corrupt_alignment_column_control,
+    corrupt_alignment_definition,
     corrupt_cell_hyperlink_reference,
     corrupt_chart_definition_root,
     corrupt_custom_data_properties_root,
@@ -142,6 +146,7 @@ from .helpers import (
     externalize_threaded_comment_relationship,
     externalize_xml_mapping_relationship,
     lowercase_legacy_threaded_placeholder_identifiers,
+    make_alignment_model,
     make_cell_hyperlink_model,
     make_cell_hyperlink_sparkline_model,
     make_chart_definition_model,
@@ -195,6 +200,8 @@ from .helpers import (
     make_zero_dimension_visibility_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
+    normalize_alignment_control_spelling,
+    normalize_alignment_inheritance,
     normalize_custom_data_store_identifiers,
     normalize_digital_signature_control_spelling,
     normalize_fill_control_spelling,
@@ -4958,6 +4965,151 @@ def test_ordinary_workbook_has_no_fill_inventory(tmp_path) -> None:
     assert snapshot.fill_controls.present is False
     assert snapshot.fill_controls.cell_fill_assignment_count == 0
     assert not any("cell-fill" in warning for warning in snapshot.parser_warnings)
+
+
+def test_alignment_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_alignment_model(tmp_path / "baseline.xlsx")
+    candidate = make_alignment_model(tmp_path / "candidate.xlsx")
+    change_alignment_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "cell_alignment_controls_changed"
+    )
+
+    assert baseline_snapshot.cells == candidate_snapshot.cells
+    assert baseline_snapshot.summary()["alignment_assignment_count"] == 5
+    assert baseline_snapshot.summary()["has_alignment_controls"] is True
+    assert profile["alignment_controls"] == {
+        "present": True,
+        "default_alignment_definition_count": 0,
+        "cell_alignment_assignment_count": 2,
+        "row_alignment_assignment_count": 1,
+        "column_alignment_assignment_count": 2,
+        "unrecognized_alignment_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Cell alignment controls" in markdown
+    assert change.details["alignment_definition_material_changed"] is True
+    assert "FF054" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-ROTATED-REVIEW-TEXT",
+        "157",
+        "158",
+        "255",
+        "B2",
+        "D:E",
+        "textRotation",
+        "relativeIndent",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_alignment_writer_noise_and_xf_inheritance_are_normalized(tmp_path) -> None:
+    baseline = make_alignment_model(tmp_path / "baseline.xlsx")
+    spelling_equivalent = make_alignment_model(tmp_path / "spelling-equivalent.xlsx")
+    inheritance_equivalent = make_alignment_model(
+        tmp_path / "inheritance-equivalent.xlsx"
+    )
+    normalize_alignment_control_spelling(spelling_equivalent)
+    normalize_alignment_inheritance(inheritance_equivalent)
+
+    spelling_report = compare_snapshots(
+        load_snapshot(baseline),
+        load_snapshot(spelling_equivalent),
+    )
+    inheritance_report = compare_snapshots(
+        load_snapshot(baseline),
+        load_snapshot(inheritance_equivalent),
+    )
+
+    assert spelling_report.changes == []
+    assert spelling_report.findings == []
+    assert inheritance_report.changes == []
+    assert inheritance_report.findings == []
+
+
+def test_default_alignment_definition_change_is_guarded(tmp_path) -> None:
+    baseline = make_alignment_model(tmp_path / "baseline.xlsx")
+    candidate = make_alignment_model(tmp_path / "candidate.xlsx")
+    change_default_alignment_definition(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.alignment_controls.default_alignment_definition_count == 1
+    assert "FF054" in {finding.rule_id for finding in report.findings}
+
+
+def test_alignment_malformed_controls_fail_closed_and_redact_values(tmp_path) -> None:
+    baseline = make_alignment_model(tmp_path / "baseline.xlsx")
+    malformed_definition = make_alignment_model(tmp_path / "malformed-definition.xlsx")
+    malformed_column = make_alignment_model(tmp_path / "malformed-column.xlsx")
+    corrupt_alignment_definition(malformed_definition)
+    corrupt_alignment_column_control(malformed_column)
+
+    definition_snapshot = load_snapshot(malformed_definition)
+    column_snapshot = load_snapshot(malformed_column)
+    definition_report = compare_snapshots(
+        load_snapshot(baseline),
+        definition_snapshot,
+    )
+    column_report = compare_snapshots(load_snapshot(baseline), column_snapshot)
+
+    assert definition_snapshot.alignment_controls.unrecognized_alignment_count == 1
+    assert column_snapshot.alignment_controls.unrecognized_alignment_count == 1
+    assert any(
+        "malformed or unsupported cell-alignment" in warning
+        for warning in definition_snapshot.parser_warnings
+    )
+    assert any(
+        "malformed or unsupported cell-alignment" in warning
+        for warning in column_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF054"} <= {
+        finding.rule_id for finding in definition_report.findings
+    }
+    assert {"FF010", "FF054"} <= {
+        finding.rule_id for finding in column_report.findings
+    }
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(definition_snapshot)),
+        profile_to_markdown(profile_snapshot(definition_snapshot)),
+        json.dumps(definition_report.to_dict()),
+        report_to_markdown(definition_report),
+        json.dumps(report_to_sarif(definition_report)),
+        json.dumps(profile_snapshot(column_snapshot)),
+        profile_to_markdown(profile_snapshot(column_snapshot)),
+        json.dumps(column_report.to_dict()),
+        report_to_markdown(column_report),
+        json.dumps(report_to_sarif(column_report)),
+    )
+    assert all("424242" not in artifact for artifact in rendered_artifacts)
+    assert all("16385" not in artifact for artifact in rendered_artifacts)
+
+
+def test_ordinary_workbook_has_no_alignment_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.alignment_controls.present is False
+    assert snapshot.alignment_controls.cell_alignment_assignment_count == 0
+    assert not any("cell-alignment" in warning for warning in snapshot.parser_warnings)
 
 
 def test_workbook_themes_are_profiled_diffed_and_redacted(tmp_path) -> None:

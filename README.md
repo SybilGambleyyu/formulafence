@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.51.0/formulafence-0.51.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.52.0/formulafence-0.52.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -78,6 +78,7 @@ rules:
   no_cell_font_changes: true
   no_cell_fill_changes: true
   no_workbook_theme_changes: true
+  no_cell_alignment_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
@@ -126,7 +127,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, workbook DrawingML Theme parts/direct image relationships, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, effective cell-alignment, workbook DrawingML Theme parts/direct image relationships, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -623,8 +624,9 @@ definitions, invalid style references, invalid/out-of-range targets, conflicting
 definitions, and bounded-parser failures become visible coverage warnings rather
 than silent omissions. FormulaFence compares declarations only: it does not
 render locale-specific output, validate a format code, calculate a value, model
-width/overflow, or cover fonts, borders, alignment, quote prefixes,
-table styles, or arbitrary visual formatting. A column `style` is recorded as
+width/overflow, compose number formats with font/fill/alignment controls, or
+cover borders, quote prefixes, table styles, or arbitrary visual formatting. A
+column `style` is recorded as
 the OOXML column default for unallocated/new cells; FormulaFence does not claim
 to apply that default retroactively to existing allocated cells. The boundary
 follows Microsoft's [custom number-format guidance](https://support.microsoft.com/en-us/excel/review-guidelines-for-customizing-a-number-format),
@@ -654,8 +656,9 @@ malformed font/style definitions, invalid IDs/indexes/targets, and bounded-parse
 failures become visible coverage warnings rather than silent omissions.
 FormulaFence compares declarations only: it does not render or resolve theme
 colours, decide whether a font is visible against a fill, calculate
-text/background contrast, track borders, alignment, rich-text run rendering, table
-styles, or arbitrary visual formatting. A column `style` is recorded as the
+text/background contrast, compose alignment with other display controls, track
+borders, rich-text run rendering, table styles, or arbitrary visual formatting.
+A column `style` is recorded as the
 OOXML default for unallocated/new cells;
 FormulaFence does not claim to apply that default retroactively to existing
 allocated cells. The boundary follows the OOXML [`xf`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_xf_topic_ID0E13S6.html)
@@ -683,8 +686,9 @@ bounded-parser failures become visible coverage warnings rather than silent
 omissions. FormulaFence compares declarations only: it does not resolve theme
 colours, render patterns or gradients, calculate text/background contrast,
 evaluate conditional-format differential styles, apply table styles, calculate
-values, or track borders, alignment, rich-text run rendering, width/overflow, or arbitrary
-visual formatting. A column `style` is recorded as the OOXML default for
+values, compose alignment with other display controls, or track borders,
+rich-text run rendering, width/overflow, or arbitrary visual formatting. A
+column `style` is recorded as the OOXML default for
 unallocated/new cells; FormulaFence does not claim to apply that default
 retroactively to existing allocated cells. The boundary follows OOXML's
 [`xf`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_xf_topic_ID0E13S6.html),
@@ -692,6 +696,34 @@ retroactively to existing allocated cells. The boundary follows OOXML's
 and [`gradientFill`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_gradientFill_topic_ID0ENWD6.html)
 forms, alongside the ICAEW's [spreadsheet-review guidance](https://www.icaew.com/-/media/corporate/files/technical/technology/excel/how-to-review-a-spreadsheet-report.ashx)
 to reveal text hidden by formatting.
+
+FormulaFence also inventories **effective cell-alignment controls**. An
+unchanged value, warning, or visual classification can be pushed out of a
+reviewer's normal view, rotated, wrapped, or shrunk without a formula or value
+edit. FormulaFence reads raw `styles.xml` `alignment` children from base
+`cellStyleXfs` and effective `cellXfs` records, follows `xfId` and
+`applyAlignment`, and compares direct cell `s`, row `s` with
+`customFormat=1`, and worksheet `<cols>/<col style>` assignments. It covers
+horizontal/vertical placement, rotation, wrapping, shrinking, indentation,
+relative indentation, justification, and reading order. A material effective
+change emits `FF054`; enable `no_cell_alignment_changes` for `FFP054`.
+
+Profiles expose only counts for default definitions, direct-cell, row, effective
+column, and malformed controls. Alignment values, style IDs, and cell/row/column
+targets never enter profiles, Markdown control sections, `FF054` details, or
+SARIF. Equivalent explicit defaults, Boolean/integer spelling, semantically
+inert `mergeCell` compatibility material, base-XF inheritance,
+`applyAlignment`, and equivalent effective column-range splitting are
+normalized. Missing, duplicate, malformed, or unsupported alignment metadata
+becomes a visible coverage warning rather than a silent omission.
+
+This is a stored-declaration boundary, not a layout engine. FormulaFence does
+not calculate column width, row height, merged-cell layout, overflow, final
+visibility, font/fill/conditional-format composition, or Excel client
+rendering. A column `style` remains an OOXML default for unallocated/new
+cells, not a claim to restyle allocated cells. The scope follows Microsoft's
+[SpreadsheetML alignment definition](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/e4ad6e3e-7702-4dbe-8c44-f5a4c686c440)
+and [CellFormat alignment semantics](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/68362a4b-5589-4504-b566-e8154dce1de3).
 
 FormulaFence also inventories the workbook-level **DrawingML Theme**. A Theme
 can change the colour, font, or effect schemes used by themed cells, charts,

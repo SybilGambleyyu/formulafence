@@ -1757,6 +1757,54 @@ class FillSnapshot:
 
 
 @dataclass(frozen=True)
+class AlignmentSnapshot:
+    """Safe aggregate of effective cell-alignment controls.
+
+    Alignment can change how an unchanged value, warning, or formula appears:
+    indentation, wrapping, shrinking, rotation, and horizontal or vertical
+    placement can all alter a reviewer's visible surface. Definitions and
+    targets can expose report context, so the private signature retains
+    canonical effective assignments for comparison while public output exposes
+    structural counts only.
+    """
+
+    default_alignment_definition_count: int = 0
+    cell_alignment_assignment_count: int = 0
+    row_alignment_assignment_count: int = 0
+    column_alignment_assignment_count: int = 0
+    unrecognized_alignment_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.default_alignment_definition_count
+            or self.cell_alignment_assignment_count
+            or self.row_alignment_assignment_count
+            or self.column_alignment_assignment_count
+            or self.unrecognized_alignment_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural alignment evidence without definitions or targets."""
+        return {
+            "present": self.present,
+            "default_alignment_definition_count": (
+                self.default_alignment_definition_count
+            ),
+            "cell_alignment_assignment_count": self.cell_alignment_assignment_count,
+            "row_alignment_assignment_count": self.row_alignment_assignment_count,
+            "column_alignment_assignment_count": (
+                self.column_alignment_assignment_count
+            ),
+            "unrecognized_alignment_count": self.unrecognized_alignment_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorkbookThemeSnapshot:
     """Safe aggregate of workbook-wide DrawingML theme controls.
 
@@ -2975,6 +3023,9 @@ class WorkbookSnapshot:
     )
     font_controls: FontSnapshot = field(default_factory=FontSnapshot)
     fill_controls: FillSnapshot = field(default_factory=FillSnapshot)
+    alignment_controls: AlignmentSnapshot = field(
+        default_factory=AlignmentSnapshot
+    )
     workbook_theme: WorkbookThemeSnapshot = field(
         default_factory=WorkbookThemeSnapshot
     )
@@ -3176,6 +3227,12 @@ class WorkbookSnapshot:
                 + self.fill_controls.column_fill_assignment_count
             ),
             "has_fill_controls": self.fill_controls.present,
+            "alignment_assignment_count": (
+                self.alignment_controls.cell_alignment_assignment_count
+                + self.alignment_controls.row_alignment_assignment_count
+                + self.alignment_controls.column_alignment_assignment_count
+            ),
+            "has_alignment_controls": self.alignment_controls.present,
             "workbook_theme_part_count": self.workbook_theme.theme_part_count,
             "workbook_theme_image_part_count": self.workbook_theme.theme_image_part_count,
             "has_workbook_theme": self.workbook_theme.present,

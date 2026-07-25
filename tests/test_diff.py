@@ -30,6 +30,8 @@ from .helpers import (
     change_filter_visibility_hidden_column,
     change_filter_visibility_hidden_row,
     change_font_definition,
+    change_formula_cached_result,
+    change_formula_cached_result_with_visible_precedent,
     change_gradient_fill_definition,
     change_ignored_error_extension_target,
     change_ignored_error_target,
@@ -66,6 +68,7 @@ from .helpers import (
     corrupt_filter_visibility_control,
     corrupt_font_column_control,
     corrupt_font_definition,
+    corrupt_formula_cached_result,
     corrupt_ignored_error_control,
     corrupt_legacy_vml_control_root,
     corrupt_named_sheet_view_control,
@@ -97,6 +100,7 @@ from .helpers import (
     make_fill_model,
     make_filter_visibility_model,
     make_font_model,
+    make_formula_cached_result_model,
     make_ignored_error_model,
     make_implicit_intersection_model,
     make_legacy_array_model,
@@ -132,6 +136,7 @@ from .helpers import (
     normalize_filter_visibility_control_spelling,
     normalize_font_control_spelling,
     normalize_font_inheritance,
+    normalize_formula_cached_result_spelling,
     normalize_ignored_error_control_spelling,
     normalize_named_sheet_view_control_spelling,
     normalize_number_format_control_spelling,
@@ -4861,6 +4866,114 @@ def test_ordinary_workbook_has_no_fill_inventory(tmp_path) -> None:
     assert snapshot.fill_controls.present is False
     assert snapshot.fill_controls.cell_fill_assignment_count == 0
     assert not any("cell-fill" in warning for warning in snapshot.parser_warnings)
+
+
+def test_formula_cached_results_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_formula_cached_result_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_cached_result_model(tmp_path / "candidate.xlsx")
+    change_formula_cached_result(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_cached_result_changed"
+    )
+
+    assert baseline_snapshot.summary()["formula_cached_result_cell_count"] == 4
+    assert baseline_snapshot.summary()["formula_missing_cached_result_cell_count"] == 1
+    assert baseline_snapshot.summary()["has_formula_cached_results"] is True
+    assert profile["formula_cached_results"] == {
+        "present": True,
+        "formula_cell_count": 5,
+        "cached_result_cell_count": 4,
+        "missing_cached_result_cell_count": 1,
+        "numeric_cached_result_count": 1,
+        "string_cached_result_count": 1,
+        "boolean_cached_result_count": 1,
+        "error_cached_result_count": 1,
+        "unrecognized_cached_result_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Stored formula results" in markdown
+    assert change.details["unexplained_cached_result_change_count"] == 1
+    assert change.details["cached_result_material_changed"] is True
+    assert "FF042" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-CACHED-STRING",
+        "999999",
+        "#DIV/0!",
+        "Report!B2",
+        "B2",
+        "<v>",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_formula_cached_results_recalculated_from_visible_precedent_stay_quiet(
+    tmp_path,
+) -> None:
+    baseline = make_formula_cached_result_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_cached_result_model(tmp_path / "candidate.xlsx")
+    change_formula_cached_result_with_visible_precedent(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert {(change.kind, change.location) for change in report.changes} == {
+        ("value_changed", ("Inputs", "A1"))
+    }
+    assert "formula_cached_result_changed" not in {change.kind for change in report.changes}
+    assert "FF042" not in {finding.rule_id for finding in report.findings}
+
+
+def test_formula_cached_result_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_formula_cached_result_model(tmp_path / "baseline.xlsx")
+    equivalent = make_formula_cached_result_model(tmp_path / "equivalent.xlsx")
+    normalize_formula_cached_result_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+
+
+def test_formula_cached_result_malformed_metadata_fails_closed(tmp_path) -> None:
+    baseline = make_formula_cached_result_model(tmp_path / "baseline.xlsx")
+    malformed = make_formula_cached_result_model(tmp_path / "malformed.xlsx")
+    corrupt_formula_cached_result(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.formula_cached_results.unrecognized_cached_result_count == 1
+    assert any(
+        "malformed or unsupported formula cached-result" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF042"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in ("PRIVATE-CACHED-STRING", "PRIVATE-NOT-A-NUMBER", "B2"):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
 
 
 def test_ignored_error_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:

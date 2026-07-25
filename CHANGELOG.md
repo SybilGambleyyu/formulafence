@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.40.0 — 2026-07-24
+
+- Inspect raw SpreadsheetML formula-result caches alongside formula text. Cache
+  values, error text, per-cell digests, and formula-cell locations remain only
+  in private comparison entries; profiles, Markdown, JSON, and SARIF expose
+  aggregate formula/cached/missing/result-type/malformed counts only.
+- Emit `FF042` when a stored formula result changes without a changed formula at
+  that cell or an ordinary changed cell that reaches it through the static
+  dependency graph. Add the fail-closed
+  `no_formula_cached_result_changes` policy rule (`FFP042`).
+- Normalize equivalent finite numeric and Boolean result spellings, keep absent
+  or blank caches visible as missing rather than inventing a result, and make
+  malformed or unsupported cache metadata an explicit parser-coverage warning.
+  FormulaFence does not calculate or validate results, distinguish a stale
+  result from a tampered one, or model volatile, dynamic, external, or
+  calculation-engine dependencies; a legitimate recalculation without a static
+  visible precedent can therefore require review.
+
 ## 0.39.0 — 2026-07-24
 
 - Extend the existing filter, sort, and row/column-visibility boundary to the

@@ -55,6 +55,8 @@ from formulafence.models import (
     FillSnapshot,
     FilterVisibilitySnapshot,
     FontSnapshot,
+    FormulaCachedResultEntry,
+    FormulaCachedResultSnapshot,
     IgnoredErrorSnapshot,
     NamedSheetViewSnapshot,
     NumberFormatSnapshot,
@@ -517,6 +519,14 @@ class _FillMetadata:
     """Raw cell-fill evidence retained before reader normalization."""
 
     controls: FillSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _FormulaCachedResultMetadata:
+    """Raw formula-result cache evidence retained before reader normalization."""
+
+    results: FormulaCachedResultSnapshot
     warnings: tuple[str, ...]
 
 
@@ -17460,6 +17470,256 @@ def _fill_metadata(path: Path) -> _FillMetadata:
     return _FillMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_FORMULA_CACHED_RESULT_DECIMAL_PATTERN = re.compile(
+    r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[Ee][+-]?[0-9]+)?"
+)
+_FORMULA_CACHED_RESULT_MAX_EXPONENT = 308
+_FORMULA_CACHED_RESULT_TYPES = frozenset({"b", "e", "n", "str"})
+_FORMULA_CACHED_RESULT_FORMULA_TYPES = frozenset({"array", "dataTable", "shared"})
+
+
+def _formula_cached_result_number(value: str) -> str | None:
+    """Normalize one finite Excel numeric cache without retaining its text."""
+    if not _FORMULA_CACHED_RESULT_DECIMAL_PATTERN.fullmatch(value):
+        return None
+    try:
+        numeric = Decimal(value)
+    except InvalidOperation:
+        return None
+    if (
+        not numeric.is_finite()
+        or (
+            not numeric.is_zero()
+            and abs(numeric.adjusted()) > _FORMULA_CACHED_RESULT_MAX_EXPONENT
+        )
+    ):
+        return None
+    if numeric.is_zero():
+        return "0"
+    sign, digits, exponent = numeric.as_tuple()
+    digit_text = "".join(str(digit) for digit in digits)
+    while digit_text.endswith("0"):
+        digit_text = digit_text[:-1]
+        exponent += 1
+    return f"{'-' if sign else ''}{digit_text}e{exponent}"
+
+
+def _formula_cached_result_boolean(value: str) -> str | None:
+    """Normalize the Boolean spellings accepted by compatible writers."""
+    lowered = value.casefold()
+    if lowered in {"0", "false"}:
+        return "false"
+    if lowered in {"1", "true"}:
+        return "true"
+    return None
+
+
+def _formula_cached_result_signature(result_type: str, value: str) -> str:
+    """Digest a private formula result without retaining its material."""
+    return _private_payload_signature(repr((result_type, value)).encode("utf-8"))
+
+
+def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
+    """Inspect stored formula results directly from worksheet XML.
+
+    The workbook reader exposes either formula text or a stored result, not
+    both at once. FormulaFence needs both representations to distinguish a
+    cache-only change from a formula or ordinary input change. Values and
+    locations remain inside private per-entry digests.
+    """
+    warnings: set[str] = set()
+    default = FormulaCachedResultSnapshot()
+    entries: list[FormulaCachedResultEntry] = []
+    signature_entries: list[tuple[str, str]] = []
+    formula_cell_count = 0
+    cached_result_cell_count = 0
+    missing_cached_result_cell_count = 0
+    numeric_cached_result_count = 0
+    string_cached_result_count = 0
+    boolean_cached_result_count = 0
+    error_cached_result_count = 0
+    unrecognized_cached_result_count = 0
+
+    try:
+        with ZipFile(path) as archive:
+            cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+            formula_tag = f"{{{_SPREADSHEETML_NS}}}f"
+            value_tag = f"{{{_SPREADSHEETML_NS}}}v"
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                if (
+                    _xml_namespace(worksheet.tag) != _SPREADSHEETML_NS
+                    or _xml_local_name(worksheet.tag) != "worksheet"
+                ):
+                    unrecognized_cached_result_count += 1
+                    signature_entries.append(
+                        (
+                            f"formula-cache-root:{sheet.casefold()}",
+                            _private_payload_signature(
+                                ElementTree.tostring(worksheet, encoding="utf-8")
+                            ),
+                        )
+                    )
+                    continue
+
+                seen_coordinates: set[str] = set()
+                for cell_index, cell in enumerate(worksheet.iter(cell_tag)):
+                    formulas = cell.findall(formula_tag)
+                    if not formulas:
+                        continue
+                    formula_cell_count += 1
+                    issues: set[str] = set()
+                    raw_coordinate = cell.get("r")
+                    coordinate = _canonical_what_if_data_table_cell(raw_coordinate)
+                    if coordinate is None:
+                        issues.add("invalid-coordinate")
+                        coordinate = f"invalid-{cell_index + 1}"
+                    elif coordinate in seen_coordinates:
+                        issues.add("duplicate-coordinate")
+                    seen_coordinates.add(coordinate)
+
+                    if len(formulas) != 1:
+                        issues.add("multiple-formulas")
+                    formula = formulas[0]
+                    formula_type = formula.get("t")
+                    if (
+                        formula_type is not None
+                        and formula_type not in _FORMULA_CACHED_RESULT_FORMULA_TYPES
+                    ):
+                        issues.add("unsupported-formula-type")
+
+                    values = cell.findall(value_tag)
+                    if len(values) > 1:
+                        issues.add("multiple-cached-values")
+                    value_element = values[0] if values else None
+                    cell_type = cell.get("t", "n")
+                    if cell_type not in _FORMULA_CACHED_RESULT_TYPES:
+                        issues.add("unsupported-result-type")
+
+                    result_type = "missing"
+                    result_value = "missing"
+                    value_is_blank = (
+                        value_element is None
+                        or value_element.text is None
+                        or value_element.text == ""
+                    )
+                    if cell_type == "str" and value_element is not None:
+                        # A formula-string result may validly be the empty string.
+                        result_type = "string"
+                        result_value = value_element.text or ""
+                        cached_result_cell_count += 1
+                        string_cached_result_count += 1
+                    elif value_is_blank:
+                        missing_cached_result_cell_count += 1
+                    elif cell_type in {"n", ""}:
+                        normalized = _formula_cached_result_number(value_element.text or "")
+                        if normalized is None:
+                            issues.add("invalid-numeric-result")
+                            result_type = "unrecognized"
+                            result_value = value_element.text or ""
+                        else:
+                            result_type = "numeric"
+                            result_value = normalized
+                            cached_result_cell_count += 1
+                            numeric_cached_result_count += 1
+                    elif cell_type == "b":
+                        normalized = _formula_cached_result_boolean(value_element.text or "")
+                        if normalized is None:
+                            issues.add("invalid-boolean-result")
+                            result_type = "unrecognized"
+                            result_value = value_element.text or ""
+                        else:
+                            result_type = "boolean"
+                            result_value = normalized
+                            cached_result_cell_count += 1
+                            boolean_cached_result_count += 1
+                    elif cell_type == "e":
+                        result_type = "error"
+                        result_value = value_element.text or ""
+                        cached_result_cell_count += 1
+                        error_cached_result_count += 1
+                    elif cell_type == "str":
+                        result_type = "string"
+                        result_value = value_element.text or ""
+                        cached_result_cell_count += 1
+                        string_cached_result_count += 1
+                    else:
+                        result_type = "unrecognized"
+                        result_value = (
+                            "missing" if value_element is None else value_element.text or ""
+                        )
+
+                    if issues:
+                        unrecognized_cached_result_count += 1
+                        result_type = "unrecognized"
+
+                    result_signature = _formula_cached_result_signature(
+                        result_type,
+                        result_value,
+                    )
+                    entries.append(
+                        FormulaCachedResultEntry(
+                            sheet=sheet,
+                            coordinate=coordinate,
+                            result_type=result_type,
+                            result_signature=result_signature,
+                        )
+                    )
+                    signature_entries.append(
+                        (
+                            (
+                                "formula-cache:"
+                                f"{sheet.casefold()}:{coordinate.casefold()}"
+                            ),
+                            repr((result_type, result_signature, tuple(sorted(issues)))),
+                        )
+                    )
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _FormulaCachedResultMetadata(
+            default,
+            (
+                "FormulaFence could not inspect formula cached-result OOXML "
+                f"({type(error).__name__}); affected displayed results were not compared.",
+            ),
+        )
+
+    if unrecognized_cached_result_count:
+        warnings.add(
+            "FormulaFence found malformed or unsupported formula cached-result metadata; "
+            "affected displayed results have a coverage gap."
+        )
+    snapshot = FormulaCachedResultSnapshot(
+        formula_cell_count=formula_cell_count,
+        cached_result_cell_count=cached_result_cell_count,
+        missing_cached_result_cell_count=missing_cached_result_cell_count,
+        numeric_cached_result_count=numeric_cached_result_count,
+        string_cached_result_count=string_cached_result_count,
+        boolean_cached_result_count=boolean_cached_result_count,
+        error_cached_result_count=error_cached_result_count,
+        unrecognized_cached_result_count=unrecognized_cached_result_count,
+        definition_signature=_private_external_data_signature(
+            tuple(sorted(signature_entries))
+        ),
+        entries=tuple(
+            sorted(
+                entries,
+                key=lambda entry: (
+                    entry.sheet.casefold(),
+                    entry.coordinate.casefold(),
+                ),
+            )
+        ),
+    )
+    return _FormulaCachedResultMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
     """Inspect raw markers that openpyxl intentionally does not expose."""
     dynamic_cells: set[CellKey] = set()
@@ -18356,6 +18616,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     number_format_metadata = _number_format_metadata(source)
     font_metadata = _font_metadata(source)
     fill_metadata = _fill_metadata(source)
+    formula_cached_result_metadata = _formula_cached_result_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -18396,6 +18657,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(number_format_metadata.warnings)
     parser_warnings.update(font_metadata.warnings)
     parser_warnings.update(fill_metadata.warnings)
+    parser_warnings.update(formula_cached_result_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -18620,6 +18882,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         number_format_controls=number_format_metadata.controls,
         font_controls=font_metadata.controls,
         fill_controls=fill_metadata.controls,
+        formula_cached_results=formula_cached_result_metadata.results,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -18697,6 +18960,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "number_format_controls": snapshot.number_format_controls.profile_dict(),
         "font_controls": snapshot.font_controls.profile_dict(),
         "fill_controls": snapshot.fill_controls.profile_dict(),
+        "formula_cached_results": snapshot.formula_cached_results.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -18726,6 +18990,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_number_format_controls": snapshot.number_format_controls.present,
             "has_font_controls": snapshot.font_controls.present,
             "has_fill_controls": snapshot.fill_controls.present,
+            "has_formula_cached_results": snapshot.formula_cached_results.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

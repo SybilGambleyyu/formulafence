@@ -7288,6 +7288,208 @@ def corrupt_fill_definition(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".fill-missing-definition.tmp.xlsx")
 
 
+def _formula_cached_result_cell(
+    worksheet: ElementTree.Element,
+    coordinate: str,
+) -> ElementTree.Element:
+    """Return one raw Report formula cell from the formula-cache fixture."""
+    cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+    cell = next(
+        (
+            current
+            for current in worksheet.iter(cell_tag)
+            if current.get("r") == coordinate
+        ),
+        None,
+    )
+    if cell is None:
+        raise ValueError(f"Could not find formula-cache fixture cell {coordinate}")
+    return cell
+
+
+def _set_formula_cached_result(
+    cell: ElementTree.Element,
+    result_type: str | None,
+    value: str | None,
+) -> None:
+    """Set one raw formula result while preserving the formula expression."""
+    value_tag = f"{{{_SPREADSHEETML_NS}}}v"
+    if result_type is None:
+        cell.attrib.pop("t", None)
+    else:
+        cell.set("t", result_type)
+    cached_value = cell.find(value_tag)
+    if cached_value is None:
+        cached_value = ElementTree.SubElement(cell, value_tag)
+    cached_value.text = value
+
+
+def make_formula_cached_result_model(path: Path) -> Path:
+    """Create a manual-calculation workbook with varied private formula caches."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = 100
+
+    report = workbook.create_sheet("Report")
+    report["A1"] = "Stored formula result review"
+    report["B2"] = "=Inputs!A1*2"
+    report["B3"] = '="PRIVATE-CACHED-STRING"'
+    report["B4"] = "=TRUE"
+    report["B5"] = "=1/0"
+    report["B6"] = "=Inputs!A1+1"
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        calc_pr_tag = f"{{{_SPREADSHEETML_NS}}}calcPr"
+        workbook_root = ElementTree.fromstring(contents["xl/workbook.xml"])
+        calc_pr = workbook_root.find(calc_pr_tag)
+        if calc_pr is None:
+            calc_pr = ElementTree.SubElement(workbook_root, calc_pr_tag)
+        calc_pr.set("calcMode", "manual")
+        calc_pr.set("fullCalcOnLoad", "0")
+        calc_pr.set("forceFullCalc", "0")
+        calc_pr.set("calcOnSave", "0")
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet2.xml"])
+        _set_formula_cached_result(
+            _formula_cached_result_cell(worksheet, "B2"),
+            None,
+            "200",
+        )
+        _set_formula_cached_result(
+            _formula_cached_result_cell(worksheet, "B3"),
+            "str",
+            "PRIVATE-CACHED-STRING",
+        )
+        _set_formula_cached_result(
+            _formula_cached_result_cell(worksheet, "B4"),
+            "b",
+            "1",
+        )
+        _set_formula_cached_result(
+            _formula_cached_result_cell(worksheet, "B5"),
+            "e",
+            "#DIV/0!",
+        )
+        _set_formula_cached_result(
+            _formula_cached_result_cell(worksheet, "B6"),
+            None,
+            None,
+        )
+        contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".formula-cached-result.tmp.xlsx")
+
+
+def change_formula_cached_result(path: Path) -> Path:
+    """Change only a private formula cache, not a formula or visible input."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet2.xml"])
+        _set_formula_cached_result(
+            _formula_cached_result_cell(worksheet, "B2"),
+            None,
+            "999999",
+        )
+        contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".formula-cached-result-change.tmp.xlsx")
+
+
+def change_formula_cached_result_with_visible_precedent(path: Path) -> Path:
+    """Update a visible input and the matching downstream cached results."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        value_tag = f"{{{_SPREADSHEETML_NS}}}v"
+        inputs = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        input_cell = _formula_cached_result_cell(inputs, "A1")
+        input_value = input_cell.find(value_tag)
+        if input_value is None:
+            input_value = ElementTree.SubElement(input_cell, value_tag)
+        input_value.text = "101"
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            inputs,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        report = ElementTree.fromstring(contents["xl/worksheets/sheet2.xml"])
+        _set_formula_cached_result(
+            _formula_cached_result_cell(report, "B2"),
+            None,
+            "202",
+        )
+        _set_formula_cached_result(
+            _formula_cached_result_cell(report, "B6"),
+            None,
+            "102",
+        )
+        contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+            report,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".formula-cached-result-recalc.tmp.xlsx")
+
+
+def normalize_formula_cached_result_spelling(path: Path) -> Path:
+    """Use equivalent numeric and Boolean cache spellings."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet2.xml"])
+        _set_formula_cached_result(
+            _formula_cached_result_cell(worksheet, "B2"),
+            None,
+            "2.00E2",
+        )
+        _set_formula_cached_result(
+            _formula_cached_result_cell(worksheet, "B4"),
+            "b",
+            "true",
+        )
+        contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".formula-cached-result-noise.tmp.xlsx")
+
+
+def corrupt_formula_cached_result(path: Path) -> Path:
+    """Inject an invalid numeric cache to exercise fail-closed coverage."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet2.xml"])
+        _set_formula_cached_result(
+            _formula_cached_result_cell(worksheet, "B2"),
+            None,
+            "PRIVATE-NOT-A-NUMBER",
+        )
+        contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".formula-cached-result-corrupt.tmp.xlsx")
+
+
 def make_named_sheet_view_model(path: Path, *, table_owned: bool = False) -> Path:
     """Create modern alternate filter/sort views with private OOXML settings."""
     workbook = Workbook()

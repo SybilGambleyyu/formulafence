@@ -24,6 +24,7 @@ from formulafence.models import (
     FilterVisibilitySnapshot,
     Finding,
     FontSnapshot,
+    FormulaCachedResultSnapshot,
     IgnoredErrorSnapshot,
     NamedSheetViewSnapshot,
     NumberFormatSnapshot,
@@ -1707,11 +1708,106 @@ def _dynamic_array_output_reference_changes(
     return changes, findings
 
 
+def _formula_cached_result_entry_map(
+    snapshot: FormulaCachedResultSnapshot,
+) -> dict[CellKey, tuple[tuple[str, str], ...]]:
+    """Index private result digests without returning them in review evidence."""
+    entries: dict[CellKey, list[tuple[str, str]]] = defaultdict(list)
+    for entry in snapshot.entries:
+        entries[entry.location].append((entry.result_type, entry.result_signature))
+    return {
+        location: tuple(sorted(values))
+        for location, values in entries.items()
+    }
+
+
+def _formula_cached_result_changes(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+    semantic_cell_changes: Iterable[Change],
+) -> tuple[list[Change], list[Finding]]:
+    """Flag result-cache changes that static visible edits cannot explain.
+
+    Stored formula results are not exposed by the normal formula reader. A
+    calculation following an ordinary input or formula edit can legitimately
+    update them, so explicit downstream dependencies suppress those cases.
+    FormulaFence deliberately does not evaluate formulas or infer dynamic,
+    volatile, or external inputs: a remaining change is review evidence, not a
+    claim that the result is mathematically incorrect.
+    """
+    old_results = before.formula_cached_results
+    new_results = after.formula_cached_results
+    if old_results == new_results:
+        return [], []
+
+    old_entries = _formula_cached_result_entry_map(old_results)
+    new_entries = _formula_cached_result_entry_map(new_results)
+    changed_locations = {
+        location
+        for location in set(old_entries) | set(new_entries)
+        if old_entries.get(location) != new_entries.get(location)
+    }
+    unexplained_locations = set(changed_locations)
+    changes_with_locations = tuple(
+        change for change in semantic_cell_changes if change.location is not None
+    )
+
+    # A changed formula owns its own cache. A value/formula edit can also
+    # explain formula caches reachable through FormulaFence's static graph.
+    for change in changes_with_locations:
+        old_cell = change.before
+        new_cell = change.after
+        if (old_cell is not None and old_cell.is_formula) or (
+            new_cell is not None and new_cell.is_formula
+        ):
+            unexplained_locations.discard(change.location)
+
+    for change in changes_with_locations:
+        if not unexplained_locations:
+            break
+        impact = analyze_downstream_impact(change.location, before, after)
+        unexplained_locations.difference_update(impact.impacted)
+
+    unrecognized_metadata_changed = (
+        old_results.unrecognized_cached_result_count
+        != new_results.unrecognized_cached_result_count
+    )
+    if not unexplained_locations and not unrecognized_metadata_changed:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_results.to_dict(),
+        "after": new_results.to_dict(),
+        "unexplained_cached_result_change_count": len(unexplained_locations),
+    }
+    if old_results.definition_signature != new_results.definition_signature:
+        details["cached_result_material_changed"] = True
+    if unrecognized_metadata_changed:
+        details["unrecognized_cached_result_metadata_changed"] = True
+    change = Change(
+        "formula_cached_result_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF042",
+        "high",
+        (
+            "Stored formula results changed without a formula or statically visible "
+            "precedent change."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> DiffReport:
     """Compare workbook semantics and attach local dependency impact to each edit."""
     changes: list[Change] = []
     findings: list[Finding] = []
     formula_changed_locations: set[CellKey] = set()
+    semantic_cell_changes: list[Change] = []
 
     all_locations = sorted(set(before.cells) | set(after.cells), key=_location_sort_key)
     for location in all_locations:
@@ -1731,18 +1827,18 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
             )
         if impact_analysis.truncated:
             details["impact_truncated_at"] = _IMPACT_NODE_LIMIT
-        changes.append(
-            Change(
-                kind=kind,
-                location=location,
-                severity=severity,
-                before=old_cell,
-                after=new_cell,
-                impact_count=len(impact),
-                impacted_cells=sampled_impacts,
-                details=details,
-            )
+        change = Change(
+            kind=kind,
+            location=location,
+            severity=severity,
+            before=old_cell,
+            after=new_cell,
+            impact_count=len(impact),
+            impacted_cells=sampled_impacts,
+            details=details,
         )
+        changes.append(change)
+        semantic_cell_changes.append(change)
         if new_cell is not None and new_cell.is_formula:
             formula_changed_locations.add(location)
         if old_cell is not None and old_cell.is_formula:
@@ -1773,6 +1869,12 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
                     },
                 )
             )
+
+    formula_cached_result_changes, formula_cached_result_findings = (
+        _formula_cached_result_changes(before, after, semantic_cell_changes)
+    )
+    changes.extend(formula_cached_result_changes)
+    findings.extend(formula_cached_result_findings)
 
     newly_broken = after.broken_references - before.broken_references
     for location in sorted(newly_broken, key=_location_sort_key):

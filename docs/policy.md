@@ -27,6 +27,7 @@ rules:
   no_number_format_changes: true
   no_cell_font_changes: true
   no_cell_fill_changes: true
+  no_formula_cached_result_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -95,6 +96,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_number_format_changes` | boolean | An effective default, direct-cell, row, or column number-format control changes. Format codes, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_font_changes` | boolean | An effective default, direct-cell, row, or column font control changes. Font names, colours, effects, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
+| `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -544,6 +546,24 @@ contrast, evaluate conditional-format differential styles, apply table styles,
 calculate values, or claim arbitrary visual-style coverage. A raw column `style`
 is compared as a declaration/default for unallocated/new cells; it is not
 treated as a renderer that restyles allocated cells.
+
+SpreadsheetML can retain the last calculated result beside a formula in the
+same `<c>` cell. FormulaFence reads raw `<f>` and `<v>` elements together,
+privately fingerprints numeric, string, Boolean, and error results, and compares
+the saved result without exposing its value, error text, digest, or location. A
+result-cache change emits `FF042` when it has no changed formula at that cell
+and no ordinary changed cell reaches it through FormulaFence's static dependency
+graph. Enable `no_formula_cached_result_changes` to make it `FFP042` in CI.
+
+Profiles and `FF042` details expose only formula-cell, cached-result,
+missing-result, result-type, and malformed-metadata counts. Equivalent finite
+numeric and Boolean spellings are normalized; blank or absent results remain
+visible as missing caches. Unsupported or malformed cache metadata is a
+coverage warning rather than a silent omission. FormulaFence does not calculate
+or validate a result, decide whether it is stale or tampered, or model volatile,
+dynamic, external, or calculation-engine dependencies. A normal recalculation
+can therefore require review if it changes a cache without a statically visible
+input edit.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

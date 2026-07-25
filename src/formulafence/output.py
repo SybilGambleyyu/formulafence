@@ -1427,6 +1427,37 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Fill definitions, style indexes, and cell/row/column targets are compared "
             "privately and intentionally omitted."
         )
+    formula_cached_results = profile["formula_cached_results"]
+    if formula_cached_results["present"]:
+        lines.extend(
+            [
+                "",
+                "## Stored formula results",
+                "",
+                (
+                    "- **Formula cells / cached results / missing results:** "
+                    f"{formula_cached_results['formula_cell_count']} / "
+                    f"{formula_cached_results['cached_result_cell_count']} / "
+                    f"{formula_cached_results['missing_cached_result_cell_count']}"
+                ),
+                (
+                    "- **Cached result types (numeric / string / Boolean / error):** "
+                    f"{formula_cached_results['numeric_cached_result_count']} / "
+                    f"{formula_cached_results['string_cached_result_count']} / "
+                    f"{formula_cached_results['boolean_cached_result_count']} / "
+                    f"{formula_cached_results['error_cached_result_count']}"
+                ),
+            ]
+        )
+        if formula_cached_results["unrecognized_cached_result_count"]:
+            lines.append(
+                "- **Unrecognized or malformed cached results:** "
+                f"{formula_cached_results['unrecognized_cached_result_count']}"
+            )
+        lines.append(
+            "Cached result values and formula-cell locations are compared privately and "
+            "intentionally omitted."
+        )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:
         lines.extend(

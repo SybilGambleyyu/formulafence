@@ -1757,6 +1757,62 @@ class FillSnapshot:
 
 
 @dataclass(frozen=True)
+class FormulaCachedResultEntry:
+    """One private formula-result cache record keyed to its worksheet cell."""
+
+    sheet: str
+    coordinate: str
+    result_type: str
+    result_signature: str = field(repr=False)
+
+    @property
+    def location(self) -> CellKey:
+        return (self.sheet, self.coordinate)
+
+
+@dataclass(frozen=True)
+class FormulaCachedResultSnapshot:
+    """Safe aggregate of stored results attached to formula cells.
+
+    SpreadsheetML persists a formula's last calculated result beside its formula
+    text. The private entries retain only per-result digests so comparison can
+    detect a changed displayed result without exposing values or locations.
+    """
+
+    formula_cell_count: int = 0
+    cached_result_cell_count: int = 0
+    missing_cached_result_cell_count: int = 0
+    numeric_cached_result_count: int = 0
+    string_cached_result_count: int = 0
+    boolean_cached_result_count: int = 0
+    error_cached_result_count: int = 0
+    unrecognized_cached_result_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+    entries: tuple[FormulaCachedResultEntry, ...] = field(default=(), repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(self.formula_cell_count or self.unrecognized_cached_result_count)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural cache evidence without values or target locations."""
+        return {
+            "present": self.present,
+            "formula_cell_count": self.formula_cell_count,
+            "cached_result_cell_count": self.cached_result_cell_count,
+            "missing_cached_result_cell_count": self.missing_cached_result_cell_count,
+            "numeric_cached_result_count": self.numeric_cached_result_count,
+            "string_cached_result_count": self.string_cached_result_count,
+            "boolean_cached_result_count": self.boolean_cached_result_count,
+            "error_cached_result_count": self.error_cached_result_count,
+            "unrecognized_cached_result_count": self.unrecognized_cached_result_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -2163,6 +2219,9 @@ class WorkbookSnapshot:
     )
     font_controls: FontSnapshot = field(default_factory=FontSnapshot)
     fill_controls: FillSnapshot = field(default_factory=FillSnapshot)
+    formula_cached_results: FormulaCachedResultSnapshot = field(
+        default_factory=FormulaCachedResultSnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -2204,6 +2263,13 @@ class WorkbookSnapshot:
             "sheet_count": len(self.sheets),
             "nonempty_cells": len(self.cells),
             "formula_cells": sum(1 for cell in self.cells.values() if cell.is_formula),
+            "formula_cached_result_cell_count": (
+                self.formula_cached_results.cached_result_cell_count
+            ),
+            "formula_missing_cached_result_cell_count": (
+                self.formula_cached_results.missing_cached_result_cell_count
+            ),
+            "has_formula_cached_results": self.formula_cached_results.present,
             "what_if_data_table_count": self.what_if_data_tables.data_table_count,
             "what_if_data_table_output_cell_count": (
                 self.what_if_data_tables.declared_output_cell_count

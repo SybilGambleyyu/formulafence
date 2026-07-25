@@ -231,6 +231,22 @@ review prompt, not proof of an error.
   styles, apply table styles, or claim arbitrary visual-style coverage. Column
   styles are compared only as OOXML defaults for unallocated/new cells, not as a
   claim to restyle allocated cells.
+- SpreadsheetML can retain a formula's last calculated result beside its
+  formula text in the same `<c>` cell. That lets a workbook save a different
+  displayed result without changing the ordinary formula text. FormulaFence
+  reads raw `<f>` and `<v>` elements together and privately fingerprints
+  numeric, string, Boolean, and error result material. It emits `FF042` only
+  when a result cache changes without a changed formula at that cell and without
+  an ordinary changed cell reaching it through the static dependency graph;
+  `no_formula_cached_result_changes` can block it as `FFP042`.
+  Profiles and reports expose only formula/cached/missing/type/malformed counts,
+  never result values, error text, digests, or locations. Equivalent finite
+  numeric and Boolean spellings are normalized; blank results remain visible as
+  missing caches. Unsupported or malformed metadata becomes an explicit coverage
+  warning. FormulaFence does not calculate or validate results, determine
+  whether they are stale or tampered, or model volatile, dynamic, external, or
+  calculation-engine dependencies. A legitimate recalculation without a
+  statically visible input edit can therefore still require review.
 - Worksheet data-validation controls are inventoried and diffed as compact
   ranges rather than by expanding their target cells. FormulaFence compares the
   validation type, operator, two criteria expressions, blank/dropdown behavior,

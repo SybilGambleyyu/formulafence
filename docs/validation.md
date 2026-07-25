@@ -5,6 +5,45 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Stored formula results — 2026-07-24
+
+FormulaFence 0.40.0 is validated with controlled raw-OOXML `.xlsx` packages
+whose formula text and visible inputs stay fixed while a saved formula result
+changes. The fixture contains numeric, string, Boolean, error, and intentionally
+missing results under manual-calculation settings. Its safe profile exposes only
+five formula cells, four cached results, one missing result, and result-type
+counts. The suite verifies a zero-change self-diff, exactly one `FF042` and
+`FFP042` for a cache-only numeric-result mutation, and no `FF042` when a visible
+input change reaches the changed caches through the static graph.
+
+Equivalent finite numeric and Boolean serializations are exercised without a
+finding. An invalid numeric cache produces a parser-coverage warning, `FF010`,
+and `FF042` rather than a silent omission. Result values, error text, result
+digests, and formula-cell locations are verified absent from profiles, Markdown,
+ordinary reports, and SARIF. The scanner compares saved XML only; these tests do
+not assert formula correctness, stale-result provenance, volatile/dynamic/
+external recalculation behavior, or Excel rendering.
+
+As an independent package-compatibility reproduction, FormulaFence used
+XlsxWriter 3.2.9's public
+[`tutorial2.py` source](https://github.com/jmcnamara/XlsxWriter/blob/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011/examples/tutorial2.py)
+at commit `cf3fe78d3eab5e4c7d825d4451af3a60e2a04011`, generated locally and
+not bundled with this repository. A controlled raw-package baseline with manual
+calculation settings had SHA-256
+`3b67f44e25555dd3172a441d6fc4c14a921e5c974401360e1e98f3935bf0e09a`.
+The candidate changed only the stored result beside the unchanged `SUM(B2:B5)`
+formula, from `1450` to `999999`, and had SHA-256
+`49cbaf7f6474ebd26dba3d604270fbc0ec2c079b1319707c7c5e90b62f431958`.
+Both packages use `calcMode="manual"` with full-recalculation and
+calculate-on-save flags disabled. The published 0.39.0 wheel (SHA-256
+`bff31fb99a49c0f257156dba35819ca408828ab50635b752d4c4ac16d706c4c3`)
+reported zero changes and no findings. A fresh 0.40.0 wheel (SHA-256
+`c7286a50775d8157795a2e4954701b1b69d0248f2b5424f5efa4bfb673d41c5e`)
+emits exactly one `formula_cached_result_changed` change and `FF042`; the
+starter policy exits `1` with `FF042` and `FFP042`. The release report
+was also checked to ensure it contains none of the public result values, formula
+text, or formula-cell coordinate from the mutation.
+
 ## Excel zero-dimension visibility controls — 2026-07-24
 
 FormulaFence 0.39.0 was validated with controlled raw-OOXML `.xlsx` packages

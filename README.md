@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.39.0/formulafence-0.39.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.40.0/formulafence-0.40.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -77,6 +77,7 @@ rules:
   no_number_format_changes: true
   no_cell_font_changes: true
   no_cell_fill_changes: true
+  no_formula_cached_result_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -114,7 +115,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, and cell-fill controls, Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, and unexplained stored-formula-result controls, Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -680,6 +681,35 @@ retroactively to existing allocated cells. The boundary follows OOXML's
 and [`gradientFill`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_gradientFill_topic_ID0ENWD6.html)
 forms, alongside the ICAEW's [spreadsheet-review guidance](https://www.icaew.com/-/media/corporate/files/technical/technology/excel/how-to-review-a-spreadsheet-report.ashx)
 to reveal text hidden by formatting.
+
+FormulaFence also compares **stored formula results**. SpreadsheetML can retain
+the last calculated result beside formula text in the same `<c>` cell. Most
+formula readers expose one representation or the other, so FormulaFence reads
+the raw `<f>` and `<v>` elements together, privately fingerprints each result,
+and compares the saved display state without exposing a result value or
+formula-cell location. A cache change emits `FF042` only when FormulaFence
+cannot explain it by a changed formula at that cell or by an ordinary changed
+cell that reaches it through the static dependency graph. Enable
+`no_formula_cached_result_changes` to make that boundary `FFP042` in CI.
+
+Profiles expose only formula-cell, cached-result, missing-result, result-type,
+and malformed-metadata counts. Result values, error text, result digests, and
+formula-cell locations never enter profiles, Markdown, JSON, `FF042` details,
+or SARIF. Equivalent finite numeric spellings and Boolean spellings are
+normalized. Supported raw result kinds are numeric, string, Boolean, and error;
+an absent or blank cache stays visible as a missing cache rather than being
+invented. Unsupported or malformed formula-cache metadata creates an explicit
+coverage warning instead of being silently ignored.
+
+FormulaFence does not calculate or validate a formula result, decide whether a
+result is stale or tampered, or model volatile, dynamic, external, or
+calculation-engine dependencies. A legitimate recalculation can change a cache
+without a statically visible input edit; `FF042` is therefore review evidence,
+not a mathematical-correctness verdict. The boundary follows Microsoft's
+[formula OOXML guidance](https://learn.microsoft.com/da-dk/office/open-xml/spreadsheet/working-with-formulas),
+the Open XML `c` [cell](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_c_topic_ID0E1XM4.html)
+and `ST_CellType` [definition](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_ST_CellType_topic_ID0E6NEFB.html),
+and Excel's [calculation-mode guidance](https://support.microsoft.com/en-US/Excel/change-formula-recalculation-iteration-or-precision-in-excel).
 
 FormulaFence also inventories relationship-backed **worksheet controls, legacy
 VML form controls, and OLE objects**. A worksheet can bind modern `<control>`

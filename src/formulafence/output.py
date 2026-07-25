@@ -2080,7 +2080,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "## Worksheet DrawingML shape controls",
+                "## Worksheet DrawingML shape and connector controls",
                 "",
                 (
                     "- **Worksheets / drawing parts / shape anchors:** "
@@ -2089,10 +2089,15 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     f"{worksheet_drawing_shapes['shape_anchor_count']}"
                 ),
                 (
-                    "- **Shapes (text-bearing / grouped):** "
+                    "- **Shapes (text-bearing / connectors / grouped):** "
                     f"{worksheet_drawing_shapes['shape_count']} "
                     f"({worksheet_drawing_shapes['text_shape_count']} / "
+                    f"{worksheet_drawing_shapes['connector_shape_count']} / "
                     f"{worksheet_drawing_shapes['group_shape_count']})"
+                ),
+                (
+                    "- **Connector attachments:** "
+                    f"{worksheet_drawing_shapes['connector_attachment_count']}"
                 ),
                 (
                     "- **Text paragraphs / runs:** "
@@ -2118,8 +2123,9 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 f"{worksheet_drawing_shapes['unrecognized_shape_count']}"
             )
         lines.append(
-            "Shape text, presentation, anchors, macro assignments, text links, hyperlink "
-            "targets, and raw XML are compared privately and intentionally omitted."
+            "Shape and connector presentation, attachment targets, anchors, macro "
+            "assignments, text links, hyperlink targets, and raw XML are compared "
+            "privately and intentionally omitted."
         )
     worksheet_images = profile["worksheet_images"]
     if worksheet_images["present"]:

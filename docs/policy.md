@@ -129,7 +129,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_custom_data_store_changes` | boolean | Generic Custom XML data/property/schema material or relationships, workbook-bound Custom Data Properties or opaque binary Custom Data payloads, or custom document properties change. Custom XML, schema URIs, property names/values, storage IDs, binary payloads, relationship IDs, and targets are compared privately. Power Query `DataMashup` remains under `no_power_query_changes`. |
 | `no_legacy_comment_changes` | boolean | A legacy Excel Note/comments binding, author association, Note text/rich-text/property declaration, threaded-comment placeholder reconciliation declaration, Note VML visibility/layout, or related relationship changes. Note text, authors, locations, VML, targets, IDs, and GUIDs are compared privately. |
 | `no_threaded_comment_changes` | boolean | A modern Excel threaded-comment/person package binding, comment/reply graph, text, stored cell/timestamp/resolution declaration, mention range/person association, extension material, or person definition changes. Comment bodies, locations, timestamps, parent links, names, user IDs, provider IDs, relationship IDs, and GUIDs are compared privately. |
-| `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp` or nested `xdr:grpSp` anchor/layout, text/presentation declaration, macro/text link, or referenced click/hover relationship changes. Shape text, formatting, formulas, anchors, IDs, and targets are compared privately. |
+| `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp`, connector `xdr:cxnSp`, or nested `xdr:grpSp` anchor/layout, text/presentation declaration, connector endpoint attachment, macro/text link, or referenced click/hover relationship changes. Shape and connector text, formatting, formulas, anchors, IDs, and targets are compared privately. |
 | `no_worksheet_image_changes` | boolean | A native anchored DrawingML `xdr:pic`, worksheet `<picture>` background, header/footer VML image, related relationship, visual declaration, anchor, or bounded direct image payload changes. Image bytes, names/descriptions, anchors, formatting, IDs, targets, and raw XML are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
@@ -1031,27 +1031,33 @@ follows Microsoft's [threaded-comment overview](https://learn.microsoft.com/en-u
 [Persons part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1a170d26-42a2-46f0-b2b6-0ff1dec1c344),
 and [threaded-comment schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/adb84732-9fc8-48b6-bddc-6b0bcdaad940).
 
-Non-chart Worksheet DrawingML can host a regular `xdr:sp` shape or a nested
-`xdr:grpSp` shape group under a standard worksheet drawing anchor. Those shape
-declarations can carry visible text, run formatting, positioning, macro
-assignments, `textlink` formulas, and click/hover hyperlink relationships
-outside cells. FormulaFence privately fingerprints supported anchor, regular
-shape, and group XML plus referenced relationship semantics. It reports only
-structural worksheet/drawing/anchor, shape/text/group, text paragraph/run,
-macro/text-link/hyperlink, relationship, and malformed-control counts. A
-material change emits `FF044`; enable
-`no_worksheet_drawing_shape_changes` to make it `FFP044` in CI.
+Non-chart Worksheet DrawingML can host a regular `xdr:sp` shape, a connector
+`xdr:cxnSp`, or a nested `xdr:grpSp` group under a standard worksheet drawing
+anchor. Regular shapes can carry visible text, run formatting, positioning,
+macro assignments, `textlink` formulas, and click/hover hyperlink
+relationships outside cells. A connector can add or alter a visual process
+link by changing its geometry, style, anchor, or `stCxn`/`endCxn` endpoint
+attachment. FormulaFence supports transitional and strict DrawingML and
+privately fingerprints supported anchor, shape, connector, and group XML;
+connector endpoint target semantics; and referenced relationships. It reports
+only structural worksheet/drawing/anchor, shape/text/connector/group,
+connector-attachment, text paragraph/run, macro/text-link/hyperlink,
+relationship, and malformed-control counts. A material change emits `FF044`;
+enable `no_worksheet_drawing_shape_changes` to make it `FFP044` in CI.
 
-Text, presentation details, geometry, anchors, descriptions, macro names,
-text-link formulas, relationship IDs/targets, and raw XML stay private.
-Writer-chosen non-visual IDs, relationship-ID rewrites, and equivalent colour
-case are normalized. Missing, malformed, unsafe, unreadable, oversized, and
-over-budget metadata is a visible coverage warning; XML reads are bounded to
-16 MiB per part, 64 MiB per workbook, and 512 parts. FormulaFence does not
-render or assess visibility, resolve theme colours/contrast, calculate a text
-link, execute a macro assignment, retrieve a target, parse/hash media, or
-inspect connectors, graphic frames, SmartArt, or other non-`xdr:sp` drawing
-objects. Native `xdr:pic` objects are covered by the separate image rule.
+Text, presentation details, geometry, anchors, descriptions, connector target
+IDs, macro names, text-link formulas, relationship IDs/targets, and raw XML
+stay private. Consistent non-visual and connector-endpoint ID rewrites,
+relationship-ID rewrites, and equivalent colour case are normalized. Missing,
+duplicate, malformed, unsafe, unreadable, oversized, and over-budget metadata
+is visible coverage evidence; XML reads are bounded to 16 MiB per part, 64 MiB
+per workbook, and 512 parts. FormulaFence does not render or assess visibility,
+resolve theme colours/contrast, calculate a text link, execute a macro
+assignment, retrieve a target, parse/hash media, or inspect graphic frames,
+SmartArt, or other unsupported drawing objects. Native `xdr:pic` objects are
+covered by the separate image rule. The boundary follows the Open XML
+[`xdr:cxnSp` ConnectionShape definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet.connectionshape?view=openxml-3.0.1)
+and Microsoft's [Excel shape API overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/excel-add-ins-shapes).
 
 Native worksheet images can alter a spreadsheet's review and print surface even
 when every stored cell is unchanged. FormulaFence follows a worksheet's
@@ -1076,7 +1082,8 @@ FormulaFence does not render or decode media, fetch external targets, resolve
 themes, calculate visibility/cropping/z-order, compose controls, or calculate
 final pagination. Charts remain under `FF030`, rich-data/in-cell images under
 `FF051`, Theme images under `FF053`, ActiveX/OLE image controls under `FF029`,
-regular/group shapes under `FF044`, and header/footer text under `FF056`.
+regular/group/connector shapes under `FF044`, and header/footer text under
+`FF056`.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

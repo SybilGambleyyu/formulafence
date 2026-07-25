@@ -12948,6 +12948,323 @@ def corrupt_worksheet_drawing_shape_root(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".worksheet-drawing-shape-corrupt.tmp.xlsx")
 
 
+def make_worksheet_drawing_connector_model(
+    path: Path,
+    *,
+    attached: bool = True,
+    grouped: bool = False,
+) -> Path:
+    """Create an anchored DrawingML connector with optional grouping and attachments."""
+    make_worksheet_drawing_shape_model(path)
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    drawing_main = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+    def marker(
+        parent: ElementTree.Element,
+        name: str,
+        *,
+        column: int,
+        row: int,
+    ) -> None:
+        point = ElementTree.SubElement(parent, f"{{{drawing}}}{name}")
+        ElementTree.SubElement(point, f"{{{drawing}}}col").text = str(column)
+        ElementTree.SubElement(point, f"{{{drawing}}}colOff").text = "0"
+        ElementTree.SubElement(point, f"{{{drawing}}}row").text = str(row)
+        ElementTree.SubElement(point, f"{{{drawing}}}rowOff").text = "0"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, _relationships_member = _worksheet_drawing_shape_part_names(
+            contents
+        )
+        root = ElementTree.fromstring(contents[drawing_member])
+        anchor = ElementTree.SubElement(
+            root,
+            f"{{{drawing}}}twoCellAnchor",
+            {"editAs": "oneCell"},
+        )
+        marker(anchor, "from", column=3, row=6)
+        marker(anchor, "to", column=9, row=6)
+        connector_parent = anchor
+        if grouped:
+            group = ElementTree.SubElement(anchor, f"{{{drawing}}}grpSp")
+            group_nonvisual = ElementTree.SubElement(group, f"{{{drawing}}}nvGrpSpPr")
+            ElementTree.SubElement(
+                group_nonvisual,
+                f"{{{drawing}}}cNvPr",
+                {
+                    "id": "1028",
+                    "name": "PRIVATE-WORKFLOW-CONNECTOR-GROUP",
+                },
+            )
+            ElementTree.SubElement(group_nonvisual, f"{{{drawing}}}cNvGrpSpPr")
+            ElementTree.SubElement(group, f"{{{drawing}}}grpSpPr")
+            connector_parent = group
+        connector = ElementTree.SubElement(connector_parent, f"{{{drawing}}}cxnSp")
+        nonvisual = ElementTree.SubElement(connector, f"{{{drawing}}}nvCxnSpPr")
+        ElementTree.SubElement(
+            nonvisual,
+            f"{{{drawing}}}cNvPr",
+            {
+                "id": "1027",
+                "name": "PRIVATE-WORKFLOW-CONNECTOR-NAME",
+                "descr": "PRIVATE-WORKFLOW-CONNECTOR-DESCRIPTION",
+            },
+        )
+        connection_properties = ElementTree.SubElement(
+            nonvisual,
+            f"{{{drawing}}}cNvCxnSpPr",
+        )
+        if attached:
+            ElementTree.SubElement(
+                connection_properties,
+                f"{{{drawing_main}}}stCxn",
+                {"id": "1025", "idx": "0"},
+            )
+            ElementTree.SubElement(
+                connection_properties,
+                f"{{{drawing_main}}}endCxn",
+                {"id": "1026", "idx": "1"},
+            )
+        shape_properties = ElementTree.SubElement(connector, f"{{{drawing}}}spPr")
+        geometry = ElementTree.SubElement(
+            shape_properties,
+            f"{{{drawing_main}}}prstGeom",
+            {"prst": "straightConnector1"},
+        )
+        ElementTree.SubElement(geometry, f"{{{drawing_main}}}avLst")
+        line = ElementTree.SubElement(
+            shape_properties,
+            f"{{{drawing_main}}}ln",
+            {"w": "12700"},
+        )
+        fill = ElementTree.SubElement(line, f"{{{drawing_main}}}solidFill")
+        ElementTree.SubElement(fill, f"{{{drawing_main}}}srgbClr", {"val": "112233"})
+        ElementTree.SubElement(line, f"{{{drawing_main}}}headEnd", {"type": "triangle"})
+        ElementTree.SubElement(anchor, f"{{{drawing}}}clientData")
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-drawing-connector.tmp.xlsx")
+
+
+def _worksheet_drawing_connector_element(
+    contents: dict[str, bytes],
+) -> tuple[str, ElementTree.Element, ElementTree.Element]:
+    """Return the raw drawing root and connector from the connector fixture."""
+    drawing_member, _relationships_member = _worksheet_drawing_shape_part_names(contents)
+    root = ElementTree.fromstring(contents[drawing_member])
+    connector = next(
+        (
+            element
+            for element in root.iter()
+            if element.tag.rsplit("}", maxsplit=1)[-1] == "cxnSp"
+        ),
+        None,
+    )
+    if connector is None:
+        raise ValueError("Fixture does not contain a Worksheet DrawingML connector")
+    return drawing_member, root, connector
+
+
+def change_worksheet_drawing_connector_presentation(path: Path) -> Path:
+    """Change only a connector's private line presentation."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, root, connector = _worksheet_drawing_connector_element(contents)
+        drawing_main = (
+            _DRAWINGML_STRICT_MAIN_NS
+            if connector.tag.startswith(
+                "{http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing}"
+            )
+            else _DRAWINGML_MAIN_NS
+        )
+        colour = next(connector.iter(f"{{{drawing_main}}}srgbClr"), None)
+        if colour is None:
+            raise ValueError("Fixture does not contain a connector line colour")
+        colour.set("val", "FFFFFF")
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-drawing-connector-change.tmp.xlsx")
+
+
+def change_worksheet_drawing_connector_attachment(path: Path) -> Path:
+    """Reattach a connector endpoint without changing any workbook cells."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, root, connector = _worksheet_drawing_connector_element(contents)
+        drawing = connector.tag[1:].split("}", maxsplit=1)[0]
+        drawing_main = (
+            _DRAWINGML_STRICT_MAIN_NS
+            if drawing == "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"
+            else _DRAWINGML_MAIN_NS
+        )
+        connection_properties = next(
+            connector.iter(f"{{{drawing}}}cNvCxnSpPr"),
+            None,
+        )
+        if connection_properties is None:
+            raise ValueError("Fixture does not contain connector connection properties")
+        endpoint = connection_properties.find(f"{{{drawing_main}}}endCxn")
+        if endpoint is None:
+            raise ValueError("Fixture does not contain a connector end attachment")
+        endpoint.set("id", "1025")
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-drawing-connector-attach.tmp.xlsx")
+
+
+def renumber_worksheet_drawing_connector_identifiers(path: Path) -> Path:
+    """Rewrite drawing IDs and matching connector references without a semantic change."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, root, connector = _worksheet_drawing_connector_element(contents)
+        drawing = connector.tag[1:].split("}", maxsplit=1)[0]
+        drawing_main = (
+            _DRAWINGML_STRICT_MAIN_NS
+            if drawing == "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"
+            else _DRAWINGML_MAIN_NS
+        )
+        identifier_map: dict[str, str] = {}
+        for index, nonvisual in enumerate(root.iter(f"{{{drawing}}}cNvPr"), start=900):
+            previous = nonvisual.get("id")
+            if previous is None:
+                raise ValueError("Fixture has a nonvisual property without an identifier")
+            replacement = str(index)
+            identifier_map[previous] = replacement
+            nonvisual.set("id", replacement)
+        for endpoint_name in ("stCxn", "endCxn"):
+            for endpoint in root.iter(f"{{{drawing_main}}}{endpoint_name}"):
+                previous = endpoint.get("id")
+                if previous not in identifier_map:
+                    raise ValueError("Fixture connector references an unknown identifier")
+                endpoint.set("id", identifier_map[previous])
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-drawing-connector-id.tmp.xlsx")
+
+
+def corrupt_worksheet_drawing_connector_attachment(path: Path) -> Path:
+    """Point a connector endpoint to an absent drawing object for fail-closed coverage."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, root, connector = _worksheet_drawing_connector_element(contents)
+        drawing = connector.tag[1:].split("}", maxsplit=1)[0]
+        drawing_main = (
+            _DRAWINGML_STRICT_MAIN_NS
+            if drawing == "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"
+            else _DRAWINGML_MAIN_NS
+        )
+        connection_properties = next(
+            connector.iter(f"{{{drawing}}}cNvCxnSpPr"),
+            None,
+        )
+        if connection_properties is None:
+            raise ValueError("Fixture does not contain connector connection properties")
+        endpoint = connection_properties.find(f"{{{drawing_main}}}endCxn")
+        if endpoint is None:
+            raise ValueError("Fixture does not contain a connector end attachment")
+        endpoint.set("id", "999999")
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-drawing-connector-corrupt.tmp.xlsx")
+
+
+def make_strict_worksheet_drawing_connector_model(path: Path) -> Path:
+    """Create a strict-namespace variant of the connector fixture."""
+    make_worksheet_drawing_connector_model(path)
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    strict_drawing = "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"
+
+    def strict_name(name: str, source_namespace: str, target_namespace: str) -> str:
+        prefix = f"{{{source_namespace}}}"
+        if name.startswith(prefix):
+            return f"{{{target_namespace}}}{name[len(prefix):]}"
+        return name
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, drawing_relationships_member = _worksheet_drawing_shape_part_names(
+            contents
+        )
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        for member, source_namespace, target_namespace in (
+            (worksheet_member, _SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS),
+            (drawing_member, drawing, strict_drawing),
+        ):
+            root = ElementTree.fromstring(contents[member])
+            for element in root.iter():
+                element.tag = strict_name(
+                    element.tag,
+                    source_namespace,
+                    target_namespace,
+                )
+                element.tag = strict_name(
+                    element.tag,
+                    _DRAWINGML_MAIN_NS,
+                    _DRAWINGML_STRICT_MAIN_NS,
+                )
+                attributes = {
+                    strict_name(
+                        name,
+                        _DOCUMENT_RELATIONSHIPS_NS,
+                        _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                    ): value
+                    for name, value in element.attrib.items()
+                }
+                element.attrib.clear()
+                element.attrib.update(attributes)
+            contents[member] = ElementTree.tostring(
+                root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        for member in (
+            _relationship_member(worksheet_member),
+            drawing_relationships_member,
+        ):
+            relationships = ElementTree.fromstring(contents[member])
+            for relationship in relationships.findall(relationship_tag):
+                relationship_type = relationship.get("Type")
+                if relationship_type and relationship_type.startswith(
+                    _DOCUMENT_RELATIONSHIPS_NS
+                ):
+                    relationship.set(
+                        "Type",
+                        relationship_type.replace(
+                            _DOCUMENT_RELATIONSHIPS_NS,
+                            _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                            1,
+                        ),
+                    )
+            contents[member] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".strict-worksheet-drawing-connector.tmp.xlsx")
+
+
 def _worksheet_image_part_names(
     contents: dict[str, bytes],
 ) -> tuple[str, str, str, str, str]:

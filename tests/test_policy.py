@@ -40,6 +40,7 @@ from .helpers import (
     change_workbook_theme_colour,
     change_worksheet_dimension_controls,
     change_worksheet_display_controls,
+    change_worksheet_drawing_connector_attachment,
     change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
     change_worksheet_image_presentation,
@@ -86,6 +87,7 @@ from .helpers import (
     make_workbook_theme_image_model,
     make_worksheet_dimension_model,
     make_worksheet_display_model,
+    make_worksheet_drawing_connector_model,
     make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
     make_worksheet_image_model,
@@ -783,6 +785,21 @@ def test_policy_can_block_worksheet_drawing_shape_changes(tmp_path) -> None:
     baseline = make_worksheet_drawing_shape_model(tmp_path / "baseline.xlsx")
     candidate = make_worksheet_drawing_shape_model(tmp_path / "candidate.xlsx")
     change_worksheet_drawing_shape_presentation(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_worksheet_drawing_shape_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP044"}
+
+
+def test_policy_can_block_worksheet_drawing_connector_attachment_changes(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_drawing_connector_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_drawing_connector_model(tmp_path / "candidate.xlsx")
+    change_worksheet_drawing_connector_attachment(candidate)
 
     report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
     policy = parse_policy(

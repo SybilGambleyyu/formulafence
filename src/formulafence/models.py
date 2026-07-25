@@ -2808,16 +2808,19 @@ class ThreadedCommentSnapshot:
 class WorksheetDrawingShapeSnapshot:
     """Safe aggregate of non-chart Worksheet DrawingML shape controls.
 
-    Worksheet DrawingML can carry text boxes and other shapes outside the cell
-    grid. Their private signatures retain anchors, presentation, text, linked
-    actions, and relationship semantics for comparison without exposing any of
-    that material in a profile or change report.
+    Worksheet DrawingML can carry text boxes, shapes, and connectors outside
+    the cell grid. Their private signatures retain anchors, presentation,
+    connector attachments, text, linked actions, and relationship semantics
+    for comparison without exposing any of that material in a profile or
+    change report.
     """
 
     worksheet_drawing_sheet_count: int = 0
     worksheet_drawing_part_count: int = 0
     shape_anchor_count: int = 0
     shape_count: int = 0
+    connector_shape_count: int = 0
+    connector_attachment_count: int = 0
     group_shape_count: int = 0
     text_shape_count: int = 0
     text_paragraph_count: int = 0
@@ -2837,6 +2840,7 @@ class WorksheetDrawingShapeSnapshot:
         return bool(
             self.worksheet_drawing_part_count
             or self.shape_count
+            or self.connector_shape_count
             or self.group_shape_count
             or self.unrecognized_shape_count
         )
@@ -2849,6 +2853,8 @@ class WorksheetDrawingShapeSnapshot:
             "worksheet_drawing_part_count": self.worksheet_drawing_part_count,
             "shape_anchor_count": self.shape_anchor_count,
             "shape_count": self.shape_count,
+            "connector_shape_count": self.connector_shape_count,
+            "connector_attachment_count": self.connector_attachment_count,
             "group_shape_count": self.group_shape_count,
             "text_shape_count": self.text_shape_count,
             "text_paragraph_count": self.text_paragraph_count,
@@ -3480,6 +3486,12 @@ class WorkbookSnapshot:
             "threaded_comment_person_count": self.threaded_comments.person_count,
             "has_threaded_comments": self.threaded_comments.present,
             "worksheet_drawing_shape_count": self.worksheet_drawing_shapes.shape_count,
+            "worksheet_drawing_connector_shape_count": (
+                self.worksheet_drawing_shapes.connector_shape_count
+            ),
+            "worksheet_drawing_connector_attachment_count": (
+                self.worksheet_drawing_shapes.connector_attachment_count
+            ),
             "worksheet_drawing_text_shape_count": (
                 self.worksheet_drawing_shapes.text_shape_count
             ),

@@ -93,6 +93,8 @@ from .helpers import (
     change_workbook_theme_image_payload,
     change_worksheet_dimension_controls,
     change_worksheet_display_controls,
+    change_worksheet_drawing_connector_attachment,
+    change_worksheet_drawing_connector_presentation,
     change_worksheet_drawing_shape_hyperlink,
     change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
@@ -141,6 +143,7 @@ from .helpers import (
     corrupt_workbook_theme_root,
     corrupt_worksheet_dimension_control,
     corrupt_worksheet_display_control,
+    corrupt_worksheet_drawing_connector_attachment,
     corrupt_worksheet_drawing_shape_root,
     corrupt_worksheet_embedded_control_activex_root,
     corrupt_worksheet_image_drawing_root,
@@ -209,6 +212,7 @@ from .helpers import (
     make_strict_workbook_theme_image_model,
     make_strict_worksheet_dimension_model,
     make_strict_worksheet_display_model,
+    make_strict_worksheet_drawing_connector_model,
     make_strict_worksheet_image_model,
     make_strict_worksheet_print_layout_model,
     make_table_model,
@@ -218,6 +222,7 @@ from .helpers import (
     make_workbook_theme_image_model,
     make_worksheet_dimension_model,
     make_worksheet_display_model,
+    make_worksheet_drawing_connector_model,
     make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
     make_worksheet_image_model,
@@ -284,6 +289,7 @@ from .helpers import (
     renumber_slicer_timeline_pivot_cache_id,
     renumber_slicer_timeline_relationships,
     renumber_threaded_comment_identifiers,
+    renumber_worksheet_drawing_connector_identifiers,
     renumber_worksheet_drawing_shape_identifiers,
     renumber_worksheet_embedded_control_relationships,
     renumber_worksheet_image_identifiers,
@@ -8072,6 +8078,8 @@ def test_worksheet_drawing_shapes_are_profiled_diffed_and_redacted(tmp_path) -> 
         "worksheet_drawing_part_count": 1,
         "shape_anchor_count": 2,
         "shape_count": 2,
+        "connector_shape_count": 0,
+        "connector_attachment_count": 0,
         "group_shape_count": 1,
         "text_shape_count": 2,
         "text_paragraph_count": 2,
@@ -8083,7 +8091,7 @@ def test_worksheet_drawing_shapes_are_profiled_diffed_and_redacted(tmp_path) -> 
         "external_relationship_count": 1,
         "unrecognized_shape_count": 0,
     }
-    assert "## Worksheet DrawingML shape controls" in markdown
+    assert "## Worksheet DrawingML shape and connector controls" in markdown
     assert change.details["worksheet_drawing_shape_definition_material_changed"] is True
     assert "FF044" in {finding.rule_id for finding in report.findings}
     assert "FF044" in {finding.rule_id for finding in hyperlink_report.findings}
@@ -8130,6 +8138,151 @@ def test_worksheet_drawing_shape_identifier_rewrites_are_ignored(tmp_path) -> No
         change.kind for change in report.changes
     }
     assert "FF044" not in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_drawing_connectors_are_profiled_diffed_and_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_drawing_connector_model(tmp_path / "baseline.xlsx")
+    presentation_candidate = make_worksheet_drawing_connector_model(
+        tmp_path / "presentation-candidate.xlsx"
+    )
+    attachment_candidate = make_worksheet_drawing_connector_model(
+        tmp_path / "attachment-candidate.xlsx"
+    )
+    free_connector = make_worksheet_drawing_connector_model(
+        tmp_path / "free-connector.xlsx",
+        attached=False,
+    )
+    grouped_connector = make_worksheet_drawing_connector_model(
+        tmp_path / "grouped-connector.xlsx",
+        grouped=True,
+    )
+    change_worksheet_drawing_connector_presentation(presentation_candidate)
+    change_worksheet_drawing_connector_attachment(attachment_candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    presentation_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(presentation_candidate),
+    )
+    attachment_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(attachment_candidate),
+    )
+    free_snapshot = load_snapshot(free_connector)
+    grouped_snapshot = load_snapshot(grouped_connector)
+
+    assert baseline_snapshot.summary()["worksheet_drawing_connector_shape_count"] == 1
+    assert (
+        baseline_snapshot.summary()["worksheet_drawing_connector_attachment_count"]
+        == 2
+    )
+    assert profile["worksheet_drawing_shapes"]["shape_anchor_count"] == 3
+    assert profile["worksheet_drawing_shapes"]["shape_count"] == 2
+    assert profile["worksheet_drawing_shapes"]["connector_shape_count"] == 1
+    assert profile["worksheet_drawing_shapes"]["connector_attachment_count"] == 2
+    assert profile["worksheet_drawing_shapes"]["group_shape_count"] == 1
+    assert profile["worksheet_drawing_shapes"]["unrecognized_shape_count"] == 0
+    assert free_snapshot.worksheet_drawing_shapes.connector_shape_count == 1
+    assert free_snapshot.worksheet_drawing_shapes.connector_attachment_count == 0
+    assert free_snapshot.worksheet_drawing_shapes.unrecognized_shape_count == 0
+    assert grouped_snapshot.worksheet_drawing_shapes.connector_shape_count == 1
+    assert grouped_snapshot.worksheet_drawing_shapes.connector_attachment_count == 2
+    assert grouped_snapshot.worksheet_drawing_shapes.group_shape_count == 2
+    assert grouped_snapshot.worksheet_drawing_shapes.unrecognized_shape_count == 0
+    assert "Connector attachments" in markdown
+    assert "FF044" in {finding.rule_id for finding in presentation_report.findings}
+    assert "FF044" in {finding.rule_id for finding in attachment_report.findings}
+    attachment_change = next(
+        change
+        for change in attachment_report.changes
+        if change.kind == "worksheet_drawing_shape_controls_changed"
+    )
+    assert attachment_change.details[
+        "worksheet_drawing_shape_definition_material_changed"
+    ] is True
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(presentation_report.to_dict()),
+        report_to_markdown(presentation_report),
+        json.dumps(report_to_sarif(presentation_report)),
+        json.dumps(attachment_report.to_dict()),
+        report_to_markdown(attachment_report),
+        json.dumps(report_to_sarif(attachment_report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-WORKFLOW-CONNECTOR-NAME",
+        "PRIVATE-WORKFLOW-CONNECTOR-DESCRIPTION",
+        "112233",
+        "1025",
+        "1026",
+        "1027",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_drawing_connector_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_worksheet_drawing_connector_model(tmp_path / "baseline.xlsx")
+    renumbered = make_worksheet_drawing_connector_model(tmp_path / "renumbered.xlsx")
+    renumber_worksheet_drawing_connector_identifiers(renumbered)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered))
+
+    assert "worksheet_drawing_shape_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" not in {finding.rule_id for finding in report.findings}
+
+
+def test_malformed_worksheet_drawing_connector_attachments_fail_closed(tmp_path) -> None:
+    baseline = make_worksheet_drawing_connector_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_drawing_connector_model(tmp_path / "candidate.xlsx")
+    corrupt_worksheet_drawing_connector_attachment(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.worksheet_drawing_shapes.unrecognized_shape_count >= 1
+    assert any(
+        "malformed or unsupported Worksheet DrawingML shape metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "worksheet_drawing_shape_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("999999" not in artifact for artifact in rendered_artifacts)
+
+
+def test_strict_worksheet_drawing_connectors_are_supported(tmp_path) -> None:
+    workbook = make_strict_worksheet_drawing_connector_model(tmp_path / "strict.xlsx")
+    candidate = make_strict_worksheet_drawing_connector_model(
+        tmp_path / "strict-candidate.xlsx"
+    )
+    change_worksheet_drawing_connector_attachment(candidate)
+
+    snapshot = load_snapshot(workbook)
+    report = compare_snapshots(snapshot, load_snapshot(candidate))
+
+    assert snapshot.worksheet_drawing_shapes.shape_count == 2
+    assert snapshot.worksheet_drawing_shapes.connector_shape_count == 1
+    assert snapshot.worksheet_drawing_shapes.connector_attachment_count == 2
+    assert snapshot.worksheet_drawing_shapes.unrecognized_shape_count == 0
+    assert not any(
+        "Worksheet DrawingML shape" in warning for warning in snapshot.parser_warnings
+    )
+    assert "FF044" in {finding.rule_id for finding in report.findings}
 
 
 def test_worksheet_images_are_profiled_diffed_and_redacted(tmp_path) -> None:

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.58.0 — 2026-07-26
+
+- Extend `FF044` Worksheet DrawingML controls to inspect transitional and
+  strict `xdr:cxnSp` connectors, including connectors nested in `xdr:grpSp`.
+  Private signatures retain connector anchor, geometry/style, nonvisual
+  declarations, and `stCxn`/`endCxn` endpoint attachment semantics alongside
+  the existing regular-shape/group controls; profiles, Markdown, JSON, and
+  SARIF expose connector and attachment aggregates only.
+- Resolve connector endpoint IDs against supported DrawingML object identities
+  without leaking those IDs. Consistent rewrites of nonvisual IDs and matching
+  connector endpoints normalize; reattachment, endpoint-site, geometry, style,
+  or anchor changes produce the existing high-severity `FF044` finding and the
+  existing fail-closed `no_worksheet_drawing_shape_changes` policy (`FFP044`).
+- Treat malformed, duplicate, missing, or unsupported connector endpoint
+  metadata as visible coverage evidence. Free connectors remain supported.
+  FormulaFence still does not render DrawingML, evaluate final routing or
+  visibility, resolve themes, fetch external targets, parse media, or inspect
+  `xdr:graphicFrame`, SmartArt, and other unsupported drawing objects; native
+  `xdr:pic` images remain in `FF059`.
+
 ## 0.57.0 — 2026-07-26
 
 - Inspect native worksheet image controls before ordinary readers discard their

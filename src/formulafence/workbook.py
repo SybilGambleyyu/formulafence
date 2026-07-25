@@ -582,11 +582,9 @@ _CHART_RELATIONSHIP_ATTRIBUTES = frozenset(
     }
 )
 _WORKSHEET_DRAWING_SHAPE_RELATIONSHIP_ATTRIBUTES = frozenset(
-    {
-        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
-        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}embed",
-        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}link",
-    }
+    f"{{{namespace}}}{local_name}"
+    for namespace in {_DOCUMENT_RELATIONSHIP_NS, _STRICT_DOCUMENT_RELATIONSHIP_NS}
+    for local_name in {"id", "embed", "link"}
 )
 _WORKSHEET_IMAGE_RELATIONSHIP_ATTRIBUTES = frozenset(
     f"{{{namespace}}}{local_name}"
@@ -601,6 +599,13 @@ _WORKSHEET_IMAGE_RELATIONSHIPS = frozenset(
     }
 )
 _WORKSHEET_IMAGE_DRAWING_RELATIONSHIPS = frozenset(
+    relationship.casefold()
+    for relationship in {
+        _WORKSHEET_DRAWING_RELATIONSHIP,
+        _WORKSHEET_STRICT_DRAWING_RELATIONSHIP,
+    }
+)
+_WORKSHEET_DRAWING_SHAPE_DRAWING_RELATIONSHIPS = frozenset(
     relationship.casefold()
     for relationship in {
         _WORKSHEET_DRAWING_RELATIONSHIP,
@@ -1568,6 +1573,8 @@ class _WorksheetDrawingShapeInspection:
     present: bool = False
     shape_anchor_count: int = 0
     shape_count: int = 0
+    connector_shape_count: int = 0
+    connector_attachment_count: int = 0
     group_shape_count: int = 0
     text_shape_count: int = 0
     text_paragraph_count: int = 0
@@ -32598,12 +32605,25 @@ def _threaded_comment_metadata(path: Path) -> _ThreadedCommentMetadata:
 _WORKSHEET_DRAWING_SHAPE_ANCHORS = frozenset(
     {"twoCellAnchor", "oneCellAnchor", "absoluteAnchor"}
 )
+_WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES = frozenset(
+    {_DRAWINGML_SPREADSHEET_NS, _DRAWINGML_STRICT_SPREADSHEET_NS}
+)
+_WORKSHEET_DRAWING_SHAPE_MAIN_NAMESPACES = frozenset(
+    {_DRAWINGML_MAIN_NS, _DRAWINGML_STRICT_MAIN_NS}
+)
 _WORKSHEET_DRAWING_SHAPE_ANCHOR_CHILDREN = frozenset(
-    {"from", "to", "pos", "ext", "sp", "grpSp", "clientData"}
+    {"from", "to", "pos", "ext", "sp", "cxnSp", "grpSp", "clientData"}
 )
 _WORKSHEET_DRAWING_GROUP_CHILDREN = frozenset(
-    {"nvGrpSpPr", "grpSpPr", "sp", "grpSp"}
+    {"nvGrpSpPr", "grpSpPr", "sp", "cxnSp", "grpSp"}
 )
+_WORKSHEET_DRAWING_SHAPE_CONTAINER_NAMES = frozenset({"sp", "cxnSp", "grpSp"})
+_WORKSHEET_DRAWING_CONNECTOR_ENDPOINT_NAMES = frozenset({"stCxn", "endCxn"})
+_WORKSHEET_DRAWING_CONTAINER_NONVISUAL_NAMES = {
+    "sp": "nvSpPr",
+    "cxnSp": "nvCxnSpPr",
+    "grpSp": "nvGrpSpPr",
+}
 
 
 def _worksheet_drawing_shape_raw_relationships(
@@ -32731,14 +32751,15 @@ def _worksheet_drawing_shape_xml_payload(
 def _worksheet_drawing_shape_xml_fragment(
     element: ElementTree.Element,
     relationship_semantics: Mapping[str, tuple[str, str, str]],
+    connection_targets: Mapping[str, tuple[object, ...]],
 ) -> tuple[object, ...]:
-    """Canonicalize private shape XML while resolving relationship identifiers."""
+    """Canonicalize private shape XML while resolving private object identifiers."""
     namespace = _xml_namespace(element.tag)
     local_name = _xml_local_name(element.tag)
     attributes: list[tuple[str, str]] = []
     for attribute, value in element.attrib.items():
         if (
-            namespace == _DRAWINGML_SPREADSHEET_NS
+            namespace in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
             and local_name == "cNvPr"
             and _xml_local_name(attribute) == "id"
         ):
@@ -32753,25 +32774,49 @@ def _worksheet_drawing_shape_xml_fragment(
             attributes.append((_xml_display_name(attribute), repr(resolved)))
             continue
         if (
-            namespace == _DRAWINGML_MAIN_NS
+            namespace in _WORKSHEET_DRAWING_SHAPE_MAIN_NAMESPACES
+            and local_name in _WORKSHEET_DRAWING_CONNECTOR_ENDPOINT_NAMES
+            and _xml_local_name(attribute) == "id"
+        ):
+            target = connection_targets.get(value)
+            resolved = (
+                ("connection-target", target)
+                if target is not None
+                else ("unresolved-connection-target",)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+            continue
+        if (
+            namespace in _WORKSHEET_DRAWING_SHAPE_MAIN_NAMESPACES
             and local_name == "srgbClr"
             and _xml_local_name(attribute) == "val"
         ):
             value = value.upper()
         attributes.append((_xml_display_name(attribute), value))
 
-    if namespace == _DRAWINGML_SPREADSHEET_NS and local_name == "grpSp":
+    if (
+        namespace in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
+        and local_name == "grpSp"
+    ):
         children = tuple(
-            _worksheet_drawing_shape_xml_fragment(child, relationship_semantics)
+            _worksheet_drawing_shape_xml_fragment(
+                child,
+                relationship_semantics,
+                connection_targets,
+            )
             for child in element
             if (
-                _xml_namespace(child.tag) == _DRAWINGML_SPREADSHEET_NS
+                _xml_namespace(child.tag) in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
                 and _xml_local_name(child.tag) in _WORKSHEET_DRAWING_GROUP_CHILDREN
             )
         )
     else:
         children = tuple(
-            _worksheet_drawing_shape_xml_fragment(child, relationship_semantics)
+            _worksheet_drawing_shape_xml_fragment(
+                child,
+                relationship_semantics,
+                connection_targets,
+            )
             for child in element
         )
     text = element.text
@@ -32788,8 +32833,9 @@ def _worksheet_drawing_shape_xml_fragment(
 def _worksheet_drawing_shape_anchor_fragment(
     anchor: ElementTree.Element,
     relationship_semantics: Mapping[str, tuple[str, str, str]],
+    connection_targets: Mapping[str, tuple[object, ...]],
 ) -> tuple[object, ...]:
-    """Retain anchors and shape containers while excluding charts and pictures."""
+    """Retain anchors and supported drawing objects without charts or pictures."""
     attributes = tuple(
         sorted(
             (_xml_display_name(attribute), value)
@@ -32797,10 +32843,14 @@ def _worksheet_drawing_shape_anchor_fragment(
         )
     )
     children = tuple(
-        _worksheet_drawing_shape_xml_fragment(child, relationship_semantics)
+        _worksheet_drawing_shape_xml_fragment(
+            child,
+            relationship_semantics,
+            connection_targets,
+        )
         for child in anchor
         if (
-            _xml_namespace(child.tag) == _DRAWINGML_SPREADSHEET_NS
+            _xml_namespace(child.tag) in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
             and _xml_local_name(child.tag) in _WORKSHEET_DRAWING_SHAPE_ANCHOR_CHILDREN
         )
     )
@@ -32810,14 +32860,14 @@ def _worksheet_drawing_shape_anchor_fragment(
 def _worksheet_drawing_shape_containers(
     anchor: ElementTree.Element,
 ) -> tuple[ElementTree.Element, ...]:
-    """Return direct and grouped shape containers without entering charts or pictures."""
+    """Return supported anchored containers without entering charts or pictures."""
     containers: list[ElementTree.Element] = []
 
     def visit(element: ElementTree.Element) -> None:
-        if _xml_namespace(element.tag) != _DRAWINGML_SPREADSHEET_NS:
+        if _xml_namespace(element.tag) not in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES:
             return
         local_name = _xml_local_name(element.tag)
-        if local_name not in {"sp", "grpSp"}:
+        if local_name not in _WORKSHEET_DRAWING_SHAPE_CONTAINER_NAMES:
             return
         containers.append(element)
         if local_name == "grpSp":
@@ -32827,6 +32877,44 @@ def _worksheet_drawing_shape_containers(
     for child in anchor:
         visit(child)
     return tuple(containers)
+
+
+def _worksheet_drawing_shape_container_identifier(
+    container: ElementTree.Element,
+) -> str | None:
+    """Return a supported drawing object's non-visual identifier, if usable."""
+    namespace = _xml_namespace(container.tag)
+    local_name = _xml_local_name(container.tag)
+    nonvisual_name = _WORKSHEET_DRAWING_CONTAINER_NONVISUAL_NAMES.get(local_name)
+    if (
+        namespace not in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
+        or nonvisual_name is None
+    ):
+        return None
+    nonvisual = [
+        child
+        for child in container
+        if (
+            _xml_namespace(child.tag) == namespace
+            and _xml_local_name(child.tag) == nonvisual_name
+        )
+    ]
+    if len(nonvisual) != 1:
+        return None
+    nonvisual_properties = [
+        child
+        for child in nonvisual[0]
+        if (
+            _xml_namespace(child.tag) == namespace
+            and _xml_local_name(child.tag) == "cNvPr"
+        )
+    ]
+    if len(nonvisual_properties) != 1:
+        return None
+    identifier = nonvisual_properties[0].get("id")
+    if not identifier or not identifier.isascii() or not identifier.isdecimal():
+        return None
+    return identifier
 
 
 def _worksheet_drawing_shape_inspection(
@@ -32863,7 +32951,7 @@ def _worksheet_drawing_shape_inspection(
             definition_signature=_private_payload_signature(payload),
         )
     if (
-        _xml_namespace(root.tag) != _DRAWINGML_SPREADSHEET_NS
+        _xml_namespace(root.tag) not in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
         or _xml_local_name(root.tag) != "wsDr"
     ):
         warnings.add(
@@ -32880,7 +32968,8 @@ def _worksheet_drawing_shape_inspection(
     anchors: list[tuple[ElementTree.Element, tuple[ElementTree.Element, ...]]] = []
     for child in root:
         if (
-            _xml_namespace(child.tag) != _DRAWINGML_SPREADSHEET_NS
+            _xml_namespace(child.tag)
+            not in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
             or _xml_local_name(child.tag) not in _WORKSHEET_DRAWING_SHAPE_ANCHORS
         ):
             continue
@@ -32888,69 +32977,221 @@ def _worksheet_drawing_shape_inspection(
         if containers:
             anchors.append((child, containers))
 
-    shape_tag = f"{{{_DRAWINGML_SPREADSHEET_NS}}}sp"
-    all_shape_nodes = list(root.iter(shape_tag))
-    selected_shape_ids = {
+    all_container_nodes = [
+        element
+        for element in root.iter()
+        if (
+            _xml_namespace(element.tag) in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
+            and _xml_local_name(element.tag)
+            in _WORKSHEET_DRAWING_SHAPE_CONTAINER_NAMES
+        )
+    ]
+    selected_container_ids = {
         id(container)
         for _anchor, containers in anchors
         for container in containers
-        if _xml_local_name(container.tag) == "sp"
     }
     issue_entries: list[tuple[str, str]] = []
     unrecognized_count = 0
-    unanchored_shape_count = sum(
-        id(shape) not in selected_shape_ids for shape in all_shape_nodes
+    unanchored_container_count = sum(
+        id(container) not in selected_container_ids for container in all_container_nodes
     )
-    if unanchored_shape_count:
+    if unanchored_container_count:
         warnings.add(
-            "FormulaFence found Worksheet DrawingML shapes outside supported anchors; "
-            "affected shape controls have a coverage gap."
+            "FormulaFence found Worksheet DrawingML objects outside supported anchors; "
+            "affected shape and connector controls have a coverage gap."
         )
-        unrecognized_count += unanchored_shape_count
+        unrecognized_count += unanchored_container_count
         issue_entries.append(
-            ("unanchored-shape-count", str(unanchored_shape_count))
+            ("unanchored-drawing-object-count", str(unanchored_container_count))
         )
 
+    container_records = [
+        (anchor_index, container_index, container)
+        for anchor_index, (_anchor, containers) in enumerate(anchors)
+        for container_index, container in enumerate(containers)
+    ]
     shape_nodes = [
         container
-        for _anchor, containers in anchors
-        for container in containers
+        for _anchor_index, _container_index, container in container_records
         if _xml_local_name(container.tag) == "sp"
+    ]
+    connector_nodes = [
+        container
+        for _anchor_index, _container_index, container in container_records
+        if _xml_local_name(container.tag) == "cxnSp"
     ]
     group_shape_count = sum(
         _xml_local_name(container.tag) == "grpSp"
-        for _anchor, containers in anchors
-        for container in containers
+        for _anchor_index, _container_index, container in container_records
     )
+
+    connection_target_candidates: dict[str, list[tuple[object, ...]]] = defaultdict(
+        list
+    )
+    for anchor_index, container_index, container in container_records:
+        if identifier := _worksheet_drawing_shape_container_identifier(container):
+            connection_target_candidates[identifier].append(
+                (
+                    "drawing-object",
+                    anchor_index,
+                    container_index,
+                    _xml_local_name(container.tag),
+                )
+            )
+    connection_targets = {
+        identifier: candidates[0]
+        for identifier, candidates in connection_target_candidates.items()
+        if len(candidates) == 1
+    }
+
+    connector_attachment_count = 0
+    for connector_index, connector in enumerate(connector_nodes):
+        connector_namespace = _xml_namespace(connector.tag)
+        connector_issue = False
+        nonvisual = [
+            child
+            for child in connector
+            if (
+                _xml_namespace(child.tag) == connector_namespace
+                and _xml_local_name(child.tag) == "nvCxnSpPr"
+            )
+        ]
+        if len(nonvisual) != 1:
+            connector_issue = True
+            issue_entries.append(
+                ("connector-nonvisual-properties", str(connector_index))
+            )
+            connection_properties: ElementTree.Element | None = None
+        else:
+            nonvisual_properties = [
+                child
+                for child in nonvisual[0]
+                if (
+                    _xml_namespace(child.tag) == connector_namespace
+                    and _xml_local_name(child.tag) == "cNvPr"
+                )
+            ]
+            if (
+                len(nonvisual_properties) != 1
+                or not _worksheet_drawing_shape_container_identifier(connector)
+            ):
+                connector_issue = True
+                issue_entries.append(
+                    ("connector-nonvisual-identifier", str(connector_index))
+                )
+            connection_properties_candidates = [
+                child
+                for child in nonvisual[0]
+                if (
+                    _xml_namespace(child.tag) == connector_namespace
+                    and _xml_local_name(child.tag) == "cNvCxnSpPr"
+                )
+            ]
+            if len(connection_properties_candidates) != 1:
+                connector_issue = True
+                issue_entries.append(
+                    ("connector-connection-properties", str(connector_index))
+                )
+                connection_properties = None
+            else:
+                connection_properties = connection_properties_candidates[0]
+
+        if connection_properties is not None:
+            for endpoint_name in _WORKSHEET_DRAWING_CONNECTOR_ENDPOINT_NAMES:
+                endpoints = [
+                    child
+                    for child in connection_properties
+                    if _xml_local_name(child.tag) == endpoint_name
+                ]
+                if not endpoints:
+                    continue
+                if (
+                    len(endpoints) != 1
+                    or _xml_namespace(endpoints[0].tag)
+                    not in _WORKSHEET_DRAWING_SHAPE_MAIN_NAMESPACES
+                ):
+                    connector_issue = True
+                    issue_entries.append(
+                        (
+                            "connector-malformed-attachment",
+                            repr((connector_index, endpoint_name)),
+                        )
+                    )
+                    continue
+                endpoint = endpoints[0]
+                target_identifier = endpoint.get("id")
+                connection_site = endpoint.get("idx")
+                if (
+                    not target_identifier
+                    or not connection_site
+                    or not target_identifier.isascii()
+                    or not target_identifier.isdecimal()
+                    or not connection_site.isascii()
+                    or not connection_site.isdecimal()
+                ):
+                    connector_issue = True
+                    issue_entries.append(
+                        (
+                            "connector-invalid-attachment",
+                            repr((connector_index, endpoint_name)),
+                        )
+                    )
+                    continue
+                candidates = connection_target_candidates.get(target_identifier, [])
+                if len(candidates) != 1:
+                    connector_issue = True
+                    issue_entries.append(
+                        (
+                            "connector-unresolved-attachment",
+                            repr(
+                                (
+                                    connector_index,
+                                    endpoint_name,
+                                    target_identifier,
+                                )
+                            ),
+                        )
+                    )
+                    continue
+                connector_attachment_count += 1
+        if connector_issue:
+            unrecognized_count += 1
 
     relationship_ids: set[str] = set()
     hyperlink_count = 0
     text_shape_count = 0
     text_paragraph_count = 0
     text_run_count = 0
-    text_body_tag = f"{{{_DRAWINGML_SPREADSHEET_NS}}}txBody"
-    paragraph_tag = f"{{{_DRAWINGML_MAIN_NS}}}p"
-    text_run_tags = {
-        f"{{{_DRAWINGML_MAIN_NS}}}r",
-        f"{{{_DRAWINGML_MAIN_NS}}}fld",
-    }
-    hyperlink_tags = {
-        f"{{{_DRAWINGML_MAIN_NS}}}hlinkClick",
-        f"{{{_DRAWINGML_MAIN_NS}}}hlinkHover",
-    }
     for shape in shape_nodes:
-        text_bodies = list(shape.iter(text_body_tag))
+        text_bodies = [
+            element
+            for element in shape.iter()
+            if (
+                _xml_namespace(element.tag)
+                in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
+                and _xml_local_name(element.tag) == "txBody"
+            )
+        ]
         if text_bodies:
             text_shape_count += 1
         for text_body in text_bodies:
             text_paragraph_count += sum(
-                child.tag == paragraph_tag for child in text_body.iter()
+                _xml_namespace(child.tag) in _WORKSHEET_DRAWING_SHAPE_MAIN_NAMESPACES
+                and _xml_local_name(child.tag) == "p"
+                for child in text_body.iter()
             )
             text_run_count += sum(
-                child.tag in text_run_tags for child in text_body.iter()
+                _xml_namespace(child.tag) in _WORKSHEET_DRAWING_SHAPE_MAIN_NAMESPACES
+                and _xml_local_name(child.tag) in {"r", "fld"}
+                for child in text_body.iter()
             )
-        for element in shape.iter():
-            if element.tag in hyperlink_tags:
+    for drawing_object in [*shape_nodes, *connector_nodes]:
+        for element in drawing_object.iter():
+            if (
+                _xml_namespace(element.tag) in _WORKSHEET_DRAWING_SHAPE_MAIN_NAMESPACES
+                and _xml_local_name(element.tag) in {"hlinkClick", "hlinkHover"}
+            ):
                 hyperlink_count += 1
             for attribute, value in element.attrib.items():
                 if (
@@ -33027,6 +33268,7 @@ def _worksheet_drawing_shape_inspection(
                     _worksheet_drawing_shape_anchor_fragment(
                         anchor,
                         relationship_semantics,
+                        connection_targets,
                     )
                 ),
             )
@@ -33042,6 +33284,8 @@ def _worksheet_drawing_shape_inspection(
             present=True,
             shape_anchor_count=len(anchors),
             shape_count=len(shape_nodes),
+            connector_shape_count=len(connector_nodes),
+            connector_attachment_count=connector_attachment_count,
             group_shape_count=group_shape_count,
             unrecognized_count=unrecognized_count + 1,
             definition_signature=_private_payload_signature(payload),
@@ -33061,6 +33305,8 @@ def _worksheet_drawing_shape_inspection(
         present=bool(anchors or unrecognized_count),
         shape_anchor_count=len(anchors),
         shape_count=len(shape_nodes),
+        connector_shape_count=len(connector_nodes),
+        connector_attachment_count=connector_attachment_count,
         group_shape_count=group_shape_count,
         text_shape_count=text_shape_count,
         text_paragraph_count=text_paragraph_count,
@@ -33092,15 +33338,15 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
     """Inspect worksheet shapes before the workbook reader can omit them.
 
     The scan follows worksheet drawing relationships and compares text-bearing
-    and ordinary shape controls, their anchor/layout declarations, and directly
-    referenced relationship semantics. It does not render shapes, fetch
-    external targets, or open arbitrary related media.
+    shapes, connectors, their anchor/layout declarations, connector attachment
+    semantics, and directly referenced relationship semantics. It does not
+    render DrawingML, fetch external targets, or open arbitrary related media.
     """
     warnings: set[str] = set()
     try:
         with ZipFile(path) as archive:
             try:
-                sheet_parts = _sheet_xml_parts(archive)
+                sheet_parts = _visual_worksheet_xml_paths(archive)
             except (
                 KeyError,
                 ElementTree.ParseError,
@@ -33124,12 +33370,10 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
 
             drawing_sources: dict[str, set[tuple[str, str]]] = defaultdict(set)
             unresolved_declarations: list[tuple[str, str]] = []
-            for sheet, (member, sheet_kind) in sorted(
+            for sheet, member in sorted(
                 sheet_parts.items(),
                 key=lambda item: item[0].casefold(),
             ):
-                if sheet_kind != "worksheet":
-                    continue
                 relationships = _worksheet_drawing_shape_raw_relationships(
                     archive,
                     member,
@@ -33142,7 +33386,10 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
                     )
                     continue
                 for relationship in relationships:
-                    if relationship.relationship_type != _WORKSHEET_DRAWING_RELATIONSHIP:
+                    if (
+                        relationship.relationship_type.casefold()
+                        not in _WORKSHEET_DRAWING_SHAPE_DRAWING_RELATIONSHIPS
+                    ):
                         continue
                     if (
                         relationship.target_mode.casefold() != "internal"
@@ -33210,6 +33457,12 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
                     inspection.shape_anchor_count for inspection in inspections
                 ),
                 shape_count=sum(inspection.shape_count for inspection in inspections),
+                connector_shape_count=sum(
+                    inspection.connector_shape_count for inspection in inspections
+                ),
+                connector_attachment_count=sum(
+                    inspection.connector_attachment_count for inspection in inspections
+                ),
                 group_shape_count=sum(
                     inspection.group_shape_count for inspection in inspections
                 ),

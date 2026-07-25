@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Worksheet DrawingML connector controls — 2026-07-26
+
+FormulaFence 0.58.0 was validated against an independently maintained,
+Excel-style DrawingML part from
+[`galirage/spreadsheet-intelligence`](https://github.com/galirage/spreadsheet-intelligence)
+at commit
+[`1762ec7b30714e43a85fa451cc97ed0b3e334dc3`](https://github.com/galirage/spreadsheet-intelligence/tree/1762ec7b30714e43a85fa451cc97ed0b3e334dc3):
+[`tests/test_data/drawing1.xml`](https://github.com/galirage/spreadsheet-intelligence/blob/1762ec7b30714e43a85fa451cc97ed0b3e334dc3/tests/test_data/drawing1.xml).
+A disposable workbook outside this repository used the source part unchanged
+behind a normal worksheet drawing relationship. The profile found 24 regular
+shapes, seven free `xdr:cxnSp` connectors, zero connector attachments, and no
+DrawingML-shape coverage warning. This validates raw-part compatibility; it
+does not claim that the upstream project distributes the enclosing workbook.
+
+A separate controlled raw-OOXML pair exercised attached connectors without
+changing cells: one endpoint was rebound while the connector's anchor,
+geometry, and all cell material stayed fixed. A clean virtual environment
+installed the staged 0.58.0 wheel (SHA-256
+`2b9f932bed642db8ca88bed6f98971c0e730392cca70558216dd983c3ba0e666`),
+returned `FormulaFence 0.58.0`, and emitted exactly one
+`worksheet_drawing_shape_controls_changed` change with `FF044`. Its generated
+starter policy exited `1` and added `FFP044`. JSON, Markdown, and SARIF output
+was checked to ensure connector names, descriptions, and non-visual/endpoint
+IDs stayed absent.
+
+The suite separately validates connector line-presentation and attachment
+changes, free and group-contained connectors, strict DrawingML, coordinated
+non-visual/endpoint-ID rewrites, malformed endpoint coverage, and policy
+enforcement. FormulaFence compares stored declarations only: it does not render
+or route connectors, resolve themes or visibility, fetch external targets, or
+cover `xdr:graphicFrame`, SmartArt, or other unsupported drawing objects.
+
 ## Native worksheet image controls — 2026-07-26
 
 FormulaFence 0.57.0 was validated against three independently maintained

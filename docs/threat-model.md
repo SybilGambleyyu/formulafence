@@ -25,10 +25,11 @@ financial correctness or replace model review.
   input/result references, and raw declarations are compared through a private
   signature only. Cached worksheet cells remain under the normal cell-diff
   boundary.
-- Worksheet DrawingML regular-shape text, presentation, geometry, anchors,
-  macro assignments, text links, descriptions, relationship identifiers, and
-  targets are compared through private fingerprints only. Profiles and reports
-  retain structural counts, never the underlying shape content.
+- Worksheet DrawingML regular-shape and connector presentation, geometry,
+  anchors, connector endpoint targets, macro assignments, text links,
+  descriptions, relationship identifiers, and targets are compared through
+  private fingerprints only. Profiles and reports retain structural counts,
+  never the underlying shape or connector content.
 - Native worksheet image declarations, anchors, visual properties,
   relationship identifiers/targets, and bounded direct image payloads are
   compared through private fingerprints only. Profiles and reports retain
@@ -634,25 +635,28 @@ review prompt, not proof of an error.
   [Threaded Comments part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/66e1875d-c60a-48eb-bf88-41066d45fea8),
   [Persons part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1a170d26-42a2-46f0-b2b6-0ff1dec1c344),
   and [schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/adb84732-9fc8-48b6-bddc-6b0bcdaad940).
-- Non-chart Worksheet DrawingML regular shapes (`xdr:sp`) and nested group
-  shapes (`xdr:grpSp`) are followed from standard worksheet `drawing`
-  relationships before the workbook reader can discard their text-box
-  declarations. FormulaFence privately fingerprints supported anchor/layout,
-  shape/group XML, macro assignments, text links, click/hover relationship
-  semantics, and visible text/presentation declarations. Profiles expose only
-  safe worksheet/drawing/anchor, shape/text/group, text paragraph/run,
+- Non-chart Worksheet DrawingML regular shapes (`xdr:sp`), connectors
+  (`xdr:cxnSp`), and nested groups (`xdr:grpSp`) are followed from standard
+  worksheet `drawing` relationships before the workbook reader can discard
+  their declarations. FormulaFence supports transitional and strict DrawingML,
+  privately fingerprints supported anchor/layout, shape/group/connector XML,
+  connector `stCxn`/`endCxn` attachment semantics, macro assignments, text
+  links, click/hover relationship semantics, and visible text/presentation
+  declarations. Profiles expose only safe worksheet/drawing/anchor,
+  shape/text/connector/group, connector-attachment, text paragraph/run,
   macro/text-link/hyperlink, relationship, and malformed-control counts. A
   material change emits `FF044` and can be blocked with
-  `no_worksheet_drawing_shape_changes`. Non-visual shape IDs, relationship-ID
-  rewrites, and colour-case spelling are normalized. FormulaFence does **not**
-  render DrawingML, resolve themes or contrast, calculate text links, execute
-  macro assignments, retrieve external targets, parse or hash media, or cover
-  connectors, graphic frames, SmartArt, or other unsupported non-`xdr:sp`
-  objects. Native pictures are handled by the separate worksheet-image
-  boundary. Missing, malformed, unsafe, oversized, over-budget, or unsupported
-  regular-shape metadata becomes a visible parser-coverage warning. XML reads
-  are bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts. This
-  scope follows the Open XML [`xdr:sp` Shape definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet.shape?view=openxml-3.0.1).
+  `no_worksheet_drawing_shape_changes`. Consistent non-visual and connector
+  endpoint ID rewrites, relationship-ID rewrites, and colour-case spelling are
+  normalized. FormulaFence does **not** render DrawingML, resolve themes or
+  contrast, calculate text links, execute macro assignments, retrieve external
+  targets, parse or hash media, or cover graphic frames, SmartArt, or other
+  unsupported drawing objects. Native pictures are handled by the separate
+  worksheet-image boundary. Missing, duplicate, malformed, unsafe, oversized,
+  over-budget, or unsupported metadata becomes visible parser-coverage
+  evidence. XML reads are bounded to 16 MiB per part, 64 MiB per workbook, and
+  512 parts. This scope follows the Open XML [`xdr:sp` Shape definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet.shape?view=openxml-3.0.1)
+  and [`xdr:cxnSp` ConnectionShape definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet.connectionshape?view=openxml-3.0.1).
 - Native worksheet image controls are followed from worksheet `drawing`, direct
   `picture`, and `legacyDrawingHF` relationships before ordinary readers can
   discard those visual bindings. FormulaFence privately compares anchored
@@ -668,7 +672,8 @@ review prompt, not proof of an error.
   relationship-ID rewrites normalize. FormulaFence does **not** render or
   decode media, fetch a target, resolve themes, calculate visibility, cropping,
   z-order, print pagination, or client behavior. Charts, rich-data/in-cell
-  images, Theme images, ActiveX/OLE image controls, regular/group shapes, and
+  images, Theme images, ActiveX/OLE image controls, regular/group/connector
+  shapes, and
   header/footer text remain in `FF030`, `FF051`, `FF053`, `FF029`, `FF044`, and
   `FF056` respectively. XML reads are bounded to 16 MiB per part, 64 MiB per
   workbook, and 512 parts; direct payload hashing is bounded to 32 MiB per
@@ -921,7 +926,7 @@ review prompt, not proof of an error.
   refresh/export, table-column, single-cell, and relationship declarations,
   legacy Excel Note/comments/VML and threaded-placeholder package chains,
   modern threaded-comment/person package chains, non-chart Worksheet DrawingML
-  regular/group shape controls, native worksheet picture/background/header-footer
+  regular/group/connector shape controls, native worksheet picture/background/header-footer
   image controls, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
@@ -931,8 +936,8 @@ review prompt, not proof of an error.
   Power Pivot/Data Model content; apply Slicer/Timeline filters or model their
   worksheet/drawing view geometry/styles; modern
   `chartEx` or nested-chart semantics; future Named Sheet View extension/rich-
-  sort or full differential-format semantics; worksheet connectors, graphic
-  frames, SmartArt, and other unsupported non-`xdr:sp` drawing objects or
+  sort or full differential-format semantics; worksheet graphic frames,
+  SmartArt, and other unsupported drawing objects or
   chart-to-cell impact; Ribbon image payloads; general VML/drawing-control
   layout beyond supported Note shapes; embedded OLE/package formats;
   worksheet-scoped Web Add-in markup; Power Query runtime behavior or returned

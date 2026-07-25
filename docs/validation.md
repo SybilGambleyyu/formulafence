@@ -22,7 +22,7 @@ confirmed that exactly one uncompressed member changed:
 `d9b89963f9ec55c4f0411cc3e95271694f7f28cfe9d6785915fb1a3b3316f3bd`.
 
 A clean Python virtual environment installed the staged 0.49.0 wheel
-(SHA-256 `267c6daffba81b4d57da7d477bd0a0433c66156246b3a336d681905a49d91f16`).
+(SHA-256 `7514c1b58332dd97021aa5cbac2a426d5ed6dd5afefa5cfcf9451867946557f6`).
 It profiled one data/structure/type/array/property-bag/style/web-image part,
 362 rich values, 10 structures including 6 linked-entity structures, 20
 arrays, 4 supporting property bags, 12 metadata bindings and bound cells, 6

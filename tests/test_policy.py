@@ -13,6 +13,7 @@ from .helpers import (
     change_external_link_package_controls,
     change_filter_visibility_criterion,
     change_filter_visibility_hidden_column,
+    change_font_definition,
     change_ignored_error_target,
     change_legacy_vml_control_controls,
     change_named_sheet_view_criterion,
@@ -33,6 +34,7 @@ from .helpers import (
     make_external_data_refresh_model,
     make_external_link_package_model,
     make_filter_visibility_model,
+    make_font_model,
     make_ignored_error_model,
     make_legacy_array_model,
     make_legacy_vml_control_model,
@@ -462,6 +464,19 @@ def test_policy_can_block_number_format_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP039"}
+
+
+def test_policy_can_block_cell_font_changes(tmp_path) -> None:
+    baseline = make_font_model(tmp_path / "baseline.xlsx")
+    candidate = make_font_model(tmp_path / "candidate.xlsx")
+    change_font_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_cell_font_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP040"}
 
 
 def test_policy_can_block_worksheet_embedded_control_changes(tmp_path) -> None:

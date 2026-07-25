@@ -1658,6 +1658,49 @@ class NumberFormatSnapshot:
 
 
 @dataclass(frozen=True)
+class FontSnapshot:
+    """Safe aggregate of effective cell-font controls.
+
+    A font can change the review surface without changing a stored value or
+    formula: for example, text can be made less visible by changing its colour,
+    size, effects, or face. Font definitions and targets can expose report
+    context, so the private signature retains canonical effective assignments
+    for comparison while public output exposes structural counts only.
+    """
+
+    default_font_definition_count: int = 0
+    cell_font_assignment_count: int = 0
+    row_font_assignment_count: int = 0
+    column_font_assignment_count: int = 0
+    unrecognized_font_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.default_font_definition_count
+            or self.cell_font_assignment_count
+            or self.row_font_assignment_count
+            or self.column_font_assignment_count
+            or self.unrecognized_font_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural font evidence without definitions or targets."""
+        return {
+            "present": self.present,
+            "default_font_definition_count": self.default_font_definition_count,
+            "cell_font_assignment_count": self.cell_font_assignment_count,
+            "row_font_assignment_count": self.row_font_assignment_count,
+            "column_font_assignment_count": self.column_font_assignment_count,
+            "unrecognized_font_count": self.unrecognized_font_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -2062,6 +2105,7 @@ class WorkbookSnapshot:
     number_format_controls: NumberFormatSnapshot = field(
         default_factory=NumberFormatSnapshot
     )
+    font_controls: FontSnapshot = field(default_factory=FontSnapshot)
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -2139,6 +2183,13 @@ class WorkbookSnapshot:
                 self.number_format_controls.custom_format_assignment_count
             ),
             "has_number_format_controls": self.number_format_controls.present,
+            "font_assignment_count": (
+                self.font_controls.default_font_definition_count
+                + self.font_controls.cell_font_assignment_count
+                + self.font_controls.row_font_assignment_count
+                + self.font_controls.column_font_assignment_count
+            ),
+            "has_font_controls": self.font_controls.present,
             "defined_names": len(self.defined_names),
             "table_count": len(self.tables),
             "data_validation_rules": len(self.data_validations),

@@ -14,8 +14,9 @@ import struct
 import tempfile
 import warnings
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile
@@ -52,6 +53,7 @@ from formulafence.models import (
     ExternalDataRefreshSettingsSnapshot,
     ExternalLinkPackageSnapshot,
     FilterVisibilitySnapshot,
+    FontSnapshot,
     IgnoredErrorSnapshot,
     NamedSheetViewSnapshot,
     NumberFormatSnapshot,
@@ -498,6 +500,14 @@ class _NumberFormatMetadata:
     """Raw cell number-format evidence retained before reader normalization."""
 
     controls: NumberFormatSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _FontMetadata:
+    """Raw cell-font evidence retained before reader normalization."""
+
+    controls: FontSnapshot
     warnings: tuple[str, ...]
 
 
@@ -15851,6 +15861,627 @@ def _number_format_metadata(path: Path) -> _NumberFormatMetadata:
     return _NumberFormatMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_FONT_COLUMN_UPDATE_BUDGET = 16_777_216
+_FONT_BOOLEAN_CHILDREN = frozenset(
+    {"b", "i", "strike", "outline", "shadow", "condense", "extend"}
+)
+_FONT_VALUE_CHILDREN = frozenset(
+    {"name", "charset", "family", "sz", "u", "vertAlign", "scheme"}
+)
+_FONT_KNOWN_CHILDREN = _FONT_BOOLEAN_CHILDREN | _FONT_VALUE_CHILDREN | {"color"}
+_FONT_COLOR_ATTRIBUTES = frozenset({"rgb", "indexed", "auto", "theme", "tint"})
+
+
+@dataclass(frozen=True)
+class _FontStyle:
+    """One effective cell font retained only for private comparison."""
+
+    category: str
+    value: str
+
+
+_DEFAULT_FONT_STYLE = _FontStyle("default", "0")
+
+
+def _font_private_digest(value: object) -> str:
+    """Hash private font material before it can reach an output model."""
+    payload = repr(value).encode("utf-8", errors="surrogatepass")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _font_unrecognized(*parts: object) -> _FontStyle:
+    """Fingerprint malformed font material without retaining it in output models."""
+    return _FontStyle("unrecognized", _font_private_digest(parts))
+
+
+def _font_decimal(value: str | None) -> str | None:
+    """Normalize one finite OOXML decimal without accepting malformed text."""
+    if value is None:
+        return None
+    try:
+        parsed = Decimal(value.strip())
+    except InvalidOperation:
+        return None
+    if not parsed.is_finite():
+        return None
+    if parsed == 0:
+        return "0"
+    normalized = parsed.normalize()
+    return format(normalized, "f")
+
+
+def _font_child_signature(
+    child: ElementTree.Element,
+    *,
+    name: str,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[object, ...], bool]:
+    """Return one canonical private font child and whether it was malformed.
+
+    Font child order and common Boolean spellings vary between writers. This
+    normalizes only documented leaf controls while leaving unsupported material
+    fail-closed and privately fingerprinted by the caller.
+    """
+    invalid = False
+    if child.text is not None and child.text.strip():
+        note_issue(f"{context}:unexpected-text", child.text)
+        invalid = True
+    if any(child):
+        note_issue(
+            f"{context}:unexpected-child", tuple(current.tag for current in child)
+        )
+        invalid = True
+    if child.tail is not None and child.tail.strip():
+        note_issue(f"{context}:unexpected-tail", child.tail)
+        invalid = True
+
+    def unexpected_attributes(allowed: frozenset[str]) -> None:
+        nonlocal invalid
+        for attribute, value in child.attrib.items():
+            local_name = _xml_local_name(attribute)
+            if _xml_namespace(attribute) is not None or local_name not in allowed:
+                note_issue(
+                    f"{context}:unsupported-attribute",
+                    (_xml_display_name(attribute), value),
+                )
+                invalid = True
+
+    if name in _FONT_BOOLEAN_CHILDREN:
+        unexpected_attributes(frozenset({"val"}))
+        enabled = _number_format_boolean(child.get("val"), True)
+        if enabled is None:
+            note_issue(f"{context}:invalid-boolean", child.get("val"))
+            invalid = True
+            enabled = False
+        return ((name, enabled), invalid)
+
+    if name == "color":
+        unexpected_attributes(_FONT_COLOR_ATTRIBUTES)
+        entries: list[tuple[str, object]] = []
+        selected = 0
+        for attribute, value in child.attrib.items():
+            local_name = _xml_local_name(attribute)
+            if _xml_namespace(attribute) is not None or local_name not in _FONT_COLOR_ATTRIBUTES:
+                continue
+            candidate = value.strip()
+            if local_name == "rgb":
+                selected += 1
+                if not re.fullmatch(r"[0-9A-Fa-f]{8}", candidate):
+                    note_issue(f"{context}:invalid-rgb", value)
+                    invalid = True
+                candidate = candidate.upper()
+            elif local_name in {"indexed", "theme"}:
+                selected += 1
+                parsed = _number_format_unsigned_int(candidate)
+                if parsed is None:
+                    note_issue(f"{context}:invalid-{local_name}", value)
+                    invalid = True
+                else:
+                    candidate = str(parsed)
+            elif local_name == "auto":
+                selected += 1
+                parsed_boolean = _number_format_boolean(candidate, True)
+                if parsed_boolean is None:
+                    note_issue(f"{context}:invalid-auto", value)
+                    invalid = True
+                else:
+                    candidate = "true" if parsed_boolean else "false"
+            else:  # ``tint`` is compatible with any one colour source.
+                parsed_decimal = _font_decimal(candidate)
+                if parsed_decimal is None:
+                    note_issue(f"{context}:invalid-tint", value)
+                    invalid = True
+                else:
+                    candidate = parsed_decimal
+            entries.append((local_name, candidate))
+        if selected > 1:
+            note_issue(f"{context}:conflicting-colour-source", tuple(entries))
+            invalid = True
+        return ((name, tuple(sorted(entries))), invalid)
+
+    unexpected_attributes(frozenset({"val"}))
+    value = child.get("val")
+    if value is None:
+        note_issue(f"{context}:missing-value", name)
+        return ((name, ""), True)
+    if name in {"charset", "family"}:
+        parsed = _number_format_unsigned_int(value)
+        if parsed is None:
+            note_issue(f"{context}:invalid-{name}", value)
+            return ((name, value), True)
+        return ((name, str(parsed)), invalid)
+    if name == "sz":
+        parsed = _font_decimal(value)
+        if parsed is None:
+            note_issue(f"{context}:invalid-size", value)
+            return ((name, value), True)
+        return ((name, parsed), invalid)
+    if name == "u":
+        return ((name, value.strip().casefold()), invalid)
+    return ((name, value), invalid)
+
+
+def _font_definition_style(
+    font: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> _FontStyle:
+    """Canonicalize a ``font`` record without exposing its private values."""
+    invalid = False
+    if font.attrib:
+        note_issue(
+            f"{context}:unsupported-attributes", tuple(sorted(font.attrib.items()))
+        )
+        invalid = True
+    if font.text is not None and font.text.strip():
+        note_issue(f"{context}:unexpected-text", font.text)
+        invalid = True
+
+    entries: list[tuple[object, ...]] = []
+    opaque_children: list[object] = []
+    seen: set[str] = set()
+    for child_index, child in enumerate(font):
+        child_context = f"{context}:child:{child_index}"
+        name = _xml_local_name(child.tag)
+        if _xml_namespace(child.tag) != _SPREADSHEETML_NS or name not in _FONT_KNOWN_CHILDREN:
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            opaque_children.append(_xml_fragment(child).sort_key())
+            invalid = True
+            continue
+        if name in seen:
+            note_issue(f"{child_context}:duplicate-child", name)
+            opaque_children.append(_xml_fragment(child).sort_key())
+            invalid = True
+            continue
+        seen.add(name)
+        signature, child_invalid = _font_child_signature(
+            child,
+            name=name,
+            context=child_context,
+            note_issue=note_issue,
+        )
+        if child_invalid:
+            invalid = True
+        # An explicit ``false`` Boolean is semantically equivalent to no
+        # Boolean child, so this also normalizes common writer spellings.
+        if name in _FONT_BOOLEAN_CHILDREN and signature[1] is False:
+            continue
+        entries.append(signature)
+
+    definition = tuple(sorted(entries, key=repr))
+    if invalid:
+        return _font_unrecognized("font-definition", context, definition, opaque_children)
+    return _FontStyle("font", _font_private_digest(definition))
+
+
+def _font_column_state_signature(
+    states: list[_FontStyle],
+    default: _FontStyle,
+) -> tuple[tuple[int, int, str, str], ...]:
+    """Compress effective column fonts so equivalent range splitting stays quiet."""
+    segments: list[tuple[int, int, str, str]] = []
+    start: int | None = None
+    previous: _FontStyle | None = None
+    for column in range(1, MAX_EXCEL_COLUMN + 1):
+        current = states[column]
+        if current == default:
+            if start is not None and previous is not None:
+                segments.append((start, column - 1, previous.category, previous.value))
+            start = None
+            previous = None
+            continue
+        if start is None:
+            start = column
+            previous = current
+            continue
+        if current != previous:
+            segments.append((start, column - 1, previous.category, previous.value))
+            start = column
+            previous = current
+    if start is not None and previous is not None:
+        segments.append((start, MAX_EXCEL_COLUMN, previous.category, previous.value))
+    return tuple(segments)
+
+
+def _font_metadata(path: Path) -> _FontMetadata:
+    """Inspect effective cell, row, and column fonts from raw OOXML.
+
+    A font can make a value substantially less visible without changing its
+    stored content. The scanner resolves reusable style records, ``xfId``
+    inheritance, and ``applyFont`` before keeping a private signature. Font
+    definitions, style IDs, and report locations never leave this process.
+    """
+    warnings: set[str] = set()
+    default_snapshot = FontSnapshot()
+    entries: list[tuple[str, str]] = []
+    issues: dict[str, str] = {}
+    default_font_definition_count = 0
+    cell_font_assignment_count = 0
+    row_font_assignment_count = 0
+    column_font_assignment_count = 0
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    try:
+        with ZipFile(path) as archive:
+            try:
+                styles = _xml_root(archive, "xl/styles.xml")
+            except KeyError:
+                styles = None
+            if styles is not None and (
+                _xml_namespace(styles.tag) != _SPREADSHEETML_NS
+                or _xml_local_name(styles.tag) != "styleSheet"
+            ):
+                note_issue("style-sheet-root", styles.tag)
+                styles = None
+
+            fonts: list[_FontStyle] = []
+            if styles is not None:
+                fonts_tag = f"{{{_SPREADSHEETML_NS}}}fonts"
+                font_tag = f"{{{_SPREADSHEETML_NS}}}font"
+                font_containers = styles.findall(fonts_tag)
+                if len(font_containers) > 1:
+                    note_issue("multiple-font-containers", len(font_containers))
+                for container_index, container in enumerate(font_containers):
+                    for font_index, font in enumerate(container):
+                        context = f"font:{container_index}:{font_index}"
+                        if font.tag != font_tag:
+                            note_issue(f"{context}:unsupported-child", font.tag)
+                            continue
+                        fonts.append(
+                            _font_definition_style(
+                                font,
+                                context=context,
+                                note_issue=note_issue,
+                            )
+                        )
+
+            def resolve_font(identifier: int, *, context: str) -> _FontStyle:
+                if 0 <= identifier < len(fonts):
+                    return fonts[identifier]
+                note_issue(f"{context}:unknown-font", identifier)
+                return _font_unrecognized("unknown-font", context, identifier)
+
+            def parse_style_index(value: str | None, *, context: str) -> int | None:
+                if value is None:
+                    return None
+                parsed = _number_format_unsigned_int(value)
+                if parsed is None:
+                    note_issue(f"{context}:invalid-style-index", value)
+                return parsed
+
+            def resolve_xf(
+                xf: ElementTree.Element,
+                inherited: _FontStyle,
+                *,
+                context: str,
+            ) -> _FontStyle:
+                applies = _number_format_boolean(xf.get("applyFont"), True)
+                if applies is None:
+                    note_issue(f"{context}:invalid-apply-font", xf.get("applyFont"))
+                    return _font_unrecognized(
+                        "invalid-apply-font", context, xf.get("applyFont")
+                    )
+                identifier_value = xf.get("fontId")
+                if not applies or identifier_value is None:
+                    return inherited
+                identifier = _number_format_unsigned_int(identifier_value)
+                if identifier is None:
+                    note_issue(f"{context}:invalid-font-id", identifier_value)
+                    return _font_unrecognized("invalid-font-id", context, identifier_value)
+                return resolve_font(identifier, context=context)
+
+            base_xfs: list[_FontStyle] = []
+            effective_xfs: list[_FontStyle] = []
+            if styles is not None:
+                xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+                cell_style_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellStyleXfs"
+                cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+                base_containers = styles.findall(cell_style_xfs_tag)
+                if len(base_containers) > 1:
+                    note_issue("multiple-cell-style-xf-containers", len(base_containers))
+                for container_index, container in enumerate(base_containers):
+                    for index, xf in enumerate(container):
+                        if xf.tag != xf_tag:
+                            note_issue(
+                                f"base-xf:{container_index}:{index}:unsupported-child",
+                                xf.tag,
+                            )
+                            continue
+                        base_xfs.append(
+                            resolve_xf(
+                                xf,
+                                _DEFAULT_FONT_STYLE,
+                                context=f"base-xf:{container_index}:{index}",
+                            )
+                        )
+                if not base_xfs:
+                    base_xfs.append(_DEFAULT_FONT_STYLE)
+
+                cell_containers = styles.findall(cell_xfs_tag)
+                if len(cell_containers) > 1:
+                    note_issue("multiple-cell-xf-containers", len(cell_containers))
+                for container_index, container in enumerate(cell_containers):
+                    for index, xf in enumerate(container):
+                        if xf.tag != xf_tag:
+                            note_issue(
+                                f"cell-xf:{container_index}:{index}:unsupported-child",
+                                xf.tag,
+                            )
+                            continue
+                        xf_id_value = xf.get("xfId")
+                        inherited = _DEFAULT_FONT_STYLE
+                        if xf_id_value is not None:
+                            xf_id = parse_style_index(
+                                xf_id_value,
+                                context=f"cell-xf:{container_index}:{index}:base",
+                            )
+                            if xf_id is None or xf_id >= len(base_xfs):
+                                note_issue(
+                                    f"cell-xf:{container_index}:{index}:unknown-base-style",
+                                    xf_id_value,
+                                )
+                                inherited = _font_unrecognized(
+                                    "unknown-font-base-style",
+                                    container_index,
+                                    index,
+                                    xf_id_value,
+                                )
+                            else:
+                                inherited = base_xfs[xf_id]
+                        effective_xfs.append(
+                            resolve_xf(
+                                xf,
+                                inherited,
+                                context=f"cell-xf:{container_index}:{index}",
+                            )
+                        )
+            if not effective_xfs:
+                effective_xfs.append(_DEFAULT_FONT_STYLE)
+
+            default_style = effective_xfs[0]
+
+            def style_for_assignment(
+                value: str | None,
+                *,
+                context: str,
+            ) -> _FontStyle | None:
+                index = parse_style_index(value, context=context)
+                if value is None:
+                    return None
+                if index is None or index >= len(effective_xfs):
+                    note_issue(f"{context}:unknown-style", value)
+                    return _font_unrecognized("unknown-font-style", context, value)
+                return effective_xfs[index]
+
+            if default_style != _DEFAULT_FONT_STYLE:
+                default_font_definition_count = 1
+                entries.append(("default-font", repr(default_style)))
+
+            cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+            col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+            sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+            row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+            cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                column_states = [default_style] * (MAX_EXCEL_COLUMN + 1)
+                column_updates = 0
+                for columns_index, columns in enumerate(worksheet.findall(cols_tag)):
+                    for column_index, column in enumerate(columns):
+                        context = f"column:{sheet.casefold()}:{columns_index}:{column_index}"
+                        if column.tag != col_tag:
+                            note_issue(f"{context}:unsupported-child", column.tag)
+                            continue
+                        if column.get("style") is None:
+                            continue
+                        minimum = _number_format_unsigned_int(column.get("min"))
+                        maximum = _number_format_unsigned_int(column.get("max"))
+                        style = style_for_assignment(column.get("style"), context=context)
+                        if (
+                            minimum is None
+                            or maximum is None
+                            or minimum < 1
+                            or maximum < minimum
+                            or maximum > MAX_EXCEL_COLUMN
+                            or style is None
+                        ):
+                            note_issue(
+                                f"{context}:invalid-column-span",
+                                (column.get("min"), column.get("max"), column.get("style")),
+                            )
+                            continue
+                        span = maximum - minimum + 1
+                        if column_updates + span > _FONT_COLUMN_UPDATE_BUDGET:
+                            note_issue(f"{context}:column-update-budget", span)
+                            continue
+                        column_states[minimum : maximum + 1] = [style] * span
+                        column_updates += span
+
+                column_signature = _font_column_state_signature(column_states, default_style)
+                if column_signature:
+                    entries.append(
+                        (f"column-fonts:{sheet.casefold()}", repr(column_signature))
+                    )
+                    column_font_assignment_count += sum(
+                        maximum - minimum + 1
+                        for minimum, maximum, _category, _value in column_signature
+                    )
+
+                raw_rows: list[tuple[int, _FontStyle]] = []
+                for sheet_data_index, sheet_data in enumerate(worksheet.findall(sheet_data_tag)):
+                    for row_index, row in enumerate(sheet_data):
+                        context = f"row:{sheet.casefold()}:{sheet_data_index}:{row_index}"
+                        if row.tag != row_tag:
+                            continue
+                        custom_format = _number_format_boolean(
+                            row.get("customFormat"), False
+                        )
+                        if custom_format is None:
+                            note_issue(
+                                f"{context}:invalid-custom-format",
+                                row.get("customFormat"),
+                            )
+                            continue
+                        if not custom_format:
+                            continue
+                        row_number = _number_format_unsigned_int(row.get("r"))
+                        style = style_for_assignment(row.get("s"), context=context)
+                        if (
+                            row_number is None
+                            or row_number < 1
+                            or row_number > MAX_EXCEL_ROW
+                            or style is None
+                        ):
+                            note_issue(
+                                f"{context}:invalid-row-assignment",
+                                (row.get("r"), row.get("s")),
+                            )
+                            continue
+                        raw_rows.append((row_number, style))
+
+                relevant_rows = {
+                    row_number
+                    for row_number, style in raw_rows
+                    if style != default_style
+                }
+                has_relevant_columns = bool(column_signature)
+                for row_number, style in raw_rows:
+                    if style == default_style and not has_relevant_columns:
+                        continue
+                    entries.append(
+                        (
+                            f"row-font:{sheet.casefold()}:{row_number}",
+                            repr(style),
+                        )
+                    )
+                    row_font_assignment_count += 1
+
+                seen_cells: set[str] = set()
+                for cell in worksheet.iter(cell_tag):
+                    if cell.get("s") is None:
+                        continue
+                    context = f"cell:{sheet.casefold()}"
+                    coordinate = cell.get("r")
+                    style = style_for_assignment(cell.get("s"), context=context)
+                    match = (
+                        re.fullmatch(r"([A-Za-z]+)([1-9][0-9]*)", coordinate)
+                        if coordinate is not None
+                        else None
+                    )
+                    if style is None or match is None:
+                        note_issue(
+                            f"{context}:invalid-cell-assignment",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    column_letters, raw_row_number = match.groups()
+                    try:
+                        column_number = (
+                            column_index_from_string(column_letters)
+                            if len(column_letters) <= 3
+                            else 0
+                        )
+                    except ValueError:
+                        column_number = 0
+                    row_number = _number_format_unsigned_int(raw_row_number)
+                    if row_number is None:
+                        note_issue(
+                            f"{context}:invalid-cell-row",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    if (
+                        column_number < 1
+                        or column_number > MAX_EXCEL_COLUMN
+                        or row_number > MAX_EXCEL_ROW
+                    ):
+                        note_issue(
+                            f"{context}:out-of-bounds-cell",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    canonical_coordinate = coordinate.upper()
+                    if canonical_coordinate in seen_cells:
+                        note_issue(
+                            f"{context}:duplicate-cell",
+                            (canonical_coordinate, cell.get("s")),
+                        )
+                    seen_cells.add(canonical_coordinate)
+                    if (
+                        style == default_style
+                        and row_number not in relevant_rows
+                        and column_states[column_number] == default_style
+                    ):
+                        continue
+                    entries.append(
+                        (
+                            f"cell-font:{sheet.casefold()}:{canonical_coordinate}",
+                            repr(style),
+                        )
+                    )
+                    cell_font_assignment_count += 1
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _FontMetadata(
+            default_snapshot,
+            (
+                "FormulaFence could not inspect cell-font OOXML "
+                f"({type(error).__name__}); affected display controls were not compared.",
+            ),
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported cell-font metadata; "
+            "affected display controls have a coverage gap."
+        )
+        entries.extend(
+            (f"font-issue:{context}", detail)
+            for context, detail in sorted(issues.items())
+        )
+    snapshot = FontSnapshot(
+        default_font_definition_count=default_font_definition_count,
+        cell_font_assignment_count=cell_font_assignment_count,
+        row_font_assignment_count=row_font_assignment_count,
+        column_font_assignment_count=column_font_assignment_count,
+        unrecognized_font_count=len(issues),
+        definition_signature=(
+            _private_external_data_signature(tuple(sorted(entries))) if entries else None
+        ),
+    )
+    return _FontMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
     """Inspect raw markers that openpyxl intentionally does not expose."""
     dynamic_cells: set[CellKey] = set()
@@ -16745,6 +17376,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     ignored_error_metadata = _ignored_error_metadata(source)
     named_sheet_view_metadata = _named_sheet_view_metadata(source)
     number_format_metadata = _number_format_metadata(source)
+    font_metadata = _font_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -16783,6 +17415,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(ignored_error_metadata.warnings)
     parser_warnings.update(named_sheet_view_metadata.warnings)
     parser_warnings.update(number_format_metadata.warnings)
+    parser_warnings.update(font_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -17005,6 +17638,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         ignored_error_controls=ignored_error_metadata.controls,
         named_sheet_views=named_sheet_view_metadata.views,
         number_format_controls=number_format_metadata.controls,
+        font_controls=font_metadata.controls,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -17080,6 +17714,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "ignored_error_controls": snapshot.ignored_error_controls.profile_dict(),
         "named_sheet_views": snapshot.named_sheet_views.profile_dict(),
         "number_format_controls": snapshot.number_format_controls.profile_dict(),
+        "font_controls": snapshot.font_controls.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -17107,6 +17742,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_ignored_error_controls": snapshot.ignored_error_controls.present,
             "has_named_sheet_views": snapshot.named_sheet_views.present,
             "has_number_format_controls": snapshot.number_format_controls.present,
+            "has_font_controls": snapshot.font_controls.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

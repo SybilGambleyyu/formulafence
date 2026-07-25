@@ -97,6 +97,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['number_format_assignment_count']} / "
             f"{workbook['number_format_custom_assignment_count']}"
         ),
+        f"- **Cell font controls:** {workbook['font_assignment_count']}",
         f"- **XLM macro-sheet parts:** {workbook['xlm_macro_sheet_count']}",
         (
             "- **XLM macro-sheet formula cells:** "
@@ -1361,6 +1362,32 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             )
         lines.append(
             "Number-format codes, style indexes, and cell/row/column targets are compared "
+            "privately and intentionally omitted."
+        )
+    font_controls = profile["font_controls"]
+    if font_controls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Cell font controls",
+                "",
+                (
+                    "- **Default definition / direct-cell assignments / row assignments / "
+                    "column assignments:** "
+                    f"{font_controls['default_font_definition_count']} / "
+                    f"{font_controls['cell_font_assignment_count']} / "
+                    f"{font_controls['row_font_assignment_count']} / "
+                    f"{font_controls['column_font_assignment_count']}"
+                ),
+            ]
+        )
+        if font_controls["unrecognized_font_count"]:
+            lines.append(
+                "- **Unrecognized or malformed font controls:** "
+                f"{font_controls['unrecognized_font_count']}"
+            )
+        lines.append(
+            "Font definitions, style indexes, and cell/row/column targets are compared "
             "privately and intentionally omitted."
         )
     chart_definitions = profile["chart_definitions"]

@@ -30,6 +30,7 @@ _RULE_FIELDS = {
     "no_ignored_error_changes",
     "no_named_sheet_view_changes",
     "no_number_format_changes",
+    "no_cell_font_changes",
     "no_worksheet_embedded_control_changes",
     "no_new_parser_warnings",
     "no_new_unresolved_references",
@@ -93,6 +94,7 @@ class Policy:
     no_ignored_error_changes: bool = False
     no_named_sheet_view_changes: bool = False
     no_number_format_changes: bool = False
+    no_cell_font_changes: bool = False
     no_worksheet_embedded_control_changes: bool = False
     no_new_parser_warnings: bool = False
     no_new_unresolved_references: bool = False
@@ -138,6 +140,7 @@ rules:
   no_ignored_error_changes: true
   no_named_sheet_view_changes: true
   no_number_format_changes: true
+  no_cell_font_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -267,6 +270,7 @@ def parse_policy(data: object) -> Policy:
         no_ignored_error_changes=_boolean_rule(rules, "no_ignored_error_changes"),
         no_named_sheet_view_changes=_boolean_rule(rules, "no_named_sheet_view_changes"),
         no_number_format_changes=_boolean_rule(rules, "no_number_format_changes"),
+        no_cell_font_changes=_boolean_rule(rules, "no_cell_font_changes"),
         no_worksheet_embedded_control_changes=_boolean_rule(
             rules, "no_worksheet_embedded_control_changes"
         ),
@@ -661,6 +665,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP039",
                     "high",
                     "Policy forbids cell number-format control changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_cell_font_changes:
+        for finding in _rule_triggered(report, "FF040"):
+            violations.append(
+                Finding(
+                    "FFP040",
+                    "high",
+                    "Policy forbids cell-font control changes.",
                     details=finding.details,
                 )
             )

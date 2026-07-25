@@ -188,10 +188,27 @@ review prompt, not proof of an error.
   Missing custom definitions, invalid IDs/indexes/targets, conflicting
   definitions, and bounded parser failures remain coverage warnings. FormulaFence
   does not render locale-specific output, validate format syntax, calculate
-  values, model width/overflow, or track fonts/fills/borders/alignment,
-  quote prefixes, table styles, or arbitrary visual formatting. Column styles
+  values, model width/overflow, or track fills/borders/alignment, quote
+  prefixes, table styles, or arbitrary visual formatting. Column styles
   are compared only as OOXML defaults for unallocated/new cells, not as a claim
   to restyle allocated cells.
+- Excel cell fonts can make an unchanged value or warning less visible, such as
+  a white font against a matching background, without changing a formula or
+  value. FormulaFence privately resolves raw `<fonts>` records, base
+  `<cellStyleXfs>`, effective `<cellXfs>` with `xfId` and `applyFont`, direct
+  cell `s`, `customFormat=1` row `s`, and raw `<cols>/<col style>` assignments.
+  It emits `FF040`; `no_cell_font_changes` can block it as `FFP040`. Profiles
+  and `FF040` details expose only default-definition, direct/row/effective-column,
+  and malformed-control counts—never font names, colour values, effects, style
+  IDs, or targets. Equivalent font-ID remapping, common font-child ordering,
+  Boolean spelling, base-XF inheritance, and effective column-range splitting
+  are normalized. Missing or malformed definitions, invalid IDs/indexes/targets,
+  and bounded parser failures remain visible coverage warnings. FormulaFence
+  does not render or resolve theme colours, decide whether a font is visible
+  against a fill, calculate values, track fills/borders/alignment, rich-text
+  runs, table styles, width/overflow, or arbitrary visual formatting. Column
+  styles are compared only as OOXML defaults for unallocated/new cells, not as a
+  claim to restyle allocated cells.
 - Worksheet data-validation controls are inventoried and diffed as compact
   ranges rather than by expanding their target cells. FormulaFence compares the
   validation type, operator, two criteria expressions, blank/dropdown behavior,

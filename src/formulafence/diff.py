@@ -22,6 +22,7 @@ from formulafence.models import (
     ExternalLinkPackageSnapshot,
     FilterVisibilitySnapshot,
     Finding,
+    FontSnapshot,
     IgnoredErrorSnapshot,
     NamedSheetViewSnapshot,
     NumberFormatSnapshot,
@@ -1456,6 +1457,32 @@ def _workbook_control_changes(
                 "high",
                 "Cell number-format controls changed; displayed values may be hidden, "
                 "scaled, or reinterpreted.",
+                details=details,
+            )
+        )
+    if before.font_controls != after.font_controls:
+        old_controls: FontSnapshot = before.font_controls
+        new_controls: FontSnapshot = after.font_controls
+        details = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.definition_signature != new_controls.definition_signature:
+            details["font_definition_material_changed"] = True
+        changes.append(
+            Change(
+                "font_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF040",
+                "high",
+                "Cell font controls changed; values or warnings may be made less visible "
+                "or misleading.",
                 details=details,
             )
         )

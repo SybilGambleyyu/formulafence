@@ -25,6 +25,7 @@ rules:
   no_ignored_error_changes: true
   no_named_sheet_view_changes: true
   no_number_format_changes: true
+  no_cell_font_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -91,6 +92,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_ignored_error_changes` | boolean | A standard or Office 2010 extension ignored-error declaration changes a per-range suppression of Excel evaluation, formula-consistency, range-omission, unlocked-formula, empty-reference, list-validation, calculated-column, text-number, or two-digit-year warnings. Targets and exact suppressions are compared privately. |
 | `no_named_sheet_view_changes` | boolean | A relationship-backed Excel Named Sheet View, alternate AutoFilter criterion, sort rule, or reconciled base-filter binding changes. View names, IDs, criteria, ranges, table bindings, and sort keys are compared privately. |
 | `no_number_format_changes` | boolean | An effective default, direct-cell, row, or column number-format control changes. Format codes, style IDs, and cell/row/column targets are compared privately. |
+| `no_cell_font_changes` | boolean | An effective default, direct-cell, row, or column font control changes. Font names, colours, effects, style IDs, and cell/row/column targets are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -487,9 +489,32 @@ base-XF inheritance, and effective column-range splitting are normalized.
 Missing custom codes, invalid IDs/indexes/targets, conflicting definitions, and
 bounded parser failures are explicit coverage warnings. FormulaFence does not
 render or locale-resolve a number format, validate its syntax, calculate values,
-model widths/overflow, or track non-number-format style properties. A raw
-column `style` is compared as a declaration/default for unallocated/new cells;
-it is not treated as a renderer that restyles allocated cells.
+model widths/overflow, or track visual-style properties other than separately
+inventoried cell fonts. A raw column `style` is compared as a declaration/default
+for unallocated/new cells; it is not treated as a renderer that restyles
+allocated cells.
+
+Cell-font controls can change the review surface without changing a stored
+value or formula: a white font can make a value or warning less visible against
+a matching background, while face, size, emphasis, underline, and related
+effects can materially change presentation. FormulaFence reads raw `<fonts>`
+definitions, base `<cellStyleXfs>`, effective `<cellXfs>` with `xfId` and
+`applyFont`, direct cell `s`, row `s` where `customFormat=1`, and raw
+`<cols>/<col style>` declarations. A material change emits `FF040`; enable
+`no_cell_font_changes` to make it `FFP040` in CI.
+
+Profiles and `FF040` details expose only counts for default definitions, direct
+cell, row, and effective column assignments, and unrecognized controls. Font
+names, colour values, effects, style indexes, and targets remain private.
+Equivalent font-ID remapping, common font-child ordering, `applyFont` Boolean
+spelling, base-XF inheritance, and effective column-range splitting are
+normalized. Missing or malformed definitions, invalid IDs/indexes/targets, and
+bounded parser failures are explicit coverage warnings. FormulaFence does not
+render or resolve theme colours, decide whether a font is visible against a
+fill, calculate values, track fills/borders/alignment/rich-text runs/table
+styles, or claim arbitrary visual-style coverage. A raw column `style` is
+compared as a declaration/default for unallocated/new cells; it is not treated
+as a renderer that restyles allocated cells.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

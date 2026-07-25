@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.37.0 — 2026-07-24
+
+- Inspect raw workbook cell-font controls that can change what a reviewer sees
+  without changing a stored cell value or formula: `<fonts>` definitions, base
+  `<cellStyleXfs>`, effective `<cellXfs>`, direct cell `s`, `customFormat=1`
+  row styles, and worksheet `<cols>/<col style>` defaults. Retain font names,
+  colours, effects, style IDs, and targets only in private signatures;
+  profiles, `FF040`, and SARIF expose structural counts only.
+- Resolve font-ID remapping, base-XF inheritance, `applyFont`, equivalent font
+  child ordering, common Boolean spellings, and equivalent column-range
+  splitting. Record a column font only as an OOXML default for unallocated/new
+  cells rather than claiming to re-render allocated cells.
+- Emit `FF040` for a material cell-font-control change and add the fail-closed
+  `no_cell_font_changes` policy rule (`FFP040`). Invalid or missing font/style
+  references, malformed definitions, invalid targets, and bounded parser
+  failures become explicit coverage warnings rather than silent omissions.
+  FormulaFence does not resolve theme colours or rendering, model fills,
+  borders, alignment, rich-text runs, table styles, width/overflow, or arbitrary
+  visual formatting.
+
 ## 0.36.0 — 2026-07-24
 
 - Inspect raw workbook number-format controls that can change what a reviewer

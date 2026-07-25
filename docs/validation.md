@@ -5,6 +5,45 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel cell-font controls — 2026-07-24
+
+FormulaFence 0.37.0 was validated with controlled raw-OOXML `.xlsx` packages
+containing a default font definition, two private direct font assignments
+(including a white font), one `customFormat=1` row font, and a two-column raw
+style default. The safe profile records one default definition, two direct-cell,
+one row, and two effective-column assignments; no font names, colour values,
+effects, style IDs, or targets. The suite verifies a zero-change self-diff,
+`FF040` for a private-colour-only change, `FFP040` under
+`no_cell_font_changes`, and `FF040` when only the default font definition
+changes—without a cell value or formula change.
+
+Equivalent font-ID reallocation, font-child ordering, explicit versus omitted
+`applyFont`, base-XF inheritance, and equivalent split column-style ranges are
+exercised without a finding. An out-of-bounds column maximum produces an
+explicit parser-coverage warning, `FF010`, and `FF040` rather than a silent
+omission. Font names, colour values, effects, style IDs, and cell/row/column
+targets are verified absent from JSON, Markdown, ordinary reports, and SARIF.
+The scanner compares font declarations only; the tests do not assert Excel's
+theme-colour resolution, rendering, background/fill contrast, width/overflow,
+rich-text behavior, table styles, or arbitrary visual formatting.
+
+As an independent package-compatibility check, FormulaFence profiled
+XlsxWriter 3.2.9's public
+[`tutorial2.py`](https://github.com/jmcnamara/XlsxWriter/blob/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011/examples/tutorial2.py)
+example at commit `cf3fe78d3eab5e4c7d825d4451af3a60e2a04011`, generated locally
+and not bundled with this repository. The resulting `Expenses02.xlsx` SHA-256
+was `272036dfdfc75257483b8a8509827cb677c2bd641c0e1f6059825391d0893225`.
+FormulaFence found one default font definition, three direct font assignments,
+and no coverage warning. Changing only the first money cell's font colour to
+white produced `candidate.xlsx` SHA-256
+`b47e2970ef8f5745bd4f111c40fb478be557919981d36c57893c33c2cf942e36`.
+The published 0.36.0 wheel (SHA-256
+`407f6d4d19ddab87549cf46fdb18f6785bc8aecd464541d6ab4d8941a32f4f4f`)
+reported `0` changes and no findings, while a fresh 0.37.0 wheel emits exactly
+one `font_controls_changed` change and `FF040` (wheel SHA-256
+`9db5e438bb501986b81d3d32d5e80b0996f09dc79e944cd321ebec36c154def0`);
+the starter policy exits `1` with `FF040` and `FFP040`.
+
 ## Excel number-format controls — 2026-07-24
 
 FormulaFence 0.36.0 was validated with controlled raw-OOXML `.xlsx` packages

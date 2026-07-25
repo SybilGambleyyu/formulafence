@@ -6459,6 +6459,283 @@ def corrupt_number_format_definition(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".number-format-missing-definition.tmp.xlsx")
 
 
+def make_font_model(path: Path) -> Path:
+    """Create display-only font controls with private names and colours."""
+    workbook = Workbook()
+    report = workbook.active
+    report.title = "Font Report"
+    report["A1"] = "Default display"
+    report["A2"] = 1234.5
+    report["B1"] = "Private direct font"
+    report["B2"] = 1234567.89
+    report["B2"].font = Font(
+        name="PRIVATE-BASELINE-FONT",
+        color="FF112233",
+        bold=True,
+    )
+    report["C1"] = "Hidden-looking display"
+    report["C2"] = 0.125
+    report["C2"].font = Font(name="PRIVATE-WHITE-FONT", color="FFFFFFFF")
+    report["D1"] = "Formula without a direct font"
+    report["D2"] = "=B2*C2"
+    report.row_dimensions[4].font = Font(
+        name="PRIVATE-ROW-FONT",
+        color="FF445566",
+        italic=True,
+    )
+    report.column_dimensions["D"].font = Font(
+        name="PRIVATE-COLUMN-FONT",
+        color="FF778899",
+        underline="single",
+    )
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        column = next(
+            current
+            for current in worksheet.iter(col_tag)
+            if current.get("min") == "4" and current.get("max") == "4"
+        )
+        # Column fonts are OOXML defaults for unallocated/new cells. Keep the
+        # fixture span short so range canonicalization is testable without
+        # claiming that an allocated formula cell adopts the default.
+        column.set("max", "5")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".font.tmp.xlsx")
+
+
+def change_font_definition(path: Path) -> Path:
+    """Change a private direct-cell font without touching its value."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        font_tag = f"{{{_SPREADSHEETML_NS}}}font"
+        name_tag = f"{{{_SPREADSHEETML_NS}}}name"
+        color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        font = next(
+            current
+            for current in styles.iter(font_tag)
+            if (name := current.find(name_tag)) is not None
+            and name.get("val") == "PRIVATE-BASELINE-FONT"
+        )
+        color = font.find(color_tag)
+        if color is None:
+            raise ValueError("Could not find private font colour fixture")
+        color.attrib.clear()
+        color.set("rgb", "FFABCDEF")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".font-change.tmp.xlsx")
+
+
+def change_default_font_definition(path: Path) -> Path:
+    """Change the default font record without touching any cell record."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        fonts_tag = f"{{{_SPREADSHEETML_NS}}}fonts"
+        color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        fonts = styles.find(fonts_tag)
+        if fonts is None or not list(fonts):
+            raise ValueError("Could not find default font fixture")
+        default_font = list(fonts)[0]
+        color = default_font.find(color_tag)
+        if color is None:
+            color = ElementTree.SubElement(default_font, color_tag)
+        color.attrib.clear()
+        color.set("rgb", "FFFAFAFA")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".font-default-change.tmp.xlsx")
+
+
+def normalize_font_control_spelling(path: Path) -> Path:
+    """Renumber fonts, normalize booleans, and split one column-style range."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        fonts_tag = f"{{{_SPREADSHEETML_NS}}}fonts"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        bold_tag = f"{{{_SPREADSHEETML_NS}}}b"
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        fonts = styles.find(fonts_tag)
+        if fonts is None:
+            raise ValueError("Could not find font fixture")
+        original_fonts = list(fonts)
+        remapping = {
+            str(index): str(len(original_fonts) - index - 1)
+            for index in range(len(original_fonts))
+        }
+        for font in original_fonts:
+            fonts.remove(font)
+        for font in reversed(original_fonts):
+            # Writer child order is not semantic. Also spell a Boolean that
+            # XlsxWriter emits without ``val`` in a different valid form.
+            children = list(font)
+            for child in children:
+                font.remove(child)
+            for child in reversed(children):
+                font.append(child)
+            bold = font.find(bold_tag)
+            if bold is not None:
+                bold.set("val", "true")
+            fonts.append(font)
+        for xf in styles.iter(xf_tag):
+            identifier = xf.get("fontId")
+            if identifier in remapping:
+                xf.set("fontId", remapping[identifier])
+                xf.set("applyFont", "1")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        columns = worksheet.find(cols_tag)
+        if columns is None:
+            raise ValueError("Could not find font column fixture")
+        column = next(
+            current
+            for current in columns.findall(col_tag)
+            if current.get("min") == "4" and current.get("max") == "5"
+        )
+        attributes = dict(column.attrib)
+        columns.remove(column)
+        for minimum, maximum in (("4", "4"), ("5", "5")):
+            split_attributes = {**attributes, "min": minimum, "max": maximum}
+            ElementTree.SubElement(columns, col_tag, split_attributes)
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".font-noise.tmp.xlsx")
+
+
+def normalize_font_inheritance(path: Path) -> Path:
+    """Move one direct font into its base XF without changing its effect."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        fonts_tag = f"{{{_SPREADSHEETML_NS}}}fonts"
+        font_tag = f"{{{_SPREADSHEETML_NS}}}font"
+        name_tag = f"{{{_SPREADSHEETML_NS}}}name"
+        cell_style_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellStyleXfs"
+        cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        fonts = styles.find(fonts_tag)
+        cell_style_xfs = styles.find(cell_style_xfs_tag)
+        cell_xfs = styles.find(cell_xfs_tag)
+        if fonts is None or cell_style_xfs is None or cell_xfs is None:
+            raise ValueError("Could not find font XF fixture")
+        font_index = next(
+            index
+            for index, current in enumerate(fonts.findall(font_tag))
+            if (name := current.find(name_tag)) is not None
+            and name.get("val") == "PRIVATE-BASELINE-FONT"
+        )
+        ElementTree.SubElement(
+            cell_style_xfs,
+            xf_tag,
+            {
+                "numFmtId": "0",
+                "fontId": str(font_index),
+                "fillId": "0",
+                "borderId": "0",
+                "applyFont": "true",
+            },
+        )
+        direct_xf = next(
+            current
+            for current in cell_xfs.findall(xf_tag)
+            if current.get("fontId") == str(font_index)
+        )
+        direct_xf.attrib.pop("fontId", None)
+        direct_xf.set("xfId", "1")
+        direct_xf.set("applyFont", "false")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".font-inheritance.tmp.xlsx")
+
+
+def corrupt_font_column_control(path: Path) -> Path:
+    """Inject an out-of-bounds font-style span to exercise fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        column = next(
+            current
+            for current in worksheet.iter(col_tag)
+            if current.get("min") == "4" and current.get("max") == "5"
+        )
+        column.set("max", "16385")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".font-corrupt.tmp.xlsx")
+
+
+def corrupt_font_definition(path: Path) -> Path:
+    """Leave a direct font assignment pointing at a missing font definition."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        fonts_tag = f"{{{_SPREADSHEETML_NS}}}fonts"
+        font_tag = f"{{{_SPREADSHEETML_NS}}}font"
+        name_tag = f"{{{_SPREADSHEETML_NS}}}name"
+        cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        fonts = styles.find(fonts_tag)
+        cell_xfs = styles.find(cell_xfs_tag)
+        if fonts is None or cell_xfs is None:
+            raise ValueError("Could not find font definition fixture")
+        font_index = next(
+            index
+            for index, current in enumerate(fonts.findall(font_tag))
+            if (name := current.find(name_tag)) is not None
+            and name.get("val") == "PRIVATE-BASELINE-FONT"
+        )
+        direct_xf = next(
+            current
+            for current in cell_xfs.findall(xf_tag)
+            if current.get("fontId") == str(font_index)
+        )
+        direct_xf.set("fontId", "999")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".font-missing-definition.tmp.xlsx")
+
+
 def make_named_sheet_view_model(path: Path, *, table_owned: bool = False) -> Path:
     """Create modern alternate filter/sort views with private OOXML settings."""
     workbook = Workbook()

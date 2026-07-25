@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.36.0/formulafence-0.36.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.37.0/formulafence-0.37.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,6 +75,7 @@ rules:
   no_ignored_error_changes: true
   no_named_sheet_view_changes: true
   no_number_format_changes: true
+  no_cell_font_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -112,7 +113,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column-visibility, ignored-error, and Named Sheet View controls, Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column-visibility, ignored-error, Named Sheet View, cell-number-format, and cell-font controls, Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -605,7 +606,7 @@ definitions, invalid style references, invalid/out-of-range targets, conflicting
 definitions, and bounded-parser failures become visible coverage warnings rather
 than silent omissions. FormulaFence compares declarations only: it does not
 render locale-specific output, validate a format code, calculate a value, model
-width/overflow, or cover fonts, fills, borders, alignment, quote prefixes,
+width/overflow, or cover fills, borders, alignment, quote prefixes,
 table styles, or arbitrary visual formatting. A column `style` is recorded as
 the OOXML column default for unallocated/new cells; FormulaFence does not claim
 to apply that default retroactively to existing allocated cells. The boundary
@@ -616,6 +617,32 @@ and Open XML's [`numFmt`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX
 [`xf`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_xf_topic_ID0E13S6.html),
 and [`col`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_col_topic_ID0ELFQ4.html)
 definitions.
+
+FormulaFence also inventories **cell-font controls**. A font can make an
+unchanged value or warning less visible—for example, by using a white font
+against a matching background—or change its face, size, emphasis, underline, or
+other display effects. FormulaFence reads raw `styles.xml` `<fonts>` records,
+base `<cellStyleXfs>`, effective `<cellXfs>` records and their
+`xfId`/`applyFont` inheritance, plus direct cell `s`, row `s` with
+`customFormat=1`, and worksheet `<cols>/<col style>` assignments. A material
+change emits `FF040`; enable `no_cell_font_changes` for `FFP040`.
+
+Profiles expose only counts for the default definition, direct-cell/row/effective
+column assignments, and malformed controls. Font names, colour values, effects,
+style IDs, and cell/row/column targets never enter profiles, Markdown control
+sections, `FF040` details, or SARIF. Equivalent font-ID remapping,
+`applyFont` Boolean spelling, base-XF inheritance, common font-child ordering,
+and equivalent effective column-range splitting are normalized. Missing or
+malformed font/style definitions, invalid IDs/indexes/targets, and bounded-parser
+failures become visible coverage warnings rather than silent omissions.
+FormulaFence compares declarations only: it does not render or resolve theme
+colours, decide whether a font is visible against a fill, track fills, borders,
+alignment, rich-text runs, table styles, or arbitrary visual formatting. A
+column `style` is recorded as the OOXML default for unallocated/new cells;
+FormulaFence does not claim to apply that default retroactively to existing
+allocated cells. The boundary follows the OOXML [`xf`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_xf_topic_ID0E13S6.html)
+form and the ICAEW's [spreadsheet-review guidance](https://www.icaew.com/-/media/corporate/files/technical/technology/excel/how-to-review-a-spreadsheet-report.ashx),
+which explicitly flags white-on-white font use as a hidden-calculation risk.
 
 FormulaFence also inventories relationship-backed **worksheet controls, legacy
 VML form controls, and OLE objects**. A worksheet can bind modern `<control>`

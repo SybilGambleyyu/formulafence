@@ -7,7 +7,7 @@ workbooks without copying their contents into this repository.
 
 ## Worksheet cell hyperlinks — 2026-07-24
 
-FormulaFence 0.45.0 is validated with a controlled `.xlsx` pair built outside
+FormulaFence 0.45.1 is validated with a controlled `.xlsx` pair built outside
 this repository from a clean openpyxl 3.1.5 workbook and its ordinary
 worksheet-cell hyperlink surface. The baseline SHA-256 was
 `48a6c07a70b72195b8efb3d881930dbbbf03b8f36439252c60eefda8130efbf5`; the
@@ -21,8 +21,8 @@ hyperlink target changed.
 A clean virtual environment using the published 0.44.0 wheel (SHA-256
 `d8fc0abcad15991a09c290239ab62f20f499eb73e94f54ab4fc2788606dd7ff5`)
 reported zero changes and zero findings for that pair. A clean environment
-using the staged 0.45.0 wheel (SHA-256
-`a9a10a056e3eb9ca0ba7fbd4b7d3e68f877d7631bf77bbf1a935af9c29649063`)
+using the staged 0.45.1 wheel (SHA-256
+`34cc951a5ecad227b46f832a36ef172d5932b674eff36a6c7984326536da837a`)
 emitted exactly one `cell_hyperlink_controls_changed` change and `FF047`.
 A policy enabling `no_cell_hyperlink_changes` exited `1` with `FF047` and
 `FFP047`. JSON reports and profiles were checked to ensure the old and new

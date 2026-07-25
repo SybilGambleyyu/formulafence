@@ -4591,7 +4591,7 @@ def test_number_format_missing_definition_fails_closed(tmp_path) -> None:
         report_to_markdown(report),
         json.dumps(report_to_sarif(report)),
     )
-    assert all("999" not in artifact for artifact in rendered_artifacts)
+    assert all("999987" not in artifact for artifact in rendered_artifacts)
 
 
 def test_number_format_free_workbook_has_no_inventory(tmp_path) -> None:

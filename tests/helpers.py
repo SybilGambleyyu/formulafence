@@ -7272,7 +7272,7 @@ def corrupt_number_format_definition(path: Path) -> Path:
             for current in cell_xfs.findall(xf_tag)
             if current.get("numFmtId") == identifier
         )
-        direct_xf.set("numFmtId", "999")
+        direct_xf.set("numFmtId", "999987")
         contents["xl/styles.xml"] = ElementTree.tostring(
             styles,
             encoding="utf-8",

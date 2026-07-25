@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.45.1 — 2026-07-24
+
+- Stabilize the cross-version redaction test for an unknown custom number
+  format by using a fixture-specific sentinel instead of a generic numeric
+  substring. This does not change FormulaFence's workbook inspection or report
+  surface.
+
 ## 0.45.0 — 2026-07-24
 
 - Inspect raw standard SpreadsheetML and Office 2016 revision worksheet-cell

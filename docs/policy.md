@@ -29,6 +29,7 @@ rules:
   no_cell_fill_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
+  no_worksheet_drawing_shape_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -99,6 +100,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
 | `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
+| `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp` or nested `xdr:grpSp` anchor/layout, text/presentation declaration, macro/text link, or referenced click/hover relationship changes. Shape text, formatting, formulas, anchors, IDs, and targets are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -585,6 +587,28 @@ Malformed, unsupported, or unreadable rich-text metadata becomes an explicit
 coverage warning. FormulaFence does not render cells, resolve theme colours,
 calculate contrast, determine visibility, preserve rich text, or guarantee
 cross-version Excel rendering equivalence.
+
+Non-chart Worksheet DrawingML can host a regular `xdr:sp` shape or a nested
+`xdr:grpSp` shape group under a standard worksheet drawing anchor. Those shape
+declarations can carry visible text, run formatting, positioning, macro
+assignments, `textlink` formulas, and click/hover hyperlink relationships
+outside cells. FormulaFence privately fingerprints supported anchor, regular
+shape, and group XML plus referenced relationship semantics. It reports only
+structural worksheet/drawing/anchor, shape/text/group, text paragraph/run,
+macro/text-link/hyperlink, relationship, and malformed-control counts. A
+material change emits `FF044`; enable
+`no_worksheet_drawing_shape_changes` to make it `FFP044` in CI.
+
+Text, presentation details, geometry, anchors, descriptions, macro names,
+text-link formulas, relationship IDs/targets, and raw XML stay private.
+Writer-chosen non-visual IDs, relationship-ID rewrites, and equivalent colour
+case are normalized. Missing, malformed, unsafe, unreadable, oversized, and
+over-budget metadata is a visible coverage warning; XML reads are bounded to
+16 MiB per part, 64 MiB per workbook, and 512 parts. FormulaFence does not
+render or assess visibility, resolve theme colours/contrast, calculate a text
+link, execute a macro assignment, retrieve a target, parse/hash media, or
+inspect pictures, connectors, graphic frames, SmartArt, or other non-`xdr:sp`
+drawing objects.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

@@ -7490,6 +7490,311 @@ def corrupt_formula_cached_result(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".formula-cached-result-corrupt.tmp.xlsx")
 
 
+def _worksheet_drawing_shape_part_names(
+    contents: dict[str, bytes],
+) -> tuple[str, str]:
+    """Return the drawing and relationship members for the shape fixture."""
+    drawing_member = "xl/drawings/drawing1.xml"
+    relationship_member = _relationship_member(drawing_member)
+    if drawing_member not in contents or relationship_member not in contents:
+        raise ValueError("Fixture does not contain Worksheet DrawingML shape parts")
+    return drawing_member, relationship_member
+
+
+def make_worksheet_drawing_shape_model(path: Path) -> Path:
+    """Create raw worksheet text-box and grouped-shape controls for inspection."""
+    make_model(path)
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    drawing_main = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def marker(
+        parent: ElementTree.Element,
+        name: str,
+        *,
+        column: int,
+        row: int,
+    ) -> None:
+        point = ElementTree.SubElement(parent, f"{{{drawing}}}{name}")
+        ElementTree.SubElement(point, f"{{{drawing}}}col").text = str(column)
+        ElementTree.SubElement(point, f"{{{drawing}}}colOff").text = "0"
+        ElementTree.SubElement(point, f"{{{drawing}}}row").text = str(row)
+        ElementTree.SubElement(point, f"{{{drawing}}}rowOff").text = "0"
+
+    def text_body(parent: ElementTree.Element, text: str, colour: str) -> None:
+        body = ElementTree.SubElement(parent, f"{{{drawing}}}txBody")
+        ElementTree.SubElement(body, f"{{{drawing_main}}}bodyPr")
+        ElementTree.SubElement(body, f"{{{drawing_main}}}lstStyle")
+        paragraph = ElementTree.SubElement(body, f"{{{drawing_main}}}p")
+        run = ElementTree.SubElement(paragraph, f"{{{drawing_main}}}r")
+        properties = ElementTree.SubElement(run, f"{{{drawing_main}}}rPr")
+        fill = ElementTree.SubElement(properties, f"{{{drawing_main}}}solidFill")
+        ElementTree.SubElement(fill, f"{{{drawing_main}}}srgbClr", {"val": colour})
+        ElementTree.SubElement(run, f"{{{drawing_main}}}t").text = text
+
+    def shape(
+        parent: ElementTree.Element,
+        *,
+        identifier: str,
+        name: str,
+        text: str,
+        colour: str,
+        macro: str | None = None,
+        text_link: str | None = None,
+        hyperlink: bool = False,
+    ) -> ElementTree.Element:
+        attributes: dict[str, str] = {}
+        if macro is not None:
+            attributes["macro"] = macro
+        if text_link is not None:
+            attributes["textlink"] = text_link
+        current = ElementTree.SubElement(parent, f"{{{drawing}}}sp", attributes)
+        non_visual = ElementTree.SubElement(current, f"{{{drawing}}}nvSpPr")
+        properties = ElementTree.SubElement(
+            non_visual,
+            f"{{{drawing}}}cNvPr",
+            {
+                "id": identifier,
+                "name": name,
+                "descr": "Private worksheet shape description",
+            },
+        )
+        if hyperlink:
+            ElementTree.SubElement(
+                properties,
+                f"{{{drawing_main}}}hlinkClick",
+                {f"{{{document_relationships}}}id": "rIdFenceShapeLink"},
+            )
+        ElementTree.SubElement(non_visual, f"{{{drawing}}}cNvSpPr")
+        shape_properties = ElementTree.SubElement(current, f"{{{drawing}}}spPr")
+        fill = ElementTree.SubElement(shape_properties, f"{{{drawing_main}}}solidFill")
+        ElementTree.SubElement(fill, f"{{{drawing_main}}}srgbClr", {"val": "FFFFFF"})
+        text_body(current, text, colour)
+        return current
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member = "xl/drawings/drawing1.xml"
+        drawing_root = ElementTree.Element(f"{{{drawing}}}wsDr")
+
+        warning_anchor = ElementTree.SubElement(
+            drawing_root,
+            f"{{{drawing}}}twoCellAnchor",
+            {"editAs": "oneCell"},
+        )
+        marker(warning_anchor, "from", column=1, row=1)
+        marker(warning_anchor, "to", column=5, row=4)
+        shape(
+            warning_anchor,
+            identifier="1025",
+            name="Private worksheet warning shape",
+            text="PRIVATE-SHAPE-DO-NOT-APPROVE",
+            colour="000000",
+            macro="PrivateWorksheetShapeMacro",
+            text_link="=Inputs!$B$2",
+            hyperlink=True,
+        )
+        ElementTree.SubElement(warning_anchor, f"{{{drawing}}}clientData")
+
+        group_anchor = ElementTree.SubElement(
+            drawing_root,
+            f"{{{drawing}}}oneCellAnchor",
+        )
+        marker(group_anchor, "from", column=7, row=2)
+        ElementTree.SubElement(
+            group_anchor,
+            f"{{{drawing}}}ext",
+            {"cx": "1828800", "cy": "548640"},
+        )
+        group = ElementTree.SubElement(group_anchor, f"{{{drawing}}}grpSp")
+        ElementTree.SubElement(group, f"{{{drawing}}}nvGrpSpPr")
+        ElementTree.SubElement(group, f"{{{drawing}}}grpSpPr")
+        shape(
+            group,
+            identifier="1026",
+            name="Private grouped shape",
+            text="PRIVATE-GROUP-SHAPE-TEXT",
+            colour="334455",
+        )
+        ElementTree.SubElement(group_anchor, f"{{{drawing}}}clientData")
+        contents[drawing_member] = serialize(drawing_root)
+
+        relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceShapeLink",
+                "Type": f"{document_relationships}/hyperlink",
+                "Target": "https://example.invalid/private-worksheet-shape-target",
+                "TargetMode": "External",
+            },
+        )
+        contents[_relationship_member(drawing_member)] = serialize(relationships)
+
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        ElementTree.SubElement(
+            worksheet,
+            f"{{{spreadsheet}}}drawing",
+            {f"{{{document_relationships}}}id": "rIdFenceWorksheetDrawing"},
+        )
+        contents["xl/worksheets/sheet1.xml"] = serialize(worksheet)
+        worksheet_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            worksheet_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceWorksheetDrawing",
+                "Type": f"{document_relationships}/drawing",
+                "Target": "../drawings/drawing1.xml",
+            },
+        )
+        contents[_relationship_member("xl/worksheets/sheet1.xml")] = serialize(
+            worksheet_relationships
+        )
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        ElementTree.SubElement(
+            types,
+            f"{{{content_types}}}Override",
+            {
+                "PartName": "/xl/drawings/drawing1.xml",
+                "ContentType": (
+                    "application/vnd.openxmlformats-officedocument.drawing+xml"
+                ),
+            },
+        )
+        contents["[Content_Types].xml"] = serialize(types)
+
+    return _rewrite_archive(path, mutate, ".worksheet-drawing-shape.tmp.xlsx")
+
+
+def change_worksheet_drawing_shape_presentation(path: Path) -> Path:
+    """Make the primary shape text less visible without changing any cells."""
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    drawing_main = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, _relationship_member_name = _worksheet_drawing_shape_part_names(
+            contents
+        )
+        root = ElementTree.fromstring(contents[drawing_member])
+        shape = next(root.iter(f"{{{drawing}}}sp"))
+        text_body = shape.find(f"{{{drawing}}}txBody")
+        if text_body is None:
+            raise ValueError("Fixture does not contain a worksheet shape text body")
+        colour = next(text_body.iter(f"{{{drawing_main}}}srgbClr"))
+        colour.set("val", "FFFFFF")
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-drawing-shape-change.tmp.xlsx")
+
+
+def change_worksheet_drawing_shape_hyperlink(path: Path) -> Path:
+    """Change only a private external hyperlink target for one shape."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _drawing_member, relationships_name = _worksheet_drawing_shape_part_names(
+            contents
+        )
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        hyperlink = next(
+            relationship
+            for relationship in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if relationship.get("Id") == "rIdFenceShapeLink"
+        )
+        hyperlink.set(
+            "Target",
+            "https://example.invalid/private-worksheet-shape-candidate",
+        )
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-drawing-shape-link.tmp.xlsx")
+
+
+def renumber_worksheet_drawing_shape_identifiers(path: Path) -> Path:
+    """Rewrite harmless nonvisual and relationship IDs without changing semantics."""
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    drawing_main = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, relationships_name = _worksheet_drawing_shape_part_names(
+            contents
+        )
+        root = ElementTree.fromstring(contents[drawing_member])
+        for index, current in enumerate(
+            root.iter(f"{{{drawing}}}cNvPr"),
+            start=900,
+        ):
+            current.set("id", str(index))
+        hyperlink = next(root.iter(f"{{{drawing_main}}}hlinkClick"))
+        hyperlink.set(
+            f"{{{document_relationships}}}id",
+            "rIdFenceShapeLinkRenumbered",
+        )
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships = ElementTree.fromstring(contents[relationships_name])
+        relationship = next(
+            current
+            for current in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if current.get("Id") == "rIdFenceShapeLink"
+        )
+        relationship.set("Id", "rIdFenceShapeLinkRenumbered")
+        contents[relationships_name] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-drawing-shape-id.tmp.xlsx")
+
+
+def corrupt_worksheet_drawing_shape_root(path: Path) -> Path:
+    """Replace the shape drawing root to exercise fail-closed coverage."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, _relationship_member_name = _worksheet_drawing_shape_part_names(
+            contents
+        )
+        root = ElementTree.fromstring(contents[drawing_member])
+        root.tag = "notWorksheetDrawing"
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-drawing-shape-corrupt.tmp.xlsx")
+
+
 def _rich_text_shared_string_root(
     contents: dict[str, bytes],
 ) -> ElementTree.Element:

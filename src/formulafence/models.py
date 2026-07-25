@@ -1885,6 +1885,67 @@ class RichTextRunSnapshot:
 
 
 @dataclass(frozen=True)
+class WorksheetDrawingShapeSnapshot:
+    """Safe aggregate of non-chart Worksheet DrawingML shape controls.
+
+    Worksheet DrawingML can carry text boxes and other shapes outside the cell
+    grid. Their private signatures retain anchors, presentation, text, linked
+    actions, and relationship semantics for comparison without exposing any of
+    that material in a profile or change report.
+    """
+
+    worksheet_drawing_sheet_count: int = 0
+    worksheet_drawing_part_count: int = 0
+    shape_anchor_count: int = 0
+    shape_count: int = 0
+    group_shape_count: int = 0
+    text_shape_count: int = 0
+    text_paragraph_count: int = 0
+    text_run_count: int = 0
+    macro_assignment_count: int = 0
+    text_link_count: int = 0
+    hyperlink_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    unrecognized_shape_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.worksheet_drawing_part_count
+            or self.shape_count
+            or self.group_shape_count
+            or self.unrecognized_shape_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural DrawingML evidence without text, targets, or anchors."""
+        return {
+            "present": self.present,
+            "worksheet_drawing_sheet_count": self.worksheet_drawing_sheet_count,
+            "worksheet_drawing_part_count": self.worksheet_drawing_part_count,
+            "shape_anchor_count": self.shape_anchor_count,
+            "shape_count": self.shape_count,
+            "group_shape_count": self.group_shape_count,
+            "text_shape_count": self.text_shape_count,
+            "text_paragraph_count": self.text_paragraph_count,
+            "text_run_count": self.text_run_count,
+            "macro_assignment_count": self.macro_assignment_count,
+            "text_link_count": self.text_link_count,
+            "hyperlink_count": self.hyperlink_count,
+            "related_relationship_count": self.related_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+            "unrecognized_shape_count": self.unrecognized_shape_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -2295,6 +2356,9 @@ class WorkbookSnapshot:
         default_factory=FormulaCachedResultSnapshot
     )
     rich_text_runs: RichTextRunSnapshot = field(default_factory=RichTextRunSnapshot)
+    worksheet_drawing_shapes: WorksheetDrawingShapeSnapshot = field(
+        default_factory=WorksheetDrawingShapeSnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -2347,6 +2411,11 @@ class WorkbookSnapshot:
             "rich_text_run_count": self.rich_text_runs.rich_text_run_count,
             "phonetic_run_count": self.rich_text_runs.phonetic_run_count,
             "has_rich_text_runs": self.rich_text_runs.present,
+            "worksheet_drawing_shape_count": self.worksheet_drawing_shapes.shape_count,
+            "worksheet_drawing_text_shape_count": (
+                self.worksheet_drawing_shapes.text_shape_count
+            ),
+            "has_worksheet_drawing_shapes": self.worksheet_drawing_shapes.present,
             "what_if_data_table_count": self.what_if_data_tables.data_table_count,
             "what_if_data_table_output_cell_count": (
                 self.what_if_data_tables.declared_output_cell_count

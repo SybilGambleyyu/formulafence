@@ -83,6 +83,7 @@ from formulafence.models import (
     WorkbookLoadError,
     WorkbookProtectionSnapshot,
     WorkbookSnapshot,
+    WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
     XlmMacroSheetSnapshot,
     XmlFragmentSnapshot,
@@ -211,6 +212,9 @@ _CHART_RELATED_PART_MAX_BYTES = 32 * 1024 * 1024
 _CHART_RELATED_PART_TOTAL_MAX_BYTES = 64 * 1024 * 1024
 _CHART_RELATED_PART_TOTAL_MAX_COUNT = 512
 _CHART_RELATED_PART_HASH_CHUNK_BYTES = 1024 * 1024
+_WORKSHEET_DRAWING_SHAPE_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_COUNT = 512
 _PIVOT_TABLE_PART_PATTERN = re.compile(r"^xl/pivotTables/[^/]+\.xml$", re.IGNORECASE)
 _PIVOT_CACHE_DEFINITION_PART_PATTERN = re.compile(
     r"^xl/pivotCache/pivotCacheDefinition[^/]*\.xml$", re.IGNORECASE
@@ -246,6 +250,7 @@ _VML_EXCEL_NS = "urn:schemas-microsoft-com:office:excel"
 _DRAWINGML_SPREADSHEET_NS = (
     "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 )
+_DRAWINGML_MAIN_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _DRAWINGML_CHART_NS = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 _DRAWINGML_CHART_DRAWING_NS = (
     "http://schemas.openxmlformats.org/drawingml/2006/chartDrawing"
@@ -279,6 +284,13 @@ _WORKSHEET_ACTIVEX_BINARY_RELATIONSHIP = (
 )
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 _CHART_RELATIONSHIP_ATTRIBUTES = frozenset(
+    {
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}embed",
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}link",
+    }
+)
+_WORKSHEET_DRAWING_SHAPE_RELATIONSHIP_ATTRIBUTES = frozenset(
     {
         f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
         f"{{{_DOCUMENT_RELATIONSHIP_NS}}}embed",
@@ -541,6 +553,14 @@ class _RichTextRunMetadata:
 
 
 @dataclass(frozen=True)
+class _WorksheetDrawingShapeMetadata:
+    """Raw Worksheet DrawingML shape evidence retained before reader loss."""
+
+    shapes: WorksheetDrawingShapeSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _NamedSheetViewAutoFilterBinding:
     """One private AutoFilter target available to a Named Sheet View."""
 
@@ -721,6 +741,28 @@ class _ChartRawRelationship:
 
 
 @dataclass(frozen=True)
+class _WorksheetDrawingShapeRawRelationship:
+    """One private DrawingML shape relationship and canonical target."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return relationship semantics while ignoring arbitrary identifiers."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        return (
+            self.relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
+@dataclass(frozen=True)
 class _PivotRawRelationship:
     """One private PivotTable-package relationship and its canonical target."""
 
@@ -815,6 +857,14 @@ class _ChartXmlBudget:
 
     remaining_bytes: int = _CHART_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _CHART_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _WorksheetDrawingShapeBudget:
+    """Bound Worksheet DrawingML XML bytes in one package scan."""
+
+    remaining_bytes: int = _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_COUNT
 
 
 @dataclass
@@ -1005,6 +1055,29 @@ class _ChartDrawingInspection:
     unrecognized_count: int = 0
     inspected: bool = False
     declaration_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _WorksheetDrawingShapeInspection:
+    """Private shape controls discovered in one worksheet DrawingML part."""
+
+    member: str
+    present: bool = False
+    shape_anchor_count: int = 0
+    shape_count: int = 0
+    group_shape_count: int = 0
+    text_shape_count: int = 0
+    text_paragraph_count: int = 0
+    text_run_count: int = 0
+    macro_assignment_count: int = 0
+    text_link_count: int = 0
+    hyperlink_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    unrecognized_count: int = 0
+    inspected: bool = False
+    definition_signature: str | None = None
     relationship_signature: str | None = None
 
 
@@ -18353,6 +18426,674 @@ def _rich_text_run_metadata(path: Path) -> _RichTextRunMetadata:
     return _RichTextRunMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_WORKSHEET_DRAWING_SHAPE_ANCHORS = frozenset(
+    {"twoCellAnchor", "oneCellAnchor", "absoluteAnchor"}
+)
+_WORKSHEET_DRAWING_SHAPE_ANCHOR_CHILDREN = frozenset(
+    {"from", "to", "pos", "ext", "sp", "grpSp", "clientData"}
+)
+_WORKSHEET_DRAWING_GROUP_CHILDREN = frozenset(
+    {"nvGrpSpPr", "grpSpPr", "sp", "grpSp"}
+)
+
+
+def _worksheet_drawing_shape_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> tuple[_WorksheetDrawingShapeRawRelationship, ...] | None:
+    """Read DrawingML shape relationships without following their targets."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for Worksheet DrawingML shape inspection "
+            f"({type(error).__name__}); affected shapes were not compared."
+        )
+        return None
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting Worksheet DrawingML shapes; "
+            "affected shapes were not compared."
+        )
+        return None
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_WorksheetDrawingShapeRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _WorksheetDrawingShapeRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting Worksheet "
+            "DrawingML shapes; affected shapes may be incomplete."
+        )
+        return None
+    return tuple(relationships)
+
+
+def _worksheet_drawing_shape_relationship_signature(
+    relationships: tuple[_WorksheetDrawingShapeRawRelationship, ...],
+) -> str | None:
+    """Fingerprint selected relationship semantics without identifier churn."""
+    material = sorted(relationship.semantic_key() for relationship in relationships)
+    return _private_external_data_signature(
+        tuple(
+            (f"relationship:{index}", repr(relationship))
+            for index, relationship in enumerate(material)
+        )
+    )
+
+
+def _worksheet_drawing_shape_xml_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _WorksheetDrawingShapeBudget,
+) -> tuple[bytes | None, str | None]:
+    """Read one bounded worksheet DrawingML XML part without following targets."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded Worksheet DrawingML shape XML part count "
+            "budget; affected shapes have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("part-count-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a Worksheet DrawingML shape XML part; "
+            "affected shapes were not compared."
+        )
+        return None, _private_external_data_signature((("missing-member", member),))
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _WORKSHEET_DRAWING_SHAPE_MAX_XML_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized Worksheet DrawingML shape "
+            "XML part; affected shapes have a coverage gap."
+        )
+        return None, _private_external_data_signature((("oversized-part", metadata),))
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded Worksheet DrawingML shape XML read "
+            "budget; affected shapes have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a Worksheet DrawingML shape XML package part "
+            f"({type(error).__name__}); affected shapes were not compared."
+        )
+        return None, _private_external_data_signature((("unreadable-part", metadata),))
+
+
+def _worksheet_drawing_shape_xml_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+) -> tuple[object, ...]:
+    """Canonicalize private shape XML while resolving relationship identifiers."""
+    namespace = _xml_namespace(element.tag)
+    local_name = _xml_local_name(element.tag)
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if (
+            namespace == _DRAWINGML_SPREADSHEET_NS
+            and local_name == "cNvPr"
+            and _xml_local_name(attribute) == "id"
+        ):
+            continue
+        if attribute in _WORKSHEET_DRAWING_SHAPE_RELATIONSHIP_ATTRIBUTES:
+            relationship = relationship_semantics.get(value)
+            resolved: object = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+            continue
+        if (
+            namespace == _DRAWINGML_MAIN_NS
+            and local_name == "srgbClr"
+            and _xml_local_name(attribute) == "val"
+        ):
+            value = value.upper()
+        attributes.append((_xml_display_name(attribute), value))
+
+    if namespace == _DRAWINGML_SPREADSHEET_NS and local_name == "grpSp":
+        children = tuple(
+            _worksheet_drawing_shape_xml_fragment(child, relationship_semantics)
+            for child in element
+            if (
+                _xml_namespace(child.tag) == _DRAWINGML_SPREADSHEET_NS
+                and _xml_local_name(child.tag) in _WORKSHEET_DRAWING_GROUP_CHILDREN
+            )
+        )
+    else:
+        children = tuple(
+            _worksheet_drawing_shape_xml_fragment(child, relationship_semantics)
+            for child in element
+        )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+    )
+
+
+def _worksheet_drawing_shape_anchor_fragment(
+    anchor: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+) -> tuple[object, ...]:
+    """Retain anchors and shape containers while excluding charts and pictures."""
+    attributes = tuple(
+        sorted(
+            (_xml_display_name(attribute), value)
+            for attribute, value in anchor.attrib.items()
+        )
+    )
+    children = tuple(
+        _worksheet_drawing_shape_xml_fragment(child, relationship_semantics)
+        for child in anchor
+        if (
+            _xml_namespace(child.tag) == _DRAWINGML_SPREADSHEET_NS
+            and _xml_local_name(child.tag) in _WORKSHEET_DRAWING_SHAPE_ANCHOR_CHILDREN
+        )
+    )
+    return (_xml_display_name(anchor.tag), attributes, children)
+
+
+def _worksheet_drawing_shape_containers(
+    anchor: ElementTree.Element,
+) -> tuple[ElementTree.Element, ...]:
+    """Return direct and grouped shape containers without entering charts or pictures."""
+    containers: list[ElementTree.Element] = []
+
+    def visit(element: ElementTree.Element) -> None:
+        if _xml_namespace(element.tag) != _DRAWINGML_SPREADSHEET_NS:
+            return
+        local_name = _xml_local_name(element.tag)
+        if local_name not in {"sp", "grpSp"}:
+            return
+        containers.append(element)
+        if local_name == "grpSp":
+            for child in element:
+                visit(child)
+
+    for child in anchor:
+        visit(child)
+    return tuple(containers)
+
+
+def _worksheet_drawing_shape_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _WorksheetDrawingShapeBudget,
+) -> _WorksheetDrawingShapeInspection:
+    """Inspect non-chart shape controls in one worksheet DrawingML part."""
+    payload, fallback_signature = _worksheet_drawing_shape_xml_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+    )
+    if payload is None:
+        return _WorksheetDrawingShapeInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a Worksheet DrawingML shape XML part "
+            f"({type(error).__name__}); affected shapes were not compared."
+        )
+        return _WorksheetDrawingShapeInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+    if (
+        _xml_namespace(root.tag) != _DRAWINGML_SPREADSHEET_NS
+        or _xml_local_name(root.tag) != "wsDr"
+    ):
+        warnings.add(
+            "FormulaFence found a Worksheet DrawingML shape part with an unexpected "
+            "root; affected shapes were not compared."
+        )
+        return _WorksheetDrawingShapeInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    anchors: list[tuple[ElementTree.Element, tuple[ElementTree.Element, ...]]] = []
+    for child in root:
+        if (
+            _xml_namespace(child.tag) != _DRAWINGML_SPREADSHEET_NS
+            or _xml_local_name(child.tag) not in _WORKSHEET_DRAWING_SHAPE_ANCHORS
+        ):
+            continue
+        containers = _worksheet_drawing_shape_containers(child)
+        if containers:
+            anchors.append((child, containers))
+
+    shape_tag = f"{{{_DRAWINGML_SPREADSHEET_NS}}}sp"
+    all_shape_nodes = list(root.iter(shape_tag))
+    selected_shape_ids = {
+        id(container)
+        for _anchor, containers in anchors
+        for container in containers
+        if _xml_local_name(container.tag) == "sp"
+    }
+    issue_entries: list[tuple[str, str]] = []
+    unrecognized_count = 0
+    unanchored_shape_count = sum(
+        id(shape) not in selected_shape_ids for shape in all_shape_nodes
+    )
+    if unanchored_shape_count:
+        warnings.add(
+            "FormulaFence found Worksheet DrawingML shapes outside supported anchors; "
+            "affected shape controls have a coverage gap."
+        )
+        unrecognized_count += unanchored_shape_count
+        issue_entries.append(
+            ("unanchored-shape-count", str(unanchored_shape_count))
+        )
+
+    shape_nodes = [
+        container
+        for _anchor, containers in anchors
+        for container in containers
+        if _xml_local_name(container.tag) == "sp"
+    ]
+    group_shape_count = sum(
+        _xml_local_name(container.tag) == "grpSp"
+        for _anchor, containers in anchors
+        for container in containers
+    )
+
+    relationship_ids: set[str] = set()
+    hyperlink_count = 0
+    text_shape_count = 0
+    text_paragraph_count = 0
+    text_run_count = 0
+    text_body_tag = f"{{{_DRAWINGML_SPREADSHEET_NS}}}txBody"
+    paragraph_tag = f"{{{_DRAWINGML_MAIN_NS}}}p"
+    text_run_tags = {
+        f"{{{_DRAWINGML_MAIN_NS}}}r",
+        f"{{{_DRAWINGML_MAIN_NS}}}fld",
+    }
+    hyperlink_tags = {
+        f"{{{_DRAWINGML_MAIN_NS}}}hlinkClick",
+        f"{{{_DRAWINGML_MAIN_NS}}}hlinkHover",
+    }
+    for shape in shape_nodes:
+        text_bodies = list(shape.iter(text_body_tag))
+        if text_bodies:
+            text_shape_count += 1
+        for text_body in text_bodies:
+            text_paragraph_count += sum(
+                child.tag == paragraph_tag for child in text_body.iter()
+            )
+            text_run_count += sum(
+                child.tag in text_run_tags for child in text_body.iter()
+            )
+        for element in shape.iter():
+            if element.tag in hyperlink_tags:
+                hyperlink_count += 1
+            for attribute, value in element.attrib.items():
+                if (
+                    attribute in _WORKSHEET_DRAWING_SHAPE_RELATIONSHIP_ATTRIBUTES
+                    and value
+                ):
+                    relationship_ids.add(value)
+
+    relationship_semantics: dict[str, tuple[str, str, str]] = {}
+    selected_relationships: list[_WorksheetDrawingShapeRawRelationship] = []
+    if relationship_ids:
+        relationships = _worksheet_drawing_shape_raw_relationships(
+            archive,
+            member,
+            warnings,
+            context="Worksheet DrawingML",
+        )
+        relationships_by_id: dict[
+            str,
+            list[_WorksheetDrawingShapeRawRelationship],
+        ] = defaultdict(list)
+        if relationships is not None:
+            for relationship in relationships:
+                if relationship.relationship_id:
+                    relationships_by_id[relationship.relationship_id].append(
+                        relationship
+                    )
+        else:
+            unrecognized_count += 1
+            issue_entries.append(("unreadable-relationships", member))
+        for relationship_id in sorted(relationship_ids):
+            matches = relationships_by_id.get(relationship_id, [])
+            if not matches:
+                warnings.add(
+                    "FormulaFence found a Worksheet DrawingML shape relationship "
+                    "reference without a matching relationship; affected shape controls "
+                    "have a coverage gap."
+                )
+                unrecognized_count += 1
+                issue_entries.append(
+                    ("missing-shape-relationship", relationship_id)
+                )
+                continue
+            matches.sort(key=lambda relationship: relationship.semantic_key())
+            if len(matches) > 1:
+                warnings.add(
+                    "FormulaFence found duplicate Worksheet DrawingML shape relationship "
+                    "ids; affected shape controls have a coverage gap."
+                )
+                unrecognized_count += 1
+                issue_entries.append(
+                    (
+                        "duplicate-shape-relationship",
+                        repr(
+                            (
+                                relationship_id,
+                                tuple(
+                                    relationship.semantic_key()
+                                    for relationship in matches
+                                ),
+                            )
+                        ),
+                    )
+                )
+            relationship = matches[0]
+            relationship_semantics[relationship_id] = relationship.semantic_key()
+            selected_relationships.append(relationship)
+
+    try:
+        definition_entries = [
+            (
+                f"shape-anchor:{index}",
+                repr(
+                    _worksheet_drawing_shape_anchor_fragment(
+                        anchor,
+                        relationship_semantics,
+                    )
+                ),
+            )
+            for index, (anchor, _containers) in enumerate(anchors)
+        ]
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested Worksheet "
+            "DrawingML shape; affected shape controls were not compared."
+        )
+        return _WorksheetDrawingShapeInspection(
+            member=member,
+            present=True,
+            shape_anchor_count=len(anchors),
+            shape_count=len(shape_nodes),
+            group_shape_count=group_shape_count,
+            unrecognized_count=unrecognized_count + 1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_signature=_worksheet_drawing_shape_relationship_signature(
+                tuple(selected_relationships)
+            ),
+        )
+
+    definition_entries.extend(sorted(issue_entries))
+    if unrecognized_count:
+        warnings.add(
+            "FormulaFence found malformed or unsupported Worksheet DrawingML shape "
+            "metadata; affected shape controls have a coverage gap."
+        )
+    return _WorksheetDrawingShapeInspection(
+        member=member,
+        present=bool(anchors or unrecognized_count),
+        shape_anchor_count=len(anchors),
+        shape_count=len(shape_nodes),
+        group_shape_count=group_shape_count,
+        text_shape_count=text_shape_count,
+        text_paragraph_count=text_paragraph_count,
+        text_run_count=text_run_count,
+        macro_assignment_count=sum(
+            bool(shape.get("macro")) for shape in shape_nodes
+        ),
+        text_link_count=sum(
+            bool(shape.get("textlink")) for shape in shape_nodes
+        ),
+        hyperlink_count=hyperlink_count,
+        related_relationship_count=len(selected_relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in selected_relationships
+        ),
+        unrecognized_count=unrecognized_count,
+        inspected=True,
+        definition_signature=_private_external_data_signature(
+            tuple(definition_entries)
+        ),
+        relationship_signature=_worksheet_drawing_shape_relationship_signature(
+            tuple(selected_relationships)
+        ),
+    )
+
+
+def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetadata:
+    """Inspect worksheet shapes before the workbook reader can omit them.
+
+    The scan follows worksheet drawing relationships and compares text-bearing
+    and ordinary shape controls, their anchor/layout declarations, and directly
+    referenced relationship semantics. It does not render shapes, fetch
+    external targets, or open arbitrary related media.
+    """
+    warnings: set[str] = set()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                sheet_parts = _sheet_xml_parts(archive)
+            except (
+                KeyError,
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                return _WorksheetDrawingShapeMetadata(
+                    WorksheetDrawingShapeSnapshot(
+                        unrecognized_shape_count=1,
+                        definition_signature=_private_external_data_signature(
+                            (("sheet-part-scan-failure", type(error).__name__),)
+                        ),
+                    ),
+                    (
+                        "FormulaFence could not inspect worksheet OOXML relationships "
+                        f"for DrawingML shapes ({type(error).__name__}); affected shape "
+                        "controls were not compared.",
+                    ),
+                )
+
+            drawing_sources: dict[str, set[tuple[str, str]]] = defaultdict(set)
+            unresolved_declarations: list[tuple[str, str]] = []
+            for sheet, (member, sheet_kind) in sorted(
+                sheet_parts.items(),
+                key=lambda item: item[0].casefold(),
+            ):
+                if sheet_kind != "worksheet":
+                    continue
+                relationships = _worksheet_drawing_shape_raw_relationships(
+                    archive,
+                    member,
+                    warnings,
+                    context="worksheet",
+                )
+                if relationships is None:
+                    unresolved_declarations.append(
+                        ("unreadable-worksheet-relationships", member)
+                    )
+                    continue
+                for relationship in relationships:
+                    if relationship.relationship_type != _WORKSHEET_DRAWING_RELATIONSHIP:
+                        continue
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.safe_target is None
+                    ):
+                        warnings.add(
+                            "FormulaFence found a worksheet DrawingML relationship "
+                            "without a safe internal target; affected shape controls "
+                            "were not compared."
+                        )
+                        unresolved_declarations.append(
+                            (
+                                "unsafe-worksheet-drawing-relationship",
+                                repr(relationship.semantic_key()),
+                            )
+                        )
+                        continue
+                    drawing_sources[relationship.safe_target].add((sheet, member))
+
+            budget = _WorksheetDrawingShapeBudget()
+            inspections: list[_WorksheetDrawingShapeInspection] = []
+            declaration_entries: list[tuple[str, str]] = list(unresolved_declarations)
+            for drawing_member in sorted(drawing_sources, key=str.casefold):
+                sources = tuple(
+                    sorted(
+                        drawing_sources[drawing_member],
+                        key=lambda source: source[0].casefold(),
+                    )
+                )
+                inspection = _worksheet_drawing_shape_inspection(
+                    archive,
+                    drawing_member,
+                    warnings,
+                    budget,
+                )
+                inspections.append(inspection)
+                if inspection.present:
+                    declaration_entries.append(
+                        (
+                            "worksheet-drawing-shape-part",
+                            repr((drawing_member, sources)),
+                        )
+                    )
+
+            def aggregate_signature(attribute: str) -> str | None:
+                entries = sorted(
+                    (inspection.member, value)
+                    for inspection in inspections
+                    if (value := getattr(inspection, attribute)) is not None
+                )
+                return _private_external_data_signature(tuple(entries))
+
+            present_inspections = [
+                inspection for inspection in inspections if inspection.present
+            ]
+            worksheet_sheets = {
+                sheet
+                for inspection in present_inspections
+                for sheet, _member in drawing_sources.get(inspection.member, set())
+            }
+            snapshot = WorksheetDrawingShapeSnapshot(
+                worksheet_drawing_sheet_count=len(worksheet_sheets),
+                worksheet_drawing_part_count=len(present_inspections),
+                shape_anchor_count=sum(
+                    inspection.shape_anchor_count for inspection in inspections
+                ),
+                shape_count=sum(inspection.shape_count for inspection in inspections),
+                group_shape_count=sum(
+                    inspection.group_shape_count for inspection in inspections
+                ),
+                text_shape_count=sum(
+                    inspection.text_shape_count for inspection in inspections
+                ),
+                text_paragraph_count=sum(
+                    inspection.text_paragraph_count for inspection in inspections
+                ),
+                text_run_count=sum(
+                    inspection.text_run_count for inspection in inspections
+                ),
+                macro_assignment_count=sum(
+                    inspection.macro_assignment_count for inspection in inspections
+                ),
+                text_link_count=sum(
+                    inspection.text_link_count for inspection in inspections
+                ),
+                hyperlink_count=sum(
+                    inspection.hyperlink_count for inspection in inspections
+                ),
+                related_relationship_count=sum(
+                    inspection.related_relationship_count for inspection in inspections
+                ),
+                external_relationship_count=sum(
+                    inspection.external_relationship_count for inspection in inspections
+                ),
+                unrecognized_shape_count=(
+                    len(unresolved_declarations)
+                    + sum(inspection.unrecognized_count for inspection in inspections)
+                ),
+                declaration_signature=_private_external_data_signature(
+                    tuple(sorted(declaration_entries))
+                ),
+                definition_signature=aggregate_signature("definition_signature"),
+                relationship_signature=aggregate_signature("relationship_signature"),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _WorksheetDrawingShapeMetadata(
+            WorksheetDrawingShapeSnapshot(
+                unrecognized_shape_count=1,
+                definition_signature=_private_external_data_signature(
+                    (("worksheet-drawing-shape-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect Worksheet DrawingML shape OOXML "
+                f"({type(error).__name__}); affected shape controls were not compared.",
+            ),
+        )
+    return _WorksheetDrawingShapeMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
     """Inspect raw markers that openpyxl intentionally does not expose."""
     dynamic_cells: set[CellKey] = set()
@@ -19251,6 +19992,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     fill_metadata = _fill_metadata(source)
     formula_cached_result_metadata = _formula_cached_result_metadata(source)
     rich_text_run_metadata = _rich_text_run_metadata(source)
+    worksheet_drawing_shape_metadata = _worksheet_drawing_shape_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -19293,6 +20035,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(fill_metadata.warnings)
     parser_warnings.update(formula_cached_result_metadata.warnings)
     parser_warnings.update(rich_text_run_metadata.warnings)
+    parser_warnings.update(worksheet_drawing_shape_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -19519,6 +20262,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         fill_controls=fill_metadata.controls,
         formula_cached_results=formula_cached_result_metadata.results,
         rich_text_runs=rich_text_run_metadata.controls,
+        worksheet_drawing_shapes=worksheet_drawing_shape_metadata.shapes,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -19598,6 +20342,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "fill_controls": snapshot.fill_controls.profile_dict(),
         "formula_cached_results": snapshot.formula_cached_results.profile_dict(),
         "rich_text_runs": snapshot.rich_text_runs.profile_dict(),
+        "worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -19629,6 +20374,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_fill_controls": snapshot.fill_controls.present,
             "has_formula_cached_results": snapshot.formula_cached_results.present,
             "has_rich_text_runs": snapshot.rich_text_runs.present,
+            "has_worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

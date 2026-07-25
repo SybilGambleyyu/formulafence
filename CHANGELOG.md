@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.42.0 — 2026-07-24
+
+- Inspect raw non-chart Worksheet DrawingML regular shapes (`xdr:sp`) and group
+  shapes (`xdr:grpSp`) before workbook readers can discard their text-box
+  presentation. FormulaFence compares anchor/layout declarations, text and
+  visual XML, group nesting, macro assignments, text links, and click/hover
+  relationship semantics privately; profiles, Markdown, JSON, and SARIF expose
+  structural counts only, never text, formatting, anchors, formulas, macro
+  names, relationship IDs, or targets.
+- Emit `FF044` for a material Worksheet DrawingML shape-control change and add
+  the fail-closed `no_worksheet_drawing_shape_changes` policy rule (`FFP044`).
+  This catches a text-box warning whose stored cell values and concatenated
+  text remain unchanged while its presentation becomes less visible.
+- Normalize writer-chosen non-visual shape IDs, relationship-ID rewrites, colour
+  case, and relationship target spelling while retaining meaningful z-order and
+  shape/group declarations. Missing, malformed, unsupported, oversized, or
+  over-budget shape metadata becomes a visible parser-coverage warning rather
+  than a silent omission. FormulaFence compares stored declarations only: it
+  does not render DrawingML, resolve themes, evaluate text links, execute macro
+  assignments, fetch targets, inspect arbitrary media, or claim coverage for
+  pictures, connectors, graphic frames, SmartArt, or other non-`xdr:sp`
+  drawing objects.
+
 ## 0.41.0 — 2026-07-24
 
 - Inspect raw shared-string and inline-string character presentation that normal

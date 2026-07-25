@@ -25,6 +25,10 @@ financial correctness or replace model review.
   input/result references, and raw declarations are compared through a private
   signature only. Cached worksheet cells remain under the normal cell-diff
   boundary.
+- Worksheet DrawingML regular-shape text, presentation, geometry, anchors,
+  macro assignments, text links, descriptions, relationship identifiers, and
+  targets are compared through private fingerprints only. Profiles and reports
+  retain structural counts, never the underlying shape content.
 - Filter criteria, selected values, custom sort lists, table names, sort keys,
   and row/range references are compared through a private signature only.
 - Ignored-error target ranges and exact per-range warning suppressions are
@@ -267,6 +271,24 @@ review prompt, not proof of an error.
   [shared-string-table guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-shared-string-table),
   the Open XML `r` [rich-text-run definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.run?view=openxml-3.0.1),
   and `is` [inline-string definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.inlinestring?view=openxml-3.0.1).
+- Non-chart Worksheet DrawingML regular shapes (`xdr:sp`) and nested group
+  shapes (`xdr:grpSp`) are followed from standard worksheet `drawing`
+  relationships before the workbook reader can discard their text-box
+  declarations. FormulaFence privately fingerprints supported anchor/layout,
+  shape/group XML, macro assignments, text links, click/hover relationship
+  semantics, and visible text/presentation declarations. Profiles expose only
+  safe worksheet/drawing/anchor, shape/text/group, text paragraph/run,
+  macro/text-link/hyperlink, relationship, and malformed-control counts. A
+  material change emits `FF044` and can be blocked with
+  `no_worksheet_drawing_shape_changes`. Non-visual shape IDs, relationship-ID
+  rewrites, and colour-case spelling are normalized. FormulaFence does **not**
+  render DrawingML, resolve themes or contrast, calculate text links, execute
+  macro assignments, retrieve external targets, parse or hash media, or cover
+  pictures, connectors, graphic frames, SmartArt, or other non-`xdr:sp`
+  objects. Missing, malformed, unsafe, oversized, over-budget, or unsupported
+  regular-shape metadata becomes a visible parser-coverage warning. XML reads
+  are bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts. This
+  scope follows the Open XML [`xdr:sp` Shape definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet.shape?view=openxml-3.0.1).
 - Worksheet data-validation controls are inventoried and diffed as compact
   ranges rather than by expanding their target cells. FormulaFence compares the
   validation type, operator, two criteria expressions, blank/dropdown behavior,
@@ -502,7 +524,7 @@ review prompt, not proof of an error.
   Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and
   Scenario Manager declarations, worksheet/Table AutoFilter and row/column-
   visibility controls, ignored-error warning suppressions, relationship-backed Named Sheet
-  View controls, DrawingML chart
+  View controls, non-chart Worksheet DrawingML regular/group shape controls, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link
@@ -511,7 +533,8 @@ review prompt, not proof of an error.
   Power Pivot/Data Model content; apply Slicer/Timeline filters or model their
   worksheet/drawing view geometry/styles; modern
   `chartEx` or nested-chart semantics; future Named Sheet View extension/rich-
-  sort or full differential-format semantics; general drawing layout/objects or
+  sort or full differential-format semantics; worksheet pictures, connectors,
+  graphic frames, SmartArt, and other non-`xdr:sp` drawing objects or
   chart-to-cell impact; Ribbon image payloads; VML/drawing control layout or
   comment content; embedded OLE/package formats; worksheet-scoped Web Add-in
   markup; Power Query runtime behavior or returned data; ordinary styles beyond

@@ -59,6 +59,8 @@ from .helpers import (
     change_slicer_timeline_filter_material,
     change_table_filter_visibility_criterion,
     change_what_if_data_table_input,
+    change_worksheet_drawing_shape_hyperlink,
+    change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
     change_worksheet_embedded_control_payload,
     change_xlm_macro_sheet_controls,
@@ -85,6 +87,7 @@ from .helpers import (
     corrupt_scenario_manager_input,
     corrupt_slicer_timeline_cache_root,
     corrupt_what_if_data_table_input,
+    corrupt_worksheet_drawing_shape_root,
     corrupt_worksheet_embedded_control_activex_root,
     corrupt_xlm_macro_sheet_root,
     corrupt_zero_dimension_visibility_controls,
@@ -131,6 +134,7 @@ from .helpers import (
     make_table_model,
     make_three_d_model,
     make_what_if_data_table_model,
+    make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
     make_xlm_macro_sheet_model,
     make_zero_dimension_visibility_model,
@@ -168,6 +172,7 @@ from .helpers import (
     renumber_ribbon_customization_relationships,
     renumber_slicer_timeline_pivot_cache_id,
     renumber_slicer_timeline_relationships,
+    renumber_worksheet_drawing_shape_identifiers,
     renumber_worksheet_embedded_control_relationships,
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
@@ -5127,6 +5132,144 @@ def test_rich_text_run_malformed_metadata_fails_closed(tmp_path) -> None:
     )
     for sensitive_value in ("PRIVATE-UNSUPPORTED-RUN-CONTROL", "A3", "FF000000"):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_drawing_shapes_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_worksheet_drawing_shape_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_drawing_shape_model(tmp_path / "candidate.xlsx")
+    hyperlink_candidate = make_worksheet_drawing_shape_model(
+        tmp_path / "hyperlink-candidate.xlsx"
+    )
+    change_worksheet_drawing_shape_presentation(candidate)
+    change_worksheet_drawing_shape_hyperlink(hyperlink_candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    hyperlink_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(hyperlink_candidate),
+    )
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_drawing_shape_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["worksheet_drawing_shape_count"] == 2
+    assert baseline_snapshot.summary()["worksheet_drawing_text_shape_count"] == 2
+    assert baseline_snapshot.summary()["has_worksheet_drawing_shapes"] is True
+    assert profile["worksheet_drawing_shapes"] == {
+        "present": True,
+        "worksheet_drawing_sheet_count": 1,
+        "worksheet_drawing_part_count": 1,
+        "shape_anchor_count": 2,
+        "shape_count": 2,
+        "group_shape_count": 1,
+        "text_shape_count": 2,
+        "text_paragraph_count": 2,
+        "text_run_count": 2,
+        "macro_assignment_count": 1,
+        "text_link_count": 1,
+        "hyperlink_count": 1,
+        "related_relationship_count": 1,
+        "external_relationship_count": 1,
+        "unrecognized_shape_count": 0,
+    }
+    assert "## Worksheet DrawingML shape controls" in markdown
+    assert change.details["worksheet_drawing_shape_definition_material_changed"] is True
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+    assert "FF044" in {finding.rule_id for finding in hyperlink_report.findings}
+    hyperlink_change = next(
+        change
+        for change in hyperlink_report.changes
+        if change.kind == "worksheet_drawing_shape_controls_changed"
+    )
+    assert hyperlink_change.details["worksheet_drawing_shape_relationships_changed"] is True
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+        json.dumps(hyperlink_report.to_dict()),
+        report_to_markdown(hyperlink_report),
+        json.dumps(report_to_sarif(hyperlink_report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-SHAPE-DO-NOT-APPROVE",
+        "PRIVATE-GROUP-SHAPE-TEXT",
+        "PrivateWorksheetShapeMacro",
+        "=Inputs!$B$2",
+        "private-worksheet-shape-target",
+        "private-worksheet-shape-candidate",
+        "Private worksheet warning shape",
+        "000000",
+        "FFFFFF",
+        "rIdFenceShapeLink",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_drawing_shape_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_worksheet_drawing_shape_model(tmp_path / "baseline.xlsx")
+    renumbered = make_worksheet_drawing_shape_model(tmp_path / "renumbered.xlsx")
+    renumber_worksheet_drawing_shape_identifiers(renumbered)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered))
+
+    assert "worksheet_drawing_shape_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" not in {finding.rule_id for finding in report.findings}
+
+
+def test_chart_drawing_is_not_misclassified_as_worksheet_shapes(tmp_path) -> None:
+    workbook = make_chart_definition_model(tmp_path / "chart.xlsx")
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.chart_definitions.present is True
+    assert snapshot.worksheet_drawing_shapes.present is False
+    assert snapshot.worksheet_drawing_shapes.shape_count == 0
+
+
+def test_malformed_worksheet_drawing_shapes_fail_closed(tmp_path) -> None:
+    baseline = make_worksheet_drawing_shape_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_drawing_shape_model(tmp_path / "candidate.xlsx")
+    corrupt_worksheet_drawing_shape_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.worksheet_drawing_shapes.unrecognized_shape_count == 1
+    assert any(
+        "Worksheet DrawingML shape part with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "worksheet_drawing_shape_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_drawing_shape_xml_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    workbook = make_worksheet_drawing_shape_model(tmp_path / "candidate.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKSHEET_DRAWING_SHAPE_MAX_XML_PART_BYTES",
+        1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_drawing_shapes.unrecognized_shape_count >= 1
+    assert any(
+        "oversized Worksheet DrawingML shape XML part" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_ignored_error_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:

@@ -43,6 +43,7 @@ from formulafence.models import (
     SlicerTimelineCacheSnapshot,
     WhatIfDataTableSnapshot,
     WorkbookSnapshot,
+    WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
     XlmMacroSheetSnapshot,
 )
@@ -1889,6 +1890,52 @@ def _rich_text_run_controls_changed(
     return [change], [finding]
 
 
+def _worksheet_drawing_shape_controls_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag DrawingML shape changes that ordinary cell diffs cannot expose."""
+    old_shapes: WorksheetDrawingShapeSnapshot = before.worksheet_drawing_shapes
+    new_shapes: WorksheetDrawingShapeSnapshot = after.worksheet_drawing_shapes
+    if old_shapes == new_shapes:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_shapes.to_dict(),
+        "after": new_shapes.to_dict(),
+    }
+    if old_shapes.declaration_signature != new_shapes.declaration_signature:
+        details["worksheet_drawing_shape_binding_changed"] = True
+    if old_shapes.definition_signature != new_shapes.definition_signature:
+        details["worksheet_drawing_shape_definition_material_changed"] = True
+    if old_shapes.relationship_signature != new_shapes.relationship_signature:
+        details["worksheet_drawing_shape_relationships_changed"] = True
+    if (
+        old_shapes.unrecognized_shape_count != new_shapes.unrecognized_shape_count
+        or (
+            (old_shapes.unrecognized_shape_count or new_shapes.unrecognized_shape_count)
+            and old_shapes.definition_signature != new_shapes.definition_signature
+        )
+    ):
+        details["unrecognized_worksheet_drawing_shape_metadata_changed"] = True
+    change = Change(
+        "worksheet_drawing_shape_controls_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF044",
+        "high",
+        (
+            "Worksheet DrawingML shape controls changed; text, visual cues, anchors, "
+            "or linked actions may be altered outside cells."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> DiffReport:
     """Compare workbook semantics and attach local dependency impact to each edit."""
     changes: list[Change] = []
@@ -1969,6 +2016,12 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(rich_text_run_changes)
     findings.extend(rich_text_run_findings)
+
+    worksheet_drawing_shape_changes, worksheet_drawing_shape_findings = (
+        _worksheet_drawing_shape_controls_changed(before, after)
+    )
+    changes.extend(worksheet_drawing_shape_changes)
+    findings.extend(worksheet_drawing_shape_findings)
 
     newly_broken = after.broken_references - before.broken_references
     for location in sorted(newly_broken, key=_location_sort_key):

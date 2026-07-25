@@ -142,6 +142,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         f"- **Chart parts:** {workbook['chart_part_count']}",
         f"- **Cached chart data points:** {workbook['chart_cached_data_point_count']}",
         (
+            "- **Worksheet DrawingML shapes / text-bearing shapes:** "
+            f"{workbook['worksheet_drawing_shape_count']} / "
+            f"{workbook['worksheet_drawing_text_shape_count']}"
+        ),
+        (
             "- **Worksheet control-bearing sheets:** "
             f"{workbook['worksheet_embedded_control_sheet_count']}"
         ),
@@ -1491,6 +1496,52 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Character-level text, formatting, phonetic hints, shared-string indexes, "
             "and cell locations are compared privately and intentionally omitted."
+        )
+    worksheet_drawing_shapes = profile["worksheet_drawing_shapes"]
+    if worksheet_drawing_shapes["present"]:
+        lines.extend(
+            [
+                "",
+                "## Worksheet DrawingML shape controls",
+                "",
+                (
+                    "- **Worksheets / drawing parts / shape anchors:** "
+                    f"{worksheet_drawing_shapes['worksheet_drawing_sheet_count']} / "
+                    f"{worksheet_drawing_shapes['worksheet_drawing_part_count']} / "
+                    f"{worksheet_drawing_shapes['shape_anchor_count']}"
+                ),
+                (
+                    "- **Shapes (text-bearing / grouped):** "
+                    f"{worksheet_drawing_shapes['shape_count']} "
+                    f"({worksheet_drawing_shapes['text_shape_count']} / "
+                    f"{worksheet_drawing_shapes['group_shape_count']})"
+                ),
+                (
+                    "- **Text paragraphs / runs:** "
+                    f"{worksheet_drawing_shapes['text_paragraph_count']} / "
+                    f"{worksheet_drawing_shapes['text_run_count']}"
+                ),
+                (
+                    "- **Macro assignments / text links / hyperlinks:** "
+                    f"{worksheet_drawing_shapes['macro_assignment_count']} / "
+                    f"{worksheet_drawing_shapes['text_link_count']} / "
+                    f"{worksheet_drawing_shapes['hyperlink_count']}"
+                ),
+                (
+                    "- **Related package relationships:** "
+                    f"{worksheet_drawing_shapes['related_relationship_count']} "
+                    f"({worksheet_drawing_shapes['external_relationship_count']} external)"
+                ),
+            ]
+        )
+        if worksheet_drawing_shapes["unrecognized_shape_count"]:
+            lines.append(
+                "- **Unrecognized or malformed shape controls:** "
+                f"{worksheet_drawing_shapes['unrecognized_shape_count']}"
+            )
+        lines.append(
+            "Shape text, presentation, anchors, macro assignments, text links, hyperlink "
+            "targets, and raw XML are compared privately and intentionally omitted."
         )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:

@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Rich-text run controls — 2026-07-24
+
+FormulaFence 0.41.0 is validated with controlled raw-OOXML `.xlsx` packages
+whose normal cell text remains unchanged while character-level presentation
+changes. The fixture has one relationship-backed shared-string item and one
+inline string, each split into two rich `<r>` runs. Its safe profile exposes
+only one referenced shared item/cell/two runs, one inline cell/two runs, zero
+phonetic controls, and zero malformed controls. The suite verifies a zero-change
+self-diff, exactly one `FF043` and `FFP043` for either shared or inline
+colour-only mutation, and `FF043` when the styled character boundary moves
+while the concatenated text remains unchanged.
+
+The suite also verifies that an ordinary text edit in an otherwise unchanged
+run-property sequence is reported as the normal cell edit rather than a second
+rich-text control finding. Equivalent property ordering, color-case spelling,
+and explicit `b val="false"` normalize without a finding. An unsupported
+namespaced run-property attribute produces a parser-coverage warning, `FF010`,
+and `FF043` rather than a silent omission. Text, fonts, colours, shared-string
+indexes, and locations are verified absent from profiles, Markdown, ordinary
+reports, and SARIF.
+
+For a package-level compatibility reproduction, a controlled baseline with the
+same visible warning text had SHA-256
+`cf74ab0a768b98acd7297ff66faf390bc1c27f6d425c00c6e80a16e6152e484c`.
+The candidate had SHA-256
+`a73b1940eb36357809c951105f3955dbd137192b2f63ea7226d5a81bd48284a5`
+and changed only the rich-run RGB value for the warning phrase, from opaque
+black to opaque white. A fresh published 0.40.0 wheel reported zero changes
+and zero findings for that pair. A fresh 0.41.0 wheel (SHA-256
+`c9f3f37b35e27db9f96a7ca6827bc006cd8fba649461a3a12a1199ef710f3144`)
+emitted exactly one `rich_text_run_controls_changed` change and `FF043`;
+the starter policy exited `1` with `FF043` and `FFP043`. Both release
+artifacts were checked to ensure neither contained the warning text, colour
+values, or cell coordinate. This boundary checks stored XML only; it does not
+assert screen rendering, theme resolution, foreground/background contrast, or
+whether Excel will make the phrase visible.
+
 ## Stored formula results — 2026-07-24
 
 FormulaFence 0.40.0 is validated with controlled raw-OOXML `.xlsx` packages

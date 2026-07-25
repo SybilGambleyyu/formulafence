@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.40.0/formulafence-0.40.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.41.0/formulafence-0.41.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -78,6 +78,7 @@ rules:
   no_cell_font_changes: true
   no_cell_fill_changes: true
   no_formula_cached_result_changes: true
+  no_rich_text_run_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -115,7 +116,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, and unexplained stored-formula-result controls, Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, character-level rich-text runs/phonetic hints, and unexplained stored-formula-result controls, Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -643,7 +644,7 @@ malformed font/style definitions, invalid IDs/indexes/targets, and bounded-parse
 failures become visible coverage warnings rather than silent omissions.
 FormulaFence compares declarations only: it does not render or resolve theme
 colours, decide whether a font is visible against a fill, calculate
-text/background contrast, track borders, alignment, rich-text runs, table
+text/background contrast, track borders, alignment, rich-text run rendering, table
 styles, or arbitrary visual formatting. A column `style` is recorded as the
 OOXML default for unallocated/new cells;
 FormulaFence does not claim to apply that default retroactively to existing
@@ -672,7 +673,7 @@ bounded-parser failures become visible coverage warnings rather than silent
 omissions. FormulaFence compares declarations only: it does not resolve theme
 colours, render patterns or gradients, calculate text/background contrast,
 evaluate conditional-format differential styles, apply table styles, calculate
-values, or track borders, alignment, rich-text runs, width/overflow, or arbitrary
+values, or track borders, alignment, rich-text run rendering, width/overflow, or arbitrary
 visual formatting. A column `style` is recorded as the OOXML default for
 unallocated/new cells; FormulaFence does not claim to apply that default
 retroactively to existing allocated cells. The boundary follows OOXML's
@@ -710,6 +711,34 @@ not a mathematical-correctness verdict. The boundary follows Microsoft's
 the Open XML `c` [cell](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_c_topic_ID0E1XM4.html)
 and `ST_CellType` [definition](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_ST_CellType_topic_ID0E6NEFB.html),
 and Excel's [calculation-mode guidance](https://support.microsoft.com/en-US/Excel/change-formula-recalculation-iteration-or-precision-in-excel).
+
+FormulaFence also compares **rich-text run controls**. A cell can keep the same
+concatenated string while its character-level SpreadsheetML `<rPr>` formatting
+changes: for example, a reviewer-facing “DO NOT APPROVE” phrase can be made
+white inside an otherwise unchanged cell. FormulaFence follows both
+relationship-backed shared strings and direct inline strings, privately
+fingerprints run-property sequences, styled character boundaries, and phonetic
+hints, and emits `FF043` when a material presentation control changes. Enable
+`no_rich_text_run_changes` to make that boundary `FFP043` in CI.
+
+Profiles expose only counts for referenced shared rich-text items/cells/runs,
+inline rich-text cells/runs, phonetic runs/properties, and malformed controls.
+Text, character formatting, colours, fonts, shared-string indexes, and cell
+locations never enter profiles, Markdown, JSON, `FF043` details, or SARIF.
+Equivalent rich-run property ordering, colour case, and explicit false Boolean
+properties are normalized. A plain text edit inside an otherwise unchanged
+run-property sequence remains the normal cell diff; moving a styled boundary
+while the displayed text stays unchanged is guarded. Malformed, unsupported, or
+unreadable rich-text metadata creates a visible coverage warning rather than a
+silent omission.
+
+FormulaFence does not render a cell, resolve theme colours, calculate
+foreground/background contrast, infer whether a phrase is visible, preserve or
+edit rich text, or guarantee equivalence across Excel versions. It compares
+stored presentation declarations only. The boundary follows Microsoft's
+[shared-string-table guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-shared-string-table),
+the Open XML `r` [rich-text-run definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.run?view=openxml-3.0.1),
+and the `is` [inline-string definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.inlinestring?view=openxml-3.0.1).
 
 FormulaFence also inventories relationship-backed **worksheet controls, legacy
 VML form controls, and OLE objects**. A worksheet can bind modern `<control>`

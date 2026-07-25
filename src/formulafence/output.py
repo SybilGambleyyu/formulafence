@@ -1458,6 +1458,40 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Cached result values and formula-cell locations are compared privately and "
             "intentionally omitted."
         )
+    rich_text_runs = profile["rich_text_runs"]
+    if rich_text_runs["present"]:
+        lines.extend(
+            [
+                "",
+                "## Rich-text run controls",
+                "",
+                (
+                    "- **Shared items / shared cells / shared runs:** "
+                    f"{rich_text_runs['shared_rich_text_item_count']} / "
+                    f"{rich_text_runs['shared_rich_text_cell_count']} / "
+                    f"{rich_text_runs['shared_rich_text_run_count']}"
+                ),
+                (
+                    "- **Inline cells / inline runs:** "
+                    f"{rich_text_runs['inline_rich_text_cell_count']} / "
+                    f"{rich_text_runs['inline_rich_text_run_count']}"
+                ),
+                (
+                    "- **Phonetic runs / phonetic properties:** "
+                    f"{rich_text_runs['phonetic_run_count']} / "
+                    f"{rich_text_runs['phonetic_property_count']}"
+                ),
+            ]
+        )
+        if rich_text_runs["unrecognized_rich_text_count"]:
+            lines.append(
+                "- **Unrecognized or malformed rich-text controls:** "
+                f"{rich_text_runs['unrecognized_rich_text_count']}"
+            )
+        lines.append(
+            "Character-level text, formatting, phonetic hints, shared-string indexes, "
+            "and cell locations are compared privately and intentionally omitted."
+        )
     chart_definitions = profile["chart_definitions"]
     if chart_definitions["present"]:
         lines.extend(

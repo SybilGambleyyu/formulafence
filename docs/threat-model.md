@@ -209,7 +209,7 @@ review prompt, not proof of an error.
   and bounded parser failures remain visible coverage warnings. FormulaFence
   does not render or resolve theme colours, decide whether a font is visible
   against a fill, calculate text/background contrast or values, track
-  borders/alignment, rich-text runs, table styles, width/overflow, or arbitrary
+  borders/alignment, rich-text run rendering, table styles, width/overflow, or arbitrary
   visual formatting. Column
   styles are compared only as OOXML defaults for unallocated/new cells, not as a
   claim to restyle allocated cells.
@@ -247,6 +247,26 @@ review prompt, not proof of an error.
   whether they are stale or tampered, or model volatile, dynamic, external, or
   calculation-engine dependencies. A legitimate recalculation without a
   statically visible input edit can therefore still require review.
+- SpreadsheetML shared strings and inline strings can split one displayed cell
+  value into character-level `<r>` runs. Their `<rPr>` formatting can hide or
+  alter the emphasis of a phrase while the normal cell reader still returns the
+  same concatenated text. FormulaFence follows referenced shared-string items
+  and direct inline strings, privately compares run-property sequences, styled
+  character boundaries, and phonetic runs/properties, and emits `FF043`.
+  `no_rich_text_run_changes` blocks it as `FFP043`. Profiles and report
+  details expose only aggregate shared-item/cell/run, inline-cell/run, phonetic,
+  and malformed-control counts; text, font/colour material, shared-string
+  indexes, and locations remain private. Equivalent property ordering, colour
+  case, and explicit false Boolean properties are normalized. A normal text
+  edit inside an unchanged run-property sequence remains a normal cell diff,
+  while a moved styled boundary with unchanged text is guarded. Malformed,
+  unsupported, or unreadable metadata becomes a coverage warning. FormulaFence
+  does not render a cell, resolve theme colours, calculate contrast, determine
+  whether text is visible, preserve rich text, or guarantee cross-version Excel
+  rendering equivalence. This boundary follows Microsoft's
+  [shared-string-table guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-shared-string-table),
+  the Open XML `r` [rich-text-run definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.run?view=openxml-3.0.1),
+  and `is` [inline-string definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.inlinestring?view=openxml-3.0.1).
 - Worksheet data-validation controls are inventoried and diffed as compact
   ranges rather than by expanding their target cells. FormulaFence compares the
   validation type, operator, two criteria expressions, blank/dropdown behavior,

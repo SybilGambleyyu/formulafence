@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.41.0 — 2026-07-24
+
+- Inspect raw shared-string and inline-string character presentation that normal
+  workbook readers reduce to concatenated text. FormulaFence compares rich
+  `<r>/<rPr>` property sequences, styled character boundaries, and phonetic
+  presentation material privately; profiles, Markdown, JSON, and SARIF expose
+  structural counts only, never text, colours, fonts, indexes, or locations.
+- Emit `FF043` for a material rich-text run control change and add the
+  fail-closed `no_rich_text_run_changes` policy rule (`FFP043`).
+  A formatting-only change such as making a warning phrase white is detected
+  even when the normal cell value remains unchanged; an ordinary text-only edit
+  within the same run-property sequence remains a normal semantic cell diff.
+- Normalize rich-run property ordering, colour case, explicit false Boolean
+  properties, and equivalent shared-versus-inline storage. Malformed,
+  unsupported, missing, or unreadable rich-text metadata becomes a visible
+  parser-coverage warning rather than a silent omission. FormulaFence compares
+  stored declarations only: it does not render cells, resolve theme colours,
+  calculate contrast, decide visibility, or guarantee Excel rendering.
+
 ## 0.40.0 — 2026-07-24
 
 - Inspect raw SpreadsheetML formula-result caches alongside formula text. Cache

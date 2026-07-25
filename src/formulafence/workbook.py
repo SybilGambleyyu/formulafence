@@ -72,6 +72,8 @@ from formulafence.models import (
     QueryTableRefreshSnapshot,
     RangeDependency,
     RibbonCustomizationSnapshot,
+    RichTextRunEntry,
+    RichTextRunSnapshot,
     ScenarioManagerSnapshot,
     SheetProtectionSnapshot,
     SheetSnapshot,
@@ -527,6 +529,14 @@ class _FormulaCachedResultMetadata:
     """Raw formula-result cache evidence retained before reader normalization."""
 
     results: FormulaCachedResultSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _RichTextRunMetadata:
+    """Raw character-level string presentation retained before reader loss."""
+
+    controls: RichTextRunSnapshot
     warnings: tuple[str, ...]
 
 
@@ -17720,6 +17730,629 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
     return _FormulaCachedResultMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_XML_SPACE_ATTRIBUTE = "{http://www.w3.org/XML/1998/namespace}space"
+_RICH_TEXT_BOOLEAN_PROPERTIES = _FONT_BOOLEAN_CHILDREN
+_RICH_TEXT_VALUE_PROPERTIES = frozenset(
+    {"rFont", "charset", "family", "sz", "u", "vertAlign", "scheme"}
+)
+_RICH_TEXT_PROPERTIES = (
+    _RICH_TEXT_BOOLEAN_PROPERTIES | _RICH_TEXT_VALUE_PROPERTIES | {"color"}
+)
+_RICH_TEXT_DEFAULT_STYLE = ("default", "")
+
+
+@dataclass(frozen=True)
+class _RichTextItem:
+    """One private shared or inline rich-string presentation record."""
+
+    has_rich_runs: bool
+    rich_run_count: int
+    phonetic_run_count: int
+    phonetic_property_count: int
+    text_signature: str
+    style_sequence_signature: str | None
+    style_layout_signature: str | None
+    unrecognized: bool
+    issue_signature: str | None
+
+    @property
+    def needs_guard(self) -> bool:
+        return bool(
+            self.has_rich_runs
+            or self.phonetic_run_count
+            or self.phonetic_property_count
+            or self.unrecognized
+        )
+
+
+def _rich_text_private_digest(value: object) -> str:
+    """Digest private rich-string material before it reaches an output model."""
+    return hashlib.sha256(
+        repr(value).encode("utf-8", errors="surrogatepass")
+    ).hexdigest()
+
+
+def _rich_text_text_signature(value: str) -> str:
+    """Digest displayed rich-string text without retaining it."""
+    return hashlib.sha256(
+        value.encode("utf-8", errors="surrogatepass")
+    ).hexdigest()
+
+
+def _rich_text_text_value(
+    text: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[str, bool, bool]:
+    """Read one rich-string text element and retain only private state."""
+    invalid = False
+    preserve_space = False
+    if any(text):
+        note_issue(f"{context}:unexpected-child", tuple(child.tag for child in text))
+        invalid = True
+    if text.tail is not None and text.tail.strip():
+        note_issue(f"{context}:unexpected-tail", text.tail)
+        invalid = True
+    for attribute, value in text.attrib.items():
+        if attribute != _XML_SPACE_ATTRIBUTE:
+            note_issue(
+                f"{context}:unsupported-attribute",
+                (_xml_display_name(attribute), value),
+            )
+            invalid = True
+            continue
+        if value == "preserve":
+            preserve_space = True
+        elif value != "default":
+            note_issue(f"{context}:invalid-space", value)
+            invalid = True
+    return text.text or "", preserve_space, invalid
+
+
+def _rich_text_run_style(
+    properties: ElementTree.Element | None,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[str, str]:
+    """Canonicalize one rich-run property set without exposing its values."""
+    if properties is None:
+        return _RICH_TEXT_DEFAULT_STYLE
+
+    invalid = False
+    opaque_children: list[object] = []
+    if properties.attrib:
+        note_issue(
+            f"{context}:unsupported-attributes",
+            tuple(sorted(properties.attrib.items())),
+        )
+        invalid = True
+    if properties.text is not None and properties.text.strip():
+        note_issue(f"{context}:unexpected-text", properties.text)
+        invalid = True
+
+    entries: list[tuple[object, ...]] = []
+    seen: set[str] = set()
+    for child_index, child in enumerate(properties):
+        child_context = f"{context}:child:{child_index}"
+        name = _xml_local_name(child.tag)
+        if (
+            _xml_namespace(child.tag) != _SPREADSHEETML_NS
+            or name not in _RICH_TEXT_PROPERTIES
+        ):
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            opaque_children.append(_xml_fragment(child).sort_key())
+            invalid = True
+            continue
+        if name in seen:
+            note_issue(f"{child_context}:duplicate-child", name)
+            opaque_children.append(_xml_fragment(child).sort_key())
+            invalid = True
+            continue
+        seen.add(name)
+        font_name = "name" if name == "rFont" else name
+        signature, child_invalid = _font_child_signature(
+            child,
+            name=font_name,
+            context=child_context,
+            note_issue=note_issue,
+        )
+        if name == "rFont":
+            signature = (name, *signature[1:])
+        if child_invalid:
+            invalid = True
+        if name in _RICH_TEXT_BOOLEAN_PROPERTIES and signature[1] is False:
+            continue
+        entries.append(signature)
+
+    definition = tuple(sorted(entries, key=repr))
+    if invalid:
+        return (
+            "unrecognized",
+            _rich_text_private_digest(
+                ("run-properties", context, definition, tuple(opaque_children))
+            ),
+        )
+    if not definition:
+        return _RICH_TEXT_DEFAULT_STYLE
+    return ("style", _rich_text_private_digest(definition))
+
+
+def _rich_text_run(
+    run: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[str, tuple[str, str], bool, bool]:
+    """Read one rich text run as text, private style, space mode, and validity."""
+    invalid = False
+    if run.attrib:
+        note_issue(f"{context}:unsupported-attributes", tuple(sorted(run.attrib.items())))
+        invalid = True
+    if run.text is not None and run.text.strip():
+        note_issue(f"{context}:unexpected-text", run.text)
+        invalid = True
+
+    properties: list[ElementTree.Element] = []
+    texts: list[ElementTree.Element] = []
+    seen_text = False
+    rpr_tag = f"{{{_SPREADSHEETML_NS}}}rPr"
+    text_tag = f"{{{_SPREADSHEETML_NS}}}t"
+    for child_index, child in enumerate(run):
+        child_context = f"{context}:child:{child_index}"
+        if child.tag == rpr_tag:
+            if seen_text:
+                note_issue(f"{child_context}:out-of-order-properties", child.tag)
+                invalid = True
+            properties.append(child)
+        elif child.tag == text_tag:
+            seen_text = True
+            texts.append(child)
+        else:
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            invalid = True
+    if len(properties) > 1:
+        note_issue(f"{context}:multiple-properties", len(properties))
+        invalid = True
+    if len(texts) != 1:
+        note_issue(f"{context}:text-count", len(texts))
+        invalid = True
+
+    style = _rich_text_run_style(
+        properties[0] if properties else None,
+        context=f"{context}:properties",
+        note_issue=note_issue,
+    )
+    if style[0] == "unrecognized":
+        invalid = True
+    if not texts:
+        return "", style, False, True
+    value, preserve_space, text_invalid = _rich_text_text_value(
+        texts[0],
+        context=f"{context}:text",
+        note_issue=note_issue,
+    )
+    return value, style, preserve_space, invalid or text_invalid
+
+
+def _rich_text_item(
+    item: ElementTree.Element,
+    *,
+    context: str,
+) -> _RichTextItem | None:
+    """Parse one rich string item only when it has presentation controls."""
+    issues: list[tuple[str, str]] = []
+
+    def note_issue(issue_context: str, detail: object) -> None:
+        issues.append((issue_context, repr(detail)))
+
+    run_tag = f"{{{_SPREADSHEETML_NS}}}r"
+    text_tag = f"{{{_SPREADSHEETML_NS}}}t"
+    phonetic_run_tag = f"{{{_SPREADSHEETML_NS}}}rPh"
+    phonetic_properties_tag = f"{{{_SPREADSHEETML_NS}}}phoneticPr"
+    has_presentation_child = any(
+        child.tag in {run_tag, phonetic_run_tag, phonetic_properties_tag}
+        for child in item
+    )
+    if not has_presentation_child:
+        return None
+
+    if item.attrib:
+        note_issue(f"{context}:unsupported-attributes", tuple(sorted(item.attrib.items())))
+    if item.text is not None and item.text.strip():
+        note_issue(f"{context}:unexpected-text", item.text)
+
+    direct_texts: list[ElementTree.Element] = []
+    runs: list[tuple[str, tuple[str, str], bool]] = []
+    phonetic_fragments: list[object] = []
+    phonetic_run_count = 0
+    phonetic_property_count = 0
+    invalid = False
+    for child_index, child in enumerate(item):
+        child_context = f"{context}:child:{child_index}"
+        if child.tag == run_tag:
+            text, style, preserve_space, run_invalid = _rich_text_run(
+                child,
+                context=child_context,
+                note_issue=note_issue,
+            )
+            runs.append((text, style, preserve_space))
+            invalid = invalid or run_invalid
+        elif child.tag == text_tag:
+            direct_texts.append(child)
+        elif child.tag == phonetic_run_tag:
+            phonetic_run_count += 1
+            phonetic_fragments.append(_xml_fragment(child).sort_key())
+        elif child.tag == phonetic_properties_tag:
+            phonetic_property_count += 1
+            phonetic_fragments.append(_xml_fragment(child).sort_key())
+        else:
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            invalid = True
+
+    if runs and direct_texts:
+        note_issue(f"{context}:mixed-direct-and-run-text", len(direct_texts))
+        invalid = True
+    if len(direct_texts) > 1:
+        note_issue(f"{context}:multiple-direct-texts", len(direct_texts))
+        invalid = True
+
+    direct_text = ""
+    if direct_texts:
+        direct_text, _preserve_space, text_invalid = _rich_text_text_value(
+            direct_texts[0],
+            context=f"{context}:direct-text",
+            note_issue=note_issue,
+        )
+        invalid = invalid or text_invalid
+
+    normalized_runs: list[tuple[str, tuple[str, str], bool]] = []
+    for text, style, preserve_space in runs:
+        if (
+            normalized_runs
+            and normalized_runs[-1][1:] == (style, preserve_space)
+        ):
+            previous_text, _previous_style, _previous_preserve_space = normalized_runs[-1]
+            normalized_runs[-1] = (previous_text + text, style, preserve_space)
+        else:
+            normalized_runs.append((text, style, preserve_space))
+
+    base_text = "".join(text for text, _style, _preserve_space in normalized_runs)
+    if not runs:
+        base_text = direct_text
+    sequence: list[tuple[str, str, bool]] = []
+    layout: list[tuple[int, int, str, str, bool]] = []
+    offset = 0
+    for text, style, preserve_space in normalized_runs:
+        controlled = style != _RICH_TEXT_DEFAULT_STYLE or preserve_space
+        if controlled:
+            sequence.append((style[0], style[1], preserve_space))
+            layout.append((offset, len(text), style[0], style[1], preserve_space))
+        offset += len(text)
+    if issues:
+        invalid = True
+        issue_signature = _rich_text_private_digest(tuple(sorted(issues)))
+        sequence.append(("unrecognized", issue_signature, False))
+        layout.append((0, len(base_text), "unrecognized", issue_signature, False))
+    else:
+        issue_signature = None
+
+    phonetic_material = tuple(phonetic_fragments)
+    controlled = bool(sequence or phonetic_material)
+    return _RichTextItem(
+        has_rich_runs=bool(runs),
+        rich_run_count=len(runs),
+        phonetic_run_count=phonetic_run_count,
+        phonetic_property_count=phonetic_property_count,
+        text_signature=_rich_text_text_signature(base_text),
+        style_sequence_signature=(
+            _rich_text_private_digest((tuple(sequence), phonetic_material))
+            if controlled
+            else None
+        ),
+        style_layout_signature=(
+            _rich_text_private_digest((tuple(layout), phonetic_material))
+            if controlled
+            else None
+        ),
+        unrecognized=invalid,
+        issue_signature=issue_signature,
+    )
+
+
+def _rich_text_shared_string_member(
+    archive: ZipFile,
+) -> tuple[str | None, str | None]:
+    """Find the shared-string part through its workbook relationship."""
+    relationship_type = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+        "sharedStrings"
+    )
+    relationships = _package_relationships(archive, "xl/workbook.xml")
+    targets = [
+        relationship.target
+        for relationship in relationships
+        if relationship.relationship_type == relationship_type
+        and relationship.target is not None
+    ]
+    if len(targets) > 1:
+        return None, "multiple-shared-string-parts"
+    if targets:
+        target = targets[0]
+        if target in archive.namelist():
+            return target, None
+        return None, "missing-shared-string-part"
+    if "xl/sharedStrings.xml" in archive.namelist():
+        return "xl/sharedStrings.xml", None
+    return None, None
+
+
+def _rich_text_run_metadata(path: Path) -> _RichTextRunMetadata:
+    """Inspect shared and inline character-level presentation controls.
+
+    Workbook readers usually return concatenated rich-string text and discard
+    the individual run properties. This scan follows shared-string references
+    and inline strings directly, retaining only private signatures keyed to
+    their effective cells. Shared-string table reorderings and a switch between
+    equivalent shared and inline storage therefore stay quiet.
+    """
+    warnings: set[str] = set()
+    entries: list[RichTextRunEntry] = []
+    signature_entries: list[tuple[str, str]] = []
+    issues: dict[str, str] = {}
+    shared_rich_text_indexes: set[int] = set()
+    shared_phonetic_indexes: set[int] = set()
+    shared_unrecognized_indexes: set[int] = set()
+    inline_unrecognized_keys: set[tuple[str, str]] = set()
+    shared_rich_text_cell_count = 0
+    inline_rich_text_cell_count = 0
+    inline_rich_text_run_count = 0
+    inline_phonetic_run_count = 0
+    inline_phonetic_property_count = 0
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    try:
+        with ZipFile(path) as archive:
+            shared_member, shared_member_issue = _rich_text_shared_string_member(archive)
+            shared_items: list[_RichTextItem | None] | None = None
+            if shared_member is not None:
+                shared_table = _xml_root(archive, shared_member)
+                if (
+                    _xml_namespace(shared_table.tag) != _SPREADSHEETML_NS
+                    or _xml_local_name(shared_table.tag) != "sst"
+                ):
+                    shared_member_issue = "invalid-shared-string-root"
+                else:
+                    shared_item_tag = f"{{{_SPREADSHEETML_NS}}}si"
+                    shared_items = [
+                        _rich_text_item(
+                            item,
+                            context=f"shared-string:{index}",
+                        )
+                        for index, item in enumerate(
+                            shared_table.findall(shared_item_tag)
+                        )
+                    ]
+
+            cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+            value_tag = f"{{{_SPREADSHEETML_NS}}}v"
+            inline_string_tag = f"{{{_SPREADSHEETML_NS}}}is"
+            seen_locations: set[tuple[str, str]] = set()
+
+            def add_entry(
+                sheet: str,
+                raw_coordinate: str | None,
+                item: _RichTextItem,
+                *,
+                context: str,
+            ) -> tuple[str, str] | None:
+                coordinate = _canonical_what_if_data_table_cell(raw_coordinate)
+                if coordinate is None:
+                    note_issue(f"{context}:invalid-coordinate", raw_coordinate)
+                    return None
+                location = (sheet, coordinate)
+                if location in seen_locations:
+                    note_issue(f"{context}:duplicate-coordinate", coordinate)
+                    return None
+                seen_locations.add(location)
+                entry = RichTextRunEntry(
+                    sheet=sheet,
+                    coordinate=coordinate,
+                    text_signature=item.text_signature,
+                    style_sequence_signature=item.style_sequence_signature,
+                    style_layout_signature=item.style_layout_signature,
+                )
+                entries.append(entry)
+                signature_entries.append(
+                    (
+                        (
+                            "rich-text:"
+                            f"{sheet.casefold()}:{coordinate.casefold()}"
+                        ),
+                        repr(
+                            (
+                                entry.text_signature,
+                                entry.style_sequence_signature,
+                                entry.style_layout_signature,
+                            )
+                        ),
+                    )
+                )
+                return location
+
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                if (
+                    _xml_namespace(worksheet.tag) != _SPREADSHEETML_NS
+                    or _xml_local_name(worksheet.tag) != "worksheet"
+                ):
+                    note_issue(f"worksheet:{sheet.casefold()}:root", worksheet.tag)
+                    continue
+                for cell_index, cell in enumerate(worksheet.iter(cell_tag)):
+                    cell_context = f"cell:{sheet.casefold()}:{cell_index}"
+                    cell_type = cell.get("t")
+                    if cell_type == "s":
+                        values = cell.findall(value_tag)
+                        if len(values) != 1:
+                            note_issue(
+                                f"{cell_context}:shared-string-value-count",
+                                len(values),
+                            )
+                            continue
+                        value = values[0].text or ""
+                        string_index = _number_format_unsigned_int(value)
+                        if shared_items is None:
+                            note_issue(
+                                f"{cell_context}:missing-shared-string-table",
+                                shared_member_issue or "not-found",
+                            )
+                            continue
+                        if (
+                            string_index is None
+                            or string_index >= len(shared_items)
+                        ):
+                            note_issue(
+                                f"{cell_context}:invalid-shared-string-index",
+                                value,
+                            )
+                            continue
+                        item = shared_items[string_index]
+                        if item is None or not item.needs_guard:
+                            continue
+                        location = add_entry(
+                            sheet,
+                            cell.get("r"),
+                            item,
+                            context=cell_context,
+                        )
+                        if location is None:
+                            continue
+                        if item.has_rich_runs:
+                            shared_rich_text_cell_count += 1
+                            shared_rich_text_indexes.add(string_index)
+                        if item.phonetic_run_count or item.phonetic_property_count:
+                            shared_phonetic_indexes.add(string_index)
+                        if item.unrecognized:
+                            shared_unrecognized_indexes.add(string_index)
+                        continue
+
+                    inline_items = cell.findall(inline_string_tag)
+                    if not inline_items:
+                        continue
+                    if len(inline_items) != 1:
+                        note_issue(
+                            f"{cell_context}:inline-string-count",
+                            len(inline_items),
+                        )
+                    item = _rich_text_item(
+                        inline_items[0],
+                        context=f"{cell_context}:inline-string",
+                    )
+                    if item is None or not item.needs_guard:
+                        continue
+                    if cell_type != "inlineStr":
+                        note_issue(
+                            f"{cell_context}:inline-string-cell-type",
+                            cell_type,
+                        )
+                    location = add_entry(
+                        sheet,
+                        cell.get("r"),
+                        item,
+                        context=cell_context,
+                    )
+                    if location is None:
+                        continue
+                    if item.has_rich_runs:
+                        inline_rich_text_cell_count += 1
+                        inline_rich_text_run_count += item.rich_run_count
+                    inline_phonetic_run_count += item.phonetic_run_count
+                    inline_phonetic_property_count += item.phonetic_property_count
+                    if item.unrecognized:
+                        inline_unrecognized_keys.add(location)
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        failed_snapshot = RichTextRunSnapshot(
+            unrecognized_rich_text_count=1,
+            definition_signature=_rich_text_private_digest(
+                ("rich-text-scan-failure", type(error).__name__)
+            ),
+        )
+        return _RichTextRunMetadata(
+            failed_snapshot,
+            (
+                "FormulaFence could not inspect rich-text run OOXML "
+                f"({type(error).__name__}); affected character-level presentation "
+                "controls were not compared.",
+            ),
+        )
+
+    if issues or shared_unrecognized_indexes or inline_unrecognized_keys:
+        warnings.add(
+            "FormulaFence found malformed or unsupported rich-text run metadata; "
+            "affected character-level presentation controls have a coverage gap."
+        )
+    signature_entries.extend(
+        (f"rich-text-issue:{context}", detail)
+        for context, detail in sorted(issues.items())
+    )
+    shared_rich_text_run_count = sum(
+        shared_items[index].rich_run_count
+        for index in shared_rich_text_indexes
+        if shared_items is not None and shared_items[index] is not None
+    )
+    shared_phonetic_run_count = sum(
+        shared_items[index].phonetic_run_count
+        for index in shared_phonetic_indexes
+        if shared_items is not None and shared_items[index] is not None
+    )
+    shared_phonetic_property_count = sum(
+        shared_items[index].phonetic_property_count
+        for index in shared_phonetic_indexes
+        if shared_items is not None and shared_items[index] is not None
+    )
+    snapshot = RichTextRunSnapshot(
+        shared_rich_text_item_count=len(shared_rich_text_indexes),
+        shared_rich_text_cell_count=shared_rich_text_cell_count,
+        shared_rich_text_run_count=shared_rich_text_run_count,
+        inline_rich_text_cell_count=inline_rich_text_cell_count,
+        inline_rich_text_run_count=inline_rich_text_run_count,
+        phonetic_run_count=shared_phonetic_run_count + inline_phonetic_run_count,
+        phonetic_property_count=(
+            shared_phonetic_property_count + inline_phonetic_property_count
+        ),
+        unrecognized_rich_text_count=(
+            len(issues)
+            + len(shared_unrecognized_indexes)
+            + len(inline_unrecognized_keys)
+        ),
+        definition_signature=(
+            _private_external_data_signature(tuple(sorted(signature_entries)))
+            if signature_entries
+            else None
+        ),
+        entries=tuple(
+            sorted(
+                entries,
+                key=lambda entry: (
+                    entry.sheet.casefold(),
+                    entry.coordinate.casefold(),
+                ),
+            )
+        ),
+    )
+    return _RichTextRunMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
     """Inspect raw markers that openpyxl intentionally does not expose."""
     dynamic_cells: set[CellKey] = set()
@@ -18617,6 +19250,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     font_metadata = _font_metadata(source)
     fill_metadata = _fill_metadata(source)
     formula_cached_result_metadata = _formula_cached_result_metadata(source)
+    rich_text_run_metadata = _rich_text_run_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -18658,6 +19292,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(font_metadata.warnings)
     parser_warnings.update(fill_metadata.warnings)
     parser_warnings.update(formula_cached_result_metadata.warnings)
+    parser_warnings.update(rich_text_run_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -18883,6 +19518,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         font_controls=font_metadata.controls,
         fill_controls=fill_metadata.controls,
         formula_cached_results=formula_cached_result_metadata.results,
+        rich_text_runs=rich_text_run_metadata.controls,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -18961,6 +19597,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "font_controls": snapshot.font_controls.profile_dict(),
         "fill_controls": snapshot.fill_controls.profile_dict(),
         "formula_cached_results": snapshot.formula_cached_results.profile_dict(),
+        "rich_text_runs": snapshot.rich_text_runs.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -18991,6 +19628,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_font_controls": snapshot.font_controls.present,
             "has_fill_controls": snapshot.fill_controls.present,
             "has_formula_cached_results": snapshot.formula_cached_results.present,
+            "has_rich_text_runs": snapshot.rich_text_runs.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

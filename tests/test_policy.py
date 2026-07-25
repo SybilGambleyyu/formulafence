@@ -25,6 +25,7 @@ from .helpers import (
     change_power_pivot_data_model_payload,
     change_power_query_controls,
     change_ribbon_customization_callback,
+    change_rich_text_run_color,
     change_scenario_manager_input_value,
     change_slicer_timeline_filter_material,
     change_what_if_data_table_input,
@@ -52,6 +53,7 @@ from .helpers import (
     make_power_query_model,
     make_protection_model,
     make_ribbon_customization_model,
+    make_rich_text_run_model,
     make_scenario_manager_model,
     make_slicer_timeline_cache_model,
     make_table_model,
@@ -524,6 +526,19 @@ def test_policy_can_block_formula_cached_result_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP042"}
+
+
+def test_policy_can_block_rich_text_run_changes(tmp_path) -> None:
+    baseline = make_rich_text_run_model(tmp_path / "baseline.xlsx")
+    candidate = make_rich_text_run_model(tmp_path / "candidate.xlsx")
+    change_rich_text_run_color(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_rich_text_run_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP043"}
 
 
 def test_policy_can_block_worksheet_embedded_control_changes(tmp_path) -> None:

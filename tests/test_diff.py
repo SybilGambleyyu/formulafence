@@ -35,6 +35,7 @@ from .helpers import (
     change_gradient_fill_definition,
     change_ignored_error_extension_target,
     change_ignored_error_target,
+    change_inline_rich_text_run_color,
     change_legacy_vml_control_controls,
     change_legacy_vml_note,
     change_named_sheet_view_criterion,
@@ -51,6 +52,9 @@ from .helpers import (
     change_protected_range,
     change_ribbon_customization_callback,
     change_ribbon_customization_controls,
+    change_rich_text_run_boundary,
+    change_rich_text_run_color,
+    change_rich_text_run_text_only,
     change_scenario_manager_input_value,
     change_slicer_timeline_filter_material,
     change_table_filter_visibility_criterion,
@@ -77,6 +81,7 @@ from .helpers import (
     corrupt_office_web_addin_definition_root,
     corrupt_pivot_table_definition_root,
     corrupt_ribbon_customization_root,
+    corrupt_rich_text_run,
     corrupt_scenario_manager_input,
     corrupt_slicer_timeline_cache_root,
     corrupt_what_if_data_table_input,
@@ -118,6 +123,7 @@ from .helpers import (
     make_power_query_model,
     make_protection_model,
     make_ribbon_customization_model,
+    make_rich_text_run_model,
     make_scenario_manager_model,
     make_scoped_named_lambda_model,
     make_slicer_timeline_cache_model,
@@ -141,6 +147,7 @@ from .helpers import (
     normalize_named_sheet_view_control_spelling,
     normalize_number_format_control_spelling,
     normalize_number_format_inheritance,
+    normalize_rich_text_run_property_spelling,
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
     normalize_zero_dimension_visibility_control_spelling,
@@ -171,6 +178,7 @@ from .helpers import (
     rewrite_pivot_table_internal_target_spelling,
     rewrite_power_pivot_data_model_internal_target_spelling,
     rewrite_ribbon_customization_internal_target_spelling,
+    rewrite_shared_rich_text_as_inline,
     rewrite_slicer_timeline_internal_target_spelling,
     rewrite_worksheet_embedded_control_internal_target_spelling,
     rewrite_xlm_macro_sheet_internal_target_spelling,
@@ -4973,6 +4981,151 @@ def test_formula_cached_result_malformed_metadata_fails_closed(tmp_path) -> None
         json.dumps(report_to_sarif(report)),
     )
     for sensitive_value in ("PRIVATE-CACHED-STRING", "PRIVATE-NOT-A-NUMBER", "B2"):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_rich_text_run_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_rich_text_run_model(tmp_path / "baseline.xlsx")
+    candidate = make_rich_text_run_model(tmp_path / "candidate.xlsx")
+    inline_candidate = make_rich_text_run_model(tmp_path / "inline-candidate.xlsx")
+    change_rich_text_run_color(candidate)
+    change_inline_rich_text_run_color(inline_candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    inline_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(inline_candidate),
+    )
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "rich_text_run_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["rich_text_cell_count"] == 2
+    assert baseline_snapshot.summary()["rich_text_run_count"] == 4
+    assert baseline_snapshot.summary()["has_rich_text_runs"] is True
+    assert profile["rich_text_runs"] == {
+        "present": True,
+        "shared_rich_text_item_count": 1,
+        "shared_rich_text_cell_count": 1,
+        "shared_rich_text_run_count": 2,
+        "inline_rich_text_cell_count": 1,
+        "inline_rich_text_run_count": 2,
+        "phonetic_run_count": 0,
+        "phonetic_property_count": 0,
+        "unrecognized_rich_text_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Rich-text run controls" in markdown
+    assert change.details["rich_text_run_control_change_count"] == 1
+    assert change.details["rich_text_run_definition_material_changed"] is True
+    assert "FF043" in {finding.rule_id for finding in report.findings}
+    assert "FF043" in {finding.rule_id for finding in inline_report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+        json.dumps(inline_report.to_dict()),
+        report_to_markdown(inline_report),
+        json.dumps(report_to_sarif(inline_report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-INLINE-HOLD",
+        "PRIVATE-RICH-RUN-FONT",
+        "FF000000",
+        "FF334455",
+        "FFFFFFFF",
+        "Review!A3",
+        "A3",
+        "B3",
+        "rPr",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_rich_text_run_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_rich_text_run_model(tmp_path / "baseline.xlsx")
+    equivalent = make_rich_text_run_model(tmp_path / "equivalent.xlsx")
+    normalize_rich_text_run_property_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+
+
+def test_equivalent_shared_and_inline_rich_text_storage_stays_quiet(tmp_path) -> None:
+    baseline = make_rich_text_run_model(tmp_path / "baseline.xlsx")
+    equivalent = make_rich_text_run_model(tmp_path / "equivalent.xlsx")
+    rewrite_shared_rich_text_as_inline(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+
+
+def test_rich_text_run_style_boundary_changes_are_guarded(tmp_path) -> None:
+    baseline = make_rich_text_run_model(tmp_path / "baseline.xlsx")
+    candidate = make_rich_text_run_model(tmp_path / "candidate.xlsx")
+    change_rich_text_run_boundary(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert {(change.kind, change.location) for change in report.changes} == {
+        ("rich_text_run_controls_changed", None)
+    }
+    assert "FF043" in {finding.rule_id for finding in report.findings}
+
+
+def test_rich_text_run_text_only_edits_stay_normal_cell_changes(tmp_path) -> None:
+    baseline = make_rich_text_run_model(tmp_path / "baseline.xlsx")
+    candidate = make_rich_text_run_model(tmp_path / "candidate.xlsx")
+    change_rich_text_run_text_only(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert ("value_changed", ("Review", "A3")) in {
+        (change.kind, change.location) for change in report.changes
+    }
+    assert "rich_text_run_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF043" not in {finding.rule_id for finding in report.findings}
+
+
+def test_rich_text_run_malformed_metadata_fails_closed(tmp_path) -> None:
+    baseline = make_rich_text_run_model(tmp_path / "baseline.xlsx")
+    malformed = make_rich_text_run_model(tmp_path / "malformed.xlsx")
+    corrupt_rich_text_run(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.rich_text_runs.unrecognized_rich_text_count == 1
+    assert any(
+        "malformed or unsupported rich-text run" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF043"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in ("PRIVATE-UNSUPPORTED-RUN-CONTROL", "A3", "FF000000"):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
 
 

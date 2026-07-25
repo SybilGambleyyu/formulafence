@@ -37,6 +37,8 @@ from formulafence.models import (
     ProtectionOpaqueMetadataSnapshot,
     QueryTableRefreshSnapshot,
     RibbonCustomizationSnapshot,
+    RichTextRunEntry,
+    RichTextRunSnapshot,
     ScenarioManagerSnapshot,
     SlicerTimelineCacheSnapshot,
     WhatIfDataTableSnapshot,
@@ -1802,6 +1804,91 @@ def _formula_cached_result_changes(
     return [change], [finding]
 
 
+def _rich_text_run_entry_map(
+    snapshot: RichTextRunSnapshot,
+) -> dict[CellKey, RichTextRunEntry]:
+    """Index private rich-string presentation records by their effective cells."""
+    return {entry.location: entry for entry in snapshot.entries}
+
+
+def _rich_text_run_controls_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag character-level presentation changes invisible to normal cell diffs.
+
+    A reader normally exposes the concatenated cell text, not the formatting of
+    its individual runs. This check avoids duplicating ordinary text edits:
+    changing text inside an unchanged run-property sequence stays a normal cell
+    change, while a changed property set or a moved style boundary is guarded.
+    """
+    old_controls = before.rich_text_runs
+    new_controls = after.rich_text_runs
+    if old_controls == new_controls:
+        return [], []
+
+    old_entries = _rich_text_run_entry_map(old_controls)
+    new_entries = _rich_text_run_entry_map(new_controls)
+    changed_locations: set[CellKey] = set()
+    for location in set(old_entries) | set(new_entries):
+        old_entry = old_entries.get(location)
+        new_entry = new_entries.get(location)
+        if old_entry is None or new_entry is None:
+            entry = old_entry or new_entry
+            if entry is not None and entry.style_sequence_signature is not None:
+                changed_locations.add(location)
+            continue
+        if old_entry.style_sequence_signature != new_entry.style_sequence_signature:
+            changed_locations.add(location)
+            continue
+        if (
+            old_entry.text_signature == new_entry.text_signature
+            and old_entry.style_layout_signature != new_entry.style_layout_signature
+        ):
+            changed_locations.add(location)
+
+    unrecognized_metadata_changed = (
+        old_controls.unrecognized_rich_text_count
+        != new_controls.unrecognized_rich_text_count
+    )
+    unrecognized_material_changed = (
+        (old_controls.unrecognized_rich_text_count or new_controls.unrecognized_rich_text_count)
+        and old_controls.definition_signature != new_controls.definition_signature
+    )
+    if (
+        not changed_locations
+        and not unrecognized_metadata_changed
+        and not unrecognized_material_changed
+    ):
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_controls.to_dict(),
+        "after": new_controls.to_dict(),
+        "rich_text_run_control_change_count": len(changed_locations),
+    }
+    if old_controls.definition_signature != new_controls.definition_signature:
+        details["rich_text_run_definition_material_changed"] = True
+    if unrecognized_metadata_changed or unrecognized_material_changed:
+        details["unrecognized_rich_text_metadata_changed"] = True
+    change = Change(
+        "rich_text_run_controls_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF043",
+        "high",
+        (
+            "Rich-text run controls changed; character-level formatting or "
+            "phonetic hints may be made less visible or misleading."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> DiffReport:
     """Compare workbook semantics and attach local dependency impact to each edit."""
     changes: list[Change] = []
@@ -1875,6 +1962,13 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(formula_cached_result_changes)
     findings.extend(formula_cached_result_findings)
+
+    rich_text_run_changes, rich_text_run_findings = _rich_text_run_controls_changed(
+        before,
+        after,
+    )
+    changes.extend(rich_text_run_changes)
+    findings.extend(rich_text_run_findings)
 
     newly_broken = after.broken_references - before.broken_references
     for location in sorted(newly_broken, key=_location_sort_key):

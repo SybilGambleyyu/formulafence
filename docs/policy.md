@@ -28,6 +28,7 @@ rules:
   no_cell_font_changes: true
   no_cell_fill_changes: true
   no_formula_cached_result_changes: true
+  no_rich_text_run_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -97,6 +98,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_cell_font_changes` | boolean | An effective default, direct-cell, row, or column font control changes. Font names, colours, effects, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
+| `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -519,7 +521,7 @@ normalized. Missing or malformed definitions, invalid IDs/indexes/targets, and
 bounded parser failures are explicit coverage warnings. FormulaFence does not
 render or resolve theme colours, decide whether a font is visible against a
 fill, calculate text/background contrast or values, track
-borders/alignment/rich-text runs/table styles, or claim arbitrary visual-style
+borders/alignment/rich-text run rendering/table styles, or claim arbitrary visual-style
 coverage. A raw column `style` is
 compared as a declaration/default for unallocated/new cells; it is not treated
 as a renderer that restyles allocated cells.
@@ -564,6 +566,25 @@ or validate a result, decide whether it is stale or tampered, or model volatile,
 dynamic, external, or calculation-engine dependencies. A normal recalculation
 can therefore require review if it changes a cache without a statically visible
 input edit.
+
+SpreadsheetML can also split a string into character-level `<r>` runs. Their
+`<rPr>` controls sit outside the cell-style table, so a phrase can be made less
+visible while the concatenated cell value remains unchanged. FormulaFence follows
+referenced shared-string items and direct inline strings, privately compares
+run-property sequences, styled character boundaries, and phonetic-hint material,
+and emits `FF043` for a material presentation control change. Enable
+`no_rich_text_run_changes` to make it `FFP043` in CI.
+
+Profiles and `FF043` details expose only shared-item/cell/run, inline-cell/run,
+phonetic, and malformed-control counts. Text, font and colour details,
+shared-string indexes, and cell locations remain private. Equivalent property
+ordering, colour case, and explicit false Boolean properties are normalized.
+An ordinary text edit within an unchanged run-property sequence stays a normal
+cell diff; a moved styled boundary with the same text remains guarded.
+Malformed, unsupported, or unreadable rich-text metadata becomes an explicit
+coverage warning. FormulaFence does not render cells, resolve theme colours,
+calculate contrast, determine visibility, preserve rich text, or guarantee
+cross-version Excel rendering equivalence.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

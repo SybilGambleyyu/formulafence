@@ -33,6 +33,7 @@ _RULE_FIELDS = {
     "no_cell_font_changes",
     "no_cell_fill_changes",
     "no_formula_cached_result_changes",
+    "no_rich_text_run_changes",
     "no_worksheet_embedded_control_changes",
     "no_new_parser_warnings",
     "no_new_unresolved_references",
@@ -99,6 +100,7 @@ class Policy:
     no_cell_font_changes: bool = False
     no_cell_fill_changes: bool = False
     no_formula_cached_result_changes: bool = False
+    no_rich_text_run_changes: bool = False
     no_worksheet_embedded_control_changes: bool = False
     no_new_parser_warnings: bool = False
     no_new_unresolved_references: bool = False
@@ -147,6 +149,7 @@ rules:
   no_cell_font_changes: true
   no_cell_fill_changes: true
   no_formula_cached_result_changes: true
+  no_rich_text_run_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -281,6 +284,7 @@ def parse_policy(data: object) -> Policy:
         no_formula_cached_result_changes=_boolean_rule(
             rules, "no_formula_cached_result_changes"
         ),
+        no_rich_text_run_changes=_boolean_rule(rules, "no_rich_text_run_changes"),
         no_worksheet_embedded_control_changes=_boolean_rule(
             rules, "no_worksheet_embedded_control_changes"
         ),
@@ -705,6 +709,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP042",
                     "high",
                     "Policy forbids unexplained stored formula-result changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_rich_text_run_changes:
+        for finding in _rule_triggered(report, "FF043"):
+            violations.append(
+                Finding(
+                    "FFP043",
+                    "high",
+                    "Policy forbids rich-text run control changes.",
                     details=finding.details,
                 )
             )

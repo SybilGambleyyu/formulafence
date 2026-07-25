@@ -7490,6 +7490,299 @@ def corrupt_formula_cached_result(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".formula-cached-result-corrupt.tmp.xlsx")
 
 
+def _rich_text_shared_string_root(
+    contents: dict[str, bytes],
+) -> ElementTree.Element:
+    """Return the raw shared-string table used by the rich-text fixture."""
+    return ElementTree.fromstring(contents["xl/sharedStrings.xml"])
+
+
+def make_rich_text_run_model(path: Path) -> Path:
+    """Create shared and inline strings whose character formatting matters."""
+    workbook = Workbook()
+    review = workbook.active
+    review.title = "Review"
+    review["A1"] = "PRIVATE-RICH-HEADER"
+    review["A3"] = "Decision: DO NOT APPROVE"
+    review["B3"] = "Inline: PRIVATE-INLINE-HOLD"
+    review["C3"] = "=1+1"
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+        value_tag = f"{{{_SPREADSHEETML_NS}}}v"
+        inline_string_tag = f"{{{_SPREADSHEETML_NS}}}is"
+        shared_table_tag = f"{{{_SPREADSHEETML_NS}}}sst"
+        shared_item_tag = f"{{{_SPREADSHEETML_NS}}}si"
+        run_tag = f"{{{_SPREADSHEETML_NS}}}r"
+        run_properties_tag = f"{{{_SPREADSHEETML_NS}}}rPr"
+        text_tag = f"{{{_SPREADSHEETML_NS}}}t"
+        color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+        size_tag = f"{{{_SPREADSHEETML_NS}}}sz"
+        font_tag = f"{{{_SPREADSHEETML_NS}}}rFont"
+        worksheet = _inputs_worksheet_root(contents)
+
+        def fixture_cell(coordinate: str) -> ElementTree.Element:
+            return next(
+                current
+                for current in worksheet.iter(cell_tag)
+                if current.get("r") == coordinate
+            )
+
+        def clear_children(cell: ElementTree.Element) -> None:
+            for child in list(cell):
+                cell.remove(child)
+
+        def rich_run(
+            parent: ElementTree.Element,
+            text: str,
+            *,
+            color: str | None = None,
+        ) -> ElementTree.Element:
+            run = ElementTree.SubElement(parent, run_tag)
+            if color is not None:
+                properties = ElementTree.SubElement(run, run_properties_tag)
+                ElementTree.SubElement(properties, size_tag, {"val": "11"})
+                ElementTree.SubElement(properties, color_tag, {"rgb": color})
+                ElementTree.SubElement(
+                    properties,
+                    font_tag,
+                    {"val": "PRIVATE-RICH-RUN-FONT"},
+                )
+            text_element = ElementTree.SubElement(run, text_tag)
+            if text.endswith(" "):
+                text_element.set(
+                    "{http://www.w3.org/XML/1998/namespace}space",
+                    "preserve",
+                )
+            text_element.text = text
+            return run
+
+        shared = ElementTree.Element(
+            shared_table_tag,
+            {"count": "1", "uniqueCount": "1"},
+        )
+        shared_item = ElementTree.SubElement(shared, shared_item_tag)
+        rich_run(shared_item, "Decision: ")
+        rich_run(shared_item, "DO NOT APPROVE", color="FF000000")
+        contents["xl/sharedStrings.xml"] = ElementTree.tostring(
+            shared,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        shared_cell = fixture_cell("A3")
+        shared_cell.attrib.clear()
+        shared_cell.set("r", "A3")
+        shared_cell.set("t", "s")
+        clear_children(shared_cell)
+        ElementTree.SubElement(shared_cell, value_tag).text = "0"
+
+        inline_cell = fixture_cell("B3")
+        inline_cell.attrib.clear()
+        inline_cell.set("r", "B3")
+        inline_cell.set("t", "inlineStr")
+        clear_children(inline_cell)
+        inline_string = ElementTree.SubElement(inline_cell, inline_string_tag)
+        rich_run(inline_string, "Inline: ")
+        rich_run(inline_string, "PRIVATE-INLINE-HOLD", color="FF334455")
+        _save_inputs_worksheet(contents, worksheet)
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        ElementTree.SubElement(
+            relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFormulaFenceRichTextSharedStrings",
+                "Type": (
+                    "http://schemas.openxmlformats.org/officeDocument/2006/"
+                    "relationships/sharedStrings"
+                ),
+                "Target": "sharedStrings.xml",
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        content_types_namespace = (
+            "http://schemas.openxmlformats.org/package/2006/content-types"
+        )
+        override_tag = f"{{{content_types_namespace}}}Override"
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        ElementTree.SubElement(
+            content_types,
+            override_tag,
+            {
+                "PartName": "/xl/sharedStrings.xml",
+                "ContentType": (
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sharedStrings+xml"
+                ),
+            },
+        )
+        contents["[Content_Types].xml"] = ElementTree.tostring(
+            content_types,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".rich-text-run.tmp.xlsx")
+
+
+def change_rich_text_run_color(path: Path) -> Path:
+    """Hide the shared-string warning with a character-level colour change."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+        shared = _rich_text_shared_string_root(contents)
+        color = next(current for current in shared.iter(color_tag))
+        color.set("rgb", "FFFFFFFF")
+        contents["xl/sharedStrings.xml"] = ElementTree.tostring(
+            shared,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".rich-text-run-colour.tmp.xlsx")
+
+
+def change_inline_rich_text_run_color(path: Path) -> Path:
+    """Hide an inline warning without changing its concatenated cell text."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+        color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+        worksheet = _inputs_worksheet_root(contents)
+        inline_cell = next(
+            current
+            for current in worksheet.iter(cell_tag)
+            if current.get("r") == "B3"
+        )
+        color = next(current for current in inline_cell.iter(color_tag))
+        color.set("rgb", "FFFFFFFF")
+        _save_inputs_worksheet(contents, worksheet)
+
+    return _rewrite_archive(path, mutate, ".inline-rich-text-run-colour.tmp.xlsx")
+
+
+def change_rich_text_run_boundary(path: Path) -> Path:
+    """Move a shared warning's styled boundary while leaving its text unchanged."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        run_tag = f"{{{_SPREADSHEETML_NS}}}r"
+        text_tag = f"{{{_SPREADSHEETML_NS}}}t"
+        shared = _rich_text_shared_string_root(contents)
+        runs = list(shared.iter(run_tag))
+        runs[0].find(text_tag).text = "Decision: D"
+        runs[1].find(text_tag).text = "O NOT APPROVE"
+        contents["xl/sharedStrings.xml"] = ElementTree.tostring(
+            shared,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".rich-text-run-boundary.tmp.xlsx")
+
+
+def change_rich_text_run_text_only(path: Path) -> Path:
+    """Edit a rich string's displayed text without changing its run controls."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        run_tag = f"{{{_SPREADSHEETML_NS}}}r"
+        text_tag = f"{{{_SPREADSHEETML_NS}}}t"
+        shared = _rich_text_shared_string_root(contents)
+        runs = list(shared.iter(run_tag))
+        runs[1].find(text_tag).text = "APPROVE WITH CHANGES"
+        contents["xl/sharedStrings.xml"] = ElementTree.tostring(
+            shared,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".rich-text-run-text.tmp.xlsx")
+
+
+def rewrite_shared_rich_text_as_inline(path: Path) -> Path:
+    """Store equivalent shared rich text inline to exercise storage normalization."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+        inline_string_tag = f"{{{_SPREADSHEETML_NS}}}is"
+        shared_item_tag = f"{{{_SPREADSHEETML_NS}}}si"
+        worksheet = _inputs_worksheet_root(contents)
+        shared_cell = next(
+            current
+            for current in worksheet.iter(cell_tag)
+            if current.get("r") == "A3"
+        )
+        shared = _rich_text_shared_string_root(contents)
+        shared_item = next(shared.iter(shared_item_tag))
+        inline_string = ElementTree.Element(inline_string_tag)
+        for child in shared_item:
+            inline_string.append(
+                ElementTree.fromstring(ElementTree.tostring(child, encoding="utf-8"))
+            )
+        shared_cell.attrib.clear()
+        shared_cell.set("r", "A3")
+        shared_cell.set("t", "inlineStr")
+        for child in list(shared_cell):
+            shared_cell.remove(child)
+        shared_cell.append(inline_string)
+        _save_inputs_worksheet(contents, worksheet)
+
+    return _rewrite_archive(path, mutate, ".rich-text-shared-to-inline.tmp.xlsx")
+
+
+def normalize_rich_text_run_property_spelling(path: Path) -> Path:
+    """Use equivalent rich-run ordering, color case, and Boolean spelling."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        bold_tag = f"{{{_SPREADSHEETML_NS}}}b"
+        color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+        run_properties_tag = f"{{{_SPREADSHEETML_NS}}}rPr"
+        shared = _rich_text_shared_string_root(contents)
+        properties = next(current for current in shared.iter(run_properties_tag))
+        color = next(current for current in properties.iter(color_tag))
+        color.set("rgb", "ff000000")
+        ElementTree.SubElement(properties, bold_tag, {"val": "false"})
+        children = list(properties)
+        for child in children:
+            properties.remove(child)
+        for child in reversed(children):
+            properties.append(child)
+        contents["xl/sharedStrings.xml"] = ElementTree.tostring(
+            shared,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".rich-text-run-noise.tmp.xlsx")
+
+
+def corrupt_rich_text_run(path: Path) -> Path:
+    """Inject unsupported private run metadata for fail-closed coverage."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        run_properties_tag = f"{{{_SPREADSHEETML_NS}}}rPr"
+        shared = _rich_text_shared_string_root(contents)
+        properties = next(current for current in shared.iter(run_properties_tag))
+        properties.set(
+            "{urn:formulafence:test}privateUnsupported",
+            "PRIVATE-UNSUPPORTED-RUN-CONTROL",
+        )
+        contents["xl/sharedStrings.xml"] = ElementTree.tostring(
+            shared,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".rich-text-run-corrupt.tmp.xlsx")
+
+
 def make_named_sheet_view_model(path: Path, *, table_owned: bool = False) -> Path:
     """Create modern alternate filter/sort views with private OOXML settings."""
     workbook = Workbook()

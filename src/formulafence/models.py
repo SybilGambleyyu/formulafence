@@ -1813,6 +1813,78 @@ class FormulaCachedResultSnapshot:
 
 
 @dataclass(frozen=True)
+class RichTextRunEntry:
+    """One private character-level presentation record keyed to a worksheet cell."""
+
+    sheet: str
+    coordinate: str
+    text_signature: str = field(repr=False)
+    style_sequence_signature: str | None = field(default=None, repr=False)
+    style_layout_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def location(self) -> CellKey:
+        return (self.sheet, self.coordinate)
+
+
+@dataclass(frozen=True)
+class RichTextRunSnapshot:
+    """Safe aggregate of character-level string presentation controls.
+
+    SpreadsheetML can store a cell's text as runs with independent font
+    properties, outside the cell-level style table. The private entries retain
+    only one-way signatures so a formatting-only change can be detected without
+    exposing the text, colours, run definitions, or cell locations.
+    """
+
+    shared_rich_text_item_count: int = 0
+    shared_rich_text_cell_count: int = 0
+    shared_rich_text_run_count: int = 0
+    inline_rich_text_cell_count: int = 0
+    inline_rich_text_run_count: int = 0
+    phonetic_run_count: int = 0
+    phonetic_property_count: int = 0
+    unrecognized_rich_text_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+    entries: tuple[RichTextRunEntry, ...] = field(default=(), repr=False)
+
+    @property
+    def rich_text_cell_count(self) -> int:
+        return self.shared_rich_text_cell_count + self.inline_rich_text_cell_count
+
+    @property
+    def rich_text_run_count(self) -> int:
+        return self.shared_rich_text_run_count + self.inline_rich_text_run_count
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.rich_text_cell_count
+            or self.rich_text_run_count
+            or self.phonetic_run_count
+            or self.phonetic_property_count
+            or self.unrecognized_rich_text_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural rich-text evidence without content or targets."""
+        return {
+            "present": self.present,
+            "shared_rich_text_item_count": self.shared_rich_text_item_count,
+            "shared_rich_text_cell_count": self.shared_rich_text_cell_count,
+            "shared_rich_text_run_count": self.shared_rich_text_run_count,
+            "inline_rich_text_cell_count": self.inline_rich_text_cell_count,
+            "inline_rich_text_run_count": self.inline_rich_text_run_count,
+            "phonetic_run_count": self.phonetic_run_count,
+            "phonetic_property_count": self.phonetic_property_count,
+            "unrecognized_rich_text_count": self.unrecognized_rich_text_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -2222,6 +2294,7 @@ class WorkbookSnapshot:
     formula_cached_results: FormulaCachedResultSnapshot = field(
         default_factory=FormulaCachedResultSnapshot
     )
+    rich_text_runs: RichTextRunSnapshot = field(default_factory=RichTextRunSnapshot)
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -2270,6 +2343,10 @@ class WorkbookSnapshot:
                 self.formula_cached_results.missing_cached_result_cell_count
             ),
             "has_formula_cached_results": self.formula_cached_results.present,
+            "rich_text_cell_count": self.rich_text_runs.rich_text_cell_count,
+            "rich_text_run_count": self.rich_text_runs.rich_text_run_count,
+            "phonetic_run_count": self.rich_text_runs.phonetic_run_count,
+            "has_rich_text_runs": self.rich_text_runs.present,
             "what_if_data_table_count": self.what_if_data_tables.data_table_count,
             "what_if_data_table_output_cell_count": (
                 self.what_if_data_tables.declared_output_cell_count

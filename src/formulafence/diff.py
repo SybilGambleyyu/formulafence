@@ -54,6 +54,7 @@ from formulafence.models import (
     WorksheetDisplaySnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
+    WorksheetPrintLayoutSnapshot,
     WorksheetSparklineSnapshot,
     XlmMacroSheetSnapshot,
     XmlMappingSnapshot,
@@ -1665,6 +1666,49 @@ def _workbook_control_changes(
                     "Worksheet display controls changed; zeroes, formulas, gridline "
                     "colour, headers, page whitespace, rulers, outline symbols, or "
                     "saved views and panes may alter the reviewer-visible surface."
+                ),
+                details=details,
+            )
+        )
+    if (
+        before.worksheet_print_layout_controls
+        != after.worksheet_print_layout_controls
+    ):
+        old_controls: WorksheetPrintLayoutSnapshot = (
+            before.worksheet_print_layout_controls
+        )
+        new_controls: WorksheetPrintLayoutSnapshot = (
+            after.worksheet_print_layout_controls
+        )
+        details = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.definition_signature != new_controls.definition_signature:
+            details["worksheet_print_layout_definition_material_changed"] = True
+        if (
+            old_controls.unrecognized_print_layout_count
+            != new_controls.unrecognized_print_layout_count
+            or old_controls.unrecognized_signature
+            != new_controls.unrecognized_signature
+        ):
+            details["unrecognized_worksheet_print_layout_metadata_changed"] = True
+        changes.append(
+            Change(
+                "worksheet_print_layout_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF056",
+                "high",
+                (
+                    "Worksheet print-layout controls changed; print areas, repeated "
+                    "titles, margins, page setup, headers or footers, or manual page "
+                    "breaks may alter the saved print surface."
                 ),
                 details=details,
             )

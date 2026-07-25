@@ -10646,6 +10646,481 @@ def corrupt_worksheet_display_control(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".worksheet-display-malformed.tmp.xlsx")
 
 
+def make_worksheet_print_layout_model(path: Path) -> Path:
+    """Create private, persisted worksheet print controls without cell edits."""
+    workbook = Workbook()
+    review = workbook.active
+    review.title = "PRIVATE-PRINT-SHEET"
+    review["A1"] = "PRIVATE-PRINT-HEADER"
+    review["B2"] = 125
+    review["C4"] = "PRIVATE-PRINT-FOOTER"
+    review["D5"] = "=B2+1"
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook_member = "xl/workbook.xml"
+        workbook_xml = ElementTree.fromstring(contents[workbook_member])
+        defined_names_tag = f"{{{_SPREADSHEETML_NS}}}definedNames"
+        defined_name_tag = f"{{{_SPREADSHEETML_NS}}}definedName"
+        defined_names = workbook_xml.find(defined_names_tag)
+        if defined_names is None:
+            defined_names = ElementTree.Element(defined_names_tag)
+            workbook_xml.append(defined_names)
+        ElementTree.SubElement(
+            defined_names,
+            defined_name_tag,
+            {"name": "_xlnm.Print_Area", "localSheetId": "0"},
+        ).text = "'PRIVATE-PRINT-SHEET'!$A$1:$D$5"
+        ElementTree.SubElement(
+            defined_names,
+            defined_name_tag,
+            {"name": "_xlnm.Print_Titles", "localSheetId": "0"},
+        ).text = "'PRIVATE-PRINT-SHEET'!$1:$2,'PRIVATE-PRINT-SHEET'!$A:$B"
+        contents[workbook_member] = ElementTree.tostring(
+            workbook_xml,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        sheet_properties_tag = f"{{{_SPREADSHEETML_NS}}}sheetPr"
+        page_setup_properties_tag = f"{{{_SPREADSHEETML_NS}}}pageSetUpPr"
+        print_options_tag = f"{{{_SPREADSHEETML_NS}}}printOptions"
+        page_margins_tag = f"{{{_SPREADSHEETML_NS}}}pageMargins"
+        page_setup_tag = f"{{{_SPREADSHEETML_NS}}}pageSetup"
+        header_footer_tag = f"{{{_SPREADSHEETML_NS}}}headerFooter"
+        odd_header_tag = f"{{{_SPREADSHEETML_NS}}}oddHeader"
+        odd_footer_tag = f"{{{_SPREADSHEETML_NS}}}oddFooter"
+        row_breaks_tag = f"{{{_SPREADSHEETML_NS}}}rowBreaks"
+        col_breaks_tag = f"{{{_SPREADSHEETML_NS}}}colBreaks"
+        break_tag = f"{{{_SPREADSHEETML_NS}}}brk"
+
+        sheet_properties = worksheet.find(sheet_properties_tag)
+        if sheet_properties is None:
+            sheet_properties = ElementTree.Element(sheet_properties_tag)
+            worksheet.insert(0, sheet_properties)
+        page_setup_properties = sheet_properties.find(page_setup_properties_tag)
+        if page_setup_properties is None:
+            page_setup_properties = ElementTree.SubElement(
+                sheet_properties,
+                page_setup_properties_tag,
+            )
+        page_setup_properties.set("fitToPage", "true")
+
+        print_options = ElementTree.SubElement(
+            worksheet,
+            print_options_tag,
+            {
+                "gridLines": "1",
+                "gridLinesSet": "true",
+                "headings": "true",
+                "horizontalCentered": "1",
+                "verticalCentered": "true",
+            },
+        )
+        print_options.tail = "\n"
+
+        page_margins = worksheet.find(page_margins_tag)
+        if page_margins is None:
+            page_margins = ElementTree.SubElement(worksheet, page_margins_tag)
+        page_margins.attrib.clear()
+        page_margins.attrib.update(
+            {
+                "left": "1.25",
+                "right": "0.75",
+                "top": "1",
+                "bottom": "1",
+                "header": "0.5",
+                "footer": "0.5",
+            }
+        )
+
+        ElementTree.SubElement(
+            worksheet,
+            page_setup_tag,
+            {
+                "orientation": "landscape",
+                "paperSize": "9",
+                "scale": "80",
+                "fitToWidth": "2",
+                "fitToHeight": "3",
+                "blackAndWhite": "true",
+                "draft": "true",
+                "cellComments": "atEnd",
+                "errors": "blank",
+                "useFirstPageNumber": "true",
+                "firstPageNumber": "5",
+                "usePrinterDefaults": "false",
+                "paperHeight": "297mm",
+                "paperWidth": "210mm",
+            },
+        )
+        header_footer = ElementTree.SubElement(worksheet, header_footer_tag)
+        ElementTree.SubElement(header_footer, odd_header_tag).text = (
+            "&CPRIVATE-PRINT-HEADER-TEXT"
+        )
+        ElementTree.SubElement(header_footer, odd_footer_tag).text = (
+            "&RPRIVATE-PRINT-FOOTER-TEXT"
+        )
+        row_breaks = ElementTree.SubElement(
+            worksheet,
+            row_breaks_tag,
+            {"count": "1", "manualBreakCount": "1"},
+        )
+        ElementTree.SubElement(
+            row_breaks,
+            break_tag,
+            {"id": "10", "min": "0", "max": "16383", "man": "true"},
+        )
+        col_breaks = ElementTree.SubElement(
+            worksheet,
+            col_breaks_tag,
+            {"count": "1", "manualBreakCount": "1"},
+        )
+        ElementTree.SubElement(
+            col_breaks,
+            break_tag,
+            {"id": "4", "min": "0", "max": "1048575", "man": "1"},
+        )
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-print-layout.tmp.xlsx")
+
+
+def _worksheet_print_layout_parts(
+    contents: dict[str, bytes],
+) -> tuple[ElementTree.Element, ElementTree.Element]:
+    """Return the transitional workbook and worksheet print-layout fixture roots."""
+    return (
+        ElementTree.fromstring(contents["xl/workbook.xml"]),
+        ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"]),
+    )
+
+
+def change_worksheet_print_layout_controls(path: Path) -> Path:
+    """Change stored print declarations while leaving worksheet cells intact."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook, worksheet = _worksheet_print_layout_parts(contents)
+        defined_name_tag = f"{{{_SPREADSHEETML_NS}}}definedName"
+        for definition in workbook.iter(defined_name_tag):
+            if definition.get("name") == "_xlnm.Print_Area":
+                definition.text = "'PRIVATE-PRINT-SHEET'!$A$1:$B$2"
+        print_options = worksheet.find(f"{{{_SPREADSHEETML_NS}}}printOptions")
+        page_margins = worksheet.find(f"{{{_SPREADSHEETML_NS}}}pageMargins")
+        page_setup = worksheet.find(f"{{{_SPREADSHEETML_NS}}}pageSetup")
+        header = worksheet.find(
+            f"{{{_SPREADSHEETML_NS}}}headerFooter/{{{_SPREADSHEETML_NS}}}oddHeader"
+        )
+        row_break = worksheet.find(
+            f"{{{_SPREADSHEETML_NS}}}rowBreaks/{{{_SPREADSHEETML_NS}}}brk"
+        )
+        if any(
+            value is None
+            for value in (print_options, page_margins, page_setup, header, row_break)
+        ):
+            raise ValueError("Could not find worksheet print-layout fixture")
+        print_options.set("gridLines", "false")
+        page_margins.set("left", "2.75")
+        page_setup.set("orientation", "portrait")
+        page_setup.set("scale", "75")
+        header.text = "&CPRIVATE-PRINT-HEADER-CANDIDATE"
+        row_break.set("id", "25")
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-print-layout-change.tmp.xlsx")
+
+
+def normalize_worksheet_print_layout_control_spelling(path: Path) -> Path:
+    """Use equivalent print-layout spelling, decimal, and ordering noise."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook, worksheet = _worksheet_print_layout_parts(contents)
+        for definition in workbook.iter(f"{{{_SPREADSHEETML_NS}}}definedName"):
+            definition.text = f"  {definition.text or ''}  "
+        print_options = worksheet.find(f"{{{_SPREADSHEETML_NS}}}printOptions")
+        page_margins = worksheet.find(f"{{{_SPREADSHEETML_NS}}}pageMargins")
+        page_setup = worksheet.find(f"{{{_SPREADSHEETML_NS}}}pageSetup")
+        page_properties = worksheet.find(
+            f"{{{_SPREADSHEETML_NS}}}sheetPr/{{{_SPREADSHEETML_NS}}}pageSetUpPr"
+        )
+        header_footer = worksheet.find(f"{{{_SPREADSHEETML_NS}}}headerFooter")
+        row_breaks = worksheet.find(f"{{{_SPREADSHEETML_NS}}}rowBreaks")
+        col_breaks = worksheet.find(f"{{{_SPREADSHEETML_NS}}}colBreaks")
+        row_break = worksheet.find(
+            f"{{{_SPREADSHEETML_NS}}}rowBreaks/{{{_SPREADSHEETML_NS}}}brk"
+        )
+        col_break = worksheet.find(
+            f"{{{_SPREADSHEETML_NS}}}colBreaks/{{{_SPREADSHEETML_NS}}}brk"
+        )
+        if any(
+            value is None
+            for value in (
+                print_options,
+                page_margins,
+                page_setup,
+                page_properties,
+                header_footer,
+                row_breaks,
+                col_breaks,
+                row_break,
+                col_break,
+            )
+        ):
+            raise ValueError("Could not normalize worksheet print-layout fixture")
+        print_options.attrib.update(
+            {
+                "gridLines": "true",
+                "gridLinesSet": "1",
+                "headings": "1",
+                "horizontalCentered": "true",
+                "verticalCentered": "1",
+            }
+        )
+        page_margins.attrib.update(
+            {
+                "left": "1.2500",
+                "right": "0.750",
+                "top": "1.00",
+                "bottom": "1.0",
+                "header": ".500",
+                "footer": "0.50",
+            }
+        )
+        page_setup.attrib.update(
+            {
+                "paperSize": "009",
+                "scale": "080",
+                "fitToWidth": "002",
+                "fitToHeight": "003",
+                "blackAndWhite": "1",
+                "draft": "1",
+                "useFirstPageNumber": "true",
+                "firstPageNumber": "005",
+                "usePrinterDefaults": "0",
+                "paperHeight": "297.0mm",
+                "paperWidth": "210.00mm",
+            }
+        )
+        page_properties.set("autoPageBreaks", "true")
+        header_footer.set("alignWithMargins", "1")
+        header_footer.set("scaleWithDoc", "true")
+        header_footer.set("differentFirst", "0")
+        header_footer.set("differentOddEven", "false")
+        row_breaks.attrib.update({"count": "01", "manualBreakCount": "001"})
+        row_break.set("id", "0010")
+        row_break.set("min", "000")
+        row_break.set("max", "016383")
+        row_break.set("man", "1")
+        col_breaks.attrib.update({"count": "01", "manualBreakCount": "001"})
+        col_break.set("id", "0004")
+        col_break.set("min", "000")
+        col_break.set("max", "01048575")
+        col_break.set("man", "true")
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-print-layout-noise.tmp.xlsx")
+
+
+def normalize_worksheet_print_layout_inert_controls(
+    path: Path,
+    *,
+    automatic_break_id: int,
+    fit_to_height: int,
+    fit_to_page: bool,
+    fit_to_width: int,
+    first_page_number: int,
+    scale: int,
+    show_auto_page_breaks: bool,
+    inactive_header_suffix: str,
+) -> Path:
+    """Vary saved declarations that cannot affect this fixture's print output."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _, worksheet = _worksheet_print_layout_parts(contents)
+        page_setup = worksheet.find(f"{{{_SPREADSHEETML_NS}}}pageSetup")
+        page_properties = worksheet.find(
+            f"{{{_SPREADSHEETML_NS}}}sheetPr/{{{_SPREADSHEETML_NS}}}pageSetUpPr"
+        )
+        header_footer = worksheet.find(f"{{{_SPREADSHEETML_NS}}}headerFooter")
+        row_breaks = worksheet.find(f"{{{_SPREADSHEETML_NS}}}rowBreaks")
+        if any(
+            value is None
+            for value in (page_setup, page_properties, header_footer, row_breaks)
+        ):
+            raise ValueError("Could not normalize inert worksheet print-layout controls")
+        page_setup.set("useFirstPageNumber", "false")
+        page_setup.set("firstPageNumber", str(first_page_number))
+        page_setup.set("scale", str(scale))
+        page_setup.set("fitToWidth", str(fit_to_width))
+        page_setup.set("fitToHeight", str(fit_to_height))
+        page_properties.set("fitToPage", "true" if fit_to_page else "false")
+        page_properties.set(
+            "autoPageBreaks", "true" if show_auto_page_breaks else "false"
+        )
+        header_footer.set("differentFirst", "false")
+        header_footer.set("differentOddEven", "false")
+        ElementTree.SubElement(
+            header_footer,
+            f"{{{_SPREADSHEETML_NS}}}evenHeader",
+        ).text = f"&CPRIVATE-INACTIVE-EVEN-{inactive_header_suffix}"
+        ElementTree.SubElement(
+            header_footer,
+            f"{{{_SPREADSHEETML_NS}}}firstFooter",
+        ).text = f"&RPRIVATE-INACTIVE-FIRST-{inactive_header_suffix}"
+        ElementTree.SubElement(
+            row_breaks,
+            f"{{{_SPREADSHEETML_NS}}}brk",
+            {
+                "id": str(automatic_break_id),
+                "min": "0",
+                "max": "16383",
+                "man": "false",
+            },
+        )
+        row_breaks.set("count", "2")
+        row_breaks.set("manualBreakCount", "1")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-print-layout-inert.tmp.xlsx")
+
+
+def corrupt_worksheet_print_layout_control(path: Path) -> Path:
+    """Inject an invalid print scale for fail-closed print-layout parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _, worksheet = _worksheet_print_layout_parts(contents)
+        page_setup = worksheet.find(f"{{{_SPREADSHEETML_NS}}}pageSetup")
+        if page_setup is None:
+            raise ValueError("Could not find worksheet print-layout page setup")
+        page_setup.set("scale", "987654321")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-print-layout-malformed.tmp.xlsx")
+
+
+def make_strict_worksheet_print_layout_model(path: Path) -> Path:
+    """Create a strict-SpreadsheetML worksheet print-layout fixture."""
+    make_worksheet_print_layout_model(path)
+
+    def strict_name(name: str, source_namespace: str, target_namespace: str) -> str:
+        prefix = f"{{{source_namespace}}}"
+        if name.startswith(prefix):
+            return f"{{{target_namespace}}}{name[len(prefix):]}"
+        return name
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook_member = "xl/workbook.xml"
+        workbook = ElementTree.fromstring(contents[workbook_member])
+        for element in workbook.iter():
+            element.tag = strict_name(
+                element.tag,
+                _SPREADSHEETML_NS,
+                _STRICT_SPREADSHEETML_NS,
+            )
+            attributes = {
+                strict_name(
+                    name,
+                    _DOCUMENT_RELATIONSHIPS_NS,
+                    _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                ): value
+                for name, value in element.attrib.items()
+            }
+            element.attrib.clear()
+            element.attrib.update(attributes)
+        contents[workbook_member] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        for relationship in relationships.findall(relationship_tag):
+            if (relationship.get("Type") or "").casefold().endswith("/worksheet"):
+                relationship.set(
+                    "Type",
+                    f"{_STRICT_DOCUMENT_RELATIONSHIPS_NS}/worksheet",
+                )
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        for member in sorted(
+            name
+            for name in contents
+            if name.startswith("xl/worksheets/") and name.endswith(".xml")
+        ):
+            worksheet = ElementTree.fromstring(contents[member])
+            for element in worksheet.iter():
+                element.tag = strict_name(
+                    element.tag,
+                    _SPREADSHEETML_NS,
+                    _STRICT_SPREADSHEETML_NS,
+                )
+            contents[member] = ElementTree.tostring(
+                worksheet,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".strict-worksheet-print-layout.tmp.xlsx")
+
+
+def change_strict_worksheet_print_layout_controls(path: Path) -> Path:
+    """Change a strict-SpreadsheetML saved print control without cell edits."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        page_setup = worksheet.find(
+            f"{{{_STRICT_SPREADSHEETML_NS}}}pageSetup"
+        )
+        if page_setup is None:
+            raise ValueError("Could not find strict worksheet print-layout setup")
+        page_setup.set("orientation", "portrait")
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".strict-worksheet-print-layout-change.tmp.xlsx")
+
+
 def _formula_cached_result_cell(
     worksheet: ElementTree.Element,
     coordinate: str,

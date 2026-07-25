@@ -37,6 +37,10 @@ financial correctness or replace model review.
   group properties, and colour definitions are compared through private
   fingerprints only. Profiles and reports retain aggregate structural counts,
   never the underlying source or presentation material.
+- Worksheet print ranges and titles, header/footer text, page values,
+  printer-setting references, and raw print-layout XML are compared through
+  private fingerprints only. Profiles and reports retain only aggregate
+  structural counts.
 - Legacy Excel Note text, authors, cell associations, comment properties,
   threaded-comment placeholder links, VML visibility/layout, relationship
   identifiers, targets, and GUIDs are compared through private fingerprints
@@ -292,10 +296,30 @@ review prompt, not proof of an error.
   outside this boundary to avoid routine writer churn. Missing, duplicate,
   malformed, or unsupported material yields coverage evidence. FormulaFence
   does **not** render Excel, resolve the effective palette colour, calculate
-  viewport geometry/final visibility, inspect print settings, interpret
-  extension-specific views, or infer client state. This boundary follows the Open XML SDK
+  viewport geometry/final visibility, interpret extension-specific views, or
+  infer client state. This boundary follows the Open XML SDK
   [`SheetView` schema surface](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.sheetview?view=openxml-3.0.1)
   and Microsoft’s [worksheet display guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/excel-add-ins-worksheet-display).
+- A saved worksheet print layout can omit printed content, repeat different
+  titles, alter print gridlines/headings/centering, reframe paper with margins
+  or setup controls, change header/footer text, or insert manual page breaks
+  without an ordinary cell edit. FormulaFence privately compares raw
+  transitional and strict SpreadsheetML workbook print-area/print-title defined
+  names plus direct worksheet `printOptions`, `pageMargins`, `pageSetup`,
+  `sheetPr/pageSetUpPr`, `headerFooter`, and row/column-break declarations.
+  It emits `FF056`; `no_worksheet_print_layout_changes` blocks it as `FFP056`.
+  Profiles and reports expose structural counts only; print ranges,
+  header/footer text, page values, printer-setting references, and raw XML stay
+  private. Omitted/default, Boolean, integer, and decimal spellings normalize
+  away, as do inactive first/even headers or footers, disabled first-page
+  numbering, scale overridden by active fit-to-page dimensions, and automatic
+  break display state. Missing, duplicate, malformed, or unsupported material
+  yields coverage evidence. FormulaFence does **not** render/preview a workbook,
+  calculate page geometry/counts or automatic page breaks, resolve printer or
+  client defaults, inspect printer-specific `devMode` data, or cover
+  custom/legacy sheet-view and extension-specific print controls. This boundary
+  follows Microsoft's [print-area guidance](https://support.microsoft.com/en-us/excel/set-or-clear-a-print-area-on-a-worksheet)
+  and [`PageLayout` control surface](https://learn.microsoft.com/en-us/javascript/api/excel/excel.pagelayout?view=excel-js-preview).
 - A workbook-level DrawingML Theme can alter colour, font, and effect schemes
   used by themed cells, charts, and drawing objects without a local style
   change. FormulaFence inspects the raw workbook Theme binding, Theme XML, and
@@ -792,8 +816,8 @@ review prompt, not proof of an error.
   record chains, Slicer and Timeline cache filter-definition chains, embedded
   Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and
   Scenario Manager declarations, worksheet/Table AutoFilter and row/column-
-  visibility controls, material worksheet-display controls, ignored-error
-  warning suppressions, relationship-backed Named Sheet
+  visibility controls, material worksheet-display and worksheet print-layout
+  controls, ignored-error warning suppressions, relationship-backed Named Sheet
   View controls, ordinary worksheet-cell hyperlink declarations/relationships,
   Office 2010 worksheet sparkline declarations, SpreadsheetML XML Map schema,
   refresh/export, table-column, single-cell, and relationship declarations,

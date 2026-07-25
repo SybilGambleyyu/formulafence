@@ -1874,6 +1874,75 @@ class WorksheetDisplaySnapshot:
 
 
 @dataclass(frozen=True)
+class WorksheetPrintLayoutSnapshot:
+    """Safe aggregate of material worksheet print-layout controls.
+
+    A workbook can print a materially different surface without changing a
+    cell: a print area can omit content, titles can repeat context, and page
+    setup, margins, headers, footers, or manual breaks can alter the saved
+    output. Private signatures retain declarations and header/footer text for
+    comparison; public output exposes structural counts only.
+    """
+
+    print_area_definition_count: int = 0
+    print_title_definition_count: int = 0
+    print_gridlines_sheet_count: int = 0
+    print_headings_sheet_count: int = 0
+    horizontally_centered_print_sheet_count: int = 0
+    vertically_centered_print_sheet_count: int = 0
+    page_margin_sheet_count: int = 0
+    page_setup_sheet_count: int = 0
+    header_footer_sheet_count: int = 0
+    manual_row_page_break_count: int = 0
+    manual_column_page_break_count: int = 0
+    unrecognized_print_layout_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+    unrecognized_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.print_area_definition_count
+            or self.print_title_definition_count
+            or self.print_gridlines_sheet_count
+            or self.print_headings_sheet_count
+            or self.horizontally_centered_print_sheet_count
+            or self.vertically_centered_print_sheet_count
+            or self.page_margin_sheet_count
+            or self.page_setup_sheet_count
+            or self.header_footer_sheet_count
+            or self.manual_row_page_break_count
+            or self.manual_column_page_break_count
+            or self.unrecognized_print_layout_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural print evidence without ranges, text, or XML."""
+        return {
+            "present": self.present,
+            "print_area_definition_count": self.print_area_definition_count,
+            "print_title_definition_count": self.print_title_definition_count,
+            "print_gridlines_sheet_count": self.print_gridlines_sheet_count,
+            "print_headings_sheet_count": self.print_headings_sheet_count,
+            "horizontally_centered_print_sheet_count": (
+                self.horizontally_centered_print_sheet_count
+            ),
+            "vertically_centered_print_sheet_count": (
+                self.vertically_centered_print_sheet_count
+            ),
+            "page_margin_sheet_count": self.page_margin_sheet_count,
+            "page_setup_sheet_count": self.page_setup_sheet_count,
+            "header_footer_sheet_count": self.header_footer_sheet_count,
+            "manual_row_page_break_count": self.manual_row_page_break_count,
+            "manual_column_page_break_count": self.manual_column_page_break_count,
+            "unrecognized_print_layout_count": self.unrecognized_print_layout_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorkbookThemeSnapshot:
     """Safe aggregate of workbook-wide DrawingML theme controls.
 
@@ -3098,6 +3167,9 @@ class WorkbookSnapshot:
     worksheet_display_controls: WorksheetDisplaySnapshot = field(
         default_factory=WorksheetDisplaySnapshot
     )
+    worksheet_print_layout_controls: WorksheetPrintLayoutSnapshot = field(
+        default_factory=WorksheetPrintLayoutSnapshot
+    )
     workbook_theme: WorkbookThemeSnapshot = field(
         default_factory=WorkbookThemeSnapshot
     )
@@ -3320,6 +3392,22 @@ class WorkbookSnapshot:
             ),
             "has_worksheet_display_controls": (
                 self.worksheet_display_controls.present
+            ),
+            "worksheet_print_layout_control_count": (
+                self.worksheet_print_layout_controls.print_area_definition_count
+                + self.worksheet_print_layout_controls.print_title_definition_count
+                + self.worksheet_print_layout_controls.print_gridlines_sheet_count
+                + self.worksheet_print_layout_controls.print_headings_sheet_count
+                + self.worksheet_print_layout_controls.horizontally_centered_print_sheet_count
+                + self.worksheet_print_layout_controls.vertically_centered_print_sheet_count
+                + self.worksheet_print_layout_controls.page_margin_sheet_count
+                + self.worksheet_print_layout_controls.page_setup_sheet_count
+                + self.worksheet_print_layout_controls.header_footer_sheet_count
+                + self.worksheet_print_layout_controls.manual_row_page_break_count
+                + self.worksheet_print_layout_controls.manual_column_page_break_count
+            ),
+            "has_worksheet_print_layout_controls": (
+                self.worksheet_print_layout_controls.present
             ),
             "workbook_theme_part_count": self.workbook_theme.theme_part_count,
             "workbook_theme_image_part_count": self.workbook_theme.theme_image_part_count,

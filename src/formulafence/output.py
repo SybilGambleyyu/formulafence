@@ -1513,6 +1513,52 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Sheet names, view targets, and raw display XML are compared privately "
             "and intentionally omitted."
         )
+    worksheet_print_layout_controls = profile["worksheet_print_layout_controls"]
+    if worksheet_print_layout_controls["present"]:
+        horizontally_centered_print_sheet_count = worksheet_print_layout_controls[
+            "horizontally_centered_print_sheet_count"
+        ]
+        vertically_centered_print_sheet_count = worksheet_print_layout_controls[
+            "vertically_centered_print_sheet_count"
+        ]
+        lines.extend(
+            [
+                "",
+                "## Worksheet print-layout controls",
+                "",
+                (
+                    "- **Print-area / print-title declarations / gridline-print sheets / "
+                    "heading-print sheets:** "
+                    f"{worksheet_print_layout_controls['print_area_definition_count']} / "
+                    f"{worksheet_print_layout_controls['print_title_definition_count']} / "
+                    f"{worksheet_print_layout_controls['print_gridlines_sheet_count']} / "
+                    f"{worksheet_print_layout_controls['print_headings_sheet_count']}"
+                ),
+                (
+                    "- **Horizontally centred / vertically centred / page-margin / "
+                    "page-setup / header-footer sheets:** "
+                    f"{horizontally_centered_print_sheet_count} / "
+                    f"{vertically_centered_print_sheet_count} / "
+                    f"{worksheet_print_layout_controls['page_margin_sheet_count']} / "
+                    f"{worksheet_print_layout_controls['page_setup_sheet_count']} / "
+                    f"{worksheet_print_layout_controls['header_footer_sheet_count']}"
+                ),
+                (
+                    "- **Manual row / column page breaks:** "
+                    f"{worksheet_print_layout_controls['manual_row_page_break_count']} / "
+                    f"{worksheet_print_layout_controls['manual_column_page_break_count']}"
+                ),
+            ]
+        )
+        if worksheet_print_layout_controls["unrecognized_print_layout_count"]:
+            lines.append(
+                "- **Unrecognized or malformed print-layout controls:** "
+                f"{worksheet_print_layout_controls['unrecognized_print_layout_count']}"
+            )
+        lines.append(
+            "Print ranges, header/footer text, page values, and raw "
+            "print-layout XML are compared privately and intentionally omitted."
+        )
     workbook_theme = profile["workbook_theme"]
     if workbook_theme["present"]:
         lines.extend(

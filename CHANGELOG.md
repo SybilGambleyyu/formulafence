@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.54.0 — 2026-07-26
+
+- Inspect material saved worksheet print-layout controls directly from raw
+  transitional and strict SpreadsheetML before ordinary readers normalize them:
+  `_xlnm.Print_Area` / `_xlnm.Print_Titles` definitions, print options,
+  margins, page setup/fit-to-page, headers and footers, and manual row/column
+  page breaks. Profiles, Markdown, JSON, and SARIF expose structural counts
+  only; print ranges, header/footer text, page values, printer-setting
+  references, and raw XML remain private.
+- Emit `FF056` for a material worksheet print-layout control change and add the
+  fail-closed `no_worksheet_print_layout_changes` policy rule (`FFP056`). This
+  closes the review gap where an unchanged workbook can print a smaller,
+  reordered, reframed, or differently labelled report.
+- Normalize omitted/default, Boolean, integer, and decimal spellings; paired
+  print-gridline flags; inactive first/even header-footer content; disabled
+  first-page numbers; the fit-to-page versus percentage-scale selection; and
+  automatic-break display noise. Missing, duplicate, malformed, or unsupported
+  metadata is an explicit coverage warning. FormulaFence compares stored
+  declarations only: it does not render or preview Excel, calculate page
+  geometry/counts or automatic pagination, resolve printer/client defaults or
+  `devMode` settings, or cover custom/legacy sheet-view and extension print
+  controls.
+
 ## 0.53.0 — 2026-07-26
 
 - Inspect material raw transitional and strict SpreadsheetML worksheet-display

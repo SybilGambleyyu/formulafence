@@ -94,6 +94,7 @@ from formulafence.models import (
     WorksheetDisplaySnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
+    WorksheetPrintLayoutSnapshot,
     WorksheetSparklineSnapshot,
     XlmMacroSheetSnapshot,
     XmlFragmentSnapshot,
@@ -820,6 +821,14 @@ class _WorksheetDisplayMetadata:
     """Raw material worksheet-display evidence retained before reader loss."""
 
     controls: WorksheetDisplaySnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _WorksheetPrintLayoutMetadata:
+    """Raw material worksheet print-layout evidence retained before reader loss."""
+
+    controls: WorksheetPrintLayoutSnapshot
     warnings: tuple[str, ...]
 
 
@@ -19333,6 +19342,956 @@ def _worksheet_display_metadata(path: Path) -> _WorksheetDisplayMetadata:
     return _WorksheetDisplayMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_WORKSHEET_PRINT_LAYOUT_PRINT_OPTIONS_ATTRIBUTES = frozenset(
+    {
+        "gridLines",
+        "gridLinesSet",
+        "headings",
+        "horizontalCentered",
+        "verticalCentered",
+    }
+)
+_WORKSHEET_PRINT_LAYOUT_PAGE_MARGIN_ATTRIBUTES = frozenset(
+    {"bottom", "footer", "header", "left", "right", "top"}
+)
+_WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_BOOLEAN_DEFAULTS = {
+    "blackAndWhite": False,
+    "draft": False,
+    "useFirstPageNumber": False,
+    "usePrinterDefaults": True,
+}
+_WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_UNSIGNED_DEFAULTS = {
+    "copies": 1,
+    "firstPageNumber": 1,
+    "fitToHeight": 1,
+    "fitToWidth": 1,
+    "horizontalDpi": 600,
+    "paperSize": 1,
+    "scale": 100,
+    "verticalDpi": 600,
+}
+_WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_ENUM_DEFAULTS = {
+    "cellComments": ("none", frozenset({"none", "asDisplayed", "atEnd"})),
+    "errors": ("displayed", frozenset({"displayed", "blank", "dash", "NA"})),
+    "orientation": (
+        "default",
+        frozenset({"default", "portrait", "landscape"}),
+    ),
+    "pageOrder": (
+        "downThenOver",
+        frozenset({"downThenOver", "overThenDown"}),
+    ),
+}
+_WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_ATTRIBUTES = frozenset(
+    set(_WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_BOOLEAN_DEFAULTS)
+    | set(_WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_UNSIGNED_DEFAULTS)
+    | set(_WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_ENUM_DEFAULTS)
+    | {"paperHeight", "paperUnits", "paperWidth"}
+)
+_WORKSHEET_PRINT_LAYOUT_HEADER_FOOTER_ATTRIBUTES = frozenset(
+    {
+        "alignWithMargins",
+        "differentFirst",
+        "differentOddEven",
+        "scaleWithDoc",
+    }
+)
+_WORKSHEET_PRINT_LAYOUT_HEADER_FOOTER_CHILDREN = frozenset(
+    {
+        "evenFooter",
+        "evenHeader",
+        "firstFooter",
+        "firstHeader",
+        "oddFooter",
+        "oddHeader",
+    }
+)
+_WORKSHEET_PRINT_LAYOUT_BREAK_ATTRIBUTES = frozenset(
+    {"id", "man", "max", "min", "pt"}
+)
+_WORKSHEET_PRINT_LAYOUT_BREAK_CONTAINER_ATTRIBUTES = frozenset(
+    {"count", "manualBreakCount"}
+)
+_WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_PROPERTY_ATTRIBUTES = frozenset(
+    {"autoPageBreaks", "fitToPage"}
+)
+_WORKSHEET_PRINT_LAYOUT_BUILTIN_NAMES = {
+    "_xlnm.print_area": "print-area",
+    "_xlnm.print_titles": "print-titles",
+}
+_WORKSHEET_PRINT_LAYOUT_MEASURE = re.compile(
+    r"^([+]?(?:\d+(?:\.\d*)?|\.\d+))(mm|cm|in|pt|pc|pi)?$",
+    flags=re.IGNORECASE,
+)
+_XML_SPACE_ATTRIBUTE = "{http://www.w3.org/XML/1998/namespace}space"
+
+
+def _worksheet_print_layout_boolean(
+    element: ElementTree.Element,
+    name: str,
+    default: bool,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> bool | None:
+    """Read one documented print-layout Boolean, retaining malformed input privately."""
+    value = _number_format_boolean(element.get(name), default)
+    if value is None:
+        note_issue(f"{context}:invalid-{name}", element.get(name))
+    return value
+
+
+def _worksheet_print_layout_unsigned_int(
+    element: ElementTree.Element,
+    name: str,
+    default: int,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> int | None:
+    """Read one bounded integer print-layout setting with an OOXML default."""
+    raw_value = element.get(name)
+    if raw_value is None:
+        return default
+    value = _number_format_unsigned_int(raw_value)
+    if value is None:
+        note_issue(f"{context}:invalid-{name}", raw_value)
+    return value
+
+
+def _worksheet_print_layout_leaf_issues(
+    element: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> None:
+    """Record non-schema text or children on a known print-layout leaf."""
+    if element.text and element.text.strip():
+        note_issue(f"{context}:unexpected-text", element.text)
+    for child_index, child in enumerate(element):
+        note_issue(
+            f"{context}:unexpected-child:{child_index}",
+            _xml_fragment(child).sort_key(),
+        )
+
+
+def _worksheet_print_layout_unexpected_attributes(
+    element: ElementTree.Element,
+    *,
+    known: frozenset[str],
+    context: str,
+    note_issue: Callable[[str, object], None],
+    relationship_id_allowed: bool = False,
+) -> tuple[tuple[str, str], ...]:
+    """Fingerprint unknown attributes while keeping their values out of output."""
+    unknown: list[tuple[str, str]] = []
+    for attribute, value in sorted(element.attrib.items()):
+        namespace = _xml_namespace(attribute)
+        local_name = _xml_local_name(attribute)
+        if namespace is None and local_name in known:
+            continue
+        if (
+            relationship_id_allowed
+            and local_name == "id"
+            and namespace
+            in {_DOCUMENT_RELATIONSHIP_NS, _STRICT_DOCUMENT_RELATIONSHIP_NS}
+        ):
+            note_issue(f"{context}:printer-settings-reference", "present")
+            unknown.append(("printer-settings-reference", "present"))
+            continue
+        note_issue(f"{context}:unsupported-attribute:{attribute}", value)
+        unknown.append(("unsupported-attribute", repr((attribute, value))))
+    return tuple(unknown)
+
+
+def _worksheet_print_layout_measure(
+    value: str | None,
+    *,
+    units: str | None,
+) -> str | None:
+    """Canonicalize one custom-paper measure without evaluating its geometry."""
+    if value is None:
+        return None
+    match = _WORKSHEET_PRINT_LAYOUT_MEASURE.fullmatch(value.strip())
+    if match is None:
+        return None
+    number = _font_decimal(match.group(1))
+    unit = (match.group(2) or units or "").casefold()
+    if number is None or Decimal(number) <= 0 or unit not in {
+        "mm",
+        "cm",
+        "in",
+        "pt",
+        "pc",
+        "pi",
+    }:
+        return None
+    return f"{number}{unit}"
+
+
+def _worksheet_print_layout_page_setup_signature(
+    element: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+    fit_to_page: bool | None,
+) -> tuple[tuple[tuple[str, str], ...], bool]:
+    """Canonicalize effective, printer-independent page setup privately.
+
+    ``fitToPage`` lives in ``sheetPr/pageSetUpPr`` rather than this element.
+    It determines whether the fit dimensions or percentage scale affect the
+    saved output, so the caller resolves it before handing us a page setup.
+    """
+    signature: list[tuple[str, str]] = list(
+        _worksheet_print_layout_unexpected_attributes(
+            element,
+            known=_WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_ATTRIBUTES,
+            context=context,
+            note_issue=note_issue,
+            relationship_id_allowed=True,
+        )
+    )
+    _worksheet_print_layout_leaf_issues(
+        element, context=context, note_issue=note_issue
+    )
+    material_entries: set[str] = set()
+    invalid_entries: set[str] = set()
+
+    for name, default in _WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_BOOLEAN_DEFAULTS.items():
+        value = _worksheet_print_layout_boolean(
+            element, name, default, context=context, note_issue=note_issue
+        )
+        if value is None:
+            signature.append((name, repr(("invalid", element.get(name)))))
+            invalid_entries.add(name)
+        elif value != default:
+            signature.append((name, "true" if value else "false"))
+            material_entries.add(name)
+
+    for name, default in _WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_UNSIGNED_DEFAULTS.items():
+        value = _worksheet_print_layout_unsigned_int(
+            element, name, default, context=context, note_issue=note_issue
+        )
+        if value is None:
+            signature.append((name, repr(("invalid", element.get(name)))))
+            invalid_entries.add(name)
+        elif value != default:
+            if name == "scale" and not 10 <= value <= 400:
+                note_issue(f"{context}:invalid-scale", element.get(name))
+                signature.append((name, repr(("invalid", element.get(name)))))
+                invalid_entries.add(name)
+            else:
+                signature.append((name, str(value)))
+                material_entries.add(name)
+
+    for name, (default, allowed) in _WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_ENUM_DEFAULTS.items():
+        raw_value = element.get(name)
+        value = default if raw_value is None else raw_value.strip()
+        if value not in allowed:
+            note_issue(f"{context}:invalid-{name}", raw_value)
+            signature.append((name, repr(("invalid", raw_value))))
+            invalid_entries.add(name)
+        elif value != default:
+            signature.append((name, value))
+            material_entries.add(name)
+
+    raw_units = element.get("paperUnits")
+    units = raw_units.strip().casefold() if raw_units is not None else None
+    if units is not None and units not in {"mm", "cm", "in", "pt", "pc", "pi"}:
+        note_issue(f"{context}:invalid-paperUnits", raw_units)
+        signature.append(("paperUnits", repr(("invalid", raw_units))))
+        units = None
+    for name in ("paperHeight", "paperWidth"):
+        raw_value = element.get(name)
+        if raw_value is None:
+            continue
+        value = _worksheet_print_layout_measure(raw_value, units=units)
+        if value is None:
+            note_issue(f"{context}:invalid-{name}", raw_value)
+            signature.append((name, repr(("invalid", raw_value))))
+            invalid_entries.add(name)
+        else:
+            signature.append((name, value))
+            material_entries.add(name)
+    if raw_units is not None and not any(
+        element.get(name) is not None for name in ("paperHeight", "paperWidth")
+    ):
+        note_issue(f"{context}:orphan-paperUnits", raw_units)
+        signature.append(("paperUnits", repr(("orphan", raw_units))))
+
+    # ``firstPageNumber`` is inert until the explicit enable flag is on. Its
+    # value remains validated above, but omitting an inactive value avoids
+    # ordinary writer churn without losing an enabled page-number change.
+    use_first_page_number = _worksheet_print_layout_boolean(
+        element,
+        "useFirstPageNumber",
+        False,
+        context=context,
+        note_issue=note_issue,
+    )
+    if use_first_page_number is False:
+        signature = [entry for entry in signature if entry[0] != "firstPageNumber"]
+        material_entries.discard("firstPageNumber")
+    elif use_first_page_number is None:
+        # The invalid flag is already retained above; leave any page number in
+        # the private signature because its effect is ambiguous.
+        pass
+
+    # Fit-to-page selects ``fitToWidth`` / ``fitToHeight``; otherwise scale
+    # selects the print size. The standard explicitly says scale is overridden
+    # when fit dimensions are in use. Preserve malformed inert values as a
+    # coverage signal, but avoid high-severity churn for well-formed values
+    # whose saved setting cannot affect this worksheet's print output.
+    if fit_to_page is True:
+        inert_entries = {"scale"}
+    elif fit_to_page is False:
+        inert_entries = {"fitToHeight", "fitToWidth"}
+    else:
+        inert_entries = set()
+    if inert_entries:
+        signature = [
+            entry
+            for entry in signature
+            if entry[0] not in inert_entries or entry[0] in invalid_entries
+        ]
+        material_entries.difference_update(inert_entries)
+
+    return tuple(sorted(signature)), bool(material_entries)
+
+
+def _worksheet_print_layout_print_options_signature(
+    element: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[tuple[str, str], ...], frozenset[str]]:
+    """Canonicalize effective print-option flags, not writer-only spelling."""
+    signature: list[tuple[str, str]] = list(
+        _worksheet_print_layout_unexpected_attributes(
+            element,
+            known=_WORKSHEET_PRINT_LAYOUT_PRINT_OPTIONS_ATTRIBUTES,
+            context=context,
+            note_issue=note_issue,
+        )
+    )
+    _worksheet_print_layout_leaf_issues(
+        element, context=context, note_issue=note_issue
+    )
+    active: set[str] = set()
+    values: dict[str, bool | None] = {}
+    for name, default in (
+        ("gridLines", False),
+        ("gridLinesSet", True),
+        ("headings", False),
+        ("horizontalCentered", False),
+        ("verticalCentered", False),
+    ):
+        value = _worksheet_print_layout_boolean(
+            element, name, default, context=context, note_issue=note_issue
+        )
+        values[name] = value
+        if value is None:
+            signature.append((name, repr(("invalid", element.get(name)))))
+
+    if values["gridLines"] is True and values["gridLinesSet"] is True:
+        signature.append(("gridLines", "true"))
+        active.add("gridLines")
+    elif values["gridLines"] is None or values["gridLinesSet"] is None:
+        # The invalid declarations are already fingerprinted above. Do not
+        # guess whether gridlines will print.
+        pass
+    for name, active_name in (
+        ("headings", "headings"),
+        ("horizontalCentered", "horizontalCentered"),
+        ("verticalCentered", "verticalCentered"),
+    ):
+        if values[name] is True:
+            signature.append((name, "true"))
+            active.add(active_name)
+    return tuple(sorted(signature)), frozenset(active)
+
+
+def _worksheet_print_layout_page_margins_signature(
+    element: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[str, str], ...]:
+    """Canonicalize all required page margins in inches without rendering them."""
+    signature: list[tuple[str, str]] = list(
+        _worksheet_print_layout_unexpected_attributes(
+            element,
+            known=_WORKSHEET_PRINT_LAYOUT_PAGE_MARGIN_ATTRIBUTES,
+            context=context,
+            note_issue=note_issue,
+        )
+    )
+    _worksheet_print_layout_leaf_issues(
+        element, context=context, note_issue=note_issue
+    )
+    for name in sorted(_WORKSHEET_PRINT_LAYOUT_PAGE_MARGIN_ATTRIBUTES):
+        raw_value = element.get(name)
+        value = _font_decimal(raw_value)
+        if value is None:
+            note_issue(f"{context}:invalid-{name}", raw_value)
+            signature.append((name, repr(("invalid", raw_value))))
+        else:
+            signature.append((name, value))
+    return tuple(sorted(signature))
+
+
+def _worksheet_print_layout_header_footer_signature(
+    element: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[tuple[str, str], ...], bool]:
+    """Compare effective header/footer declarations without exposing their text."""
+    signature: list[tuple[str, str]] = list(
+        _worksheet_print_layout_unexpected_attributes(
+            element,
+            known=_WORKSHEET_PRINT_LAYOUT_HEADER_FOOTER_ATTRIBUTES,
+            context=context,
+            note_issue=note_issue,
+        )
+    )
+    defaults = {
+        "alignWithMargins": True,
+        "differentFirst": False,
+        "differentOddEven": False,
+        "scaleWithDoc": True,
+    }
+    values: dict[str, bool | None] = {}
+    material = False
+    for name, default in defaults.items():
+        value = _worksheet_print_layout_boolean(
+            element, name, default, context=context, note_issue=note_issue
+        )
+        values[name] = value
+        if value is None:
+            signature.append((name, repr(("invalid", element.get(name)))))
+        elif value != default:
+            signature.append((name, "true" if value else "false"))
+            material = True
+
+    children: dict[str, tuple[str, str | None]] = {}
+    namespace = _xml_namespace(element.tag)
+    for child_index, child in enumerate(element):
+        child_context = f"{context}:child:{child_index}"
+        local_name = _xml_local_name(child.tag)
+        if _xml_namespace(child.tag) != namespace or local_name not in (
+            _WORKSHEET_PRINT_LAYOUT_HEADER_FOOTER_CHILDREN
+        ):
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            signature.append(("unsupported-child", repr(_xml_fragment(child).sort_key())))
+            continue
+        if local_name in children:
+            note_issue(f"{child_context}:duplicate-child", local_name)
+            signature.append(("duplicate-child", repr(_xml_fragment(child).sort_key())))
+            continue
+        for attribute, value in sorted(child.attrib.items()):
+            if attribute == _XML_SPACE_ATTRIBUTE and value in {"default", "preserve"}:
+                continue
+            note_issue(f"{child_context}:unsupported-attribute:{attribute}", value)
+            signature.append(
+                ("unsupported-header-footer-attribute", repr((attribute, value)))
+            )
+        if list(child):
+            note_issue(
+                f"{child_context}:unexpected-child",
+                _xml_fragment(child).sort_key(),
+            )
+        children[local_name] = (child.text or "", child.get(_XML_SPACE_ATTRIBUTE))
+
+    active_children = {"oddHeader", "oddFooter"}
+    if values["differentOddEven"] is True:
+        active_children.update({"evenHeader", "evenFooter"})
+    if values["differentFirst"] is True:
+        active_children.update({"firstHeader", "firstFooter"})
+    for name in sorted(active_children):
+        value = children.get(name)
+        if value is not None and value[0]:
+            signature.append((name, repr(value)))
+            material = True
+    return tuple(sorted(signature)), material
+
+
+def _worksheet_print_layout_breaks_signature(
+    element: ElementTree.Element,
+    *,
+    axis: str,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[tuple[str, str], ...], int]:
+    """Retain manual page-break positions, not generated automatic breaks."""
+    signature: list[tuple[str, str]] = list(
+        _worksheet_print_layout_unexpected_attributes(
+            element,
+            known=_WORKSHEET_PRINT_LAYOUT_BREAK_CONTAINER_ATTRIBUTES,
+            context=context,
+            note_issue=note_issue,
+        )
+    )
+    manual_breaks: list[tuple[int, int, int]] = []
+    namespace = _xml_namespace(element.tag)
+    break_count = 0
+    for child_index, child in enumerate(element):
+        child_context = f"{context}:break:{child_index}"
+        if _xml_namespace(child.tag) != namespace or _xml_local_name(child.tag) != "brk":
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            signature.append(("unsupported-child", repr(_xml_fragment(child).sort_key())))
+            continue
+        break_count += 1
+        signature.extend(
+            _worksheet_print_layout_unexpected_attributes(
+                child,
+                known=_WORKSHEET_PRINT_LAYOUT_BREAK_ATTRIBUTES,
+                context=child_context,
+                note_issue=note_issue,
+            )
+        )
+        _worksheet_print_layout_leaf_issues(
+            child, context=child_context, note_issue=note_issue
+        )
+        manual = _worksheet_print_layout_boolean(
+            child, "man", False, context=child_context, note_issue=note_issue
+        )
+        pivot = _worksheet_print_layout_boolean(
+            child, "pt", False, context=child_context, note_issue=note_issue
+        )
+        values: list[int | None] = []
+        for name in ("id", "min", "max"):
+            value = _worksheet_print_layout_unsigned_int(
+                child, name, 0, context=child_context, note_issue=note_issue
+            )
+            values.append(value)
+        if manual is None or pivot is None or any(value is None for value in values):
+            signature.append(("invalid-break", repr((manual, pivot, tuple(values)))))
+            continue
+        if manual:
+            manual_breaks.append((values[0] or 0, values[1] or 0, values[2] or 0))
+
+    for name, expected in (
+        ("count", break_count),
+        ("manualBreakCount", len(manual_breaks)),
+    ):
+        raw_value = element.get(name)
+        if raw_value is None:
+            continue
+        value = _number_format_unsigned_int(raw_value)
+        if value is None:
+            note_issue(f"{context}:invalid-{name}", raw_value)
+            signature.append((name, repr(("invalid", raw_value))))
+        elif value != expected:
+            note_issue(f"{context}:inconsistent-{name}", raw_value)
+            signature.append((name, repr(("inconsistent", value, expected))))
+
+    if len(set(manual_breaks)) != len(manual_breaks):
+        note_issue(f"{context}:duplicate-manual-break", len(manual_breaks))
+    for index, values in enumerate(sorted(manual_breaks)):
+        signature.append((f"{axis}-manual-break:{index}", repr(values)))
+    return tuple(sorted(signature)), len(manual_breaks)
+
+
+def _worksheet_print_layout_page_setup_properties_signature(
+    element: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[tuple[str, str], ...], bool | None]:
+    """Compare the saved fit-to-page switch while ignoring view-only noise."""
+    signature: list[tuple[str, str]] = list(
+        _worksheet_print_layout_unexpected_attributes(
+            element,
+            known=_WORKSHEET_PRINT_LAYOUT_PAGE_SETUP_PROPERTY_ATTRIBUTES,
+            context=context,
+            note_issue=note_issue,
+        )
+    )
+    _worksheet_print_layout_leaf_issues(
+        element, context=context, note_issue=note_issue
+    )
+    # ``autoPageBreaks`` controls the on-screen indicator, not the saved print
+    # surface. Accept and validate it so writers can round-trip it quietly.
+    _worksheet_print_layout_boolean(
+        element, "autoPageBreaks", True, context=context, note_issue=note_issue
+    )
+    fit_to_page = _worksheet_print_layout_boolean(
+        element, "fitToPage", False, context=context, note_issue=note_issue
+    )
+    if fit_to_page is None:
+        signature.append(("fitToPage", repr(("invalid", element.get("fitToPage")))))
+    elif fit_to_page:
+        signature.append(("fitToPage", "true"))
+    return tuple(sorted(signature)), fit_to_page
+
+
+def _worksheet_print_layout_metadata(path: Path) -> _WorksheetPrintLayoutMetadata:
+    """Inspect persisted, printer-independent worksheet print controls.
+
+    The raw boundary deliberately stays separate from workbook readers: print
+    area/title names, page settings, headers, and manual breaks can otherwise
+    be normalized away while cells and formulas remain identical. It covers
+    standard worksheet declarations in transitional and strict SpreadsheetML.
+    Printer-specific devMode settings and legacy custom sheet views remain
+    coverage limits rather than guessed render results.
+    """
+    default_snapshot = WorksheetPrintLayoutSnapshot()
+    warnings: set[str] = set()
+    issues: dict[str, str] = {}
+    entries: list[tuple[str, str]] = []
+    print_area_definition_count = 0
+    print_title_definition_count = 0
+    print_gridline_sheets: set[int] = set()
+    print_heading_sheets: set[int] = set()
+    horizontally_centered_sheets: set[int] = set()
+    vertically_centered_sheets: set[int] = set()
+    page_margin_sheets: set[int] = set()
+    page_setup_sheets: set[int] = set()
+    header_footer_sheets: set[int] = set()
+    manual_row_page_break_count = 0
+    manual_column_page_break_count = 0
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    try:
+        with ZipFile(path) as archive:
+            workbook = _xml_root(archive, "xl/workbook.xml")
+            workbook_namespace = _xml_namespace(workbook.tag)
+            if (
+                _xml_local_name(workbook.tag) != "workbook"
+                or workbook_namespace
+                not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+            ):
+                note_issue("workbook:unexpected-root", workbook.tag)
+            elif workbook_namespace is not None:
+                sheet_tag = f"{{{workbook_namespace}}}sheet"
+                sheets_tag = f"{{{workbook_namespace}}}sheets"
+                sheet_count = sum(
+                    1
+                    for container in workbook.findall(sheets_tag)
+                    for child in container
+                    if child.tag == sheet_tag
+                )
+                defined_names_tag = f"{{{workbook_namespace}}}definedNames"
+                defined_name_tag = f"{{{workbook_namespace}}}definedName"
+                containers = workbook.findall(defined_names_tag)
+                if len(containers) > 1:
+                    note_issue("workbook:multiple-defined-names-containers", len(containers))
+                seen_builtin_definitions: set[tuple[str, str]] = set()
+                for container_index, container in enumerate(containers):
+                    context = f"workbook:defined-names:{container_index}"
+                    if container.attrib:
+                        note_issue(
+                            f"{context}:unexpected-attributes",
+                            tuple(sorted(container.attrib.items())),
+                        )
+                    for definition_index, definition in enumerate(container):
+                        definition_context = f"{context}:definition:{definition_index}"
+                        if definition.tag != defined_name_tag:
+                            note_issue(
+                                f"{definition_context}:unsupported-child", definition.tag
+                            )
+                            continue
+                        raw_name = definition.get("name")
+                        kind = (
+                            _WORKSHEET_PRINT_LAYOUT_BUILTIN_NAMES.get(
+                                raw_name.casefold()
+                            )
+                            if raw_name is not None
+                            else None
+                        )
+                        if kind is None:
+                            continue
+                        for attribute, value in sorted(definition.attrib.items()):
+                            local_name = _xml_local_name(attribute)
+                            if _xml_namespace(attribute) is None and local_name in {
+                                "name",
+                                "localSheetId",
+                                "hidden",
+                            }:
+                                if local_name == "hidden" and _number_format_boolean(
+                                    value, False
+                                ) is None:
+                                    note_issue(
+                                        f"{definition_context}:invalid-hidden", value
+                                    )
+                                continue
+                            note_issue(
+                                f"{definition_context}:unsupported-attribute:{attribute}",
+                                value,
+                            )
+                        local_sheet_id = _number_format_unsigned_int(
+                            definition.get("localSheetId")
+                        )
+                        if local_sheet_id is None or local_sheet_id >= sheet_count:
+                            note_issue(
+                                f"{definition_context}:invalid-local-sheet-id",
+                                definition.get("localSheetId"),
+                            )
+                            scope = "invalid"
+                        else:
+                            scope = str(local_sheet_id)
+                        definition_text = (definition.text or "").strip()
+                        if not definition_text:
+                            note_issue(
+                                f"{definition_context}:missing-definition", definition.text
+                            )
+                        if list(definition):
+                            note_issue(
+                                f"{definition_context}:unexpected-child",
+                                _xml_fragment(definition).sort_key(),
+                            )
+                        duplicate_key = (kind, scope)
+                        if duplicate_key in seen_builtin_definitions:
+                            note_issue(
+                                f"{definition_context}:duplicate-builtin-definition",
+                                duplicate_key,
+                            )
+                        seen_builtin_definitions.add(duplicate_key)
+                        entries.append(
+                            (f"worksheet-print-layout:{kind}:{scope}", definition_text)
+                        )
+                        if kind == "print-area":
+                            print_area_definition_count += 1
+                        else:
+                            print_title_definition_count += 1
+
+            for sheet_index, member in enumerate(_worksheet_display_xml_paths(archive)):
+                worksheet = _xml_root(archive, member)
+                worksheet_context = f"worksheet:{sheet_index}"
+                worksheet_namespace = _xml_namespace(worksheet.tag)
+                if (
+                    _xml_local_name(worksheet.tag) != "worksheet"
+                    or worksheet_namespace
+                    not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+                ):
+                    note_issue(f"{worksheet_context}:unexpected-root", worksheet.tag)
+                    continue
+                if worksheet_namespace is None:  # guarded above; helps type checkers
+                    continue
+
+                def direct_children(
+                    name: str,
+                    *,
+                    root: ElementTree.Element = worksheet,
+                    namespace: str = worksheet_namespace,
+                ) -> list[ElementTree.Element]:
+                    tag = f"{{{namespace}}}{name}"
+                    return [child for child in root if child.tag == tag]
+
+                # ``fitToPage`` changes which pageSetup fields are effective,
+                # so read it before canonicalising pageSetup itself. Duplicate
+                # or invalid declarations leave that relationship ambiguous;
+                # retain both sides privately rather than guessing.
+                sheet_properties = direct_children("sheetPr")
+                if len(sheet_properties) > 1:
+                    note_issue(
+                        f"{worksheet_context}:multiple-sheet-properties", len(sheet_properties)
+                    )
+                page_setup_properties_tag = f"{{{worksheet_namespace}}}pageSetUpPr"
+                fit_to_page_states: list[bool | None] = []
+                for properties_index, properties in enumerate(sheet_properties):
+                    controls = [
+                        child
+                        for child in properties
+                        if child.tag == page_setup_properties_tag
+                    ]
+                    if len(controls) > 1:
+                        note_issue(
+                            (
+                                f"{worksheet_context}:sheet-properties:{properties_index}:"
+                                "multiple-page-setup-properties"
+                            ),
+                            len(controls),
+                        )
+                    for control_index, control in enumerate(controls):
+                        context = (
+                            f"{worksheet_context}:sheet-properties:{properties_index}:"
+                            f"page-setup-properties:{control_index}"
+                        )
+                        signature, state = (
+                            _worksheet_print_layout_page_setup_properties_signature(
+                                control, context=context, note_issue=note_issue
+                            )
+                        )
+                        fit_to_page_states.append(state)
+                        if signature:
+                            entries.append(
+                                (
+                                    (
+                                        "worksheet-print-layout:"
+                                        f"page-setup-properties:{sheet_index}:"
+                                        f"{properties_index}:{control_index}"
+                                    ),
+                                    repr(signature),
+                                )
+                            )
+                            if ("fitToPage", "true") in signature:
+                                page_setup_sheets.add(sheet_index)
+                if not fit_to_page_states:
+                    fit_to_page: bool | None = False
+                elif any(state is None for state in fit_to_page_states):
+                    fit_to_page = None
+                elif len(set(fit_to_page_states)) == 1:
+                    fit_to_page = fit_to_page_states[0]
+                else:
+                    note_issue(
+                        f"{worksheet_context}:conflicting-fit-to-page-settings",
+                        tuple(fit_to_page_states),
+                    )
+                    fit_to_page = None
+
+                for name, parser in (
+                    ("printOptions", _worksheet_print_layout_print_options_signature),
+                    ("pageMargins", _worksheet_print_layout_page_margins_signature),
+                    ("headerFooter", _worksheet_print_layout_header_footer_signature),
+                ):
+                    controls = direct_children(name)
+                    if len(controls) > 1:
+                        note_issue(
+                            f"{worksheet_context}:multiple-{name}-elements", len(controls)
+                        )
+                    for control_index, control in enumerate(controls):
+                        context = f"{worksheet_context}:{name}:{control_index}"
+                        parsed = parser(
+                            control, context=context, note_issue=note_issue
+                        )
+                        if name == "printOptions":
+                            signature, active_controls = parsed
+                            if "gridLines" in active_controls:
+                                print_gridline_sheets.add(sheet_index)
+                            if "headings" in active_controls:
+                                print_heading_sheets.add(sheet_index)
+                            if "horizontalCentered" in active_controls:
+                                horizontally_centered_sheets.add(sheet_index)
+                            if "verticalCentered" in active_controls:
+                                vertically_centered_sheets.add(sheet_index)
+                        elif name == "pageMargins":
+                            signature = parsed
+                            page_margin_sheets.add(sheet_index)
+                        else:
+                            signature, material = parsed
+                            if name == "headerFooter" and material:
+                                header_footer_sheets.add(sheet_index)
+                        if signature:
+                            entries.append(
+                                (
+                                    (
+                                        "worksheet-print-layout:"
+                                        f"{name}:{sheet_index}:{control_index}"
+                                    ),
+                                    repr(signature),
+                                )
+                            )
+
+                page_setups = direct_children("pageSetup")
+                if len(page_setups) > 1:
+                    note_issue(
+                        f"{worksheet_context}:multiple-pageSetup-elements",
+                        len(page_setups),
+                    )
+                for control_index, control in enumerate(page_setups):
+                    context = f"{worksheet_context}:pageSetup:{control_index}"
+                    signature, material = _worksheet_print_layout_page_setup_signature(
+                        control,
+                        context=context,
+                        note_issue=note_issue,
+                        fit_to_page=fit_to_page,
+                    )
+                    if material:
+                        page_setup_sheets.add(sheet_index)
+                    if signature:
+                        entries.append(
+                            (
+                                (
+                                    "worksheet-print-layout:"
+                                    f"pageSetup:{sheet_index}:{control_index}"
+                                ),
+                                repr(signature),
+                            )
+                        )
+
+                for name, axis in (("rowBreaks", "row"), ("colBreaks", "column")):
+                    controls = direct_children(name)
+                    if len(controls) > 1:
+                        note_issue(
+                            f"{worksheet_context}:multiple-{name}-elements", len(controls)
+                        )
+                    for control_index, control in enumerate(controls):
+                        context = f"{worksheet_context}:{name}:{control_index}"
+                        signature, count = _worksheet_print_layout_breaks_signature(
+                            control,
+                            axis=axis,
+                            context=context,
+                            note_issue=note_issue,
+                        )
+                        if axis == "row":
+                            manual_row_page_break_count += count
+                        else:
+                            manual_column_page_break_count += count
+                        if signature:
+                            entries.append(
+                                (
+                                    (
+                                        "worksheet-print-layout:"
+                                        f"{name}:{sheet_index}:{control_index}"
+                                    ),
+                                    repr(signature),
+                                )
+                            )
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _WorksheetPrintLayoutMetadata(
+            default_snapshot,
+            (
+                "FormulaFence could not inspect worksheet print-layout OOXML "
+                f"({type(error).__name__}); affected print controls were not compared.",
+            ),
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported worksheet print-layout "
+            "metadata; affected print controls have a coverage gap."
+        )
+        issue_entries = tuple(
+            (f"worksheet-print-layout-issue:{context}", detail)
+            for context, detail in sorted(issues.items())
+        )
+        entries.extend(issue_entries)
+    else:
+        issue_entries = ()
+    snapshot = WorksheetPrintLayoutSnapshot(
+        print_area_definition_count=print_area_definition_count,
+        print_title_definition_count=print_title_definition_count,
+        print_gridlines_sheet_count=len(print_gridline_sheets),
+        print_headings_sheet_count=len(print_heading_sheets),
+        horizontally_centered_print_sheet_count=len(horizontally_centered_sheets),
+        vertically_centered_print_sheet_count=len(vertically_centered_sheets),
+        page_margin_sheet_count=len(page_margin_sheets),
+        page_setup_sheet_count=len(page_setup_sheets),
+        header_footer_sheet_count=len(header_footer_sheets),
+        manual_row_page_break_count=manual_row_page_break_count,
+        manual_column_page_break_count=manual_column_page_break_count,
+        unrecognized_print_layout_count=len(issues),
+        definition_signature=(
+            _private_external_data_signature(tuple(sorted(entries))) if entries else None
+        ),
+        unrecognized_signature=(
+            _private_external_data_signature(issue_entries) if issue_entries else None
+        ),
+    )
+    return _WorksheetPrintLayoutMetadata(snapshot, tuple(sorted(warnings)))
+
+
 @dataclass
 class _WorkbookThemeBudget:
     """Bound raw workbook-theme reads across XML and direct image parts."""
@@ -31478,6 +32437,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     fill_metadata = _fill_metadata(source)
     alignment_metadata = _alignment_metadata(source)
     worksheet_display_metadata = _worksheet_display_metadata(source)
+    worksheet_print_layout_metadata = _worksheet_print_layout_metadata(source)
     workbook_theme_metadata = _workbook_theme_metadata(source)
     formula_cached_result_metadata = _formula_cached_result_metadata(source)
     rich_text_run_metadata = _rich_text_run_metadata(source)
@@ -31532,6 +32492,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(fill_metadata.warnings)
     parser_warnings.update(alignment_metadata.warnings)
     parser_warnings.update(worksheet_display_metadata.warnings)
+    parser_warnings.update(worksheet_print_layout_metadata.warnings)
     parser_warnings.update(workbook_theme_metadata.warnings)
     parser_warnings.update(formula_cached_result_metadata.warnings)
     parser_warnings.update(rich_text_run_metadata.warnings)
@@ -31770,6 +32731,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         fill_controls=fill_metadata.controls,
         alignment_controls=alignment_metadata.controls,
         worksheet_display_controls=worksheet_display_metadata.controls,
+        worksheet_print_layout_controls=worksheet_print_layout_metadata.controls,
         workbook_theme=workbook_theme_metadata.theme,
         formula_cached_results=formula_cached_result_metadata.results,
         rich_text_runs=rich_text_run_metadata.controls,
@@ -31863,6 +32825,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "worksheet_display_controls": (
             snapshot.worksheet_display_controls.profile_dict()
         ),
+        "worksheet_print_layout_controls": (
+            snapshot.worksheet_print_layout_controls.profile_dict()
+        ),
         "workbook_theme": snapshot.workbook_theme.profile_dict(),
         "formula_cached_results": snapshot.formula_cached_results.profile_dict(),
         "rich_text_runs": snapshot.rich_text_runs.profile_dict(),
@@ -31907,6 +32872,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_alignment_controls": snapshot.alignment_controls.present,
             "has_worksheet_display_controls": (
                 snapshot.worksheet_display_controls.present
+            ),
+            "has_worksheet_print_layout_controls": (
+                snapshot.worksheet_print_layout_controls.present
             ),
             "has_workbook_theme": snapshot.workbook_theme.present,
             "has_formula_cached_results": snapshot.formula_cached_results.present,

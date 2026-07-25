@@ -79,6 +79,7 @@ from .helpers import (
     change_scenario_manager_input_value,
     change_slicer_timeline_filter_material,
     change_strict_worksheet_display_controls,
+    change_strict_worksheet_print_layout_controls,
     change_table_filter_visibility_criterion,
     change_threaded_comment_person_identity,
     change_threaded_comment_reply,
@@ -91,6 +92,7 @@ from .helpers import (
     change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
     change_worksheet_embedded_control_payload,
+    change_worksheet_print_layout_controls,
     change_worksheet_sparkline_presentation,
     change_worksheet_sparkline_source,
     change_xlm_macro_sheet_controls,
@@ -131,6 +133,7 @@ from .helpers import (
     corrupt_worksheet_display_control,
     corrupt_worksheet_drawing_shape_root,
     corrupt_worksheet_embedded_control_activex_root,
+    corrupt_worksheet_print_layout_control,
     corrupt_worksheet_sparkline_destination,
     corrupt_xlm_macro_sheet_root,
     corrupt_xml_mapping_single_cell_reference,
@@ -191,6 +194,7 @@ from .helpers import (
     make_spill_model,
     make_strict_workbook_theme_image_model,
     make_strict_worksheet_display_model,
+    make_strict_worksheet_print_layout_model,
     make_table_model,
     make_threaded_comment_model,
     make_three_d_model,
@@ -199,6 +203,7 @@ from .helpers import (
     make_worksheet_display_model,
     make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
+    make_worksheet_print_layout_model,
     make_worksheet_sparkline_model,
     make_xlm_macro_sheet_model,
     make_xml_mapping_model,
@@ -226,6 +231,8 @@ from .helpers import (
     normalize_what_if_data_table_reference_spelling,
     normalize_workbook_theme_relationship_identifiers,
     normalize_worksheet_display_control_spelling,
+    normalize_worksheet_print_layout_control_spelling,
+    normalize_worksheet_print_layout_inert_controls,
     normalize_worksheet_sparkline_control_spelling,
     normalize_xml_mapping_control_spelling,
     normalize_zero_dimension_visibility_control_spelling,
@@ -5243,6 +5250,222 @@ def test_strict_worksheet_display_controls_are_supported(tmp_path) -> None:
         for warning in baseline_snapshot.parser_warnings
     )
     assert "FF055" in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_print_layout_controls_are_profiled_diffed_and_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_print_layout_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_print_layout_model(tmp_path / "candidate.xlsx")
+    change_worksheet_print_layout_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_print_layout_controls_changed"
+    )
+
+    assert baseline_snapshot.cells == candidate_snapshot.cells
+    assert baseline_snapshot.summary()["worksheet_print_layout_control_count"] == 11
+    assert baseline_snapshot.summary()["has_worksheet_print_layout_controls"] is True
+    assert profile["worksheet_print_layout_controls"] == {
+        "present": True,
+        "print_area_definition_count": 1,
+        "print_title_definition_count": 1,
+        "print_gridlines_sheet_count": 1,
+        "print_headings_sheet_count": 1,
+        "horizontally_centered_print_sheet_count": 1,
+        "vertically_centered_print_sheet_count": 1,
+        "page_margin_sheet_count": 1,
+        "page_setup_sheet_count": 1,
+        "header_footer_sheet_count": 1,
+        "manual_row_page_break_count": 1,
+        "manual_column_page_break_count": 1,
+        "unrecognized_print_layout_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Worksheet print-layout controls" in markdown
+    assert change.details["worksheet_print_layout_definition_material_changed"] is True
+    assert [change.kind for change in report.changes] == [
+        "worksheet_print_layout_controls_changed"
+    ]
+    assert {finding.rule_id for finding in report.findings} == {"FF056"}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-PRINT-HEADER",
+        "PRIVATE-PRINT-FOOTER",
+        "PRIVATE-PRINT-HEADER-TEXT",
+        "PRIVATE-PRINT-HEADER-CANDIDATE",
+        "_xlnm.Print_Area",
+        "pageMargins",
+        "pageSetup",
+        "297mm",
+        "16383",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_print_layout_control_noise_is_normalized(tmp_path) -> None:
+    baseline = make_worksheet_print_layout_model(tmp_path / "baseline.xlsx")
+    equivalent = make_worksheet_print_layout_model(tmp_path / "equivalent.xlsx")
+    normalize_worksheet_print_layout_control_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+
+
+def test_worksheet_print_layout_inert_controls_are_normalized(tmp_path) -> None:
+    baseline = make_worksheet_print_layout_model(tmp_path / "baseline.xlsx")
+    equivalent = make_worksheet_print_layout_model(tmp_path / "equivalent.xlsx")
+    normalize_worksheet_print_layout_inert_controls(
+        baseline,
+        automatic_break_id=11,
+        fit_to_height=3,
+        fit_to_page=True,
+        fit_to_width=2,
+        first_page_number=7,
+        scale=80,
+        show_auto_page_breaks=True,
+        inactive_header_suffix="BASELINE",
+    )
+    normalize_worksheet_print_layout_inert_controls(
+        equivalent,
+        automatic_break_id=101,
+        fit_to_height=3,
+        fit_to_page=True,
+        fit_to_width=2,
+        first_page_number=500,
+        scale=160,
+        show_auto_page_breaks=False,
+        inactive_header_suffix="CANDIDATE",
+    )
+
+    baseline_snapshot = load_snapshot(baseline)
+    equivalent_snapshot = load_snapshot(equivalent)
+    report = compare_snapshots(baseline_snapshot, equivalent_snapshot)
+
+    assert (
+        baseline_snapshot.worksheet_print_layout_controls
+        == equivalent_snapshot.worksheet_print_layout_controls
+    )
+    assert report.changes == []
+    assert report.findings == []
+
+
+def test_worksheet_print_layout_disabled_fit_dimensions_are_normalized(tmp_path) -> None:
+    baseline = make_worksheet_print_layout_model(tmp_path / "baseline.xlsx")
+    equivalent = make_worksheet_print_layout_model(tmp_path / "equivalent.xlsx")
+    normalize_worksheet_print_layout_inert_controls(
+        baseline,
+        automatic_break_id=11,
+        fit_to_height=3,
+        fit_to_page=False,
+        fit_to_width=2,
+        first_page_number=7,
+        scale=80,
+        show_auto_page_breaks=True,
+        inactive_header_suffix="BASELINE",
+    )
+    normalize_worksheet_print_layout_inert_controls(
+        equivalent,
+        automatic_break_id=101,
+        fit_to_height=9,
+        fit_to_page=False,
+        fit_to_width=8,
+        first_page_number=500,
+        scale=80,
+        show_auto_page_breaks=False,
+        inactive_header_suffix="CANDIDATE",
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+
+
+def test_worksheet_print_layout_malformed_controls_fail_closed_and_redact_values(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_print_layout_model(tmp_path / "baseline.xlsx")
+    malformed = make_worksheet_print_layout_model(tmp_path / "malformed.xlsx")
+    corrupt_worksheet_print_layout_control(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert (
+        malformed_snapshot.worksheet_print_layout_controls.unrecognized_print_layout_count
+        == 1
+    )
+    assert any(
+        "malformed or unsupported worksheet print-layout" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF056"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(malformed_snapshot)),
+        profile_to_markdown(profile_snapshot(malformed_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("987654321" not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_print_layout_preexisting_coverage_gap_stays_distinct(tmp_path) -> None:
+    baseline = make_worksheet_print_layout_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_print_layout_model(tmp_path / "candidate.xlsx")
+    change_worksheet_print_layout_controls(candidate)
+    corrupt_worksheet_print_layout_control(baseline)
+    corrupt_worksheet_print_layout_control(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_print_layout_controls_changed"
+    )
+
+    assert "FF056" in {finding.rule_id for finding in report.findings}
+    assert "unrecognized_worksheet_print_layout_metadata_changed" not in change.details
+
+
+def test_strict_worksheet_print_layout_controls_are_supported(tmp_path) -> None:
+    baseline = make_strict_worksheet_print_layout_model(tmp_path / "baseline.xlsx")
+    candidate = make_strict_worksheet_print_layout_model(tmp_path / "candidate.xlsx")
+    change_strict_worksheet_print_layout_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+
+    assert baseline_snapshot.worksheet_print_layout_controls.print_area_definition_count == 1
+    assert baseline_snapshot.worksheet_print_layout_controls.page_setup_sheet_count == 1
+    assert (
+        baseline_snapshot.worksheet_print_layout_controls.unrecognized_print_layout_count
+        == 0
+    )
+    assert not any(
+        "worksheet print-layout" in warning
+        for warning in baseline_snapshot.parser_warnings
+    )
+    assert "FF056" in {finding.rule_id for finding in report.findings}
 
 
 def test_workbook_themes_are_profiled_diffed_and_redacted(tmp_path) -> None:

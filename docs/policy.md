@@ -30,6 +30,7 @@ rules:
   no_workbook_theme_changes: true
   no_cell_alignment_changes: true
   no_worksheet_display_control_changes: true
+  no_worksheet_print_layout_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
@@ -112,6 +113,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_workbook_theme_changes` | boolean | A workbook Theme binding, stored colour/font/format scheme, direct Theme-image relationship, or direct Theme-image payload changes. Theme XML, scheme names, colours, font names, image bytes, relationship IDs, and targets are compared privately. |
 | `no_cell_alignment_changes` | boolean | An effective default, direct-cell, row, or column alignment control changes. Alignment values, style IDs, and cell/row/column targets are compared privately. |
 | `no_worksheet_display_control_changes` | boolean | A material raw worksheet view changes hidden-zero, formula-display, gridline/gridline-colour, row/column-header, outline-symbol, ruler, page-whitespace, right-to-left, non-normal-view, or split/frozen-pane controls. Sheet names, targets, pane positions, and raw view XML are compared privately. |
+| `no_worksheet_print_layout_changes` | boolean | A material saved print-area/title, print-option, margin, page-setup, fit-to-page, header/footer, or manual page-break control changes. Print ranges, header/footer text, page values, printer-setting references, and raw XML are compared privately. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
 | `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
 | `no_cell_hyperlink_changes` | boolean | A standard or Office 2016 revision worksheet-cell hyperlink binding, location, display override, ScreenTip, or selected relationship target/type/mode changes. Targets, cell references, locations, display strings, ScreenTips, relationship IDs, and revision UIDs are compared privately. |
@@ -618,12 +620,37 @@ ordinary navigation does not become a policy event. Missing, duplicate,
 malformed, or unsupported material is an explicit coverage warning rather than
 a silent omission. FormulaFence compares declarations, not rendering: it does
 not resolve the effective palette colour, calculate viewport geometry or final
-visibility, inspect print settings, interpret extension-specific views, or
-infer Excel client state. The boundary
+visibility, interpret extension-specific views, or infer Excel client state.
+The boundary
 follows the Open XML SDK [`SheetView` schema
 surface](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.sheetview?view=openxml-3.0.1)
 and Microsoft’s [worksheet display
 guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/excel-add-ins-worksheet-display).
+
+Worksheet print-layout controls can change what gets printed even when every
+ordinary cell and formula stays fixed. FormulaFence reads raw transitional and
+strict SpreadsheetML workbook `_xlnm.Print_Area` / `_xlnm.Print_Titles`
+defined names and direct worksheet `printOptions`, `pageMargins`, `pageSetup`,
+`sheetPr/pageSetUpPr`, `headerFooter`, `rowBreaks`, and `colBreaks`
+declarations. A material declaration change emits `FF056`; enable
+`no_worksheet_print_layout_changes` to make it `FFP056` in CI.
+
+Profiles and `FF056` details expose only counts for print areas/titles,
+gridlines/headings/centering, margins, page setup, headers/footers, manual
+row/column breaks, and unrecognized controls. Print ranges, header/footer
+text, page values, printer-setting relationship IDs, and raw XML remain
+private. Omitted/default, Boolean, integer, and decimal spellings are
+normalized; so are the documented semantic no-ops where both print-gridline
+flags must be true, inactive first/even header-footer sections are ignored,
+`firstPageNumber` is disabled, scale is overridden by fit-to-page dimensions,
+or an automatic page-break display declaration changes. Missing, duplicate,
+malformed, or unsupported material is an explicit coverage warning rather than
+a silent omission. FormulaFence compares stored declarations, not rendered
+paper: it does not calculate page geometry/counts or automatic pagination,
+resolve printer/client defaults or printer-specific `devMode` settings, or
+cover custom/legacy sheet-view and extension print controls. This boundary
+follows Microsoft's [print-area guidance](https://support.microsoft.com/en-us/excel/set-or-clear-a-print-area-on-a-worksheet)
+and [`PageLayout` control surface](https://learn.microsoft.com/en-us/javascript/api/excel/excel.pagelayout?view=excel-js-preview).
 
 Workbook-level DrawingML Theme controls can change the colour, font, and effect
 schemes used by themed cells, charts, and drawing objects without changing a

@@ -5,6 +5,50 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Material worksheet print-layout controls — 2026-07-26
+
+FormulaFence 0.54.0 was validated against two independently maintained Open
+XML SDK fixtures at commit
+[`cd2b359ef824737edb93f1c6157c19551aae1e52`](https://github.com/dotnet/Open-XML-SDK/tree/cd2b359ef824737edb93f1c6157c19551aae1e52).
+The transitional
+[`Styles.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/v2FxTestFiles/spreadsheet/Styles.xlsx)
+baseline SHA-256 was
+`a1ca7e60befe2ca550cd4729d68028de2a96aa163574892ed6a0890595b26468`; its
+candidate SHA-256 was
+`b387281421f701dcc2e25630d3d0aa99d9519559511419477b6c3695b86a808e`.
+The strict-OOXML
+[`2D Rotation-O12-XL-OartEffects.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/O14ISOStrict/Excel/2D%20Rotation-O12-XL-OartEffects.xlsx)
+baseline SHA-256 was
+`0e0017c70a5362ef3c49be3fb82c3e80210cfda0e813413c2b28a5ee141c0ad3`; its
+candidate SHA-256 was
+`1c24da193641bee1ef124331e346ac68dd9227e85af823ac29cfdd8e4ab7d37b`.
+
+A standalone raw-ZIP script outside this repository changed only the stored
+left page margin in `xl/worksheets/sheet1.xml` for the transitional fixture
+and only `xl/worksheets/sheet2.xml` for the strict fixture. ZIP-member
+comparison confirmed that exactly that one uncompressed member changed in each
+candidate; ordinary cells and formulas remained fixed.
+
+A clean Python virtual environment installed the staged 0.54.0 wheel
+(SHA-256 `b23d9bd9d797f005e10f42b7598e4f5d622bbdecff7af405460c27d8adfe1d81`).
+Each pair emitted exactly one `worksheet_print_layout_controls_changed` change
+and `FF056`; a policy enabling `no_worksheet_print_layout_changes` exited 1
+and added `FFP056`. The transitional source has an existing printer-settings
+relationship coverage gap, but it was unchanged and did not create a false
+`unrecognized_worksheet_print_layout_metadata_changed` detail. JSON and
+Markdown profiles/diffs, SARIF diffs, and JSON policy reports were checked to
+ensure the changed margin value, raw `pageMargins` identifier, worksheet-member
+name, and printer relationship ID were absent.
+
+The suite separately validates transitional and strict namespaces; print areas
+and titles; gridlines, headings, centering, margins, page setup/fit-to-page,
+headers/footers, and manual breaks; omitted/default, Boolean, integer, decimal,
+and semantic no-op normalization; malformed metadata; redaction; policy
+enforcement; and isolation from ordinary cells. FormulaFence compares stored
+declarations only: it does not render or preview Excel, calculate page geometry
+or automatic pagination, resolve printer/client defaults or `devMode`, or cover
+custom/legacy sheet-view and extension print controls.
+
 ## Material worksheet-display controls — 2026-07-26
 
 FormulaFence 0.53.0 was validated against the independently maintained

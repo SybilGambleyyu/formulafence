@@ -153,6 +153,12 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['worksheet_drawing_text_shape_count']}"
         ),
         (
+            "- **Worksheet images (anchored / backgrounds / header-footer):** "
+            f"{workbook['worksheet_anchored_picture_count']} / "
+            f"{workbook['worksheet_background_image_count']} / "
+            f"{workbook['worksheet_header_footer_image_count']}"
+        ),
+        (
             "- **Worksheet control-bearing sheets:** "
             f"{workbook['worksheet_embedded_control_sheet_count']}"
         ),
@@ -2113,6 +2119,46 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             )
         lines.append(
             "Shape text, presentation, anchors, macro assignments, text links, hyperlink "
+            "targets, and raw XML are compared privately and intentionally omitted."
+        )
+    worksheet_images = profile["worksheet_images"]
+    if worksheet_images["present"]:
+        lines.extend(
+            [
+                "",
+                "## Native worksheet image controls",
+                "",
+                (
+                    "- **Worksheets / anchored pictures / picture anchors:** "
+                    f"{worksheet_images['worksheet_image_sheet_count']} / "
+                    f"{worksheet_images['anchored_picture_count']} / "
+                    f"{worksheet_images['anchored_picture_anchor_count']}"
+                ),
+                (
+                    "- **Sheet backgrounds / header-footer images:** "
+                    f"{worksheet_images['worksheet_background_image_count']} / "
+                    f"{worksheet_images['header_footer_image_count']}"
+                ),
+                (
+                    "- **Image parts (fingerprinted / uninspected):** "
+                    f"{worksheet_images['image_part_count']} "
+                    f"({worksheet_images['fingerprinted_image_part_count']} / "
+                    f"{worksheet_images['uninspected_image_part_count']})"
+                ),
+                (
+                    "- **Related package relationships:** "
+                    f"{worksheet_images['related_relationship_count']} "
+                    f"({worksheet_images['external_relationship_count']} external)"
+                ),
+            ]
+        )
+        if worksheet_images["unrecognized_image_count"]:
+            lines.append(
+                "- **Unrecognized or malformed image controls:** "
+                f"{worksheet_images['unrecognized_image_count']}"
+            )
+        lines.append(
+            "Image bytes, names, descriptions, visual formatting, anchors, relationship "
             "targets, and raw XML are compared privately and intentionally omitted."
         )
     chart_definitions = profile["chart_definitions"]

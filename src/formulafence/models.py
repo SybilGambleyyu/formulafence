@@ -2866,6 +2866,63 @@ class WorksheetDrawingShapeSnapshot:
 
 
 @dataclass(frozen=True)
+class WorksheetImageSnapshot:
+    """Safe aggregate of native worksheet image controls.
+
+    Floating DrawingML pictures, worksheet backgrounds, and header/footer VML
+    watermark images can alter a report without changing a cell. Private
+    signatures retain their bindings, visual declarations, relationships, and
+    bounded media fingerprints while public output exposes counts only.
+    """
+
+    worksheet_image_sheet_count: int = 0
+    anchored_picture_count: int = 0
+    anchored_picture_anchor_count: int = 0
+    worksheet_background_image_count: int = 0
+    header_footer_image_count: int = 0
+    image_part_count: int = 0
+    fingerprinted_image_part_count: int = 0
+    uninspected_image_part_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    unrecognized_image_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+    image_payload_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.anchored_picture_count
+            or self.worksheet_background_image_count
+            or self.header_footer_image_count
+            or self.image_part_count
+            or self.unrecognized_image_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural image evidence without visual or package contents."""
+        return {
+            "present": self.present,
+            "worksheet_image_sheet_count": self.worksheet_image_sheet_count,
+            "anchored_picture_count": self.anchored_picture_count,
+            "anchored_picture_anchor_count": self.anchored_picture_anchor_count,
+            "worksheet_background_image_count": self.worksheet_background_image_count,
+            "header_footer_image_count": self.header_footer_image_count,
+            "image_part_count": self.image_part_count,
+            "fingerprinted_image_part_count": self.fingerprinted_image_part_count,
+            "uninspected_image_part_count": self.uninspected_image_part_count,
+            "related_relationship_count": self.related_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+            "unrecognized_image_count": self.unrecognized_image_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -3317,6 +3374,9 @@ class WorkbookSnapshot:
     worksheet_drawing_shapes: WorksheetDrawingShapeSnapshot = field(
         default_factory=WorksheetDrawingShapeSnapshot
     )
+    worksheet_images: WorksheetImageSnapshot = field(
+        default_factory=WorksheetImageSnapshot
+    )
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -3424,6 +3484,16 @@ class WorkbookSnapshot:
                 self.worksheet_drawing_shapes.text_shape_count
             ),
             "has_worksheet_drawing_shapes": self.worksheet_drawing_shapes.present,
+            "worksheet_anchored_picture_count": (
+                self.worksheet_images.anchored_picture_count
+            ),
+            "worksheet_background_image_count": (
+                self.worksheet_images.worksheet_background_image_count
+            ),
+            "worksheet_header_footer_image_count": (
+                self.worksheet_images.header_footer_image_count
+            ),
+            "has_worksheet_images": self.worksheet_images.present,
             "what_if_data_table_count": self.what_if_data_tables.data_table_count,
             "what_if_data_table_output_cell_count": (
                 self.what_if_data_tables.declared_output_cell_count

@@ -49,6 +49,7 @@ _RULE_FIELDS = {
     "no_legacy_comment_changes",
     "no_threaded_comment_changes",
     "no_worksheet_drawing_shape_changes",
+    "no_worksheet_image_changes",
     "no_worksheet_embedded_control_changes",
     "no_new_parser_warnings",
     "no_new_unresolved_references",
@@ -131,6 +132,7 @@ class Policy:
     no_legacy_comment_changes: bool = False
     no_threaded_comment_changes: bool = False
     no_worksheet_drawing_shape_changes: bool = False
+    no_worksheet_image_changes: bool = False
     no_worksheet_embedded_control_changes: bool = False
     no_new_parser_warnings: bool = False
     no_new_unresolved_references: bool = False
@@ -195,6 +197,7 @@ rules:
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
+  no_worksheet_image_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -364,6 +367,9 @@ def parse_policy(data: object) -> Policy:
         no_threaded_comment_changes=_boolean_rule(rules, "no_threaded_comment_changes"),
         no_worksheet_drawing_shape_changes=_boolean_rule(
             rules, "no_worksheet_drawing_shape_changes"
+        ),
+        no_worksheet_image_changes=_boolean_rule(
+            rules, "no_worksheet_image_changes"
         ),
         no_worksheet_embedded_control_changes=_boolean_rule(
             rules, "no_worksheet_embedded_control_changes"
@@ -949,6 +955,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP044",
                     "high",
                     "Policy forbids Worksheet DrawingML shape control changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_worksheet_image_changes:
+        for finding in _rule_triggered(report, "FF059"):
+            violations.append(
+                Finding(
+                    "FFP059",
+                    "high",
+                    "Policy forbids native worksheet image control changes.",
                     details=finding.details,
                 )
             )

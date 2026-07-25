@@ -12948,6 +12948,570 @@ def corrupt_worksheet_drawing_shape_root(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".worksheet-drawing-shape-corrupt.tmp.xlsx")
 
 
+def _worksheet_image_part_names(
+    contents: dict[str, bytes],
+) -> tuple[str, str, str, str, str]:
+    """Return the raw members used by the native worksheet-image fixture."""
+    worksheet_member = "xl/worksheets/sheet1.xml"
+    drawing_member = "xl/drawings/drawing1.xml"
+    vml_member = "xl/drawings/vmlDrawing1.vml"
+    drawing_relationships = _relationship_member(drawing_member)
+    vml_relationships = _relationship_member(vml_member)
+    required = {
+        worksheet_member,
+        drawing_member,
+        vml_member,
+        drawing_relationships,
+        vml_relationships,
+        _relationship_member(worksheet_member),
+    }
+    if not required <= set(contents):
+        raise ValueError("Fixture does not contain native worksheet image parts")
+    return (
+        worksheet_member,
+        drawing_member,
+        drawing_relationships,
+        vml_member,
+        vml_relationships,
+    )
+
+
+def make_worksheet_image_model(path: Path) -> Path:
+    """Create anchored, background, and header/footer images outside cells."""
+    make_model(path)
+    content_types = _CONTENT_TYPES_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    drawing_main = _DRAWINGML_MAIN_NS
+    vml = "urn:schemas-microsoft-com:vml"
+    vml_office = "urn:schemas-microsoft-com:office:office"
+    baseline_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9JdcAAAAAASUVORK5CYII="
+    )
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def anchor_marker(
+        parent: ElementTree.Element,
+        name: str,
+        *,
+        column: int,
+        row: int,
+    ) -> None:
+        marker = ElementTree.SubElement(parent, f"{{{drawing}}}{name}")
+        ElementTree.SubElement(marker, f"{{{drawing}}}col").text = str(column)
+        ElementTree.SubElement(marker, f"{{{drawing}}}colOff").text = "0"
+        ElementTree.SubElement(marker, f"{{{drawing}}}row").text = str(row)
+        ElementTree.SubElement(marker, f"{{{drawing}}}rowOff").text = "0"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        drawing_member = "xl/drawings/drawing1.xml"
+        vml_member = "xl/drawings/vmlDrawing1.vml"
+
+        drawing_root = ElementTree.Element(f"{{{drawing}}}wsDr")
+        anchor = ElementTree.SubElement(
+            drawing_root,
+            f"{{{drawing}}}twoCellAnchor",
+            {"editAs": "oneCell"},
+        )
+        anchor_marker(anchor, "from", column=1, row=1)
+        anchor_marker(anchor, "to", column=6, row=8)
+        picture = ElementTree.SubElement(anchor, f"{{{drawing}}}pic")
+        non_visual = ElementTree.SubElement(picture, f"{{{drawing}}}nvPicPr")
+        ElementTree.SubElement(
+            non_visual,
+            f"{{{drawing}}}cNvPr",
+            {
+                "id": "4101",
+                "name": "PRIVATE-ANCHORED-IMAGE-NAME",
+                "descr": "PRIVATE-ANCHORED-IMAGE-DESCRIPTION",
+            },
+        )
+        ElementTree.SubElement(non_visual, f"{{{drawing}}}cNvPicPr")
+        blip_fill = ElementTree.SubElement(picture, f"{{{drawing}}}blipFill")
+        ElementTree.SubElement(
+            blip_fill,
+            f"{{{drawing_main}}}blip",
+            {f"{{{document_relationships}}}embed": "rIdFenceAnchoredImage"},
+        )
+        stretch = ElementTree.SubElement(blip_fill, f"{{{drawing_main}}}stretch")
+        ElementTree.SubElement(stretch, f"{{{drawing_main}}}fillRect")
+        picture_properties = ElementTree.SubElement(picture, f"{{{drawing}}}spPr")
+        transform = ElementTree.SubElement(picture_properties, f"{{{drawing_main}}}xfrm")
+        ElementTree.SubElement(
+            transform,
+            f"{{{drawing_main}}}off",
+            {"x": "0", "y": "0"},
+        )
+        ElementTree.SubElement(
+            transform,
+            f"{{{drawing_main}}}ext",
+            {"cx": "1828800", "cy": "1371600"},
+        )
+        geometry = ElementTree.SubElement(
+            picture_properties,
+            f"{{{drawing_main}}}prstGeom",
+            {"prst": "rect"},
+        )
+        ElementTree.SubElement(geometry, f"{{{drawing_main}}}avLst")
+        ElementTree.SubElement(anchor, f"{{{drawing}}}clientData")
+        contents[drawing_member] = serialize(drawing_root)
+
+        drawing_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            drawing_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceAnchoredImage",
+                "Type": f"{document_relationships}/image",
+                "Target": "../media/private-anchored.png",
+            },
+        )
+        contents[_relationship_member(drawing_member)] = serialize(drawing_relationships)
+
+        vml_root = ElementTree.Element("xml")
+        shape_type = ElementTree.SubElement(
+            vml_root,
+            f"{{{vml}}}shapetype",
+            {
+                "id": "_x0000_t75",
+                "coordsize": "21600,21600",
+                f"{{{vml_office}}}spt": "75",
+            },
+        )
+        ElementTree.SubElement(shape_type, f"{{{vml}}}path", {"gradientshapeok": "t"})
+        watermark = ElementTree.SubElement(
+            vml_root,
+            f"{{{vml}}}shape",
+            {
+                "id": "PrivateHeaderFooterWatermark",
+                "type": "#_x0000_t75",
+                "style": (
+                    "position:absolute;margin-left:0;margin-top:0;"
+                    "width:120pt;height:40pt;z-index:1"
+                ),
+                f"{{{vml_office}}}spid": "_x0000_s4101",
+            },
+        )
+        ElementTree.SubElement(
+            watermark,
+            f"{{{vml}}}imagedata",
+            {
+                f"{{{vml_office}}}relid": "rIdFenceWatermarkImage",
+                f"{{{vml_office}}}title": "PRIVATE-WATERMARK-IMAGE-TITLE",
+            },
+        )
+        contents[vml_member] = serialize(vml_root)
+
+        vml_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            vml_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceWatermarkImage",
+                "Type": f"{document_relationships}/image",
+                "Target": "../media/private-watermark.png",
+            },
+        )
+        contents[_relationship_member(vml_member)] = serialize(vml_relationships)
+
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        ElementTree.SubElement(
+            worksheet,
+            f"{{{spreadsheet}}}drawing",
+            {f"{{{document_relationships}}}id": "rIdFenceWorksheetDrawing"},
+        )
+        ElementTree.SubElement(
+            worksheet,
+            f"{{{spreadsheet}}}picture",
+            {f"{{{document_relationships}}}id": "rIdFenceBackgroundImage"},
+        )
+        header_footer = ElementTree.SubElement(worksheet, f"{{{spreadsheet}}}headerFooter")
+        ElementTree.SubElement(header_footer, f"{{{spreadsheet}}}oddHeader").text = "&C&G"
+        ElementTree.SubElement(
+            worksheet,
+            f"{{{spreadsheet}}}legacyDrawingHF",
+            {f"{{{document_relationships}}}id": "rIdFenceHeaderFooterImage"},
+        )
+        contents[worksheet_member] = serialize(worksheet)
+
+        worksheet_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        for identifier, relationship_type, target in (
+            (
+                "rIdFenceWorksheetDrawing",
+                f"{document_relationships}/drawing",
+                "../drawings/drawing1.xml",
+            ),
+            (
+                "rIdFenceBackgroundImage",
+                f"{document_relationships}/image",
+                "../media/private-background.png",
+            ),
+            (
+                "rIdFenceHeaderFooterImage",
+                f"{document_relationships}/vmlDrawing",
+                "../drawings/vmlDrawing1.vml",
+            ),
+        ):
+            ElementTree.SubElement(
+                worksheet_relationships,
+                f"{{{package_relationships}}}Relationship",
+                {"Id": identifier, "Type": relationship_type, "Target": target},
+            )
+        contents[_relationship_member(worksheet_member)] = serialize(worksheet_relationships)
+
+        contents["xl/media/private-anchored.png"] = baseline_png
+        contents["xl/media/private-background.png"] = baseline_png
+        contents["xl/media/private-watermark.png"] = baseline_png
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        default_tag = f"{{{content_types}}}Default"
+        override_tag = f"{{{content_types}}}Override"
+        ElementTree.SubElement(
+            types,
+            default_tag,
+            {"Extension": "png", "ContentType": "image/png"},
+        )
+        for part_name, content_type in (
+            (
+                "/xl/drawings/drawing1.xml",
+                "application/vnd.openxmlformats-officedocument.drawing+xml",
+            ),
+            (
+                "/xl/drawings/vmlDrawing1.vml",
+                "application/vnd.openxmlformats-officedocument.vmlDrawing",
+            ),
+        ):
+            ElementTree.SubElement(
+                types,
+                override_tag,
+                {"PartName": part_name, "ContentType": content_type},
+            )
+        contents["[Content_Types].xml"] = serialize(types)
+
+    return _rewrite_archive(path, mutate, ".worksheet-image-model.tmp.xlsx")
+
+
+def change_worksheet_image_presentation(path: Path) -> Path:
+    """Move one anchored image without changing worksheet cells or image bytes."""
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _worksheet, drawing_member, _drawing_rels, _vml, _vml_rels = (
+            _worksheet_image_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[drawing_member])
+        marker = next(root.iter(f"{{{drawing}}}from"))
+        column_offset = marker.find(f"{{{drawing}}}colOff")
+        if column_offset is None:
+            raise ValueError("Fixture picture anchor is missing its column offset")
+        column_offset.text = "457200"
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-image-presentation.tmp.xlsx")
+
+
+def change_worksheet_image_payload(path: Path) -> Path:
+    """Replace one valid native image payload without changing declarations."""
+    candidate_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z8DwHwAFgAI/ScLkYQAAAABJRU5ErkJggg=="
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["xl/media/private-anchored.png"] = candidate_png
+
+    return _rewrite_archive(path, mutate, ".worksheet-image-payload.tmp.xlsx")
+
+
+def externalize_worksheet_image_relationship(path: Path) -> Path:
+    """Make an anchored picture target external without ever following it."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _worksheet, _drawing, drawing_relationships, _vml, _vml_relationships = (
+            _worksheet_image_part_names(contents)
+        )
+        relationships = ElementTree.fromstring(contents[drawing_relationships])
+        image_relationship = next(
+            relationship
+            for relationship in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if relationship.get("Id") == "rIdFenceAnchoredImage"
+        )
+        image_relationship.set(
+            "Target",
+            "https://example.invalid/PRIVATE-EXTERNAL-WORKSHEET-IMAGE",
+        )
+        image_relationship.set("TargetMode", "External")
+        contents[drawing_relationships] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-image-external.tmp.xlsx")
+
+
+def rebind_worksheet_image_source_relationship(path: Path) -> Path:
+    """Point a picture declaration at an equivalent new DrawingML part."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    content_types = _CONTENT_TYPES_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        (
+            worksheet_member,
+            drawing_member,
+            drawing_relationships_member,
+            _vml_member,
+            _vml_relationships_member,
+        ) = _worksheet_image_part_names(contents)
+        rebound_drawing_member = "xl/drawings/drawing2.xml"
+        contents[rebound_drawing_member] = contents[drawing_member]
+        contents[_relationship_member(rebound_drawing_member)] = contents[
+            drawing_relationships_member
+        ]
+
+        relationships_member = _relationship_member(worksheet_member)
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        drawing_relationship = next(
+            relationship
+            for relationship in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if relationship.get("Id") == "rIdFenceWorksheetDrawing"
+        )
+        drawing_relationship.set("Target", "../drawings/drawing2.xml")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        ElementTree.SubElement(
+            types,
+            f"{{{content_types}}}Override",
+            {
+                "PartName": "/xl/drawings/drawing2.xml",
+                "ContentType": (
+                    "application/vnd.openxmlformats-officedocument.drawing+xml"
+                ),
+            },
+        )
+        contents["[Content_Types].xml"] = ElementTree.tostring(
+            types,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-image-rebind.tmp.xlsx")
+
+
+def renumber_worksheet_image_identifiers(path: Path) -> Path:
+    """Rewrite volatile drawing, VML, and relationship IDs consistently."""
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    drawing_main = _DRAWINGML_MAIN_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    vml = "urn:schemas-microsoft-com:vml"
+    vml_office = "urn:schemas-microsoft-com:office:office"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        (
+            worksheet_member,
+            drawing_member,
+            drawing_relationships_member,
+            vml_member,
+            vml_relationships_member,
+        ) = _worksheet_image_part_names(contents)
+        worksheet_mapping = {
+            "rIdFenceWorksheetDrawing": "rIdFenceWorksheetDrawingRenumbered",
+            "rIdFenceBackgroundImage": "rIdFenceBackgroundImageRenumbered",
+            "rIdFenceHeaderFooterImage": "rIdFenceHeaderFooterImageRenumbered",
+        }
+        drawing_mapping = {"rIdFenceAnchoredImage": "rIdFenceAnchoredImageRenumbered"}
+        vml_mapping = {"rIdFenceWatermarkImage": "rIdFenceWatermarkImageRenumbered"}
+
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        for element in worksheet:
+            relationship_id = element.get(f"{{{document_relationships}}}id")
+            if relationship_id in worksheet_mapping:
+                element.set(
+                    f"{{{document_relationships}}}id",
+                    worksheet_mapping[relationship_id],
+                )
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        drawing_root = ElementTree.fromstring(contents[drawing_member])
+        for index, non_visual in enumerate(
+            drawing_root.iter(f"{{{drawing}}}cNvPr"),
+            start=9100,
+        ):
+            non_visual.set("id", str(index))
+        blip = next(drawing_root.iter(f"{{{drawing_main}}}blip"))
+        blip.set(
+            f"{{{document_relationships}}}embed",
+            drawing_mapping["rIdFenceAnchoredImage"],
+        )
+        contents[drawing_member] = ElementTree.tostring(
+            drawing_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        vml_root = ElementTree.fromstring(contents[vml_member])
+        shape = next(vml_root.iter(f"{{{vml}}}shape"))
+        shape.set("id", "PrivateHeaderFooterWatermarkRenumbered")
+        shape.set(f"{{{vml_office}}}spid", "_x0000_s9101")
+        image_data = next(vml_root.iter(f"{{{vml}}}imagedata"))
+        image_data.set(
+            f"{{{vml_office}}}relid",
+            vml_mapping["rIdFenceWatermarkImage"],
+        )
+        contents[vml_member] = ElementTree.tostring(
+            vml_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        for member, mapping in (
+            (_relationship_member(worksheet_member), worksheet_mapping),
+            (drawing_relationships_member, drawing_mapping),
+            (vml_relationships_member, vml_mapping),
+        ):
+            relationships = ElementTree.fromstring(contents[member])
+            for relationship in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            ):
+                identifier = relationship.get("Id")
+                if identifier in mapping:
+                    relationship.set("Id", mapping[identifier])
+            contents[member] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".worksheet-image-ids.tmp.xlsx")
+
+
+def corrupt_worksheet_image_drawing_root(path: Path) -> Path:
+    """Replace an anchored-picture root to exercise fail-closed coverage."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        _worksheet, drawing_member, _drawing_rels, _vml, _vml_rels = (
+            _worksheet_image_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[drawing_member])
+        root.tag = "notWorksheetDrawing"
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-image-corrupt.tmp.xlsx")
+
+
+def make_strict_worksheet_image_model(path: Path) -> Path:
+    """Create a strict-namespace variant of the native image fixture."""
+    make_worksheet_image_model(path)
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    strict_drawing = "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"
+
+    def strict_name(name: str, source_namespace: str, target_namespace: str) -> str:
+        prefix = f"{{{source_namespace}}}"
+        if name.startswith(prefix):
+            return f"{{{target_namespace}}}{name[len(prefix):]}"
+        return name
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        (
+            worksheet_member,
+            drawing_member,
+            drawing_relationships_member,
+            vml_member,
+            vml_relationships_member,
+        ) = _worksheet_image_part_names(contents)
+        for member, source_namespace, target_namespace in (
+            (worksheet_member, _SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS),
+            (drawing_member, drawing, strict_drawing),
+        ):
+            root = ElementTree.fromstring(contents[member])
+            for element in root.iter():
+                element.tag = strict_name(
+                    element.tag,
+                    source_namespace,
+                    target_namespace,
+                )
+                element.tag = strict_name(
+                    element.tag,
+                    _DRAWINGML_MAIN_NS,
+                    _DRAWINGML_STRICT_MAIN_NS,
+                )
+                attributes = {
+                    strict_name(
+                        name,
+                        _DOCUMENT_RELATIONSHIPS_NS,
+                        _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                    ): value
+                    for name, value in element.attrib.items()
+                }
+                element.attrib.clear()
+                element.attrib.update(attributes)
+            contents[member] = ElementTree.tostring(
+                root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        for member in (
+            _relationship_member(worksheet_member),
+            drawing_relationships_member,
+            vml_relationships_member,
+        ):
+            relationships = ElementTree.fromstring(contents[member])
+            for relationship in relationships.findall(relationship_tag):
+                relationship_type = relationship.get("Type")
+                if relationship_type and relationship_type.startswith(
+                    _DOCUMENT_RELATIONSHIPS_NS
+                ):
+                    relationship.set(
+                        "Type",
+                        relationship_type.replace(
+                            _DOCUMENT_RELATIONSHIPS_NS,
+                            _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                            1,
+                        ),
+                    )
+            contents[member] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".strict-worksheet-image-model.tmp.xlsx")
+
+
 def _rich_text_shared_string_root(
     contents: dict[str, bytes],
 ) -> ElementTree.Element:

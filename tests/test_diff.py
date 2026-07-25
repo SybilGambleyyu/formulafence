@@ -97,6 +97,8 @@ from .helpers import (
     change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
     change_worksheet_embedded_control_payload,
+    change_worksheet_image_payload,
+    change_worksheet_image_presentation,
     change_worksheet_print_layout_controls,
     change_worksheet_sparkline_presentation,
     change_worksheet_sparkline_source,
@@ -141,6 +143,7 @@ from .helpers import (
     corrupt_worksheet_display_control,
     corrupt_worksheet_drawing_shape_root,
     corrupt_worksheet_embedded_control_activex_root,
+    corrupt_worksheet_image_drawing_root,
     corrupt_worksheet_print_layout_control,
     corrupt_worksheet_sparkline_destination,
     corrupt_xlm_macro_sheet_root,
@@ -158,6 +161,7 @@ from .helpers import (
     externalize_power_pivot_data_model,
     externalize_slicer_timeline_cache_relationship,
     externalize_threaded_comment_relationship,
+    externalize_worksheet_image_relationship,
     externalize_xml_mapping_relationship,
     lowercase_legacy_threaded_placeholder_identifiers,
     make_alignment_model,
@@ -205,6 +209,7 @@ from .helpers import (
     make_strict_workbook_theme_image_model,
     make_strict_worksheet_dimension_model,
     make_strict_worksheet_display_model,
+    make_strict_worksheet_image_model,
     make_strict_worksheet_print_layout_model,
     make_table_model,
     make_threaded_comment_model,
@@ -215,6 +220,7 @@ from .helpers import (
     make_worksheet_display_model,
     make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
+    make_worksheet_image_model,
     make_worksheet_print_layout_model,
     make_worksheet_sparkline_model,
     make_xlm_macro_sheet_model,
@@ -260,6 +266,7 @@ from .helpers import (
     rebind_pivot_table_cache_records,
     rebind_power_pivot_data_model,
     rebind_slicer_timeline_cache,
+    rebind_worksheet_image_source_relationship,
     rebind_xml_mapping_relationship,
     remove_power_pivot_data_model_workbook_binding,
     remove_xlm_macro_sheet_related_part_payload,
@@ -279,6 +286,7 @@ from .helpers import (
     renumber_threaded_comment_identifiers,
     renumber_worksheet_drawing_shape_identifiers,
     renumber_worksheet_embedded_control_relationships,
+    renumber_worksheet_image_identifiers,
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
     reorder_worksheet_sparklines,
@@ -5244,9 +5252,6 @@ def test_alignment_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
     )
     for sensitive_value in (
         "PRIVATE-ROTATED-REVIEW-TEXT",
-        "157",
-        "158",
-        "255",
         "B2",
         "D:E",
         "textRotation",
@@ -8059,6 +8064,8 @@ def test_worksheet_drawing_shapes_are_profiled_diffed_and_redacted(tmp_path) -> 
     assert baseline_snapshot.summary()["worksheet_drawing_shape_count"] == 2
     assert baseline_snapshot.summary()["worksheet_drawing_text_shape_count"] == 2
     assert baseline_snapshot.summary()["has_worksheet_drawing_shapes"] is True
+    assert baseline_snapshot.worksheet_images.present is False
+    assert baseline_snapshot.worksheet_images.worksheet_image_sheet_count == 0
     assert profile["worksheet_drawing_shapes"] == {
         "present": True,
         "worksheet_drawing_sheet_count": 1,
@@ -8125,6 +8132,232 @@ def test_worksheet_drawing_shape_identifier_rewrites_are_ignored(tmp_path) -> No
     assert "FF044" not in {finding.rule_id for finding in report.findings}
 
 
+def test_worksheet_images_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_worksheet_image_model(tmp_path / "baseline.xlsx")
+    presentation_candidate = make_worksheet_image_model(
+        tmp_path / "presentation-candidate.xlsx"
+    )
+    payload_candidate = make_worksheet_image_model(tmp_path / "payload-candidate.xlsx")
+    change_worksheet_image_presentation(presentation_candidate)
+    change_worksheet_image_payload(payload_candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    presentation_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(presentation_candidate),
+    )
+    payload_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(payload_candidate),
+    )
+    presentation_change = next(
+        change
+        for change in presentation_report.changes
+        if change.kind == "worksheet_image_controls_changed"
+    )
+    payload_change = next(
+        change
+        for change in payload_report.changes
+        if change.kind == "worksheet_image_controls_changed"
+    )
+
+    assert self_report.findings == []
+    assert baseline_snapshot.summary()["worksheet_anchored_picture_count"] == 1
+    assert baseline_snapshot.summary()["worksheet_background_image_count"] == 1
+    assert baseline_snapshot.summary()["worksheet_header_footer_image_count"] == 1
+    assert baseline_snapshot.summary()["has_worksheet_images"] is True
+    assert profile["worksheet_images"] == {
+        "present": True,
+        "worksheet_image_sheet_count": 1,
+        "anchored_picture_count": 1,
+        "anchored_picture_anchor_count": 1,
+        "worksheet_background_image_count": 1,
+        "header_footer_image_count": 1,
+        "image_part_count": 3,
+        "fingerprinted_image_part_count": 3,
+        "uninspected_image_part_count": 0,
+        "related_relationship_count": 5,
+        "external_relationship_count": 0,
+        "unrecognized_image_count": 0,
+    }
+    assert "## Native worksheet image controls" in markdown
+    assert presentation_change.details["worksheet_image_definition_material_changed"] is True
+    assert payload_change.details["worksheet_image_payload_material_changed"] is True
+    assert "FF059" in {finding.rule_id for finding in presentation_report.findings}
+    assert "FF059" in {finding.rule_id for finding in payload_report.findings}
+    assert "FF044" not in {finding.rule_id for finding in presentation_report.findings}
+    assert "FF044" not in {finding.rule_id for finding in payload_report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(presentation_report.to_dict()),
+        report_to_markdown(presentation_report),
+        json.dumps(report_to_sarif(presentation_report)),
+        json.dumps(payload_report.to_dict()),
+        report_to_markdown(payload_report),
+        json.dumps(report_to_sarif(payload_report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-ANCHORED-IMAGE-NAME",
+        "PRIVATE-ANCHORED-IMAGE-DESCRIPTION",
+        "PRIVATE-WATERMARK-IMAGE-TITLE",
+        "PrivateHeaderFooterWatermark",
+        "private-anchored.png",
+        "private-background.png",
+        "private-watermark.png",
+        "rIdFenceAnchoredImage",
+        "rIdFenceBackgroundImage",
+        "rIdFenceHeaderFooterImage",
+        "position:absolute",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_image_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_worksheet_image_model(tmp_path / "baseline.xlsx")
+    renumbered = make_worksheet_image_model(tmp_path / "renumbered.xlsx")
+    renumber_worksheet_image_identifiers(renumbered)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered))
+
+    assert "worksheet_image_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF059" not in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_image_source_relationship_rebinding_is_detected(tmp_path) -> None:
+    baseline = make_worksheet_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_image_model(tmp_path / "candidate.xlsx")
+    rebind_worksheet_image_source_relationship(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_image_controls_changed"
+    )
+
+    assert baseline_snapshot.worksheet_images.related_relationship_count == 5
+    assert candidate_snapshot.worksheet_images.related_relationship_count == 5
+    assert change.details["worksheet_image_binding_changed"] is True
+    assert change.details["worksheet_image_relationships_changed"] is True
+    assert "FF059" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("drawing2.xml" not in artifact for artifact in rendered_artifacts)
+
+
+def test_external_worksheet_images_are_counted_without_exposing_targets(tmp_path) -> None:
+    baseline = make_worksheet_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_image_model(tmp_path / "candidate.xlsx")
+    externalize_worksheet_image_relationship(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    candidate_profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.worksheet_images.anchored_picture_count == 1
+    assert candidate_snapshot.worksheet_images.image_part_count == 2
+    assert candidate_snapshot.worksheet_images.external_relationship_count == 1
+    assert candidate_snapshot.worksheet_images.unrecognized_image_count == 0
+    assert "FF059" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(candidate_profile),
+        profile_to_markdown(candidate_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all(
+        "PRIVATE-EXTERNAL-WORKSHEET-IMAGE" not in artifact
+        for artifact in rendered_artifacts
+    )
+
+
+def test_strict_worksheet_images_are_supported(tmp_path) -> None:
+    baseline = make_strict_worksheet_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_strict_worksheet_image_model(tmp_path / "candidate.xlsx")
+    change_worksheet_image_payload(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+
+    assert baseline_snapshot.worksheet_images.anchored_picture_count == 1
+    assert baseline_snapshot.worksheet_images.worksheet_background_image_count == 1
+    assert baseline_snapshot.worksheet_images.header_footer_image_count == 1
+    assert baseline_snapshot.worksheet_images.image_part_count == 3
+    assert baseline_snapshot.worksheet_images.unrecognized_image_count == 0
+    assert not any(
+        "native worksheet-image" in warning
+        for warning in baseline_snapshot.parser_warnings
+    )
+    assert "FF059" in {finding.rule_id for finding in report.findings}
+
+
+def test_malformed_worksheet_images_fail_closed(tmp_path) -> None:
+    baseline = make_worksheet_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_image_model(tmp_path / "candidate.xlsx")
+    corrupt_worksheet_image_drawing_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.worksheet_images.unrecognized_image_count == 1
+    assert any(
+        "Worksheet DrawingML picture part with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "worksheet_image_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF059" in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_image_xml_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    workbook = make_worksheet_image_model(tmp_path / "candidate.xlsx")
+    monkeypatch.setattr(workbook_module, "_WORKSHEET_IMAGE_MAX_XML_PART_BYTES", 1)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_images.unrecognized_image_count >= 1
+    assert any(
+        "oversized native worksheet-image XML" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_worksheet_image_relationship_xml_budget_fails_closed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_image_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._WorksheetImageXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_WorksheetImageXmlBudget",
+        lambda: budget_type(remaining_parts=1),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_images.unrecognized_image_count >= 1
+    assert any(
+        "bounded native worksheet-image XML part count budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
 def test_chart_drawing_is_not_misclassified_as_worksheet_shapes(tmp_path) -> None:
     workbook = make_chart_definition_model(tmp_path / "chart.xlsx")
 
@@ -8133,6 +8366,8 @@ def test_chart_drawing_is_not_misclassified_as_worksheet_shapes(tmp_path) -> Non
     assert snapshot.chart_definitions.present is True
     assert snapshot.worksheet_drawing_shapes.present is False
     assert snapshot.worksheet_drawing_shapes.shape_count == 0
+    assert snapshot.worksheet_images.present is False
+    assert snapshot.worksheet_images.worksheet_image_sheet_count == 0
 
 
 def test_malformed_worksheet_drawing_shapes_fail_closed(tmp_path) -> None:

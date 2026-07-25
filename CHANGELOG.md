@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.57.0 — 2026-07-26
+
+- Inspect native worksheet image controls before ordinary readers discard their
+  package bindings: anchored transitional and strict DrawingML `xdr:pic`
+  objects (including pictures inside groups), direct worksheet backgrounds, and
+  VML-backed header/footer watermark images. Private signatures retain anchors,
+  visual declarations, relationship semantics, and bounded direct image-payload
+  hashes; profiles, Markdown, JSON, and SARIF expose aggregate counts only.
+- Emit `FF059` for a material native worksheet-image change and add the
+  fail-closed `no_worksheet_image_changes` policy rule (`FFP059`). This catches
+  a changed floating picture, sheet background, or printed watermark while
+  formulas and ordinary cells remain unchanged.
+- Normalize writer-selected non-visual and VML IDs plus consistent
+  relationship-ID rewrites. Keep chart drawings, rich-data/in-cell images,
+  Themes, ActiveX/OLE image controls, text/group shapes, and header/footer text
+  in their existing dedicated boundaries. Missing, duplicate, malformed,
+  unsafe, oversized, or over-budget XML/payload material is explicit coverage
+  evidence; FormulaFence neither renders nor decodes images, follows an
+  external target, or calculates final print/layout behavior.
+
 ## 0.56.0 — 2026-07-26
 
 - Inspect material worksheet-dimension controls directly from raw transitional

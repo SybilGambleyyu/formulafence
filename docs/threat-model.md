@@ -29,6 +29,10 @@ financial correctness or replace model review.
   macro assignments, text links, descriptions, relationship identifiers, and
   targets are compared through private fingerprints only. Profiles and reports
   retain structural counts, never the underlying shape content.
+- Native worksheet image declarations, anchors, visual properties,
+  relationship identifiers/targets, and bounded direct image payloads are
+  compared through private fingerprints only. Profiles and reports retain
+  aggregate structural counts, never image bytes or image metadata.
 - Worksheet cell-hyperlink targets, locations, display overrides, ScreenTips,
   references, relationship identifiers, and revision UIDs are compared through
   private fingerprints only. Profiles and reports retain structural counts,
@@ -643,11 +647,37 @@ review prompt, not proof of an error.
   rewrites, and colour-case spelling are normalized. FormulaFence does **not**
   render DrawingML, resolve themes or contrast, calculate text links, execute
   macro assignments, retrieve external targets, parse or hash media, or cover
-  pictures, connectors, graphic frames, SmartArt, or other non-`xdr:sp`
-  objects. Missing, malformed, unsafe, oversized, over-budget, or unsupported
+  connectors, graphic frames, SmartArt, or other unsupported non-`xdr:sp`
+  objects. Native pictures are handled by the separate worksheet-image
+  boundary. Missing, malformed, unsafe, oversized, over-budget, or unsupported
   regular-shape metadata becomes a visible parser-coverage warning. XML reads
   are bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts. This
   scope follows the Open XML [`xdr:sp` Shape definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet.shape?view=openxml-3.0.1).
+- Native worksheet image controls are followed from worksheet `drawing`, direct
+  `picture`, and `legacyDrawingHF` relationships before ordinary readers can
+  discard those visual bindings. FormulaFence privately compares anchored
+  transitional/strict DrawingML `xdr:pic` objects (including group-contained
+  pictures), worksheet backgrounds, and VML-backed header/footer watermark
+  images, along with their anchors, visual declarations, relationship
+  semantics, and bounded direct payload hashes. Profiles and reports expose
+  only safe worksheet/picture/anchor/background/header-footer/image-payload/
+  relationship/malformed-control counts. Image bytes, image names/descriptions,
+  visual formatting, anchors, relationship IDs/targets, and raw XML remain
+  private. A material change emits `FF059` and can be blocked with
+  `no_worksheet_image_changes`. Non-visual DrawingML/VML IDs and consistent
+  relationship-ID rewrites normalize. FormulaFence does **not** render or
+  decode media, fetch a target, resolve themes, calculate visibility, cropping,
+  z-order, print pagination, or client behavior. Charts, rich-data/in-cell
+  images, Theme images, ActiveX/OLE image controls, regular/group shapes, and
+  header/footer text remain in `FF030`, `FF051`, `FF053`, `FF029`, `FF044`, and
+  `FF056` respectively. XML reads are bounded to 16 MiB per part, 64 MiB per
+  workbook, and 512 parts; direct payload hashing is bounded to 32 MiB per
+  part, 64 MiB per workbook, and 512 parts. Missing, duplicate, malformed,
+  unsafe, unreadable, oversized, or over-budget material is visible coverage
+  evidence. The boundary follows Open XML's
+  [`xdr:pic` Picture definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet.picture?view=openxml-3.0.1),
+  Microsoft's [worksheet background guidance](https://support.microsoft.com/en-us/excel/add-or-remove-a-sheet-background),
+  and [header/footer watermark guidance](https://support.microsoft.com/en-us/excel/get-started/add-a-watermark-in-excel).
 - Worksheet data-validation controls are inventoried and diffed as compact
   ranges rather than by expanding their target cells. FormulaFence compares the
   validation type, operator, two criteria expressions, blank/dropdown behavior,
@@ -891,7 +921,8 @@ review prompt, not proof of an error.
   refresh/export, table-column, single-cell, and relationship declarations,
   legacy Excel Note/comments/VML and threaded-placeholder package chains,
   modern threaded-comment/person package chains, non-chart Worksheet DrawingML
-  regular/group shape controls, DrawingML chart
+  regular/group shape controls, native worksheet picture/background/header-footer
+  image controls, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link
@@ -900,8 +931,8 @@ review prompt, not proof of an error.
   Power Pivot/Data Model content; apply Slicer/Timeline filters or model their
   worksheet/drawing view geometry/styles; modern
   `chartEx` or nested-chart semantics; future Named Sheet View extension/rich-
-  sort or full differential-format semantics; worksheet pictures, connectors,
-  graphic frames, SmartArt, and other non-`xdr:sp` drawing objects or
+  sort or full differential-format semantics; worksheet connectors, graphic
+  frames, SmartArt, and other unsupported non-`xdr:sp` drawing objects or
   chart-to-cell impact; Ribbon image payloads; general VML/drawing-control
   layout beyond supported Note shapes; embedded OLE/package formats;
   worksheet-scoped Web Add-in markup; Power Query runtime behavior or returned

@@ -101,6 +101,7 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
     assert "no_legacy_comment_changes: true" in content
     assert "no_threaded_comment_changes: true" in content
     assert "no_worksheet_drawing_shape_changes: true" in content
+    assert "no_worksheet_image_changes: true" in content
     assert "no_worksheet_embedded_control_changes: true" in content
     assert "no_power_query_changes: true" in content
     assert "no_new_tokenization_failures: true" in content

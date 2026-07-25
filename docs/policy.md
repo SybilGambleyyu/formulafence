@@ -44,6 +44,7 @@ rules:
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
+  no_worksheet_image_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -129,6 +130,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_legacy_comment_changes` | boolean | A legacy Excel Note/comments binding, author association, Note text/rich-text/property declaration, threaded-comment placeholder reconciliation declaration, Note VML visibility/layout, or related relationship changes. Note text, authors, locations, VML, targets, IDs, and GUIDs are compared privately. |
 | `no_threaded_comment_changes` | boolean | A modern Excel threaded-comment/person package binding, comment/reply graph, text, stored cell/timestamp/resolution declaration, mention range/person association, extension material, or person definition changes. Comment bodies, locations, timestamps, parent links, names, user IDs, provider IDs, relationship IDs, and GUIDs are compared privately. |
 | `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp` or nested `xdr:grpSp` anchor/layout, text/presentation declaration, macro/text link, or referenced click/hover relationship changes. Shape text, formatting, formulas, anchors, IDs, and targets are compared privately. |
+| `no_worksheet_image_changes` | boolean | A native anchored DrawingML `xdr:pic`, worksheet `<picture>` background, header/footer VML image, related relationship, visual declaration, anchor, or bounded direct image payload changes. Image bytes, names/descriptions, anchors, formatting, IDs, targets, and raw XML are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -1048,8 +1050,33 @@ over-budget metadata is a visible coverage warning; XML reads are bounded to
 16 MiB per part, 64 MiB per workbook, and 512 parts. FormulaFence does not
 render or assess visibility, resolve theme colours/contrast, calculate a text
 link, execute a macro assignment, retrieve a target, parse/hash media, or
-inspect pictures, connectors, graphic frames, SmartArt, or other non-`xdr:sp`
-drawing objects.
+inspect connectors, graphic frames, SmartArt, or other non-`xdr:sp` drawing
+objects. Native `xdr:pic` objects are covered by the separate image rule.
+
+Native worksheet images can alter a spreadsheet's review and print surface even
+when every stored cell is unchanged. FormulaFence follows a worksheet's
+`drawing`, direct `<picture>`, and `legacyDrawingHF` relationships to inspect
+anchored transitional/strict DrawingML `xdr:pic` objects (including grouped
+pictures), worksheet background images, and VML-backed header/footer watermark
+images. It compares private anchor/picture/VML declarations, relationship
+semantics, and bounded direct image-payload hashes. A material change emits
+`FF059`; enable `no_worksheet_image_changes` to make it `FFP059` in CI.
+
+Profiles and `FF059` details expose only worksheet, picture/anchor, background,
+header/footer, image-payload, relationship, and malformed-control counts. Image
+bytes, image names/descriptions, visual formatting, anchors, relationship
+IDs/targets, and raw XML remain private. Non-visual DrawingML/VML IDs and
+consistent relationship-ID rewrites normalize. Missing, duplicate, malformed,
+unsafe, unreadable, oversized, or over-budget material is a visible coverage
+warning. XML reads are bounded to 16 MiB per part, 64 MiB per workbook, and 512
+parts; direct image-payload hashing is bounded to 32 MiB per part, 64 MiB per
+workbook, and 512 parts.
+
+FormulaFence does not render or decode media, fetch external targets, resolve
+themes, calculate visibility/cropping/z-order, compose controls, or calculate
+final pagination. Charts remain under `FF030`, rich-data/in-cell images under
+`FF051`, Theme images under `FF053`, ActiveX/OLE image controls under `FF029`,
+regular/group shapes under `FF044`, and header/footer text under `FF056`.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

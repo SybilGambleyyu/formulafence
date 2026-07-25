@@ -5,6 +5,50 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Native worksheet image controls — 2026-07-26
+
+FormulaFence 0.57.0 was validated against three independently maintained
+XlsxWriter examples at commit
+[`cf3fe78d3eab5e4c7d825d4451af3a60e2a04011`](https://github.com/jmcnamara/XlsxWriter/tree/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011):
+[`images.py`](https://github.com/jmcnamara/XlsxWriter/blob/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011/examples/images.py),
+[`background.py`](https://github.com/jmcnamara/XlsxWriter/blob/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011/examples/background.py),
+and [`watermark.py`](https://github.com/jmcnamara/XlsxWriter/blob/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011/examples/watermark.py).
+Their baseline SHA-256 values were, respectively,
+`86a71dac81cf456622f75aed0898f69c7c57bc51f158918081a8c06e60996e80`,
+`c392aa76c41e7230c575e3d87b00efbe1f58ebaff44047f0e142981f31f4e8b7`,
+and `7c919d1e5309d9dfc15469436b7ad4e356b59da21cef7d5b0d6338dcd673315b`.
+The profiles reported three anchored pictures and one shared image part for the
+first workbook, one worksheet background/image part for the second, and one
+header/footer VML watermark/image part for the third.
+
+A standalone raw-ZIP script outside this repository replaced only each
+workbook's direct `xl/media/` member with a valid alternate PNG. It preserved
+the member list and all non-media uncompressed member bytes. Candidate SHA-256
+values were, respectively,
+`d19dcce79da07308ce4d8842e14011a343b85976ecf9ddd1594524ed1a52d096`,
+`362a10723336184ace11bfc5b7c206c870e57452dccc6e64a15be682ecc869e0`,
+and `e92e1bdea58447212da730af49f4cf65aff74c2014b5056258d5c786ccc21093`.
+
+A clean virtual environment installed the staged 0.57.0 wheel (SHA-256
+`7cea4ab4b011319ded2df58a5b0ca63e57ed5cabcbb4e305d28db2109be7ce38`)
+with its declared dependencies and returned `FormulaFence 0.57.0`. Each pair
+emitted exactly one `worksheet_image_controls_changed` change and `FF059`; an
+installed starter policy enabling `no_worksheet_image_changes` exited `1` and
+added `FFP059`. JSON,
+Markdown, and SARIF profiles/diffs were checked to ensure raw media member
+names stayed absent. XlsxWriter's separate
+[`embedded_images.py`](https://github.com/jmcnamara/XlsxWriter/blob/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011/examples/embedded_images.py)
+workbook remained outside this boundary (`worksheet_images.present == false`)
+and inside the existing rich-data boundary (`rich_data.present == true`).
+
+The suite separately validates anchored-picture presentation and payload
+changes, direct backgrounds, VML header/footer watermarks, strict DrawingML,
+external relationships without retrieval, ID normalization, privacy redaction,
+policy enforcement, malformed roots, bounded XML reads, and separation from
+chart and text-shape controls. FormulaFence compares stored package material;
+it does not decode or render images, fetch targets, or calculate final layout
+or pagination.
+
 ## Material worksheet-dimension controls — 2026-07-26
 
 FormulaFence 0.56.0 was validated against two independently maintained

@@ -96,6 +96,7 @@ from formulafence.models import (
     WorksheetDisplaySnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
+    WorksheetImageSnapshot,
     WorksheetPrintLayoutSnapshot,
     WorksheetSparklineSnapshot,
     XlmMacroSheetSnapshot,
@@ -403,6 +404,13 @@ _CHART_RELATED_PART_HASH_CHUNK_BYTES = 1024 * 1024
 _WORKSHEET_DRAWING_SHAPE_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_COUNT = 512
+_WORKSHEET_IMAGE_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_WORKSHEET_IMAGE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_WORKSHEET_IMAGE_TOTAL_XML_MAX_COUNT = 512
+_WORKSHEET_IMAGE_RELATED_PART_MAX_BYTES = 32 * 1024 * 1024
+_WORKSHEET_IMAGE_RELATED_PART_TOTAL_MAX_BYTES = 64 * 1024 * 1024
+_WORKSHEET_IMAGE_RELATED_PART_TOTAL_MAX_COUNT = 512
+_WORKSHEET_IMAGE_HASH_CHUNK_BYTES = 1024 * 1024
 _THREADED_COMMENT_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _THREADED_COMMENT_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _THREADED_COMMENT_TOTAL_XML_MAX_COUNT = 512
@@ -472,6 +480,7 @@ _VML_EXCEL_NS = "urn:schemas-microsoft-com:office:excel"
 _DRAWINGML_SPREADSHEET_NS = (
     "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 )
+_DRAWINGML_STRICT_SPREADSHEET_NS = "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"
 _DRAWINGML_MAIN_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _DRAWINGML_STRICT_MAIN_NS = "http://purl.oclc.org/ooxml/drawingml/main"
 _DRAWINGML_CHART_NS = "http://schemas.openxmlformats.org/drawingml/2006/chart"
@@ -494,6 +503,13 @@ _WORKSHEET_OLE_OBJECT_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/oleObject"
 _WORKSHEET_EMBEDDED_PACKAGE_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/package"
 _WORKSHEET_VML_DRAWING_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/vmlDrawing"
 _WORKSHEET_DRAWING_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/drawing"
+_WORKSHEET_STRICT_DRAWING_RELATIONSHIP = f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/drawing"
+_WORKSHEET_IMAGE_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/image"
+_WORKSHEET_STRICT_IMAGE_RELATIONSHIP = f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/image"
+_WORKSHEET_IMAGE_VML_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/vmlDrawing"
+_WORKSHEET_STRICT_IMAGE_VML_RELATIONSHIP = (
+    f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/vmlDrawing"
+)
 _THREADED_COMMENT_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2017/10/relationships/threadedComment"
 )
@@ -570,6 +586,32 @@ _WORKSHEET_DRAWING_SHAPE_RELATIONSHIP_ATTRIBUTES = frozenset(
         f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
         f"{{{_DOCUMENT_RELATIONSHIP_NS}}}embed",
         f"{{{_DOCUMENT_RELATIONSHIP_NS}}}link",
+    }
+)
+_WORKSHEET_IMAGE_RELATIONSHIP_ATTRIBUTES = frozenset(
+    f"{{{namespace}}}{local_name}"
+    for namespace in {_DOCUMENT_RELATIONSHIP_NS, _STRICT_DOCUMENT_RELATIONSHIP_NS}
+    for local_name in {"id", "embed", "link"}
+)
+_WORKSHEET_IMAGE_RELATIONSHIPS = frozenset(
+    relationship.casefold()
+    for relationship in {
+        _WORKSHEET_IMAGE_RELATIONSHIP,
+        _WORKSHEET_STRICT_IMAGE_RELATIONSHIP,
+    }
+)
+_WORKSHEET_IMAGE_DRAWING_RELATIONSHIPS = frozenset(
+    relationship.casefold()
+    for relationship in {
+        _WORKSHEET_DRAWING_RELATIONSHIP,
+        _WORKSHEET_STRICT_DRAWING_RELATIONSHIP,
+    }
+)
+_WORKSHEET_IMAGE_VML_RELATIONSHIPS = frozenset(
+    relationship.casefold()
+    for relationship in {
+        _WORKSHEET_IMAGE_VML_RELATIONSHIP,
+        _WORKSHEET_STRICT_IMAGE_VML_RELATIONSHIP,
     }
 )
 _PIVOT_RELATIONSHIP_ATTRIBUTES = frozenset(
@@ -948,6 +990,14 @@ class _WorksheetDrawingShapeMetadata:
 
 
 @dataclass(frozen=True)
+class _WorksheetImageMetadata:
+    """Raw native worksheet-image evidence retained before reader loss."""
+
+    images: WorksheetImageSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _NamedSheetViewAutoFilterBinding:
     """One private AutoFilter target available to a Named Sheet View."""
 
@@ -1150,6 +1200,28 @@ class _WorksheetDrawingShapeRawRelationship:
 
 
 @dataclass(frozen=True)
+class _WorksheetImageRawRelationship:
+    """One private worksheet-image relationship and canonical target."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return relationship semantics while ignoring arbitrary identifiers."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        return (
+            self.relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
+@dataclass(frozen=True)
 class _PivotRawRelationship:
     """One private PivotTable-package relationship and its canonical target."""
 
@@ -1252,6 +1324,22 @@ class _WorksheetDrawingShapeBudget:
 
     remaining_bytes: int = _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _WorksheetImageXmlBudget:
+    """Bound native worksheet-image XML bytes in one package scan."""
+
+    remaining_bytes: int = _WORKSHEET_IMAGE_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _WORKSHEET_IMAGE_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _WorksheetImageRelatedPartBudget:
+    """Bound direct native worksheet-image payload bytes in one package scan."""
+
+    remaining_bytes: int = _WORKSHEET_IMAGE_RELATED_PART_TOTAL_MAX_BYTES
+    remaining_parts: int = _WORKSHEET_IMAGE_RELATED_PART_TOTAL_MAX_COUNT
 
 
 @dataclass
@@ -1436,6 +1524,17 @@ class _ChartRelatedPartPayloadInspection:
 
 
 @dataclass(frozen=True)
+class _WorksheetImagePayloadInspection:
+    """Private fingerprint result for direct native worksheet-image payloads."""
+
+    image_part_count: int = 0
+    fingerprinted_part_count: int = 0
+    uninspected_part_count: int = 0
+    payload_by_member: tuple[tuple[str, str], ...] = ()
+    payload_signature: str | None = None
+
+
+@dataclass(frozen=True)
 class _PivotCacheRecordPayloadInspection:
     """Private fingerprint result for raw PivotTable cache-record parts."""
 
@@ -1482,6 +1581,37 @@ class _WorksheetDrawingShapeInspection:
     inspected: bool = False
     definition_signature: str | None = None
     relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _WorksheetAnchoredPictureInspection:
+    """Private native pictures discovered in one Worksheet DrawingML part."""
+
+    member: str
+    present: bool = False
+    picture_anchor_count: int = 0
+    picture_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    image_members: tuple[str, ...] = ()
+    unrecognized_count: int = 0
+    definition_signature: str | None = None
+    relationship_entries: tuple[tuple[str, str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class _WorksheetHeaderFooterImageInspection:
+    """Private header/footer VML watermark images from one VML drawing part."""
+
+    member: str
+    present: bool = False
+    image_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    image_members: tuple[str, ...] = ()
+    unrecognized_count: int = 0
+    definition_signature: str | None = None
+    relationship_entries: tuple[tuple[str, str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -33133,6 +33263,1316 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
     return _WorksheetDrawingShapeMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_WORKSHEET_IMAGE_DRAWING_NAMESPACES = frozenset(
+    {_DRAWINGML_SPREADSHEET_NS, _DRAWINGML_STRICT_SPREADSHEET_NS}
+)
+_WORKSHEET_IMAGE_MAIN_NAMESPACES = frozenset(
+    {_DRAWINGML_MAIN_NS, _DRAWINGML_STRICT_MAIN_NS}
+)
+_WORKSHEET_IMAGE_ANCHORS = frozenset(
+    {"twoCellAnchor", "oneCellAnchor", "absoluteAnchor"}
+)
+_WORKSHEET_IMAGE_ANCHOR_CHILDREN = frozenset(
+    {"from", "to", "pos", "ext", "pic", "grpSp", "clientData"}
+)
+_WORKSHEET_IMAGE_GROUP_CHILDREN = frozenset(
+    {"nvGrpSpPr", "grpSpPr", "pic", "grpSp"}
+)
+
+
+def _worksheet_image_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    budget: _WorksheetImageXmlBudget,
+    *,
+    context: str,
+) -> tuple[_WorksheetImageRawRelationship, ...] | None:
+    """Read native worksheet-image relationships without following targets."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        archive.getinfo(relationship_member)
+    except KeyError:
+        return ()
+    payload, _fallback_signature = _worksheet_image_xml_payload(
+        archive,
+        relationship_member,
+        warnings,
+        budget,
+        kind=f"{context} relationship",
+    )
+    if payload is None:
+        return None
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for native worksheet-image inspection "
+            f"({type(error).__name__}); affected images were not compared."
+        )
+        return None
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting native worksheet images; "
+            "affected images were not compared."
+        )
+        return None
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_WorksheetImageRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _WorksheetImageRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting native "
+            "worksheet images; affected images may be incomplete."
+        )
+        return None
+    return tuple(relationships)
+
+
+def _worksheet_image_relationship_index(
+    relationships: tuple[_WorksheetImageRawRelationship, ...],
+) -> dict[str, list[_WorksheetImageRawRelationship]]:
+    """Index raw image relationships without trusting an identifier as unique."""
+    indexed: dict[str, list[_WorksheetImageRawRelationship]] = defaultdict(list)
+    for relationship in relationships:
+        if relationship.relationship_id:
+            indexed[relationship.relationship_id].append(relationship)
+    for matches in indexed.values():
+        matches.sort(key=lambda relationship: relationship.semantic_key())
+    return indexed
+
+
+def _worksheet_image_resolve_relationships(
+    relationship_ids: set[str],
+    relationships_by_id: Mapping[str, list[_WorksheetImageRawRelationship]],
+    warnings: set[str],
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+) -> tuple[_WorksheetImageRawRelationship, ...]:
+    """Resolve referenced relationship IDs with duplicate/missing evidence."""
+    selected: list[_WorksheetImageRawRelationship] = []
+    for relationship_id in sorted(relationship_ids):
+        matches = relationships_by_id.get(relationship_id, [])
+        if not matches:
+            warnings.add(
+                "FormulaFence found a native worksheet-image relationship reference "
+                f"without a matching relationship in {context}; affected images have "
+                "a coverage gap."
+            )
+            issues.append(("missing-image-relationship", relationship_id))
+            continue
+        if len(matches) > 1:
+            warnings.add(
+                "FormulaFence found duplicate native worksheet-image relationship IDs; "
+                "affected images have a coverage gap."
+            )
+            issues.append(
+                (
+                    "duplicate-image-relationship",
+                    repr(
+                        (
+                            relationship_id,
+                            tuple(
+                                relationship.semantic_key() for relationship in matches
+                            ),
+                        )
+                    ),
+                )
+            )
+        selected.append(matches[0])
+    return tuple(selected)
+
+
+def _worksheet_image_relationship_id(element: ElementTree.Element) -> str | None:
+    """Return one Office relationship identifier from an image declaration."""
+    values = [
+        value
+        for attribute, value in element.attrib.items()
+        if attribute in _WORKSHEET_IMAGE_RELATIONSHIP_ATTRIBUTES and value
+    ]
+    if len(values) == 1:
+        return values[0]
+    return None
+
+
+def _worksheet_image_is_image_relationship(
+    relationship: _WorksheetImageRawRelationship,
+) -> bool:
+    """Return whether a relationship is a native image payload binding."""
+    return relationship.relationship_type.casefold() in _WORKSHEET_IMAGE_RELATIONSHIPS
+
+
+def _worksheet_image_xml_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _WorksheetImageXmlBudget,
+    *,
+    kind: str,
+) -> tuple[bytes | None, str | None]:
+    """Read one bounded native worksheet-image XML member."""
+    if budget.remaining_parts <= 0:
+        warnings.add(
+            "FormulaFence reached its bounded native worksheet-image XML part count "
+            "budget; affected images have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("worksheet-image-part-budget-exhausted", repr((kind, member))),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a native worksheet-image XML package part; "
+            "affected images were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("missing-worksheet-image-member", repr((kind, member))),)
+        )
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _WORKSHEET_IMAGE_MAX_XML_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized native worksheet-image XML "
+            "part; affected images have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("oversized-worksheet-image-member", repr((kind, metadata))),)
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded native worksheet-image XML read budget; "
+            "affected images have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("worksheet-image-read-budget-exhausted", repr((kind, metadata))),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a native worksheet-image XML package part "
+            f"({type(error).__name__}); affected images were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("unreadable-worksheet-image-member", repr((kind, metadata))),)
+        )
+
+
+def _worksheet_image_payloads(
+    archive: ZipFile,
+    members: set[str],
+    unresolved_entries: list[tuple[str, str]],
+    warnings: set[str],
+    budget: _WorksheetImageRelatedPartBudget,
+) -> _WorksheetImagePayloadInspection:
+    """Fingerprint bounded image bytes without decoding or exposing them."""
+    entries = list(unresolved_entries)
+    payload_by_member: list[tuple[str, str]] = []
+    fingerprinted_part_count = 0
+    uninspected_part_count = len(unresolved_entries)
+    for member in sorted(members, key=str.casefold):
+        if budget.remaining_parts <= 0:
+            warnings.add(
+                "FormulaFence reached its bounded native worksheet-image payload part "
+                "count budget; affected images have a coverage gap."
+            )
+            entries.append(("part-count-budget-exhausted", member))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_parts -= 1
+        try:
+            info = archive.getinfo(member)
+        except KeyError:
+            warnings.add(
+                "FormulaFence could not locate a native worksheet-image payload part; "
+                "affected images were not compared."
+            )
+            entries.append(("missing-image-part", member))
+            uninspected_part_count += 1
+            continue
+        metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+        if info.file_size > _WORKSHEET_IMAGE_RELATED_PART_MAX_BYTES:
+            warnings.add(
+                "FormulaFence did not fully read an oversized native worksheet-image "
+                "payload; affected images have a coverage gap."
+            )
+            entries.append(("oversized-image-part", metadata))
+            uninspected_part_count += 1
+            continue
+        if info.file_size > budget.remaining_bytes:
+            warnings.add(
+                "FormulaFence reached its bounded native worksheet-image payload read "
+                "budget; affected images have a coverage gap."
+            )
+            entries.append(("image-read-budget-exhausted", metadata))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_bytes -= info.file_size
+        digest = hashlib.sha256()
+        bytes_read = 0
+        try:
+            with archive.open(info) as payload:
+                while chunk := payload.read(_WORKSHEET_IMAGE_HASH_CHUNK_BYTES):
+                    bytes_read += len(chunk)
+                    if bytes_read > info.file_size:
+                        raise ValueError("payload exceeded its declared size")
+                    digest.update(chunk)
+            if bytes_read != info.file_size:
+                raise ValueError("payload did not match its declared size")
+        except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+            warnings.add(
+                "FormulaFence could not fingerprint a native worksheet-image payload "
+                f"({type(error).__name__}); affected images were not compared."
+            )
+            entries.append(("unreadable-image-part", metadata))
+            uninspected_part_count += 1
+            continue
+        digest_hex = digest.hexdigest()
+        payload_by_member.append((member, digest_hex))
+        entries.append(("image-payload", repr((member, digest_hex))))
+        fingerprinted_part_count += 1
+
+    entries.sort()
+    return _WorksheetImagePayloadInspection(
+        image_part_count=len(members) + len(unresolved_entries),
+        fingerprinted_part_count=fingerprinted_part_count,
+        uninspected_part_count=uninspected_part_count,
+        payload_by_member=tuple(
+            sorted(payload_by_member, key=lambda item: item[0].casefold())
+        ),
+        payload_signature=(
+            _private_external_data_signature(tuple(entries)) if entries else None
+        ),
+    )
+
+
+def _worksheet_image_drawing_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+) -> tuple[object, ...]:
+    """Canonicalize private picture XML while resolving relationship IDs."""
+    namespace = _xml_namespace(element.tag)
+    local_name = _xml_local_name(element.tag)
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if (
+            namespace in _WORKSHEET_IMAGE_DRAWING_NAMESPACES
+            and local_name == "cNvPr"
+            and _xml_local_name(attribute) == "id"
+        ):
+            continue
+        if attribute in _WORKSHEET_IMAGE_RELATIONSHIP_ATTRIBUTES:
+            relationship = relationship_semantics.get(value)
+            resolved: object = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+            continue
+        if (
+            namespace in _WORKSHEET_IMAGE_MAIN_NAMESPACES
+            and local_name == "srgbClr"
+            and _xml_local_name(attribute) == "val"
+        ):
+            value = value.upper()
+        attributes.append((_xml_display_name(attribute), value))
+
+    if namespace in _WORKSHEET_IMAGE_DRAWING_NAMESPACES and local_name == "grpSp":
+        children = tuple(
+            _worksheet_image_drawing_fragment(child, relationship_semantics)
+            for child in element
+            if (
+                _xml_namespace(child.tag) in _WORKSHEET_IMAGE_DRAWING_NAMESPACES
+                and _xml_local_name(child.tag) in _WORKSHEET_IMAGE_GROUP_CHILDREN
+            )
+        )
+    else:
+        children = tuple(
+            _worksheet_image_drawing_fragment(child, relationship_semantics)
+            for child in element
+        )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+    )
+
+
+def _worksheet_image_anchor_fragment(
+    anchor: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+) -> tuple[object, ...]:
+    """Retain an image anchor while excluding non-image drawing siblings."""
+    attributes = tuple(
+        sorted(
+            (_xml_display_name(attribute), value)
+            for attribute, value in anchor.attrib.items()
+        )
+    )
+    children = tuple(
+        _worksheet_image_drawing_fragment(child, relationship_semantics)
+        for child in anchor
+        if (
+            _xml_namespace(child.tag) in _WORKSHEET_IMAGE_DRAWING_NAMESPACES
+            and _xml_local_name(child.tag) in _WORKSHEET_IMAGE_ANCHOR_CHILDREN
+        )
+    )
+    return (_xml_display_name(anchor.tag), attributes, children)
+
+
+def _worksheet_image_picture_containers(
+    anchor: ElementTree.Element,
+) -> tuple[ElementTree.Element, ...]:
+    """Return native picture elements in an anchor or nested drawing group."""
+    pictures: list[ElementTree.Element] = []
+
+    def visit(element: ElementTree.Element) -> None:
+        if _xml_namespace(element.tag) not in _WORKSHEET_IMAGE_DRAWING_NAMESPACES:
+            return
+        local_name = _xml_local_name(element.tag)
+        if local_name == "pic":
+            pictures.append(element)
+            return
+        if local_name == "grpSp":
+            for child in element:
+                visit(child)
+
+    for child in anchor:
+        visit(child)
+    return tuple(pictures)
+
+
+def _worksheet_image_picture_relationship_ids(
+    picture: ElementTree.Element,
+) -> tuple[set[str], set[str]]:
+    """Return all picture links and the image-payload subset of those links."""
+    relationship_ids: set[str] = set()
+    image_relationship_ids: set[str] = set()
+    for element in picture.iter():
+        is_blip = (
+            _xml_namespace(element.tag) in _WORKSHEET_IMAGE_MAIN_NAMESPACES
+            and _xml_local_name(element.tag) == "blip"
+        )
+        for attribute, value in element.attrib.items():
+            if attribute not in _WORKSHEET_IMAGE_RELATIONSHIP_ATTRIBUTES or not value:
+                continue
+            relationship_ids.add(value)
+            if is_blip and _xml_local_name(attribute) in {"embed", "link"}:
+                image_relationship_ids.add(value)
+    return relationship_ids, image_relationship_ids
+
+
+def _worksheet_anchored_picture_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _WorksheetImageXmlBudget,
+) -> _WorksheetAnchoredPictureInspection:
+    """Inspect native anchored pictures in one DrawingML worksheet part."""
+    payload, fallback_signature = _worksheet_image_xml_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        kind="Worksheet DrawingML picture",
+    )
+    if payload is None:
+        return _WorksheetAnchoredPictureInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a Worksheet DrawingML picture XML part "
+            f"({type(error).__name__}); affected pictures were not compared."
+        )
+        return _WorksheetAnchoredPictureInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+    if (
+        _xml_namespace(root.tag) not in _WORKSHEET_IMAGE_DRAWING_NAMESPACES
+        or _xml_local_name(root.tag) != "wsDr"
+    ):
+        warnings.add(
+            "FormulaFence found a Worksheet DrawingML picture part with an unexpected "
+            "root; affected pictures were not compared."
+        )
+        return _WorksheetAnchoredPictureInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    anchor_records: list[tuple[ElementTree.Element, tuple[ElementTree.Element, ...]]] = []
+    for child in root:
+        if (
+            _xml_namespace(child.tag) not in _WORKSHEET_IMAGE_DRAWING_NAMESPACES
+            or _xml_local_name(child.tag) not in _WORKSHEET_IMAGE_ANCHORS
+        ):
+            continue
+        pictures = _worksheet_image_picture_containers(child)
+        if pictures:
+            anchor_records.append((child, pictures))
+
+    all_picture_nodes = [
+        element
+        for element in root.iter()
+        if (
+            _xml_namespace(element.tag) in _WORKSHEET_IMAGE_DRAWING_NAMESPACES
+            and _xml_local_name(element.tag) == "pic"
+        )
+    ]
+    selected_picture_ids = {
+        id(picture)
+        for _anchor, pictures in anchor_records
+        for picture in pictures
+    }
+    issues: list[tuple[str, str]] = []
+    unrecognized_count = 0
+    unanchored_picture_count = sum(
+        id(picture) not in selected_picture_ids for picture in all_picture_nodes
+    )
+    if unanchored_picture_count:
+        warnings.add(
+            "FormulaFence found Worksheet DrawingML pictures outside supported anchors; "
+            "affected picture controls have a coverage gap."
+        )
+        issues.append(("unanchored-picture-count", str(unanchored_picture_count)))
+        unrecognized_count += unanchored_picture_count
+
+    relationship_ids: set[str] = set()
+    image_relationship_ids: set[str] = set()
+    for _anchor, pictures in anchor_records:
+        for picture in pictures:
+            picture_relationship_ids, picture_image_relationship_ids = (
+                _worksheet_image_picture_relationship_ids(picture)
+            )
+            relationship_ids.update(picture_relationship_ids)
+            image_relationship_ids.update(picture_image_relationship_ids)
+            if not picture_image_relationship_ids:
+                issues.append(("picture-without-image-binding", str(id(picture))))
+                unrecognized_count += 1
+
+    selected_relationships: tuple[_WorksheetImageRawRelationship, ...] = ()
+    relationship_semantics: dict[str, tuple[str, str, str]] = {}
+    if relationship_ids:
+        relationships = _worksheet_image_raw_relationships(
+            archive,
+            member,
+            warnings,
+            budget,
+            context="Worksheet DrawingML picture",
+        )
+        if relationships is None:
+            issues.append(("unreadable-picture-relationships", member))
+            unrecognized_count += 1
+        else:
+            relationships_by_id = _worksheet_image_relationship_index(relationships)
+            selected_relationships = _worksheet_image_resolve_relationships(
+                relationship_ids,
+                relationships_by_id,
+                warnings,
+                issues,
+                context="Worksheet DrawingML picture",
+            )
+            relationship_semantics = {
+                relationship.relationship_id: relationship.semantic_key()
+                for relationship in selected_relationships
+                if relationship.relationship_id
+            }
+
+    selected_by_id = {
+        relationship.relationship_id: relationship
+        for relationship in selected_relationships
+        if relationship.relationship_id
+    }
+    image_members: set[str] = set()
+    for relationship_id in sorted(image_relationship_ids):
+        relationship = selected_by_id.get(relationship_id)
+        if relationship is None:
+            continue
+        if not _worksheet_image_is_image_relationship(relationship):
+            warnings.add(
+                "FormulaFence found a DrawingML picture image binding with an "
+                "unexpected relationship type; affected pictures have a coverage gap."
+            )
+            issues.append(
+                ("unexpected-picture-image-relationship", repr(relationship.semantic_key()))
+            )
+            unrecognized_count += 1
+            continue
+        if relationship.target_mode.casefold() == "internal":
+            if relationship.safe_target is None:
+                warnings.add(
+                    "FormulaFence found a DrawingML picture without a safe internal "
+                    "image target; affected pictures have a coverage gap."
+                )
+                issues.append(
+                    ("unsafe-picture-image-target", repr(relationship.semantic_key()))
+                )
+                unrecognized_count += 1
+                continue
+            image_members.add(relationship.safe_target)
+
+    try:
+        definition_entries = [
+            (
+                f"picture-anchor:{index}",
+                repr(_worksheet_image_anchor_fragment(anchor, relationship_semantics)),
+            )
+            for index, (anchor, _pictures) in enumerate(anchor_records)
+        ]
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested Worksheet "
+            "DrawingML picture; affected pictures were not compared."
+        )
+        return _WorksheetAnchoredPictureInspection(
+            member=member,
+            present=True,
+            picture_anchor_count=len(anchor_records),
+            picture_count=sum(len(pictures) for _anchor, pictures in anchor_records),
+            related_relationship_count=len(selected_relationships),
+            external_relationship_count=sum(
+                relationship.target_mode.casefold() != "internal"
+                for relationship in selected_relationships
+            ),
+            image_members=tuple(sorted(image_members, key=str.casefold)),
+            unrecognized_count=unrecognized_count + 1,
+            definition_signature=_private_payload_signature(payload),
+            relationship_entries=tuple(
+                sorted(relationship.semantic_key() for relationship in selected_relationships)
+            ),
+        )
+
+    definition_entries.extend(sorted(issues))
+    if unrecognized_count:
+        warnings.add(
+            "FormulaFence found malformed or unsupported Worksheet DrawingML picture "
+            "metadata; affected pictures have a coverage gap."
+        )
+    return _WorksheetAnchoredPictureInspection(
+        member=member,
+        present=bool(anchor_records or unrecognized_count),
+        picture_anchor_count=len(anchor_records),
+        picture_count=sum(len(pictures) for _anchor, pictures in anchor_records),
+        related_relationship_count=len(selected_relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in selected_relationships
+        ),
+        image_members=tuple(sorted(image_members, key=str.casefold)),
+        unrecognized_count=unrecognized_count,
+        definition_signature=_private_external_data_signature(tuple(definition_entries)),
+        relationship_entries=tuple(
+            sorted(relationship.semantic_key() for relationship in selected_relationships)
+        ),
+    )
+
+
+def _worksheet_image_vml_relationship_id(element: ElementTree.Element) -> str | None:
+    """Return one image relationship ID from header/footer VML."""
+    values = [
+        value
+        for attribute, value in element.attrib.items()
+        if (
+            attribute in _WORKSHEET_IMAGE_RELATIONSHIP_ATTRIBUTES
+            or (
+                _xml_namespace(attribute) == _VML_OFFICE_NS
+                and _xml_local_name(attribute) == "relid"
+            )
+        )
+        and value
+    ]
+    if len(values) == 1:
+        return values[0]
+    return None
+
+
+def _worksheet_header_footer_image_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _WorksheetImageXmlBudget,
+) -> _WorksheetHeaderFooterImageInspection:
+    """Inspect VML-backed header/footer watermark images without rendering VML."""
+    payload, fallback_signature = _worksheet_image_xml_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        kind="header/footer VML image",
+    )
+    if payload is None:
+        return _WorksheetHeaderFooterImageInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a header/footer VML image part "
+            f"({type(error).__name__}); affected images were not compared."
+        )
+        return _WorksheetHeaderFooterImageInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+    if _xml_local_name(root.tag) != "xml" or _xml_namespace(root.tag) not in {
+        None,
+        _VML_NS,
+    }:
+        warnings.add(
+            "FormulaFence found a header/footer VML image part with an unexpected "
+            "root; affected images were not compared."
+        )
+        return _WorksheetHeaderFooterImageInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    image_data_tag = f"{{{_VML_NS}}}imagedata"
+    image_data_nodes = list(root.iter(image_data_tag))
+    if not image_data_nodes:
+        return _WorksheetHeaderFooterImageInspection(member=member)
+
+    issues: list[tuple[str, str]] = []
+    relationship_ids: set[str] = set()
+    for image_data in image_data_nodes:
+        relationship_id = _worksheet_image_vml_relationship_id(image_data)
+        if relationship_id is None:
+            issues.append(("header-footer-image-without-binding", str(id(image_data))))
+            continue
+        relationship_ids.add(relationship_id)
+
+    selected_relationships: tuple[_WorksheetImageRawRelationship, ...] = ()
+    relationship_semantics: dict[str, tuple[str, str, str]] = {}
+    relationships = _worksheet_image_raw_relationships(
+        archive,
+        member,
+        warnings,
+        budget,
+        context="header/footer VML image",
+    )
+    if relationships is None:
+        issues.append(("unreadable-header-footer-image-relationships", member))
+    else:
+        selected_relationships = _worksheet_image_resolve_relationships(
+            relationship_ids,
+            _worksheet_image_relationship_index(relationships),
+            warnings,
+            issues,
+            context="header/footer VML image",
+        )
+        relationship_semantics = {
+            relationship.relationship_id: relationship.semantic_key()
+            for relationship in selected_relationships
+            if relationship.relationship_id
+        }
+
+    selected_by_id = {
+        relationship.relationship_id: relationship
+        for relationship in selected_relationships
+        if relationship.relationship_id
+    }
+    image_members: set[str] = set()
+    for relationship_id in sorted(relationship_ids):
+        relationship = selected_by_id.get(relationship_id)
+        if relationship is None:
+            continue
+        if not _worksheet_image_is_image_relationship(relationship):
+            warnings.add(
+                "FormulaFence found a header/footer VML image binding with an "
+                "unexpected relationship type; affected images have a coverage gap."
+            )
+            issues.append(
+                ("unexpected-header-footer-image-relationship", repr(relationship.semantic_key()))
+            )
+            continue
+        if relationship.target_mode.casefold() == "internal":
+            if relationship.safe_target is None:
+                warnings.add(
+                    "FormulaFence found a header/footer VML image without a safe "
+                    "internal target; affected images have a coverage gap."
+                )
+                issues.append(
+                    ("unsafe-header-footer-image-target", repr(relationship.semantic_key()))
+                )
+                continue
+            image_members.add(relationship.safe_target)
+
+    relationship_attributes = frozenset(
+        {
+            *_WORKSHEET_IMAGE_RELATIONSHIP_ATTRIBUTES,
+            f"{{{_VML_OFFICE_NS}}}relid",
+        }
+    )
+    shape_type_tag = f"{{{_VML_NS}}}shapetype"
+    shape_tag = f"{{{_VML_NS}}}shape"
+    shape_type_fragments: dict[str, tuple[object, ...]] = {}
+    for shape_type in root.iter(shape_type_tag):
+        identifier = shape_type.get("id")
+        if identifier:
+            shape_type_fragments[identifier] = _legacy_note_vml_fragment(
+                shape_type,
+                relationship_semantics,
+                {},
+                relationship_attributes=relationship_attributes,
+            )
+    parent_by_child = {
+        child: parent
+        for parent in root.iter()
+        for child in parent
+    }
+    fragments: list[tuple[object, ...]] = []
+    seen_shapes: set[int] = set()
+    for image_data in image_data_nodes:
+        container = parent_by_child.get(image_data)
+        while container is not None and container.tag != shape_tag:
+            container = parent_by_child.get(container)
+        if container is None:
+            issues.append(("header-footer-image-without-vml-shape", str(id(image_data))))
+            fragments.append(
+                _legacy_note_vml_fragment(
+                    image_data,
+                    relationship_semantics,
+                    shape_type_fragments,
+                    relationship_attributes=relationship_attributes,
+                )
+            )
+            continue
+        if id(container) in seen_shapes:
+            continue
+        seen_shapes.add(id(container))
+        fragments.append(
+            _legacy_note_vml_fragment(
+                container,
+                relationship_semantics,
+                shape_type_fragments,
+                relationship_attributes=relationship_attributes,
+            )
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported header/footer VML image "
+            "metadata; affected images have a coverage gap."
+        )
+    return _WorksheetHeaderFooterImageInspection(
+        member=member,
+        present=True,
+        image_count=len(image_data_nodes),
+        related_relationship_count=len(selected_relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in selected_relationships
+        ),
+        image_members=tuple(sorted(image_members, key=str.casefold)),
+        unrecognized_count=len(issues),
+        definition_signature=_private_external_data_signature(
+            tuple(
+                (f"header-footer-image:{index}", repr(fragment))
+                for index, fragment in enumerate(fragments)
+            )
+            + tuple(sorted(issues))
+        ),
+        relationship_entries=tuple(
+            sorted(relationship.semantic_key() for relationship in selected_relationships)
+        ),
+    )
+
+
+def _worksheet_image_metadata(path: Path) -> _WorksheetImageMetadata:
+    """Inspect native worksheet image controls before ordinary reader loss.
+
+    The scan compares floating pictures, display-only worksheet backgrounds, and
+    VML-backed header/footer watermarks. It fingerprints safe direct image bytes
+    under fixed budgets without decoding media or following external targets.
+    Charts, rich-data images, Themes, ActiveX/OLE, and text shapes remain in
+    their dedicated control boundaries.
+    """
+    warnings: set[str] = set()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                sheet_parts = _visual_worksheet_xml_paths(archive)
+            except (
+                KeyError,
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                return _WorksheetImageMetadata(
+                    WorksheetImageSnapshot(
+                        unrecognized_image_count=1,
+                        definition_signature=_private_external_data_signature(
+                            (("worksheet-image-sheet-part-scan-failure", type(error).__name__),)
+                        ),
+                    ),
+                    (
+                        "FormulaFence could not inspect worksheet OOXML for native "
+                        f"image controls ({type(error).__name__}); affected images were "
+                        "not compared.",
+                    ),
+                )
+
+            xml_budget = _WorksheetImageXmlBudget()
+            payload_budget = _WorksheetImageRelatedPartBudget()
+            drawing_sources: dict[str, set[tuple[str, str]]] = defaultdict(set)
+            drawing_source_relationships: dict[
+                str, set[tuple[str, str, str]]
+            ] = defaultdict(set)
+            header_footer_sources: dict[str, set[tuple[str, str]]] = defaultdict(set)
+            header_footer_source_relationships: dict[
+                str, set[tuple[str, str, str]]
+            ] = defaultdict(set)
+            background_records: list[tuple[str, _WorksheetImageRawRelationship]] = []
+            unresolved_declarations: list[tuple[str, str]] = []
+            candidate_sheets: set[str] = set()
+
+            for sheet, member in sorted(
+                sheet_parts.items(),
+                key=lambda item: item[0].casefold(),
+            ):
+                payload, fallback_signature = _worksheet_image_xml_payload(
+                    archive,
+                    member,
+                    warnings,
+                    xml_budget,
+                    kind="worksheet declaration",
+                )
+                if payload is None:
+                    unresolved_declarations.append(
+                        (
+                            "unreadable-worksheet-image-declaration",
+                            repr((sheet, fallback_signature)),
+                        )
+                    )
+                    candidate_sheets.add(sheet)
+                    continue
+                try:
+                    worksheet = _xml_root_from_payload(payload)
+                except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+                    warnings.add(
+                        "FormulaFence could not inspect worksheet XML for native image "
+                        f"controls ({type(error).__name__}); affected images were not "
+                        "compared."
+                    )
+                    unresolved_declarations.append(
+                        ("invalid-worksheet-image-declaration", repr((sheet, type(error).__name__)))
+                    )
+                    candidate_sheets.add(sheet)
+                    continue
+                if (
+                    _xml_namespace(worksheet.tag)
+                    not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+                    or _xml_local_name(worksheet.tag) != "worksheet"
+                ):
+                    warnings.add(
+                        "FormulaFence found an unexpected worksheet root while inspecting "
+                        "native image controls; affected images were not compared."
+                    )
+                    unresolved_declarations.append(
+                        ("unexpected-worksheet-image-root", sheet)
+                    )
+                    candidate_sheets.add(sheet)
+                    continue
+
+                image_declarations = [
+                    element
+                    for element in worksheet
+                    if (
+                        _xml_namespace(element.tag)
+                        in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+                        and _xml_local_name(element.tag)
+                        in {"drawing", "picture", "legacyDrawingHF"}
+                    )
+                ]
+                if not image_declarations:
+                    continue
+                relationships = _worksheet_image_raw_relationships(
+                    archive,
+                    member,
+                    warnings,
+                    xml_budget,
+                    context="worksheet",
+                )
+                if relationships is None:
+                    unresolved_declarations.append(
+                        ("unreadable-worksheet-image-relationships", member)
+                    )
+                    candidate_sheets.add(sheet)
+                    continue
+                relationships_by_id = _worksheet_image_relationship_index(relationships)
+                for element in image_declarations:
+                    local_name = _xml_local_name(element.tag)
+                    relationship_id = _worksheet_image_relationship_id(element)
+                    if relationship_id is None:
+                        warnings.add(
+                            "FormulaFence found a native worksheet-image declaration "
+                            "without one relationship ID; affected images have a coverage gap."
+                        )
+                        unresolved_declarations.append(
+                            ("worksheet-image-declaration-without-relationship", sheet)
+                        )
+                        candidate_sheets.add(sheet)
+                        continue
+                    issues: list[tuple[str, str]] = []
+                    selected = _worksheet_image_resolve_relationships(
+                        {relationship_id},
+                        relationships_by_id,
+                        warnings,
+                        issues,
+                        context="worksheet",
+                    )
+                    if issues or not selected:
+                        unresolved_declarations.extend(
+                            (f"worksheet-{local_name}-{kind}", repr((sheet, detail)))
+                            for kind, detail in issues
+                        )
+                        candidate_sheets.add(sheet)
+                        continue
+                    relationship = selected[0]
+                    if local_name == "drawing":
+                        if (
+                            relationship.relationship_type.casefold()
+                            not in _WORKSHEET_IMAGE_DRAWING_RELATIONSHIPS
+                        ):
+                            warnings.add(
+                                "FormulaFence found a worksheet DrawingML declaration with "
+                                "an unexpected relationship type; affected pictures have a "
+                                "coverage gap."
+                            )
+                            unresolved_declarations.append(
+                                (
+                                    "unexpected-worksheet-drawing-relationship",
+                                    repr(relationship.semantic_key()),
+                                )
+                            )
+                            candidate_sheets.add(sheet)
+                            continue
+                        if (
+                            relationship.target_mode.casefold() != "internal"
+                            or relationship.safe_target is None
+                        ):
+                            warnings.add(
+                                "FormulaFence found a worksheet DrawingML declaration without "
+                                "a safe internal target; affected pictures have a coverage gap."
+                            )
+                            unresolved_declarations.append(
+                                (
+                                    "unsafe-worksheet-drawing-target",
+                                    repr(relationship.semantic_key()),
+                                )
+                            )
+                            candidate_sheets.add(sheet)
+                            continue
+                        drawing_sources[relationship.safe_target].add((sheet, member))
+                        drawing_source_relationships[relationship.safe_target].add(
+                            relationship.semantic_key()
+                        )
+                        continue
+                    if local_name == "picture":
+                        if not _worksheet_image_is_image_relationship(relationship):
+                            warnings.add(
+                                "FormulaFence found a worksheet background image declaration "
+                                "with an unexpected relationship type; affected images have a "
+                                "coverage gap."
+                            )
+                            unresolved_declarations.append(
+                                (
+                                    "unexpected-background-image-relationship",
+                                    repr(relationship.semantic_key()),
+                                )
+                            )
+                            candidate_sheets.add(sheet)
+                            continue
+                        background_records.append((sheet, relationship))
+                        candidate_sheets.add(sheet)
+                        continue
+                    if (
+                        relationship.relationship_type.casefold()
+                        not in _WORKSHEET_IMAGE_VML_RELATIONSHIPS
+                    ):
+                        warnings.add(
+                            "FormulaFence found a header/footer VML image declaration with "
+                            "an unexpected relationship type; affected images have a coverage gap."
+                        )
+                        unresolved_declarations.append(
+                            (
+                                "unexpected-header-footer-vml-relationship",
+                                repr(relationship.semantic_key()),
+                            )
+                        )
+                        candidate_sheets.add(sheet)
+                        continue
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.safe_target is None
+                    ):
+                        warnings.add(
+                            "FormulaFence found a header/footer VML image declaration without "
+                            "a safe internal target; affected images have a coverage gap."
+                        )
+                        unresolved_declarations.append(
+                            ("unsafe-header-footer-vml-target", repr(relationship.semantic_key()))
+                        )
+                        candidate_sheets.add(sheet)
+                        continue
+                    header_footer_sources[relationship.safe_target].add((sheet, member))
+                    header_footer_source_relationships[relationship.safe_target].add(
+                        relationship.semantic_key()
+                    )
+
+            drawing_inspections: list[_WorksheetAnchoredPictureInspection] = []
+            for drawing_member in sorted(drawing_sources, key=str.casefold):
+                drawing_inspections.append(
+                    _worksheet_anchored_picture_inspection(
+                        archive,
+                        drawing_member,
+                        warnings,
+                        xml_budget,
+                    )
+                )
+            header_footer_inspections: list[_WorksheetHeaderFooterImageInspection] = []
+            for vml_member in sorted(header_footer_sources, key=str.casefold):
+                header_footer_inspections.append(
+                    _worksheet_header_footer_image_inspection(
+                        archive,
+                        vml_member,
+                        warnings,
+                        xml_budget,
+                    )
+                )
+
+            image_members: set[str] = set()
+            unresolved_payload_entries: list[tuple[str, str]] = []
+            relationship_entries: list[tuple[str, str, str]] = []
+            definition_entries: list[tuple[str, str]] = list(unresolved_declarations)
+            declaration_entries: list[tuple[str, str]] = list(unresolved_declarations)
+            image_sheets = set(candidate_sheets)
+
+            for sheet, relationship in background_records:
+                relationship_entries.append(relationship.semantic_key())
+                declaration_entries.append(
+                    ("worksheet-background-image", repr((sheet, relationship.semantic_key())))
+                )
+                definition_entries.append(
+                    ("worksheet-background-image", repr((sheet, relationship.semantic_key())))
+                )
+                image_sheets.add(sheet)
+                if relationship.target_mode.casefold() == "internal":
+                    if relationship.safe_target is None:
+                        unresolved_payload_entries.append(
+                            ("unsafe-background-image-target", repr(relationship.semantic_key()))
+                        )
+                    else:
+                        image_members.add(relationship.safe_target)
+
+            for inspection in drawing_inspections:
+                sources = tuple(
+                    sorted(
+                        drawing_sources.get(inspection.member, set()),
+                        key=lambda source: source[0].casefold(),
+                    )
+                )
+                source_relationships = tuple(
+                    sorted(
+                        drawing_source_relationships.get(inspection.member, set())
+                    )
+                )
+                if inspection.present:
+                    image_sheets.update(sheet for sheet, _member in sources)
+                    declaration_entries.append(
+                        (
+                            "anchored-picture-source",
+                            repr(
+                                (
+                                    sources,
+                                    source_relationships,
+                                    inspection.picture_anchor_count,
+                                    inspection.picture_count,
+                                )
+                            ),
+                        )
+                    )
+                    definition_entries.append(
+                        (
+                            "anchored-picture-definition",
+                            repr(
+                                (
+                                    sources,
+                                    source_relationships,
+                                    inspection.definition_signature,
+                                )
+                            ),
+                        )
+                    )
+                relationship_entries.extend(source_relationships)
+                relationship_entries.extend(inspection.relationship_entries)
+                image_members.update(inspection.image_members)
+
+            for inspection in header_footer_inspections:
+                sources = tuple(
+                    sorted(
+                        header_footer_sources.get(inspection.member, set()),
+                        key=lambda source: source[0].casefold(),
+                    )
+                )
+                source_relationships = tuple(
+                    sorted(
+                        header_footer_source_relationships.get(
+                            inspection.member,
+                            set(),
+                        )
+                    )
+                )
+                if inspection.present:
+                    image_sheets.update(sheet for sheet, _member in sources)
+                    declaration_entries.append(
+                        (
+                            "header-footer-image-source",
+                            repr((sources, source_relationships, inspection.image_count)),
+                        )
+                    )
+                    definition_entries.append(
+                        (
+                            "header-footer-image-definition",
+                            repr(
+                                (
+                                    sources,
+                                    source_relationships,
+                                    inspection.definition_signature,
+                                )
+                            ),
+                        )
+                    )
+                relationship_entries.extend(source_relationships)
+                relationship_entries.extend(inspection.relationship_entries)
+                image_members.update(inspection.image_members)
+
+            payload_inspection = _worksheet_image_payloads(
+                archive,
+                image_members,
+                unresolved_payload_entries,
+                warnings,
+                payload_budget,
+            )
+            all_relationship_entries = tuple(sorted(relationship_entries))
+            snapshot = WorksheetImageSnapshot(
+                worksheet_image_sheet_count=len(image_sheets),
+                anchored_picture_count=sum(
+                    inspection.picture_count for inspection in drawing_inspections
+                ),
+                anchored_picture_anchor_count=sum(
+                    inspection.picture_anchor_count for inspection in drawing_inspections
+                ),
+                worksheet_background_image_count=len(background_records),
+                header_footer_image_count=sum(
+                    inspection.image_count for inspection in header_footer_inspections
+                ),
+                image_part_count=payload_inspection.image_part_count,
+                fingerprinted_image_part_count=payload_inspection.fingerprinted_part_count,
+                uninspected_image_part_count=payload_inspection.uninspected_part_count,
+                related_relationship_count=len(all_relationship_entries),
+                external_relationship_count=sum(
+                    relationship[1].casefold() != "internal"
+                    for relationship in all_relationship_entries
+                ),
+                unrecognized_image_count=(
+                    len(unresolved_declarations)
+                    + sum(inspection.unrecognized_count for inspection in drawing_inspections)
+                    + sum(
+                        inspection.unrecognized_count
+                        for inspection in header_footer_inspections
+                    )
+                ),
+                declaration_signature=(
+                    _private_external_data_signature(
+                        tuple(sorted(declaration_entries))
+                    )
+                    if declaration_entries
+                    else None
+                ),
+                definition_signature=(
+                    _private_external_data_signature(tuple(sorted(definition_entries)))
+                    if definition_entries
+                    else None
+                ),
+                relationship_signature=(
+                    _private_external_data_signature(
+                        tuple(
+                            (f"image-relationship:{index}", repr(relationship))
+                            for index, relationship in enumerate(all_relationship_entries)
+                        )
+                    )
+                    if all_relationship_entries
+                    else None
+                ),
+                image_payload_signature=payload_inspection.payload_signature,
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _WorksheetImageMetadata(
+            WorksheetImageSnapshot(
+                unrecognized_image_count=1,
+                definition_signature=_private_external_data_signature(
+                    (("worksheet-image-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect native worksheet-image OOXML "
+                f"({type(error).__name__}); affected images were not compared.",
+            ),
+        )
+    return _WorksheetImageMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
     """Inspect raw markers that openpyxl intentionally does not expose."""
     dynamic_cells: set[CellKey] = set()
@@ -34046,6 +35486,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     legacy_comment_metadata = _legacy_comment_metadata(source)
     threaded_comment_metadata = _threaded_comment_metadata(source)
     worksheet_drawing_shape_metadata = _worksheet_drawing_shape_metadata(source)
+    worksheet_image_metadata = _worksheet_image_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -34103,6 +35544,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(legacy_comment_metadata.warnings)
     parser_warnings.update(threaded_comment_metadata.warnings)
     parser_warnings.update(worksheet_drawing_shape_metadata.warnings)
+    parser_warnings.update(worksheet_image_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -34344,6 +35786,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         legacy_comments=legacy_comment_metadata.comments,
         threaded_comments=threaded_comment_metadata.comments,
         worksheet_drawing_shapes=worksheet_drawing_shape_metadata.shapes,
+        worksheet_images=worksheet_image_metadata.images,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -34444,6 +35887,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "legacy_comments": snapshot.legacy_comments.profile_dict(),
         "threaded_comments": snapshot.threaded_comments.profile_dict(),
         "worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.profile_dict(),
+        "worksheet_images": snapshot.worksheet_images.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -34495,6 +35939,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_legacy_comments": snapshot.legacy_comments.present,
             "has_threaded_comments": snapshot.threaded_comments.present,
             "has_worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.present,
+            "has_worksheet_images": snapshot.worksheet_images.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

@@ -56,6 +56,7 @@ from formulafence.models import (
     WorksheetDisplaySnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
+    WorksheetImageSnapshot,
     WorksheetPrintLayoutSnapshot,
     WorksheetSparklineSnapshot,
     XlmMacroSheetSnapshot,
@@ -2691,6 +2692,57 @@ def _worksheet_drawing_shape_controls_changed(
     return [change], [finding]
 
 
+def _worksheet_image_controls_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag native worksheet image changes outside ordinary cells."""
+    old_images: WorksheetImageSnapshot = before.worksheet_images
+    new_images: WorksheetImageSnapshot = after.worksheet_images
+    if old_images == new_images:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_images.to_dict(),
+        "after": new_images.to_dict(),
+    }
+    if old_images.declaration_signature != new_images.declaration_signature:
+        details["worksheet_image_binding_changed"] = True
+    if old_images.definition_signature != new_images.definition_signature:
+        details["worksheet_image_definition_material_changed"] = True
+    if old_images.relationship_signature != new_images.relationship_signature:
+        details["worksheet_image_relationships_changed"] = True
+    if old_images.image_payload_signature != new_images.image_payload_signature:
+        details["worksheet_image_payload_material_changed"] = True
+    if (
+        old_images.unrecognized_image_count != new_images.unrecognized_image_count
+        or (
+            old_images.unrecognized_image_count or new_images.unrecognized_image_count
+        )
+        and (
+            old_images.definition_signature != new_images.definition_signature
+            or old_images.image_payload_signature != new_images.image_payload_signature
+        )
+    ):
+        details["unrecognized_worksheet_image_metadata_changed"] = True
+    change = Change(
+        "worksheet_image_controls_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF059",
+        "high",
+        (
+            "Native worksheet images changed; floating pictures, sheet backgrounds, "
+            "or header/footer watermarks may alter a report outside cells."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> DiffReport:
     """Compare workbook semantics and attach local dependency impact to each edit."""
     changes: list[Change] = []
@@ -2827,6 +2879,13 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(worksheet_drawing_shape_changes)
     findings.extend(worksheet_drawing_shape_findings)
+
+    worksheet_image_changes, worksheet_image_findings = _worksheet_image_controls_changed(
+        before,
+        after,
+    )
+    changes.extend(worksheet_image_changes)
+    findings.extend(worksheet_image_findings)
 
     newly_broken = after.broken_references - before.broken_references
     for location in sorted(newly_broken, key=_location_sort_key):

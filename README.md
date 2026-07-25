@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.56.0/formulafence-0.56.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.57.0/formulafence-0.57.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -94,6 +94,7 @@ rules:
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
+  no_worksheet_image_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -131,7 +132,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -1251,16 +1252,46 @@ unreadable, oversized, or over-budget metadata becomes an explicit coverage
 warning. XML reads are bounded to 16 MiB per part, 64 MiB per workbook, and
 512 parts.
 
-The scope is deliberately narrow: FormulaFence does not render DrawingML,
-resolve themes or contrast, decide whether text is actually visible, calculate
-a text-link formula, execute a macro assignment, fetch an external target,
-parse or hash media, or inspect `xdr:pic`, `xdr:cxnSp`, `xdr:graphicFrame`,
-SmartArt, or other non-`xdr:sp` drawing objects. It follows the Open XML
+The shape boundary is deliberately narrow: FormulaFence does not render
+DrawingML, resolve themes or contrast, decide whether text is actually visible,
+calculate a text-link formula, execute a macro assignment, fetch an external
+target, parse or hash media, or inspect `xdr:cxnSp`, `xdr:graphicFrame`,
+SmartArt, or other non-`xdr:sp` objects. Native `xdr:pic` objects are covered
+by the separate image boundary below. It follows the Open XML
 [`xdr:sp` Shape definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet.shape?view=openxml-3.0.1),
 which places shapes under the supported anchor and group elements and permits
 shape text/properties, plus XlsxWriter's documented
 [worksheet text boxes](https://xlsxwriter.readthedocs.io/working_with_textboxes.html)
 as an independent writer surface.
+
+FormulaFence separately inventories native **worksheet image controls**. A
+floating DrawingML `xdr:pic`, a worksheet `<picture>` background, or a
+header/footer VML image can change what a reviewer sees or prints while every
+cell stays fixed. It follows worksheet `drawing`, `picture`, and
+`legacyDrawingHF` relationships, recognizes transitional and strict DrawingML,
+and compares private anchor/picture/VML declarations, relationship semantics,
+and bounded direct image payload hashes. A material change emits `FF059`;
+enable `no_worksheet_image_changes` for `FFP059`.
+
+Profiles expose only worksheet, picture/anchor, background, header/footer,
+image-payload, relationship, and malformed-control counts. Image bytes, image
+names/descriptions, visual formatting, anchors, relationship IDs/targets, and
+raw XML never enter profiles or reports. Non-visual DrawingML and VML IDs plus
+consistent relationship-ID rewrites normalize when semantics stay unchanged.
+Missing, duplicate, malformed, unsafe, unreadable, oversized, or over-budget
+metadata becomes an explicit coverage warning. XML reads are bounded to 16 MiB
+per part, 64 MiB per workbook, and 512 parts; direct image payload hashes are
+bounded to 32 MiB per part, 64 MiB per workbook, and 512 parts.
+
+The image boundary does not render or decode media, fetch an external target,
+resolve themes, calculate visibility/cropping/z-order, compose controls, or
+calculate final pagination. It intentionally leaves charts to `FF030`, rich
+data/in-cell images to `FF051`, Theme images to `FF053`, ActiveX/OLE image
+controls to `FF029`, regular/group shapes to `FF044`, and header/footer text to
+`FF056`. The package model follows Open XML's
+[`xdr:pic` Picture definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet.picture?view=openxml-3.0.1),
+Microsoft's [worksheet background guidance](https://support.microsoft.com/en-us/excel/add-or-remove-a-sheet-background),
+and [header/footer watermark guidance](https://support.microsoft.com/en-us/excel/get-started/add-a-watermark-in-excel).
 
 FormulaFence also inventories relationship-backed **worksheet controls, legacy
 VML form controls, and OLE objects**. A worksheet can bind modern `<control>`

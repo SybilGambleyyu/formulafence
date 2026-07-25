@@ -19,6 +19,7 @@ from formulafence.models import (
     ConditionalFormattingSnapshot,
     DataValidationSnapshot,
     DiffReport,
+    DigitalSignatureSnapshot,
     ExternalDataConnectionSnapshot,
     ExternalLinkPackageSnapshot,
     FillSnapshot,
@@ -2113,6 +2114,69 @@ def _xml_mapping_controls_changed(
     return [change], [finding]
 
 
+def _digital_signature_controls_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag package- and VBA-signature envelope changes outside normal cells."""
+    old_signatures: DigitalSignatureSnapshot = before.digital_signatures
+    new_signatures: DigitalSignatureSnapshot = after.digital_signatures
+    if old_signatures == new_signatures:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_signatures.to_dict(),
+        "after": new_signatures.to_dict(),
+    }
+    if (
+        old_signatures.package_signature_signature
+        != new_signatures.package_signature_signature
+    ):
+        details["package_signature_material_changed"] = True
+    if (
+        old_signatures.vba_signature_payload_signature
+        != new_signatures.vba_signature_payload_signature
+    ):
+        details["vba_project_signature_payload_changed"] = True
+    if old_signatures.relationship_signature != new_signatures.relationship_signature:
+        details["digital_signature_relationships_changed"] = True
+    if (
+        old_signatures.unrecognized_digital_signature_count
+        != new_signatures.unrecognized_digital_signature_count
+        or (
+            (
+                old_signatures.unrecognized_digital_signature_count
+                or new_signatures.unrecognized_digital_signature_count
+            )
+            and (
+                old_signatures.package_signature_signature
+                != new_signatures.package_signature_signature
+                or old_signatures.vba_signature_payload_signature
+                != new_signatures.vba_signature_payload_signature
+                or old_signatures.relationship_signature
+                != new_signatures.relationship_signature
+            )
+        )
+    ):
+        details["unrecognized_digital_signature_metadata_changed"] = True
+    change = Change(
+        "digital_signature_controls_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF050",
+        "high",
+        (
+            "Digital-signature controls changed; package or VBA provenance and "
+            "integrity-assurance metadata may have been added, removed, or altered."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _threaded_comment_controls_changed(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
@@ -2314,6 +2378,12 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(xml_mapping_changes)
     findings.extend(xml_mapping_findings)
+
+    digital_signature_changes, digital_signature_findings = (
+        _digital_signature_controls_changed(before, after)
+    )
+    changes.extend(digital_signature_changes)
+    findings.extend(digital_signature_findings)
 
     legacy_comment_changes, legacy_comment_findings = _legacy_comment_controls_changed(
         before,

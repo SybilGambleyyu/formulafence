@@ -2047,6 +2047,72 @@ class XmlMappingSnapshot:
 
 
 @dataclass(frozen=True)
+class DigitalSignatureSnapshot:
+    """Safe aggregate of package and VBA digital-signature controls.
+
+    Office packages can carry XML package signatures, while a VBA project can
+    carry one or more binary code-signature payloads. Private signatures retain
+    the certificate, signed-reference, and payload material for comparison
+    without serialising provenance or cryptographic data into reports.
+    """
+
+    package_signature_origin_count: int = 0
+    package_xml_signature_count: int = 0
+    package_signature_reference_count: int = 0
+    package_signature_certificate_count: int = 0
+    package_signature_certificate_part_count: int = 0
+    package_signature_certificate_relationship_count: int = 0
+    vba_project_signature_count: int = 0
+    vba_project_signature_relationship_count: int = 0
+    unrecognized_digital_signature_count: int = 0
+    package_signature_signature: str | None = field(default=None, repr=False)
+    vba_signature_payload_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.package_signature_origin_count
+            or self.package_xml_signature_count
+            or self.package_signature_certificate_part_count
+            or self.package_signature_certificate_relationship_count
+            or self.vba_project_signature_count
+            or self.vba_project_signature_relationship_count
+            or self.unrecognized_digital_signature_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate signature evidence without signer or certificate data."""
+        return {
+            "present": self.present,
+            "package_signature_origin_count": self.package_signature_origin_count,
+            "package_xml_signature_count": self.package_xml_signature_count,
+            "package_signature_reference_count": (
+                self.package_signature_reference_count
+            ),
+            "package_signature_certificate_count": (
+                self.package_signature_certificate_count
+            ),
+            "package_signature_certificate_part_count": (
+                self.package_signature_certificate_part_count
+            ),
+            "package_signature_certificate_relationship_count": (
+                self.package_signature_certificate_relationship_count
+            ),
+            "vba_project_signature_count": self.vba_project_signature_count,
+            "vba_project_signature_relationship_count": (
+                self.vba_project_signature_relationship_count
+            ),
+            "unrecognized_digital_signature_count": (
+                self.unrecognized_digital_signature_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class LegacyCommentSnapshot:
     """Safe aggregate of legacy Excel note and placeholder controls.
 
@@ -2670,6 +2736,9 @@ class WorkbookSnapshot:
     xml_mapping_controls: XmlMappingSnapshot = field(
         default_factory=XmlMappingSnapshot
     )
+    digital_signatures: DigitalSignatureSnapshot = field(
+        default_factory=DigitalSignatureSnapshot
+    )
     legacy_comments: LegacyCommentSnapshot = field(
         default_factory=LegacyCommentSnapshot
     )
@@ -2749,6 +2818,16 @@ class WorkbookSnapshot:
                 self.xml_mapping_controls.single_cell_xml_binding_count
             ),
             "has_xml_mapping_controls": self.xml_mapping_controls.present,
+            "package_xml_signature_count": (
+                self.digital_signatures.package_xml_signature_count
+            ),
+            "package_signature_certificate_part_count": (
+                self.digital_signatures.package_signature_certificate_part_count
+            ),
+            "vba_project_signature_count": (
+                self.digital_signatures.vba_project_signature_count
+            ),
+            "has_digital_signatures": self.digital_signatures.present,
             "legacy_comment_count": self.legacy_comments.comment_count,
             "legacy_comment_author_count": self.legacy_comments.comment_author_count,
             "legacy_comment_note_shape_count": self.legacy_comments.note_shape_count,

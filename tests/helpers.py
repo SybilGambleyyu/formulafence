@@ -41,6 +41,22 @@ _EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
 _NAMED_SHEET_VIEW_NS = "http://schemas.microsoft.com/office/spreadsheetml/2019/namedsheetviews"
 _XML_MAP_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIPS_NS}/xmlMaps"
 _TABLE_SINGLE_CELLS_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIPS_NS}/tableSingleCells"
+_XML_DIGITAL_SIGNATURE_NS = "http://www.w3.org/2000/09/xmldsig#"
+_DIGITAL_SIGNATURE_ORIGIN_RELATIONSHIP = (
+    f"{_PACKAGE_RELATIONSHIPS_NS}/digital-signature/origin"
+)
+_DIGITAL_SIGNATURE_SIGNATURE_RELATIONSHIP = (
+    f"{_PACKAGE_RELATIONSHIPS_NS}/digital-signature/signature"
+)
+_DIGITAL_SIGNATURE_CERTIFICATE_RELATIONSHIP = (
+    f"{_PACKAGE_RELATIONSHIPS_NS}/digital-signature/certificate"
+)
+_VBA_PROJECT_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2006/relationships/vbaProject"
+)
+_VBA_PROJECT_SIGNATURE_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignature"
+)
 
 
 def make_model(path: Path) -> Path:
@@ -953,6 +969,396 @@ def corrupt_legacy_comment_root(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".legacy-comment-corrupt.tmp.xlsx")
+
+
+def _digital_signature_xml_root(contents: dict[str, bytes]) -> ElementTree.Element:
+    """Return the one package XML signature fixture envelope."""
+    try:
+        return ElementTree.fromstring(contents["_xmlsignatures/sig1.xml"])
+    except KeyError as error:
+        raise ValueError("Fixture does not contain a package XML signature") from error
+
+
+def _digital_signature_relationship(
+    relationships: ElementTree.Element,
+    relationship_type: str,
+) -> ElementTree.Element:
+    """Return one digital-signature fixture relationship by its type."""
+    relationship = next(
+        (
+            current
+            for current in relationships.findall(
+                f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+            )
+            if current.get("Type") == relationship_type
+        ),
+        None,
+    )
+    if relationship is None:
+        raise ValueError(f"Fixture does not contain {relationship_type!r} relationship")
+    return relationship
+
+
+def _digital_signature_content_type_override(
+    content_types: ElementTree.Element,
+    member: str,
+) -> ElementTree.Element:
+    """Return one fixture content-type override by its package member."""
+    override = next(
+        (
+            current
+            for current in content_types.findall(f"{{{_CONTENT_TYPES_NS}}}Override")
+            if current.get("PartName") == f"/{member}"
+        ),
+        None,
+    )
+    if override is None:
+        raise ValueError(f"Fixture does not contain content type for {member!r}")
+    return override
+
+
+def make_digital_signature_model(path: Path) -> Path:
+    """Create an inspectable package and VBA signature fixture.
+
+    The intentionally private signature, digest, certificate, and binary values
+    are structurally shaped but not cryptographically valid. FormulaFence only
+    inventories and compares the envelopes; it must never claim validation.
+    """
+    make_model(path)
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_override(
+        content_types: ElementTree.Element,
+        member: str,
+        content_type: str,
+    ) -> None:
+        ElementTree.SubElement(
+            content_types,
+            f"{{{_CONTENT_TYPES_NS}}}Override",
+            {"PartName": f"/{member}", "ContentType": content_type},
+        )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        signature = _XML_DIGITAL_SIGNATURE_NS
+
+        root_relationships = ElementTree.fromstring(contents["_rels/.rels"])
+        ElementTree.SubElement(
+            root_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFencePackageSignatureOrigin",
+                "Type": _DIGITAL_SIGNATURE_ORIGIN_RELATIONSHIP,
+                "Target": "_xmlsignatures/origin.sigs",
+            },
+        )
+        contents["_rels/.rels"] = serialize(root_relationships)
+
+        origin_member = "_xmlsignatures/origin.sigs"
+        signature_member = "_xmlsignatures/sig1.xml"
+        certificate_member = "package/services/digital-signature/certificate/cert1.cer"
+        contents[origin_member] = b""
+        origin_relationships = ElementTree.Element(
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships"
+        )
+        ElementTree.SubElement(
+            origin_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFencePackageXmlSignature",
+                "Type": _DIGITAL_SIGNATURE_SIGNATURE_RELATIONSHIP,
+                "Target": "sig1.xml",
+            },
+        )
+        contents["_xmlsignatures/_rels/origin.sigs.rels"] = serialize(
+            origin_relationships
+        )
+
+        envelope = ElementTree.Element(f"{{{signature}}}Signature")
+        signed_info = ElementTree.SubElement(envelope, f"{{{signature}}}SignedInfo")
+        ElementTree.SubElement(
+            signed_info,
+            f"{{{signature}}}CanonicalizationMethod",
+            {"Algorithm": "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"},
+        )
+        ElementTree.SubElement(
+            signed_info,
+            f"{{{signature}}}SignatureMethod",
+            {"Algorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"},
+        )
+        reference = ElementTree.SubElement(
+            signed_info,
+            f"{{{signature}}}Reference",
+            {"URI": "/xl/workbook.xml"},
+        )
+        ElementTree.SubElement(
+            reference,
+            f"{{{signature}}}DigestMethod",
+            {"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"},
+        )
+        ElementTree.SubElement(reference, f"{{{signature}}}DigestValue").text = (
+            "PRIVATE-PACKAGE-DIGEST-BASELINE"
+        )
+        ElementTree.SubElement(envelope, f"{{{signature}}}SignatureValue").text = (
+            "PRIVATE-PACKAGE-SIGNATURE-BASELINE"
+        )
+        key_info = ElementTree.SubElement(envelope, f"{{{signature}}}KeyInfo")
+        certificate_data = ElementTree.SubElement(key_info, f"{{{signature}}}X509Data")
+        ElementTree.SubElement(
+            certificate_data,
+            f"{{{signature}}}X509Certificate",
+        ).text = "PRIVATE-SIGNER-CERTIFICATE-BASELINE"
+        contents[signature_member] = serialize(envelope)
+        certificate_relationships = ElementTree.Element(
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships"
+        )
+        ElementTree.SubElement(
+            certificate_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFencePackageSignatureCertificate",
+                "Type": _DIGITAL_SIGNATURE_CERTIFICATE_RELATIONSHIP,
+                "Target": "../package/services/digital-signature/certificate/cert1.cer",
+            },
+        )
+        contents["_xmlsignatures/_rels/sig1.xml.rels"] = serialize(
+            certificate_relationships
+        )
+        contents[certificate_member] = b"PRIVATE-CERTIFICATE-PART-BASELINE"
+
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceVbaProject",
+                "Type": _VBA_PROJECT_RELATIONSHIP,
+                "Target": "vbaProject.bin",
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
+        contents["xl/vbaProject.bin"] = b"PRIVATE-VBA-PROJECT-BASELINE"
+
+        vba_relationships = ElementTree.Element(
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships"
+        )
+        for suffix in ("", "Agile", "V3"):
+            member = f"xl/vbaProjectSignature{suffix}.bin"
+            ElementTree.SubElement(
+                vba_relationships,
+                relationship_tag,
+                {
+                    "Id": f"rIdFenceVbaSignature{suffix or 'Classic'}",
+                    "Type": f"{_VBA_PROJECT_SIGNATURE_RELATIONSHIP}{suffix}",
+                    "Target": member.rsplit("/", maxsplit=1)[-1],
+                },
+            )
+            contents[member] = (
+                f"PRIVATE-VBA-SIGNATURE-{suffix or 'CLASSIC'}-BASELINE".encode()
+            )
+        contents["xl/_rels/vbaProject.bin.rels"] = serialize(vba_relationships)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        if not any(
+            current.get("Extension", "").casefold() == "sigs"
+            for current in content_types.findall(f"{{{_CONTENT_TYPES_NS}}}Default")
+        ):
+            ElementTree.SubElement(
+                content_types,
+                f"{{{_CONTENT_TYPES_NS}}}Default",
+                {
+                    "Extension": "sigs",
+                    "ContentType": (
+                        "application/vnd.openxmlformats-package.digital-signature-origin"
+                    ),
+                },
+            )
+        add_override(
+            content_types,
+            signature_member,
+            "application/vnd.openxmlformats-package.digital-signature-xmlsignature+xml",
+        )
+        add_override(
+            content_types,
+            certificate_member,
+            "application/vnd.openxmlformats-package.digital-signature-certificate",
+        )
+        add_override(
+            content_types,
+            "xl/vbaProject.bin",
+            "application/vnd.ms-office.vbaProject",
+        )
+        for suffix in ("", "Agile", "V3"):
+            add_override(
+                content_types,
+                f"xl/vbaProjectSignature{suffix}.bin",
+                f"application/vnd.ms-office.vbaProjectSignature{suffix}",
+            )
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+    return _rewrite_archive(path, mutate, ".digital-signature-model.tmp.xlsx")
+
+
+def change_package_signature_reference(path: Path) -> Path:
+    """Change a package signed reference without changing a workbook cell."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = _digital_signature_xml_root(contents)
+        reference = root.find(
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}SignedInfo/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Reference"
+        )
+        if reference is None:
+            raise ValueError("Fixture package signature does not contain a reference")
+        reference.set("URI", "/xl/worksheets/sheet1.xml")
+        contents["_xmlsignatures/sig1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".package-signature-reference.tmp.xlsx")
+
+
+def change_package_signature_certificate_payload(path: Path) -> Path:
+    """Change a package certificate part without changing a workbook cell."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["package/services/digital-signature/certificate/cert1.cer"] = (
+            b"PRIVATE-CERTIFICATE-PART-CANDIDATE"
+        )
+
+    return _rewrite_archive(path, mutate, ".package-signature-certificate.tmp.xlsx")
+
+
+def change_vba_project_signature_payload(path: Path) -> Path:
+    """Change only the Agile VBA code-signature binary payload."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["xl/vbaProjectSignatureAgile.bin"] = (
+            b"PRIVATE-VBA-SIGNATURE-AGILE-CANDIDATE"
+        )
+
+    return _rewrite_archive(path, mutate, ".vba-signature-payload.tmp.xlsx")
+
+
+def rebind_package_signature_relationship(path: Path) -> Path:
+    """Move an XML signature part and retarget the origin relationship."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        old_member = "_xmlsignatures/sig1.xml"
+        new_member = "_xmlsignatures/sig2.xml"
+        try:
+            contents[new_member] = contents.pop(old_member)
+        except KeyError as error:
+            raise ValueError("Fixture does not contain an XML signature part") from error
+        relationships_member = "_xmlsignatures/_rels/origin.sigs.rels"
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        _digital_signature_relationship(
+            relationships,
+            _DIGITAL_SIGNATURE_SIGNATURE_RELATIONSHIP,
+        ).set("Target", "sig2.xml")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        _digital_signature_content_type_override(content_types, old_member).set(
+            "PartName",
+            f"/{new_member}",
+        )
+        contents["[Content_Types].xml"] = ElementTree.tostring(
+            content_types,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".package-signature-rebind.tmp.xlsx")
+
+
+def normalize_digital_signature_control_spelling(path: Path) -> Path:
+    """Rewrite equivalent relationship IDs, targets, and base64 whitespace."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        root_relationships = ElementTree.fromstring(contents["_rels/.rels"])
+        _digital_signature_relationship(
+            root_relationships,
+            _DIGITAL_SIGNATURE_ORIGIN_RELATIONSHIP,
+        ).set("Id", "rIdFencePackageSignatureOriginRenumbered")
+        contents["_rels/.rels"] = ElementTree.tostring(
+            root_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships_member = "_xmlsignatures/_rels/origin.sigs.rels"
+        origin_relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = _digital_signature_relationship(
+            origin_relationships,
+            _DIGITAL_SIGNATURE_SIGNATURE_RELATIONSHIP,
+        )
+        relationship.set("Id", "rIdFencePackageXmlSignatureRenumbered")
+        relationship.set("Target", "./sig1.xml")
+        contents[relationships_member] = ElementTree.tostring(
+            origin_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        root = _digital_signature_xml_root(contents)
+        for local_name in ("DigestValue", "SignatureValue", "X509Certificate"):
+            element = next(
+                root.iter(f"{{{_XML_DIGITAL_SIGNATURE_NS}}}{local_name}"),
+                None,
+            )
+            if element is None or element.text is None:
+                raise ValueError(f"Fixture package signature does not contain {local_name}")
+            midpoint = len(element.text) // 2
+            element.text = f"  {element.text[:midpoint]}\n{element.text[midpoint:]}  "
+        contents["_xmlsignatures/sig1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".digital-signature-normalize.tmp.xlsx")
+
+
+def externalize_package_signature_relationship(path: Path) -> Path:
+    """Make a package-signature relationship unsafe without following it."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships_member = "_xmlsignatures/_rels/origin.sigs.rels"
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = _digital_signature_relationship(
+            relationships,
+            _DIGITAL_SIGNATURE_SIGNATURE_RELATIONSHIP,
+        )
+        relationship.set(
+            "Target",
+            "https://private.example.test/PRIVATE-PACKAGE-SIGNATURE",
+        )
+        relationship.set("TargetMode", "External")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".package-signature-external.tmp.xlsx")
+
+
+def corrupt_package_signature_root(path: Path) -> Path:
+    """Replace an XMLDSIG root to exercise fail-closed package inspection."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = _digital_signature_xml_root(contents)
+        root.tag = "privateUnexpectedSignature"
+        contents["_xmlsignatures/sig1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".package-signature-corrupt.tmp.xlsx")
 
 
 def make_table_model(path: Path) -> Path:

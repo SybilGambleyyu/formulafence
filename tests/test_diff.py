@@ -53,6 +53,8 @@ from .helpers import (
     change_number_format_default_style,
     change_office_web_addin_auto_show,
     change_office_web_addin_controls,
+    change_package_signature_certificate_payload,
+    change_package_signature_reference,
     change_pivot_table_definition_material,
     change_pivot_table_refresh_control,
     change_power_pivot_data_model_declaration,
@@ -70,6 +72,7 @@ from .helpers import (
     change_table_filter_visibility_criterion,
     change_threaded_comment_person_identity,
     change_threaded_comment_reply,
+    change_vba_project_signature_payload,
     change_what_if_data_table_input,
     change_worksheet_drawing_shape_hyperlink,
     change_worksheet_drawing_shape_presentation,
@@ -99,6 +102,7 @@ from .helpers import (
     corrupt_number_format_column_control,
     corrupt_number_format_definition,
     corrupt_office_web_addin_definition_root,
+    corrupt_package_signature_root,
     corrupt_pivot_table_definition_root,
     corrupt_ribbon_customization_root,
     corrupt_rich_text_run,
@@ -119,6 +123,7 @@ from .helpers import (
     externalize_chart_overlay_relationship,
     externalize_legacy_comment_relationship,
     externalize_legacy_note_vml_relationship,
+    externalize_package_signature_relationship,
     externalize_pivot_table_cache_record_relationship,
     externalize_power_pivot_data_model,
     externalize_slicer_timeline_cache_relationship,
@@ -131,6 +136,7 @@ from .helpers import (
     make_conditional_formatting_model,
     make_current_row_table_model,
     make_data_validation_model,
+    make_digital_signature_model,
     make_external_data_refresh_model,
     make_external_link_package_model,
     make_fill_model,
@@ -173,6 +179,7 @@ from .helpers import (
     make_zero_dimension_visibility_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
+    normalize_digital_signature_control_spelling,
     normalize_fill_control_spelling,
     normalize_fill_inert_pattern_declarations,
     normalize_fill_inheritance,
@@ -193,6 +200,7 @@ from .helpers import (
     overlap_what_if_data_table_outputs,
     rebind_external_link_declaration,
     rebind_legacy_comment_relationship,
+    rebind_package_signature_relationship,
     rebind_pivot_table_cache_records,
     rebind_power_pivot_data_model,
     rebind_slicer_timeline_cache,
@@ -5786,6 +5794,234 @@ def test_xml_mapping_xml_budget_fails_closed(tmp_path, monkeypatch) -> None:
         for warning in candidate_snapshot.parser_warnings
     )
     assert {"FF010", "FF049"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_digital_signatures_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_digital_signature_model(tmp_path / "baseline.xlsx")
+    package_candidate = make_digital_signature_model(
+        tmp_path / "package-candidate.xlsx"
+    )
+    certificate_candidate = make_digital_signature_model(
+        tmp_path / "certificate-candidate.xlsx"
+    )
+    vba_candidate = make_digital_signature_model(tmp_path / "vba-candidate.xlsx")
+    relationship_candidate = make_digital_signature_model(
+        tmp_path / "relationship-candidate.xlsx"
+    )
+    normalised = make_digital_signature_model(tmp_path / "normalised.xlsx")
+    unsigned = make_model(tmp_path / "ordinary.xlsx")
+    change_package_signature_reference(package_candidate)
+    change_package_signature_certificate_payload(certificate_candidate)
+    change_vba_project_signature_payload(vba_candidate)
+    rebind_package_signature_relationship(relationship_candidate)
+    normalize_digital_signature_control_spelling(normalised)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    package_snapshot = load_snapshot(package_candidate)
+    certificate_snapshot = load_snapshot(certificate_candidate)
+    vba_snapshot = load_snapshot(vba_candidate)
+    relationship_snapshot = load_snapshot(relationship_candidate)
+    package_report = compare_snapshots(baseline_snapshot, package_snapshot)
+    certificate_report = compare_snapshots(
+        baseline_snapshot,
+        certificate_snapshot,
+    )
+    vba_report = compare_snapshots(baseline_snapshot, vba_snapshot)
+    relationship_report = compare_snapshots(
+        baseline_snapshot,
+        relationship_snapshot,
+    )
+    normalised_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(normalised),
+    )
+    package_change = next(
+        change
+        for change in package_report.changes
+        if change.kind == "digital_signature_controls_changed"
+    )
+    certificate_change = next(
+        change
+        for change in certificate_report.changes
+        if change.kind == "digital_signature_controls_changed"
+    )
+    vba_change = next(
+        change
+        for change in vba_report.changes
+        if change.kind == "digital_signature_controls_changed"
+    )
+    relationship_change = next(
+        change
+        for change in relationship_report.changes
+        if change.kind == "digital_signature_controls_changed"
+    )
+
+    assert load_workbook(baseline).sheetnames == ["Inputs", "Model", "Dashboard", "Control"]
+    assert baseline_snapshot.cells == package_snapshot.cells
+    assert baseline_snapshot.cells == certificate_snapshot.cells
+    assert baseline_snapshot.cells == vba_snapshot.cells
+    assert baseline_snapshot.cells == relationship_snapshot.cells
+    assert baseline_snapshot.summary()["package_xml_signature_count"] == 1
+    assert baseline_snapshot.summary()["package_signature_certificate_part_count"] == 1
+    assert baseline_snapshot.summary()["vba_project_signature_count"] == 3
+    assert baseline_snapshot.summary()["has_digital_signatures"] is True
+    assert profile["digital_signatures"] == {
+        "present": True,
+        "package_signature_origin_count": 1,
+        "package_xml_signature_count": 1,
+        "package_signature_reference_count": 1,
+        "package_signature_certificate_count": 1,
+        "package_signature_certificate_part_count": 1,
+        "package_signature_certificate_relationship_count": 1,
+        "vba_project_signature_count": 3,
+        "vba_project_signature_relationship_count": 3,
+        "unrecognized_digital_signature_count": 0,
+    }
+    assert "## Digital-signature controls" in markdown
+    assert "does not validate cryptography" in markdown
+    assert package_change.details["package_signature_material_changed"] is True
+    assert certificate_change.details["package_signature_material_changed"] is True
+    assert vba_change.details["vba_project_signature_payload_changed"] is True
+    assert relationship_change.details["digital_signature_relationships_changed"] is True
+    assert "FF005" not in {finding.rule_id for finding in vba_report.findings}
+    assert "FF050" in {finding.rule_id for finding in package_report.findings}
+    assert "FF050" in {finding.rule_id for finding in certificate_report.findings}
+    assert "FF050" in {finding.rule_id for finding in vba_report.findings}
+    assert "FF050" in {finding.rule_id for finding in relationship_report.findings}
+    assert "digital_signature_controls_changed" not in {
+        change.kind for change in normalised_report.changes
+    }
+    assert "FF050" not in {finding.rule_id for finding in normalised_report.findings}
+    assert load_snapshot(unsigned).digital_signatures.to_dict() == {
+        "present": False,
+        "package_signature_origin_count": 0,
+        "package_xml_signature_count": 0,
+        "package_signature_reference_count": 0,
+        "package_signature_certificate_count": 0,
+        "package_signature_certificate_part_count": 0,
+        "package_signature_certificate_relationship_count": 0,
+        "vba_project_signature_count": 0,
+        "vba_project_signature_relationship_count": 0,
+        "unrecognized_digital_signature_count": 0,
+    }
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(package_report.to_dict()),
+        report_to_markdown(package_report),
+        json.dumps(report_to_sarif(package_report)),
+        json.dumps(certificate_report.to_dict()),
+        report_to_markdown(certificate_report),
+        json.dumps(report_to_sarif(certificate_report)),
+        json.dumps(vba_report.to_dict()),
+        report_to_markdown(vba_report),
+        json.dumps(report_to_sarif(vba_report)),
+        json.dumps(relationship_report.to_dict()),
+        report_to_markdown(relationship_report),
+        json.dumps(report_to_sarif(relationship_report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-PACKAGE-DIGEST-BASELINE",
+        "PRIVATE-PACKAGE-SIGNATURE-BASELINE",
+        "PRIVATE-SIGNER-CERTIFICATE-BASELINE",
+        "PRIVATE-CERTIFICATE-PART-BASELINE",
+        "PRIVATE-CERTIFICATE-PART-CANDIDATE",
+        "PRIVATE-VBA-SIGNATURE-AGILE-CANDIDATE",
+        "rIdFencePackageSignatureOrigin",
+        "/xl/worksheets/sheet1.xml",
+        "sig2.xml",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_unsafe_digital_signature_relationship_fails_closed_and_is_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_digital_signature_model(tmp_path / "baseline.xlsx")
+    candidate = make_digital_signature_model(tmp_path / "candidate.xlsx")
+    externalize_package_signature_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "digital_signature_controls_changed"
+    )
+
+    assert candidate_snapshot.digital_signatures.unrecognized_digital_signature_count >= 1
+    assert any(
+        "malformed or unsupported digital-signature metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert change.details["digital_signature_relationships_changed"] is True
+    assert change.details["unrecognized_digital_signature_metadata_changed"] is True
+    assert {"FF010", "FF050"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all(
+        "https://private.example.test/PRIVATE-PACKAGE-SIGNATURE" not in artifact
+        for artifact in rendered_artifacts
+    )
+
+
+def test_malformed_digital_signature_metadata_fails_closed_and_is_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_digital_signature_model(tmp_path / "baseline.xlsx")
+    candidate = make_digital_signature_model(tmp_path / "candidate.xlsx")
+    corrupt_package_signature_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "digital_signature_controls_changed"
+    )
+
+    assert candidate_snapshot.digital_signatures.unrecognized_digital_signature_count >= 1
+    assert any(
+        "malformed or unsupported digital-signature metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert change.details["unrecognized_digital_signature_metadata_changed"] is True
+    assert {"FF010", "FF050"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("privateUnexpectedSignature" not in artifact for artifact in rendered_artifacts)
+
+
+def test_digital_signature_read_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    baseline = make_digital_signature_model(tmp_path / "baseline.xlsx")
+    candidate = make_digital_signature_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    monkeypatch.setattr(workbook_module, "_DIGITAL_SIGNATURE_MAX_PART_BYTES", 1)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.digital_signatures.unrecognized_digital_signature_count >= 1
+    assert any(
+        "oversized digital-signature XML part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF050"} <= {finding.rule_id for finding in report.findings}
 
 
 def test_legacy_excel_notes_are_profiled_diffed_and_redacted(tmp_path) -> None:

@@ -37,6 +37,7 @@ _RULE_FIELDS = {
     "no_cell_hyperlink_changes",
     "no_worksheet_sparkline_changes",
     "no_xml_mapping_changes",
+    "no_digital_signature_changes",
     "no_legacy_comment_changes",
     "no_threaded_comment_changes",
     "no_worksheet_drawing_shape_changes",
@@ -110,6 +111,7 @@ class Policy:
     no_cell_hyperlink_changes: bool = False
     no_worksheet_sparkline_changes: bool = False
     no_xml_mapping_changes: bool = False
+    no_digital_signature_changes: bool = False
     no_legacy_comment_changes: bool = False
     no_threaded_comment_changes: bool = False
     no_worksheet_drawing_shape_changes: bool = False
@@ -165,6 +167,7 @@ rules:
   no_cell_hyperlink_changes: true
   no_worksheet_sparkline_changes: true
   no_xml_mapping_changes: true
+  no_digital_signature_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -310,6 +313,9 @@ def parse_policy(data: object) -> Policy:
             rules, "no_worksheet_sparkline_changes"
         ),
         no_xml_mapping_changes=_boolean_rule(rules, "no_xml_mapping_changes"),
+        no_digital_signature_changes=_boolean_rule(
+            rules, "no_digital_signature_changes"
+        ),
         no_legacy_comment_changes=_boolean_rule(rules, "no_legacy_comment_changes"),
         no_threaded_comment_changes=_boolean_rule(rules, "no_threaded_comment_changes"),
         no_worksheet_drawing_shape_changes=_boolean_rule(
@@ -779,6 +785,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP049",
                     "high",
                     "Policy forbids XML-mapped workbook control changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_digital_signature_changes:
+        for finding in _rule_triggered(report, "FF050"):
+            violations.append(
+                Finding(
+                    "FFP050",
+                    "high",
+                    "Policy forbids digital-signature control changes.",
                     details=finding.details,
                 )
             )

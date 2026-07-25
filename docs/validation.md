@@ -5,6 +5,45 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Digital-signature controls — 2026-07-24
+
+FormulaFence 0.48.0 is validated with a controlled `.xlsx` pair built outside
+this repository by a standalone OpenPyXL 3.1.5 and raw-ZIP script, independent
+of the test helpers. The baseline SHA-256 was
+`1e4e186f57203d96afc1be1e34e496e809258b5ab2f846e477d57538cfaf0464`;
+the candidate SHA-256 was
+`428e2952167faf049dfa2960a3655ba914318b4a5054c2aa4b1a114ac87ace12`.
+The package carries an empty OPC signature-origin part, one XMLDSIG envelope
+with one signed reference and embedded certificate value, one certificate part
+linked from the XML signature, and classic, Agile, and V3 VBA signature
+payloads linked from a VBA project. The fixture is structurally shaped for
+inspection, not a claim of a cryptographically valid signature; OpenPyXL could
+still load the baseline normally.
+
+All ordinary cells and formulas stayed fixed. A ZIP-member comparison confirmed
+that the only uncompressed member changed in the candidate was
+`package/services/digital-signature/certificate/cert1.cer`, whose private
+payload was replaced.
+
+A clean Python 3.13 virtual environment installed from the staged 0.48.0 wheel
+(SHA-256 `8e92783f822c68271bea598769ab0096667ca62ce2ab32d56ee0c313a7e1c9cf`).
+It emitted exactly one `digital_signature_controls_changed` change and
+`FF050`. The profile reported one origin, one XML signature, one signed
+reference, one embedded certificate value, one certificate part/relationship,
+and three VBA signature payloads/relationships. A policy enabling
+`no_digital_signature_changes` exited 1 with `FF050` and `FFP050`. JSON
+diff, policy, and profile artifacts were checked to ensure private signature
+values, certificate content, relationship identifiers, and signed-reference
+URIs were absent.
+
+The suite separately validates package-reference, certificate-payload, classic/
+Agile/V3 VBA-payload, and relationship changes; equivalent relationship ID,
+target spelling, and XMLDSIG base64 whitespace; malformed/unsafe metadata;
+bounded reads; redaction; policy enforcement; and isolation from ordinary
+workbook cells and macro payload hashing. FormulaFence inventories signature
+envelopes only; it does not validate cryptography, certificate trust, expiry,
+revocation, timestamps, signed contents, or VBA-code validity.
+
 ## SpreadsheetML XML Maps — 2026-07-24
 
 FormulaFence 0.47.0 is validated with a controlled XML Maps pair built outside

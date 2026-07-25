@@ -361,6 +361,26 @@ review prompt, not proof of an error.
   [XmlProperties](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.xmlproperties.xpath?view=openxml-3.0.1),
   and [SingleXmlCells](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.singlexmlcells?view=openxml-3.0.1)
   definitions.
+- OPC package signatures and VBA project signatures are distinct stored
+  integrity/provenance surfaces. A workbook can preserve ordinary cells and
+  even `xl/vbaProject.bin` while the package-root signature origin, XML signature
+  envelope/signed references, optional certificate-part relationship/payload, or
+  classic/Agile/V3 VBA signature payload changes. FormulaFence reads those raw
+  relationships and bounded parts before normal readers can omit them. A
+  material envelope change emits `FF050` and
+  `no_digital_signature_changes` blocks it as `FFP050`. Profiles and reports
+  expose aggregate counts only; XML signature material, reference URIs,
+  certificate identities/contents, binary signature payloads, relationship IDs,
+  and targets remain private. Equivalent IDs/order/internal targets and XMLDSIG
+  base64 whitespace normalize away. Missing, duplicate, malformed, unsafe,
+  unbound, unreadable, oversized, or over-budget metadata becomes a coverage
+  warning; reads are bounded to 16 MiB per part, 64 MiB per workbook, and 512
+  parts. FormulaFence does **not** validate a signature/digest/transform,
+  reference coverage, certificate chain/identity/trust/expiry/revocation,
+  timestamp, signed contents, or VBA code; it does not fetch certificates or
+  contact trust services. Microsoft's [OPC digital-signature
+  overview](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/open-packaging-conventions-overview)
+  assigns signer/trust validation to the package consumer.
 - Traditional Excel Notes are stored in worksheet-associated SpreadsheetML
   comments parts and their display declarations live in worksheet
   `legacyDrawing` VML parts. FormulaFence follows the worksheet bindings and
@@ -656,7 +676,9 @@ review prompt, not proof of an error.
   location in the profile, and a newly introduced one emits `FF016`; its graph
   is deliberately omitted rather than partially guessed.
 - It inventories sheet visibility, defined names, calculation settings, the VBA
-  payload, XLM macro-sheet packages, RibbonX custom UI packages, Office Web
+  payload; OPC package XML-signature/certificate-part relationships and
+  payloads; classic/Agile/V3 VBA signature payloads/relationships; XLM
+  macro-sheet packages; RibbonX custom UI packages; Office Web
   Add-in task-pane packages, PivotTable view/cache-schema/shared-item/cached-
   record chains, Slicer and Timeline cache filter-definition chains, embedded
   Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and

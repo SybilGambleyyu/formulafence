@@ -32,6 +32,7 @@ rules:
   no_cell_hyperlink_changes: true
   no_worksheet_sparkline_changes: true
   no_xml_mapping_changes: true
+  no_digital_signature_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -108,6 +109,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_cell_hyperlink_changes` | boolean | A standard or Office 2016 revision worksheet-cell hyperlink binding, location, display override, ScreenTip, or selected relationship target/type/mode changes. Targets, cell references, locations, display strings, ScreenTips, relationship IDs, and revision UIDs are compared privately. |
 | `no_worksheet_sparkline_changes` | boolean | An Office 2010 worksheet sparkline source or date-axis formula, destination cell, group membership, type/axis/display/marker control, line weight, or colour definition changes. Source formulas, destination cells, control values, and colours are compared privately. |
 | `no_xml_mapping_changes` | boolean | An XML Map schema, mapping/refresh behavior, table-column or single-cell binding, or map-related workbook/worksheet relationship changes. Schemas, map names, XPath expressions, table identities, target cells, connection identities, and relationship targets are compared privately. |
+| `no_digital_signature_changes` | boolean | An OPC package signature origin/XML-signature/certificate relationship or payload, XMLDSIG envelope/reference, or VBA project signature payload/relationship changes. Signature XML, reference URIs, certificate identities and contents, binary payloads, relationship IDs, and targets are compared privately; FormulaFence inventories envelopes but does not validate cryptography or trust. |
 | `no_legacy_comment_changes` | boolean | A legacy Excel Note/comments binding, author association, Note text/rich-text/property declaration, threaded-comment placeholder reconciliation declaration, Note VML visibility/layout, or related relationship changes. Note text, authors, locations, VML, targets, IDs, and GUIDs are compared privately. |
 | `no_threaded_comment_changes` | boolean | A modern Excel threaded-comment/person package binding, comment/reply graph, text, stored cell/timestamp/resolution declaration, mention range/person association, extension material, or person definition changes. Comment bodies, locations, timestamps, parent links, names, user IDs, provider IDs, relationship IDs, and GUIDs are compared privately. |
 | `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp` or nested `xdr:grpSp` anchor/layout, text/presentation declaration, macro/text link, or referenced click/hover relationship changes. Shape text, formatting, formulas, anchors, IDs, and targets are compared privately. |
@@ -684,6 +686,35 @@ Open XML [Map](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openx
 [XmlProperties](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.xmlproperties.xpath?view=openxml-3.0.1),
 and [SingleXmlCells](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.singlexmlcells?view=openxml-3.0.1)
 definitions.
+
+Package/content signatures and VBA project code signatures are separate Excel
+trust surfaces. A workbook can therefore retain identical formulas, values, and
+`xl/vbaProject.bin` bytes while package-signature metadata, a certificate part,
+or a VBA signature payload changes. FormulaFence reads the raw OPC graph:
+package-root origin, origin-to-XML-signature, XML-signature-to-certificate, and
+VBA signature relationships; it privately compares XMLDSIG envelopes/signed
+references, certificate-part payloads, and the conventional classic, Agile, and
+V3 VBA signature binaries.
+
+Such a change emits `FF050`. Enable `no_digital_signature_changes` to block it
+as `FFP050`. Profiles and finding details expose only aggregate
+origin/XML-signature, signed-reference, embedded-certificate/certificate-part,
+VBA-signature, and malformed-metadata counts. Signature XML, reference URIs,
+certificate identities/contents, binary signature payloads, relationship IDs,
+and targets stay private. Equivalent relationship IDs/order, equivalent
+internal-target spelling, and whitespace in XMLDSIG base64 values normalize
+away. Missing, duplicate, malformed, unsafe, unbound, unreadable, oversized,
+or over-budget metadata produces a coverage warning; reads are bounded to
+16 MiB per part, 64 MiB per workbook, and 512 parts.
+
+This policy guards stored signature envelopes only. It does **not** verify a
+signature or digest, XML transforms or signed-reference coverage, certificate
+chain/identity/trust/expiry/revocation, timestamps, the actual signed
+contents, or VBA code validity. It does not fetch a certificate or contact a
+trust service. Microsoft's [OPC digital-signature
+overview](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/open-packaging-conventions-overview)
+explicitly leaves signer/trust validation to the package consumer; see also
+Excel's [workbook and VBA signing guidance](https://learn.microsoft.com/en-us/troubleshoot/microsoft-365-apps/excel/digital-signatures-code-signing).
 
 Traditional Excel Notes are stored in worksheet-associated SpreadsheetML
 comments parts, not in ordinary cells. Their author association, text, cell

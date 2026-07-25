@@ -1607,6 +1607,47 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Schemas, map names, XPath expressions, table identities, target cells, "
             "and connection identities are compared privately and intentionally omitted."
         )
+    digital_signatures = profile["digital_signatures"]
+    if digital_signatures["present"]:
+        lines.extend(
+            [
+                "",
+                "## Digital-signature controls",
+                "",
+                (
+                    "- **Package signature origins / XML signatures:** "
+                    f"{digital_signatures['package_signature_origin_count']} / "
+                    f"{digital_signatures['package_xml_signature_count']}"
+                ),
+                (
+                    "- **Signed references / embedded certificate values / certificate parts:** "
+                    f"{digital_signatures['package_signature_reference_count']} / "
+                    f"{digital_signatures['package_signature_certificate_count']} / "
+                    f"{digital_signatures['package_signature_certificate_part_count']}"
+                ),
+                (
+                    "- **Certificate-part relationships:** "
+                    f"{digital_signatures['package_signature_certificate_relationship_count']}"
+                ),
+                (
+                    "- **VBA project signature payloads / relationships:** "
+                    f"{digital_signatures['vba_project_signature_count']} / "
+                    f"{digital_signatures['vba_project_signature_relationship_count']}"
+                ),
+            ]
+        )
+        if digital_signatures["unrecognized_digital_signature_count"]:
+            lines.append(
+                "- **Unrecognized or malformed digital-signature metadata:** "
+                f"{digital_signatures['unrecognized_digital_signature_count']}"
+            )
+        lines.append(
+            "Signature XML, signed-part references, certificate identities and "
+            "contents, VBA signature payloads, and relationship targets are compared "
+            "privately and intentionally omitted. FormulaFence inventories envelope "
+            "changes only: it does not validate cryptography, certificate trust, "
+            "expiration, revocation, timestamps, or signed contents."
+        )
     legacy_comments = profile["legacy_comments"]
     if legacy_comments["present"]:
         lines.extend(

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.48.0 — 2026-07-24
+
+- Inspect raw OPC package-signature controls before ordinary workbook readers
+  can omit or normalize them: package-root signature origins, origin-to-XML
+  signature relationships, XMLDSIG envelope/reference material, embedded
+  certificate values, certificate-part relationships/payloads, and conventional
+  VBA project signature payloads/relationships
+  (`vbaProjectSignature.bin`, Agile, and V3). Profiles, Markdown, JSON, and
+  SARIF expose aggregate counts only; signature XML, reference URIs,
+  certificate identities/contents, binary payloads, relationship IDs, and
+  relationship targets remain private.
+- Emit `FF050` for material package- or VBA-signature envelope changes and add
+  the fail-closed `no_digital_signature_changes` policy rule (`FFP050`).
+  This closes the review gap where provenance/integrity-assurance metadata can
+  be added, removed, or altered while ordinary cell values, formulas, and
+  `xl/vbaProject.bin` bytes remain unchanged.
+- Normalize writer-selected relationship IDs/order, equivalent internal target
+  spelling, and XMLDSIG base64 whitespace. Missing, duplicate, malformed,
+  unsafe, unbound, unreadable, oversized, or over-budget metadata emits a
+  visible coverage warning; reads are bounded to 16 MiB per part, 64 MiB per
+  workbook, and 512 parts. FormulaFence inventories envelopes only: it does
+  not validate cryptography, signed-reference coverage, certificate identity or
+  trust, expiry, revocation, timestamps, signed contents, or VBA-code validity.
+
 ## 0.47.0 — 2026-07-24
 
 - Inspect raw SpreadsheetML XML Maps, XML-table column properties, and

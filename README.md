@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.47.0/formulafence-0.47.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.48.0/formulafence-0.48.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -82,6 +82,7 @@ rules:
   no_cell_hyperlink_changes: true
   no_worksheet_sparkline_changes: true
   no_xml_mapping_changes: true
+  no_digital_signature_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -122,7 +123,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -851,6 +852,41 @@ Excel client behavior. The scope follows the Open XML
 [XmlProperties](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.xmlproperties.xpath?view=openxml-3.0.1),
 and [SingleXmlCells](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.singlexmlcells?view=openxml-3.0.1)
 definitions.
+
+FormulaFence also inventories **digital-signature controls** that can change
+outside ordinary cells and outside the `xl/vbaProject.bin` macro payload.
+Excel distinguishes a package/content signature from a VBA project code
+signature: either one can be added, removed, replaced, or rendered materially
+different while formulas and visible values stay fixed.
+
+FormulaFence reads the raw OPC package-signature graph before ordinary workbook
+readers can discard or normalize it. It privately compares the package-root
+signature-origin relationship, origin-to-XML-signature relationships, XMLDSIG
+envelopes and signed references, embedded certificate values, certificate-part
+relationships and payloads, and conventional VBA signature payloads and
+relationships (`vbaProjectSignature.bin`, `vbaProjectSignatureAgile.bin`, and
+`vbaProjectSignatureV3.bin`). A material change emits `FF050`; enable
+`no_digital_signature_changes` to make that boundary `FFP050` in CI.
+
+Profiles and `FF050` details expose only aggregate origin/XML-signature,
+signed-reference, embedded-certificate/certificate-part, VBA-signature, and
+malformed-metadata counts. Signature XML, reference URIs, certificate
+identities and contents, binary signature payloads, relationship IDs, and
+relationship targets never enter profiles, Markdown, JSON, or SARIF. Equivalent
+relationship IDs/order and internal-target spelling, plus whitespace in XMLDSIG
+base64 values, stay quiet. Missing, duplicate, malformed, unsafe, unbound,
+unreadable, oversized, or over-budget metadata becomes a visible coverage
+warning; raw signature reads are bounded to 16 MiB per part, 64 MiB per
+workbook, and 512 parts.
+
+This is an envelope-integrity boundary, **not cryptographic validation**.
+FormulaFence does not verify signature or digest values, XML transforms,
+reference coverage, certificate chains, identity, trust, expiry, revocation,
+timestamps, or the validity of signed VBA code. It never fetches certificates
+or contacts a trust service. The scope follows Microsoft's
+[OPC digital-signature overview](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/open-packaging-conventions-overview),
+which places signer/trust validation with the package consumer, and Excel's
+[separate workbook and VBA signing guidance](https://learn.microsoft.com/en-us/troubleshoot/microsoft-365-apps/excel/digital-signatures-code-signing).
 
 FormulaFence also inventories legacy **Excel Notes** and the legacy placeholders
 that can accompany modern threaded comments. Conventional Notes keep author

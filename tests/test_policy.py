@@ -23,6 +23,7 @@ from .helpers import (
     change_named_sheet_view_criterion,
     change_number_format_code,
     change_office_web_addin_auto_show,
+    change_package_signature_reference,
     change_pivot_table_definition_material,
     change_power_pivot_data_model_payload,
     change_power_query_controls,
@@ -42,6 +43,7 @@ from .helpers import (
     make_chart_definition_model,
     make_conditional_formatting_model,
     make_data_validation_model,
+    make_digital_signature_model,
     make_external_data_refresh_model,
     make_external_link_package_model,
     make_fill_model,
@@ -595,6 +597,21 @@ def test_policy_can_block_xml_mapping_changes(tmp_path) -> None:
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
         "FFP049"
+    }
+
+
+def test_policy_can_block_digital_signature_changes(tmp_path) -> None:
+    baseline = make_digital_signature_model(tmp_path / "baseline.xlsx")
+    candidate = make_digital_signature_model(tmp_path / "candidate.xlsx")
+    change_package_signature_reference(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_digital_signature_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP050"
     }
 
 

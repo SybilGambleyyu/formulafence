@@ -48,6 +48,7 @@ from formulafence.models import (
     ConditionalFormattingExtensionSnapshot,
     ConditionalFormattingSnapshot,
     DataValidationSnapshot,
+    DigitalSignatureSnapshot,
     DynamicArrayOutputReference,
     ExternalDataConnectionSnapshot,
     ExternalDataOpaqueMetadataSnapshot,
@@ -125,6 +126,7 @@ _EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
 _NAMED_SHEET_VIEW_NS = "http://schemas.microsoft.com/office/spreadsheetml/2019/namedsheetviews"
 _DATA_MASHUP_NS = "http://schemas.microsoft.com/DataMashup"
 _MARKUP_COMPATIBILITY_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+_XML_DIGITAL_SIGNATURE_NS = "http://www.w3.org/2000/09/xmldsig#"
 _XML_NAMESPACE_PREFIXES = {
     _SPREADSHEETML_NS: "",
     _OFFICE_2010_SPREADSHEET_NS: "x14:",
@@ -152,6 +154,43 @@ _XML_MAPPING_UNSIGNED_PATTERN = re.compile(r"^\+?[0-9]+$")
 _XML_MAPPING_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _XML_MAPPING_TOTAL_XML_BYTES = 64 * 1024 * 1024
 _XML_MAPPING_TOTAL_XML_PARTS = 512
+_DIGITAL_SIGNATURE_ORIGIN_RELATIONSHIP = (
+    "http://schemas.openxmlformats.org/package/2006/relationships/"
+    "digital-signature/origin"
+)
+_DIGITAL_SIGNATURE_SIGNATURE_RELATIONSHIP = (
+    "http://schemas.openxmlformats.org/package/2006/relationships/"
+    "digital-signature/signature"
+)
+_DIGITAL_SIGNATURE_CERTIFICATE_RELATIONSHIP = (
+    "http://schemas.openxmlformats.org/package/2006/relationships/"
+    "digital-signature/certificate"
+)
+_DIGITAL_SIGNATURE_ORIGIN_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-package.digital-signature-origin"
+)
+_DIGITAL_SIGNATURE_XML_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-package.digital-signature-xmlsignature+xml"
+)
+_DIGITAL_SIGNATURE_CERTIFICATE_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-package.digital-signature-certificate"
+)
+_DIGITAL_SIGNATURE_ORIGIN_PART_PATTERN = re.compile(
+    r"^_xmlsignatures/[^/]+\.sigs$", re.IGNORECASE
+)
+_DIGITAL_SIGNATURE_XML_PART_PATTERN = re.compile(
+    r"^_xmlsignatures/[^/]+\.xml$", re.IGNORECASE
+)
+_DIGITAL_SIGNATURE_CERTIFICATE_PART_PATTERN = re.compile(
+    r"^(?:_xmlsignatures|package/services/digital-signature/certificate)/[^/]+\.cer$",
+    re.IGNORECASE,
+)
+_VBA_PROJECT_SIGNATURE_PART_PATTERN = re.compile(
+    r"^xl/vbaProjectSignature(?:Agile|V3)?\.bin$", re.IGNORECASE
+)
+_DIGITAL_SIGNATURE_MAX_PART_BYTES = 16 * 1024 * 1024
+_DIGITAL_SIGNATURE_TOTAL_BYTES = 64 * 1024 * 1024
+_DIGITAL_SIGNATURE_TOTAL_PARTS = 512
 _EXTERNAL_LINK_PART_PATTERN = re.compile(
     r"^xl/externalLinks/externalLink(?:\d+)?\.xml$", re.IGNORECASE
 )
@@ -643,6 +682,14 @@ class _XmlMappingMetadata:
     """Raw XML-map evidence retained before the workbook reader drops it."""
 
     controls: XmlMappingSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _DigitalSignatureMetadata:
+    """Raw signature envelope evidence retained outside the workbook reader."""
+
+    signatures: DigitalSignatureSnapshot
     warnings: tuple[str, ...]
 
 
@@ -21941,6 +21988,956 @@ def _xml_mapping_metadata(path: Path) -> _XmlMappingMetadata:
     return _XmlMappingMetadata(snapshot, tuple(sorted(warnings)))
 
 
+@dataclass
+class _DigitalSignatureBudget:
+    """Bound raw package- and VBA-signature reads."""
+
+    remaining_parts: int = _DIGITAL_SIGNATURE_TOTAL_PARTS
+    remaining_bytes: int = _DIGITAL_SIGNATURE_TOTAL_BYTES
+
+
+@dataclass(frozen=True)
+class _DigitalSignatureXmlInspection:
+    """Private inspection result for one OPC XML signature part."""
+
+    member: str
+    reference_count: int = 0
+    certificate_count: int = 0
+    signature: str | None = None
+    issues: tuple[tuple[str, str], ...] = ()
+
+
+def _digital_signature_issue(
+    issues: list[tuple[str, str]],
+    context: str,
+    detail: object,
+) -> None:
+    """Retain malformed signature evidence only inside a private fingerprint."""
+    issues.append((context, repr(detail)))
+
+
+def _digital_signature_bounded_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _DigitalSignatureBudget,
+    *,
+    kind: str,
+) -> tuple[bytes | None, str | None]:
+    """Read one signature package member within fixed defensive limits."""
+    if budget.remaining_parts <= 0:
+        warnings.add(
+            "FormulaFence reached its bounded digital-signature part-count budget; "
+            "affected signature controls have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("digital-signature-part-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a digital-signature package member; "
+            "affected signature controls were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("missing-digital-signature-member", member),)
+        )
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _DIGITAL_SIGNATURE_MAX_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized digital-signature "
+            f"{kind} part; affected signature controls have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("oversized-digital-signature-member", metadata),)
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded digital-signature read budget; "
+            "affected signature controls have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("digital-signature-read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a digital-signature "
+            f"{kind} part ({type(error).__name__}); affected signature controls "
+            "were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("unreadable-digital-signature-member", metadata),)
+        )
+
+
+def _digital_signature_bounded_root(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _DigitalSignatureBudget,
+) -> tuple[ElementTree.Element | None, str | None]:
+    """Return one bounded XML-signature root or a private failure fingerprint."""
+    payload, fallback_signature = _digital_signature_bounded_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        kind="XML",
+    )
+    if payload is None:
+        return None, fallback_signature
+    try:
+        return _xml_root_from_payload(payload), None
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not parse a digital-signature XML part "
+            f"({type(error).__name__}); affected signature controls were not compared."
+        )
+        return None, _private_payload_signature(payload)
+
+
+def _digital_signature_target(relationship: _PackageRelationship) -> str | None:
+    """Retain a relationship endpoint privately even when it is unsafe."""
+    return (
+        relationship.target
+        if relationship.target is not None
+        else relationship.raw_target
+    )
+
+
+def _digital_signature_content_type_declarations(
+    archive: ZipFile,
+    warnings: set[str],
+    issues: list[tuple[str, str]],
+) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+    """Read only signature-relevant OPC content-type declarations."""
+    overrides: dict[str, list[str]] = defaultdict(list)
+    defaults: dict[str, list[str]] = defaultdict(list)
+    try:
+        root = _xml_root(archive, "[Content_Types].xml")
+    except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect OPC content types for digital "
+            f"signatures ({type(error).__name__}); affected signature controls may be incomplete."
+        )
+        _digital_signature_issue(
+            issues,
+            "digital-signature-content-type-scan",
+            type(error).__name__,
+        )
+        return {}, {}
+    if (
+        _xml_namespace(root.tag) != _CONTENT_TYPES_NS
+        or _xml_local_name(root.tag) != "Types"
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected OPC content-types root while "
+            "inspecting digital signatures; affected signature controls may be incomplete."
+        )
+        _digital_signature_issue(
+            issues,
+            "unexpected-digital-signature-content-types-root",
+            _xml_display_name(root.tag),
+        )
+        return {}, {}
+
+    override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
+    default_tag = f"{{{_CONTENT_TYPES_NS}}}Default"
+    for child in root:
+        if child.tag == override_tag:
+            content_type = child.get("ContentType")
+            raw_member = child.get("PartName")
+            member = (
+                _normalise_content_type_part_name(raw_member)
+                if raw_member is not None
+                else None
+            )
+            relevant = bool(
+                content_type
+                in {
+                    _DIGITAL_SIGNATURE_ORIGIN_CONTENT_TYPE,
+                    _DIGITAL_SIGNATURE_XML_CONTENT_TYPE,
+                    _DIGITAL_SIGNATURE_CERTIFICATE_CONTENT_TYPE,
+                }
+                or (
+                    member is not None
+                    and (
+                        _DIGITAL_SIGNATURE_ORIGIN_PART_PATTERN.fullmatch(member)
+                        or _DIGITAL_SIGNATURE_XML_PART_PATTERN.fullmatch(member)
+                        or _DIGITAL_SIGNATURE_CERTIFICATE_PART_PATTERN.fullmatch(
+                            member
+                        )
+                    )
+                )
+            )
+            if not relevant:
+                continue
+            if member is None or content_type is None:
+                _digital_signature_issue(
+                    issues,
+                    "malformed-digital-signature-content-type-override",
+                    _xml_display_name(child.tag),
+                )
+                continue
+            overrides[member].append(content_type)
+            continue
+        if child.tag != default_tag:
+            continue
+        extension = child.get("Extension")
+        content_type = child.get("ContentType")
+        if (
+            extension is None
+            or content_type is None
+            or (
+                extension.casefold() != "sigs"
+                and content_type
+                not in {
+                    _DIGITAL_SIGNATURE_ORIGIN_CONTENT_TYPE,
+                    _DIGITAL_SIGNATURE_XML_CONTENT_TYPE,
+                    _DIGITAL_SIGNATURE_CERTIFICATE_CONTENT_TYPE,
+                }
+            )
+        ):
+            continue
+        defaults[extension.casefold()].append(content_type)
+
+    duplicate_overrides = {
+        member: values
+        for member, values in overrides.items()
+        if len(values) > 1
+    }
+    for member, values in duplicate_overrides.items():
+        _digital_signature_issue(
+            issues,
+            "duplicate-digital-signature-content-type-override",
+            (member, tuple(sorted(values))),
+        )
+    duplicate_defaults = {
+        extension: values
+        for extension, values in defaults.items()
+        if len(values) > 1
+    }
+    for extension, values in duplicate_defaults.items():
+        _digital_signature_issue(
+            issues,
+            "duplicate-digital-signature-content-type-default",
+            (extension, tuple(sorted(values))),
+        )
+    return (
+        {member: tuple(sorted(values)) for member, values in overrides.items()},
+        {extension: tuple(sorted(values)) for extension, values in defaults.items()},
+    )
+
+
+def _digital_signature_content_type_status(
+    member: str,
+    expected: str,
+    overrides: Mapping[str, tuple[str, ...]],
+    defaults: Mapping[str, tuple[str, ...]],
+) -> str:
+    """Classify a signature part's OPC content-type declaration."""
+    declared = overrides.get(member)
+    if declared is None:
+        extension = member.rsplit(".", maxsplit=1)[-1].casefold() if "." in member else ""
+        declared = defaults.get(extension, ())
+    if expected in declared:
+        return "declared"
+    return "mismatched" if declared else "unlisted"
+
+
+def _digital_signature_fragment(element: ElementTree.Element) -> tuple[object, ...]:
+    """Canonicalise signature XML while retaining cryptographic material privately."""
+    base64_elements = frozenset(
+        {
+            "DigestValue",
+            "SignatureValue",
+            "X509Certificate",
+            "X509CRL",
+            "PGPKeyID",
+            "PGPKeyPacket",
+            "SPKISexp",
+            "Modulus",
+            "Exponent",
+        }
+    )
+    children = tuple(_digital_signature_fragment(child) for child in element)
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    if (
+        text is not None
+        and _xml_namespace(element.tag) == _XML_DIGITAL_SIGNATURE_NS
+        and _xml_local_name(element.tag) in base64_elements
+    ):
+        text = "".join(text.split())
+    return (
+        _xml_display_name(element.tag),
+        tuple(
+            sorted(
+                (_xml_display_name(attribute), value)
+                for attribute, value in element.attrib.items()
+            )
+        ),
+        text,
+        children,
+    )
+
+
+def _digital_signature_xml_inspection(
+    root: ElementTree.Element,
+    member: str,
+) -> _DigitalSignatureXmlInspection:
+    """Inspect an XMLDSIG envelope without evaluating its cryptography."""
+    issues: list[tuple[str, str]] = []
+    signature_tag = f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Signature"
+    if root.tag != signature_tag:
+        _digital_signature_issue(
+            issues,
+            "unexpected-package-signature-root",
+            _digital_signature_fragment(root),
+        )
+        return _DigitalSignatureXmlInspection(
+            member=member,
+            signature=_private_external_data_signature(
+                (("unexpected-package-signature-root", repr(_digital_signature_fragment(root))),)
+            ),
+            issues=tuple(issues),
+        )
+
+    signed_info_tag = f"{{{_XML_DIGITAL_SIGNATURE_NS}}}SignedInfo"
+    signature_value_tag = f"{{{_XML_DIGITAL_SIGNATURE_NS}}}SignatureValue"
+    reference_tag = f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Reference"
+    certificate_tag = f"{{{_XML_DIGITAL_SIGNATURE_NS}}}X509Certificate"
+    signed_infos = root.findall(signed_info_tag)
+    signature_values = root.findall(signature_value_tag)
+    if len(signed_infos) != 1:
+        _digital_signature_issue(
+            issues,
+            "invalid-package-signature-signed-info-count",
+            len(signed_infos),
+        )
+    if len(signature_values) != 1:
+        _digital_signature_issue(
+            issues,
+            "invalid-package-signature-value-count",
+            len(signature_values),
+        )
+    references = (
+        signed_infos[0].findall(reference_tag)
+        if len(signed_infos) == 1
+        else []
+    )
+    if not references:
+        _digital_signature_issue(issues, "empty-package-signature-references", None)
+    return _DigitalSignatureXmlInspection(
+        member=member,
+        reference_count=len(references),
+        certificate_count=len(root.findall(f".//{certificate_tag}")),
+        signature=_private_external_data_signature(
+            (("package-xml-signature", repr(_digital_signature_fragment(root))),)
+        ),
+        issues=tuple(issues),
+    )
+
+
+def _digital_signature_metadata(path: Path) -> _DigitalSignatureMetadata:
+    """Inventory package and VBA signature envelopes without validating them.
+
+    A package XML signature and a VBA code signature are separate Excel trust
+    surfaces. The scanner records only safe aggregate counts and private hashes;
+    it never validates certificates, cryptographic values, trust chains,
+    revocation, timestamps, or signed package contents.
+    """
+    warnings: set[str] = set()
+    issues: list[tuple[str, str]] = []
+    package_entries: list[tuple[str, str]] = []
+    vba_entries: list[tuple[str, str]] = []
+    relationship_entries: list[tuple[str, str]] = []
+    try:
+        with ZipFile(path) as archive:
+            members = set(archive.namelist())
+            member_counts: dict[str, int] = defaultdict(int)
+            for entry in archive.infolist():
+                member_counts[entry.filename] += 1
+
+            overrides, defaults = _digital_signature_content_type_declarations(
+                archive,
+                warnings,
+                issues,
+            )
+            discovered_origins = {
+                member
+                for member in members
+                if _DIGITAL_SIGNATURE_ORIGIN_PART_PATTERN.fullmatch(member)
+            } | {
+                member
+                for member, content_types in overrides.items()
+                if _DIGITAL_SIGNATURE_ORIGIN_CONTENT_TYPE in content_types
+            }
+            discovered_xml_signatures = {
+                member
+                for member in members
+                if _DIGITAL_SIGNATURE_XML_PART_PATTERN.fullmatch(member)
+            } | {
+                member
+                for member, content_types in overrides.items()
+                if _DIGITAL_SIGNATURE_XML_CONTENT_TYPE in content_types
+            }
+            discovered_package_certificates = {
+                member
+                for member in members
+                if _DIGITAL_SIGNATURE_CERTIFICATE_PART_PATTERN.fullmatch(member)
+            } | {
+                member
+                for member, content_types in overrides.items()
+                if _DIGITAL_SIGNATURE_CERTIFICATE_CONTENT_TYPE in content_types
+            }
+
+            try:
+                root_relationships = _package_relationships(archive, "")
+            except (
+                ElementTree.ParseError,
+                KeyError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                _digital_signature_issue(
+                    issues,
+                    "package-signature-root-relationship-scan-failure",
+                    type(error).__name__,
+                )
+                root_relationships = ()
+
+            declared_origins: set[str] = set()
+            declared_origin_relationship_count = 0
+            for relationship in root_relationships:
+                if (
+                    relationship.relationship_type.casefold()
+                    != _DIGITAL_SIGNATURE_ORIGIN_RELATIONSHIP.casefold()
+                ):
+                    continue
+                relationship_target = _digital_signature_target(relationship)
+                relationship_entries.append(
+                    (
+                        "package-signature-origin-relationship",
+                        repr(
+                            (
+                                relationship.relationship_type,
+                                relationship.target_mode.casefold(),
+                                relationship_target,
+                            )
+                        ),
+                    )
+                )
+                if (
+                    relationship.target_mode.casefold() != "internal"
+                    or relationship.target is None
+                ):
+                    _digital_signature_issue(
+                        issues,
+                        "unsafe-package-signature-origin-relationship",
+                        (
+                            relationship.relationship_type,
+                            relationship.target_mode,
+                            relationship_target,
+                        ),
+                    )
+                    continue
+                declared_origin_relationship_count += 1
+                declared_origins.add(relationship.target)
+            if len(declared_origins) != declared_origin_relationship_count:
+                _digital_signature_issue(
+                    issues,
+                    "duplicate-package-signature-origin-target",
+                    tuple(sorted(declared_origins)),
+                )
+            for member in discovered_origins - declared_origins:
+                _digital_signature_issue(
+                    issues,
+                    "unbound-package-signature-origin-part",
+                    member,
+                )
+            origin_members = discovered_origins | declared_origins
+
+            declared_xml_signatures: set[str] = set()
+            declared_xml_signature_relationship_count = 0
+            budget = _DigitalSignatureBudget()
+            for origin_member in sorted(origin_members, key=str.casefold):
+                origin_status = _digital_signature_content_type_status(
+                    origin_member,
+                    _DIGITAL_SIGNATURE_ORIGIN_CONTENT_TYPE,
+                    overrides,
+                    defaults,
+                )
+                if origin_status != "declared":
+                    _digital_signature_issue(
+                        issues,
+                        "invalid-package-signature-origin-content-type",
+                        (origin_member, origin_status),
+                    )
+                payload, fallback_signature = _digital_signature_bounded_payload(
+                    archive,
+                    origin_member,
+                    warnings,
+                    budget,
+                    kind="origin",
+                )
+                if payload is None:
+                    _digital_signature_issue(
+                        issues,
+                        "unreadable-package-signature-origin-part",
+                        (origin_member, fallback_signature),
+                    )
+                    package_entries.append(
+                        (
+                            "unreadable-package-signature-origin-part",
+                            fallback_signature or "",
+                        )
+                    )
+                elif payload:
+                    _digital_signature_issue(
+                        issues,
+                        "nonempty-package-signature-origin-part",
+                        _private_payload_signature(payload),
+                    )
+                    package_entries.append(
+                        (
+                            "nonempty-package-signature-origin-part",
+                            _private_payload_signature(payload),
+                        )
+                    )
+
+                relationship_member = _relationship_part_path(origin_member)
+                if relationship_member not in members:
+                    continue
+                try:
+                    origin_relationships = _package_relationships(archive, origin_member)
+                except (
+                    ElementTree.ParseError,
+                    KeyError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    _digital_signature_issue(
+                        issues,
+                        "package-signature-origin-relationship-scan-failure",
+                        (origin_member, type(error).__name__),
+                    )
+                    continue
+                for relationship in origin_relationships:
+                    if (
+                        relationship.relationship_type.casefold()
+                        != _DIGITAL_SIGNATURE_SIGNATURE_RELATIONSHIP.casefold()
+                    ):
+                        continue
+                    relationship_target = _digital_signature_target(relationship)
+                    relationship_entries.append(
+                        (
+                            "package-xml-signature-relationship",
+                            repr(
+                                (
+                                    relationship.relationship_type,
+                                    relationship.target_mode.casefold(),
+                                    relationship_target,
+                                )
+                            ),
+                        )
+                    )
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.target is None
+                    ):
+                        _digital_signature_issue(
+                            issues,
+                            "unsafe-package-xml-signature-relationship",
+                            (
+                                origin_member,
+                                relationship.relationship_type,
+                                relationship.target_mode,
+                                relationship_target,
+                            ),
+                        )
+                        continue
+                    declared_xml_signature_relationship_count += 1
+                    declared_xml_signatures.add(relationship.target)
+            if (
+                len(declared_xml_signatures)
+                != declared_xml_signature_relationship_count
+            ):
+                _digital_signature_issue(
+                    issues,
+                    "duplicate-package-xml-signature-target",
+                    tuple(sorted(declared_xml_signatures)),
+                )
+            for member in discovered_xml_signatures - declared_xml_signatures:
+                _digital_signature_issue(
+                    issues,
+                    "unbound-package-xml-signature-part",
+                    member,
+                )
+            xml_signature_members = discovered_xml_signatures | declared_xml_signatures
+
+            xml_inspections: list[_DigitalSignatureXmlInspection] = []
+            for member in sorted(xml_signature_members, key=str.casefold):
+                signature_status = _digital_signature_content_type_status(
+                    member,
+                    _DIGITAL_SIGNATURE_XML_CONTENT_TYPE,
+                    overrides,
+                    defaults,
+                )
+                if signature_status != "declared":
+                    _digital_signature_issue(
+                        issues,
+                        "invalid-package-xml-signature-content-type",
+                        (member, signature_status),
+                    )
+                root, fallback_signature = _digital_signature_bounded_root(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                if root is None:
+                    _digital_signature_issue(
+                        issues,
+                        "unreadable-package-xml-signature-part",
+                        (member, fallback_signature),
+                    )
+                    package_entries.append(
+                        (
+                            "unreadable-package-xml-signature-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                inspection = _digital_signature_xml_inspection(root, member)
+                xml_inspections.append(inspection)
+                if inspection.signature is not None:
+                    package_entries.append(
+                        ("package-xml-signature", inspection.signature)
+                    )
+                issues.extend(inspection.issues)
+
+            declared_package_certificates: set[str] = set()
+            package_certificate_relationship_count = 0
+            declared_certificate_relationship_count = 0
+            for signature_member in sorted(xml_signature_members, key=str.casefold):
+                relationship_member = _relationship_part_path(signature_member)
+                if relationship_member not in members:
+                    continue
+                try:
+                    certificate_relationships = _package_relationships(
+                        archive,
+                        signature_member,
+                    )
+                except (
+                    ElementTree.ParseError,
+                    KeyError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    _digital_signature_issue(
+                        issues,
+                        "package-signature-certificate-relationship-scan-failure",
+                        (signature_member, type(error).__name__),
+                    )
+                    continue
+                for relationship in certificate_relationships:
+                    if (
+                        relationship.relationship_type.casefold()
+                        != _DIGITAL_SIGNATURE_CERTIFICATE_RELATIONSHIP.casefold()
+                    ):
+                        continue
+                    package_certificate_relationship_count += 1
+                    relationship_target = _digital_signature_target(relationship)
+                    relationship_entries.append(
+                        (
+                            "package-signature-certificate-relationship",
+                            repr(
+                                (
+                                    relationship.relationship_type,
+                                    relationship.target_mode.casefold(),
+                                    relationship_target,
+                                )
+                            ),
+                        )
+                    )
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.target is None
+                    ):
+                        _digital_signature_issue(
+                            issues,
+                            "unsafe-package-signature-certificate-relationship",
+                            (
+                                signature_member,
+                                relationship.relationship_type,
+                                relationship.target_mode,
+                                relationship_target,
+                            ),
+                        )
+                        continue
+                    declared_certificate_relationship_count += 1
+                    declared_package_certificates.add(relationship.target)
+            if (
+                len(declared_package_certificates)
+                != declared_certificate_relationship_count
+            ):
+                _digital_signature_issue(
+                    issues,
+                    "duplicate-package-signature-certificate-target",
+                    tuple(sorted(declared_package_certificates)),
+                )
+            for member in discovered_package_certificates - declared_package_certificates:
+                _digital_signature_issue(
+                    issues,
+                    "unbound-package-signature-certificate-part",
+                    member,
+                )
+            package_certificate_members = (
+                discovered_package_certificates | declared_package_certificates
+            )
+            for member in sorted(package_certificate_members, key=str.casefold):
+                certificate_status = _digital_signature_content_type_status(
+                    member,
+                    _DIGITAL_SIGNATURE_CERTIFICATE_CONTENT_TYPE,
+                    overrides,
+                    defaults,
+                )
+                if certificate_status != "declared":
+                    _digital_signature_issue(
+                        issues,
+                        "invalid-package-signature-certificate-content-type",
+                        (member, certificate_status),
+                    )
+                payload, fallback_signature = _digital_signature_bounded_payload(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                    kind="certificate",
+                )
+                if payload is None:
+                    _digital_signature_issue(
+                        issues,
+                        "unreadable-package-signature-certificate-part",
+                        (member, fallback_signature),
+                    )
+                    package_entries.append(
+                        (
+                            "unreadable-package-signature-certificate-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                package_entries.append(
+                    (
+                        "package-signature-certificate",
+                        repr((member, _private_payload_signature(payload))),
+                    )
+                )
+
+            discovered_vba_signatures = {
+                member
+                for member in members
+                if _VBA_PROJECT_SIGNATURE_PART_PATTERN.fullmatch(member)
+            }
+            declared_vba_signatures: set[str] = set()
+            vba_signature_relationship_count = 0
+            declared_vba_signature_relationship_count = 0
+            vba_project_member = "xl/vbaProject.bin"
+            vba_relationship_member = _relationship_part_path(vba_project_member)
+            if vba_relationship_member in members:
+                try:
+                    vba_relationships = _package_relationships(
+                        archive,
+                        vba_project_member,
+                    )
+                except (
+                    ElementTree.ParseError,
+                    KeyError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    _digital_signature_issue(
+                        issues,
+                        "vba-signature-relationship-scan-failure",
+                        type(error).__name__,
+                    )
+                    vba_relationships = ()
+                for relationship in vba_relationships:
+                    relationship_suffix = relationship.relationship_type.rsplit(
+                        "/",
+                        maxsplit=1,
+                    )[-1].casefold()
+                    if not relationship_suffix.startswith("vbaprojectsignature"):
+                        continue
+                    vba_signature_relationship_count += 1
+                    relationship_target = _digital_signature_target(relationship)
+                    relationship_entries.append(
+                        (
+                            "vba-project-signature-relationship",
+                            repr(
+                                (
+                                    relationship.relationship_type,
+                                    relationship.target_mode.casefold(),
+                                    relationship_target,
+                                )
+                            ),
+                        )
+                    )
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.target is None
+                    ):
+                        _digital_signature_issue(
+                            issues,
+                            "unsafe-vba-project-signature-relationship",
+                            (
+                                relationship.relationship_type,
+                                relationship.target_mode,
+                                relationship_target,
+                            ),
+                        )
+                        continue
+                    declared_vba_signature_relationship_count += 1
+                    declared_vba_signatures.add(relationship.target)
+            elif discovered_vba_signatures:
+                _digital_signature_issue(
+                    issues,
+                    "missing-vba-project-signature-relationship-part",
+                    vba_project_member,
+                )
+
+            if discovered_vba_signatures and vba_project_member not in members:
+                _digital_signature_issue(
+                    issues,
+                    "vba-project-signature-without-vba-project",
+                    tuple(sorted(discovered_vba_signatures)),
+                )
+            if (
+                len(declared_vba_signatures)
+                != declared_vba_signature_relationship_count
+            ):
+                _digital_signature_issue(
+                    issues,
+                    "duplicate-vba-project-signature-target",
+                    tuple(sorted(declared_vba_signatures)),
+                )
+            for member in discovered_vba_signatures - declared_vba_signatures:
+                _digital_signature_issue(
+                    issues,
+                    "unbound-vba-project-signature-part",
+                    member,
+                )
+            vba_signature_members = discovered_vba_signatures | declared_vba_signatures
+            for member in sorted(
+                origin_members
+                | xml_signature_members
+                | package_certificate_members
+                | vba_signature_members,
+                key=str.casefold,
+            ):
+                if (count := member_counts.get(member, 0)) > 1:
+                    _digital_signature_issue(
+                        issues,
+                        "duplicate-digital-signature-package-member",
+                        (member, count),
+                    )
+            for member in sorted(vba_signature_members, key=str.casefold):
+                payload, fallback_signature = _digital_signature_bounded_payload(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                    kind="VBA",
+                )
+                if payload is None:
+                    _digital_signature_issue(
+                        issues,
+                        "unreadable-vba-project-signature-part",
+                        (member, fallback_signature),
+                    )
+                    vba_entries.append(
+                        (
+                            "unreadable-vba-project-signature-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                vba_entries.append(
+                    (
+                        "vba-project-signature",
+                        repr((member, _private_payload_signature(payload))),
+                    )
+                )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _DigitalSignatureMetadata(
+            DigitalSignatureSnapshot(
+                unrecognized_digital_signature_count=1,
+                package_signature_signature=_private_external_data_signature(
+                    (("digital-signature-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect digital-signature OOXML "
+                f"({type(error).__name__}); affected signature controls were not compared.",
+            ),
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported digital-signature metadata; "
+            "affected signature controls have a coverage gap."
+        )
+    package_entries.extend(
+        ("digital-signature-issue", repr(issue))
+        for issue in issues
+    )
+    snapshot = DigitalSignatureSnapshot(
+        package_signature_origin_count=len(origin_members),
+        package_xml_signature_count=len(xml_signature_members),
+        package_signature_reference_count=sum(
+            inspection.reference_count for inspection in xml_inspections
+        ),
+        package_signature_certificate_count=sum(
+            inspection.certificate_count for inspection in xml_inspections
+        ),
+        package_signature_certificate_part_count=len(package_certificate_members),
+        package_signature_certificate_relationship_count=(
+            package_certificate_relationship_count
+        ),
+        vba_project_signature_count=len(vba_signature_members),
+        vba_project_signature_relationship_count=vba_signature_relationship_count,
+        unrecognized_digital_signature_count=len(issues),
+        package_signature_signature=(
+            _private_external_data_signature(tuple(sorted(package_entries)))
+            if package_entries
+            else None
+        ),
+        vba_signature_payload_signature=(
+            _private_external_data_signature(tuple(sorted(vba_entries)))
+            if vba_entries
+            else None
+        ),
+        relationship_signature=(
+            _private_external_data_signature(tuple(sorted(relationship_entries)))
+            if relationship_entries
+            else None
+        ),
+    )
+    return _DigitalSignatureMetadata(snapshot, tuple(sorted(warnings)))
+
+
 @dataclass(frozen=True)
 class _LegacyCommentRawRelationship:
     """One private package relationship used to locate legacy notes."""
@@ -26071,6 +27068,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     cell_hyperlink_metadata = _cell_hyperlink_metadata(source)
     worksheet_sparkline_metadata = _worksheet_sparkline_metadata(source)
     xml_mapping_metadata = _xml_mapping_metadata(source)
+    digital_signature_metadata = _digital_signature_metadata(source)
     legacy_comment_metadata = _legacy_comment_metadata(source)
     threaded_comment_metadata = _threaded_comment_metadata(source)
     worksheet_drawing_shape_metadata = _worksheet_drawing_shape_metadata(source)
@@ -26119,6 +27117,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(cell_hyperlink_metadata.warnings)
     parser_warnings.update(worksheet_sparkline_metadata.warnings)
     parser_warnings.update(xml_mapping_metadata.warnings)
+    parser_warnings.update(digital_signature_metadata.warnings)
     parser_warnings.update(legacy_comment_metadata.warnings)
     parser_warnings.update(threaded_comment_metadata.warnings)
     parser_warnings.update(worksheet_drawing_shape_metadata.warnings)
@@ -26351,6 +27350,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         cell_hyperlinks=cell_hyperlink_metadata.hyperlinks,
         worksheet_sparklines=worksheet_sparkline_metadata.sparklines,
         xml_mapping_controls=xml_mapping_metadata.controls,
+        digital_signatures=digital_signature_metadata.signatures,
         legacy_comments=legacy_comment_metadata.comments,
         threaded_comments=threaded_comment_metadata.comments,
         worksheet_drawing_shapes=worksheet_drawing_shape_metadata.shapes,
@@ -26436,6 +27436,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "cell_hyperlinks": snapshot.cell_hyperlinks.profile_dict(),
         "worksheet_sparklines": snapshot.worksheet_sparklines.profile_dict(),
         "xml_mapping_controls": snapshot.xml_mapping_controls.profile_dict(),
+        "digital_signatures": snapshot.digital_signatures.profile_dict(),
         "legacy_comments": snapshot.legacy_comments.profile_dict(),
         "threaded_comments": snapshot.threaded_comments.profile_dict(),
         "worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.profile_dict(),

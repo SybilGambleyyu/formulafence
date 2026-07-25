@@ -5,6 +5,48 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Effective cell-border controls — 2026-07-26
+
+FormulaFence 0.55.0 was validated against two independently maintained Open
+XML SDK fixtures at commit
+[`cd2b359ef824737edb93f1c6157c19551aae1e52`](https://github.com/dotnet/Open-XML-SDK/tree/cd2b359ef824737edb93f1c6157c19551aae1e52).
+The transitional
+[`Styles.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/v2FxTestFiles/spreadsheet/Styles.xlsx)
+baseline SHA-256 was
+`a1ca7e60befe2ca550cd4729d68028de2a96aa163574892ed6a0890595b26468`; its
+candidate SHA-256 was
+`450f8d9114ad526d0953b251d394e21db1c1ac37d47c04acf32d50572c3a458a`.
+The strict-OOXML
+[`2D Rotation-O12-XL-OartEffects.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/O14ISOStrict/Excel/2D%20Rotation-O12-XL-OartEffects.xlsx)
+baseline SHA-256 was
+`0e0017c70a5362ef3c49be3fb82c3e80210cfda0e813413c2b28a5ee141c0ad3`; its
+candidate SHA-256 was
+`5894a56adf616acae79c851e32b93f632e3698c4d8f7c2df376d570e8004895e`.
+
+A standalone raw-ZIP script outside this repository changed one stored border
+definition in each fixture without using FormulaFence or a workbook writer.
+ZIP-member comparison and archive integrity checks confirmed that exactly
+`xl/styles.xml` changed in each candidate; ordinary cells and formulas remained
+fixed.
+
+A clean Python virtual environment installed the staged 0.55.0 wheel
+(SHA-256 `d358993d00f19b7201e12a9d6dc1d284dbd46c66b05740453002dc16f91b9e33`).
+Each pair emitted exactly one `cell_border_controls_changed` change and
+`FF057`; a policy enabling `no_cell_border_changes` exited 1 and added
+`FFP057`. JSON and Markdown profiles/diffs, SARIF diffs, and JSON policy
+reports were checked to ensure changed border colours, raw `styles.xml` member
+names, border indexes, and line-style spellings were absent.
+
+The suite separately validates direct-cell, row, and column assignments;
+default-XF controls; `xfId`/`applyBorder` inheritance; transitional and strict
+worksheet namespaces; ordinary/logical/diagonal sides and outline; equivalent
+omitted/`none`, Boolean/colour, diagonal, and empty-outline declarations;
+malformed metadata; redaction; policy enforcement; and isolation from ordinary
+workbook cells. FormulaFence compares stored declarations only: it does not
+resolve theme/palette colours, choose adjacent-cell precedence, render final
+styles, apply conditional-format/table/differential-style borders, calculate
+print output, or infer Excel client behavior.
+
 ## Material worksheet print-layout controls — 2026-07-26
 
 FormulaFence 0.54.0 was validated against two independently maintained Open

@@ -22,6 +22,8 @@ from .helpers import (
     add_protected_range,
     break_slicer_timeline_pivot_cache_binding,
     change_alignment_definition,
+    change_border_definition,
+    change_border_logical_start_side,
     change_cell_hyperlink_display,
     change_cell_hyperlink_location,
     change_cell_hyperlink_target,
@@ -33,6 +35,7 @@ from .helpers import (
     change_custom_document_property_value,
     change_custom_xml_data_store_value,
     change_default_alignment_definition,
+    change_default_border_definition,
     change_default_fill_definition,
     change_default_font_definition,
     change_default_zero_dimension_visibility_controls,
@@ -102,6 +105,8 @@ from .helpers import (
     change_zero_dimension_visibility_controls,
     corrupt_alignment_column_control,
     corrupt_alignment_definition,
+    corrupt_border_column_control,
+    corrupt_border_definition,
     corrupt_cell_hyperlink_reference,
     corrupt_chart_definition_root,
     corrupt_custom_data_properties_root,
@@ -153,6 +158,7 @@ from .helpers import (
     externalize_xml_mapping_relationship,
     lowercase_legacy_threaded_placeholder_identifiers,
     make_alignment_model,
+    make_border_model,
     make_cell_hyperlink_model,
     make_cell_hyperlink_sparkline_model,
     make_chart_definition_model,
@@ -192,6 +198,7 @@ from .helpers import (
     make_scoped_named_lambda_model,
     make_slicer_timeline_cache_model,
     make_spill_model,
+    make_strict_border_model,
     make_strict_workbook_theme_image_model,
     make_strict_worksheet_display_model,
     make_strict_worksheet_print_layout_model,
@@ -212,6 +219,9 @@ from .helpers import (
     mark_array_formula_unclassified,
     normalize_alignment_control_spelling,
     normalize_alignment_inheritance,
+    normalize_border_control_spelling,
+    normalize_border_inert_declarations,
+    normalize_border_inheritance,
     normalize_custom_data_store_identifiers,
     normalize_digital_signature_control_spelling,
     normalize_fill_control_spelling,
@@ -5123,6 +5133,215 @@ def test_ordinary_workbook_has_no_alignment_inventory(tmp_path) -> None:
     assert snapshot.alignment_controls.present is False
     assert snapshot.alignment_controls.cell_alignment_assignment_count == 0
     assert not any("cell-alignment" in warning for warning in snapshot.parser_warnings)
+
+
+def test_border_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_border_model(tmp_path / "baseline.xlsx")
+    candidate = make_border_model(tmp_path / "candidate.xlsx")
+    change_border_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "cell_border_controls_changed"
+    )
+
+    assert baseline_snapshot.cells == candidate_snapshot.cells
+    assert baseline_snapshot.summary()["border_assignment_count"] == 5
+    assert baseline_snapshot.summary()["has_border_controls"] is True
+    assert profile["border_controls"] == {
+        "present": True,
+        "default_border_definition_count": 0,
+        "cell_border_assignment_count": 2,
+        "row_border_assignment_count": 1,
+        "column_border_assignment_count": 2,
+        "unrecognized_border_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Cell border controls" in markdown
+    assert change.details["border_definition_material_changed"] is True
+    assert "FF057" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-BORDER-REVIEW-TEXT",
+        "FF112233",
+        "FF445566",
+        "FF556677",
+        "B2",
+        "D:E",
+        "borderId",
+        "diagonalUp",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_border_writer_noise_and_xf_inheritance_are_normalized(tmp_path) -> None:
+    baseline = make_border_model(tmp_path / "baseline.xlsx")
+    spelling_equivalent = make_border_model(tmp_path / "spelling-equivalent.xlsx")
+    inheritance_equivalent = make_border_model(
+        tmp_path / "inheritance-equivalent.xlsx"
+    )
+    normalize_border_control_spelling(spelling_equivalent)
+    normalize_border_inheritance(inheritance_equivalent)
+
+    spelling_report = compare_snapshots(
+        load_snapshot(baseline),
+        load_snapshot(spelling_equivalent),
+    )
+    inheritance_report = compare_snapshots(
+        load_snapshot(baseline),
+        load_snapshot(inheritance_equivalent),
+    )
+
+    assert spelling_report.changes == []
+    assert spelling_report.findings == []
+    assert inheritance_report.changes == []
+    assert inheritance_report.findings == []
+
+
+def test_border_logical_sides_and_inert_declarations_are_handled(tmp_path) -> None:
+    baseline = make_border_model(tmp_path / "baseline.xlsx")
+    logical_side_candidate = make_border_model(tmp_path / "logical-side.xlsx")
+    inert_equivalent = make_border_model(tmp_path / "inert-equivalent.xlsx")
+    change_border_logical_start_side(logical_side_candidate)
+    normalize_border_inert_declarations(inert_equivalent)
+
+    logical_snapshot = load_snapshot(logical_side_candidate)
+    logical_report = compare_snapshots(load_snapshot(baseline), logical_snapshot)
+    inert_report = compare_snapshots(
+        load_snapshot(baseline),
+        load_snapshot(inert_equivalent),
+    )
+
+    assert logical_snapshot.border_controls.unrecognized_border_count == 0
+    assert not any(
+        "ordinary cell-border" in warning
+        for warning in logical_snapshot.parser_warnings
+    )
+    assert {finding.rule_id for finding in logical_report.findings} == {"FF057"}
+    assert inert_report.changes == []
+    assert inert_report.findings == []
+
+
+def test_default_border_definition_change_is_guarded(tmp_path) -> None:
+    baseline = make_border_model(tmp_path / "baseline.xlsx")
+    candidate = make_border_model(tmp_path / "candidate.xlsx")
+    change_default_border_definition(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.border_controls.default_border_definition_count == 1
+    assert "FF057" in {finding.rule_id for finding in report.findings}
+
+
+def test_border_malformed_controls_fail_closed_and_redact_values(tmp_path) -> None:
+    baseline = make_border_model(tmp_path / "baseline.xlsx")
+    malformed_definition = make_border_model(tmp_path / "malformed-definition.xlsx")
+    malformed_column = make_border_model(tmp_path / "malformed-column.xlsx")
+    corrupt_border_definition(malformed_definition)
+    corrupt_border_column_control(malformed_column)
+
+    definition_snapshot = load_snapshot(malformed_definition)
+    column_snapshot = load_snapshot(malformed_column)
+    definition_report = compare_snapshots(
+        load_snapshot(baseline),
+        definition_snapshot,
+    )
+    column_report = compare_snapshots(load_snapshot(baseline), column_snapshot)
+
+    assert definition_snapshot.border_controls.unrecognized_border_count == 1
+    assert column_snapshot.border_controls.unrecognized_border_count == 1
+    assert any(
+        "malformed or unsupported ordinary cell-border" in warning
+        for warning in definition_snapshot.parser_warnings
+    )
+    assert any(
+        "malformed or unsupported ordinary cell-border" in warning
+        for warning in column_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF057"} <= {
+        finding.rule_id for finding in definition_report.findings
+    }
+    assert {"FF010", "FF057"} <= {
+        finding.rule_id for finding in column_report.findings
+    }
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(definition_snapshot)),
+        profile_to_markdown(profile_snapshot(definition_snapshot)),
+        json.dumps(definition_report.to_dict()),
+        report_to_markdown(definition_report),
+        json.dumps(report_to_sarif(definition_report)),
+        json.dumps(profile_snapshot(column_snapshot)),
+        profile_to_markdown(profile_snapshot(column_snapshot)),
+        json.dumps(column_report.to_dict()),
+        report_to_markdown(column_report),
+        json.dumps(report_to_sarif(column_report)),
+    )
+    assert all(
+        "PRIVATE-INVALID-BORDER-METADATA" not in artifact
+        for artifact in rendered_artifacts
+    )
+    assert all("16385" not in artifact for artifact in rendered_artifacts)
+
+
+def test_border_preexisting_coverage_gap_stays_distinct(tmp_path) -> None:
+    baseline = make_border_model(tmp_path / "baseline.xlsx")
+    candidate = make_border_model(tmp_path / "candidate.xlsx")
+    change_border_definition(candidate)
+    corrupt_border_definition(baseline)
+    corrupt_border_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "cell_border_controls_changed"
+    )
+
+    assert "FF057" in {finding.rule_id for finding in report.findings}
+    assert "unrecognized_border_metadata_changed" not in change.details
+
+
+def test_ordinary_workbook_has_no_border_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.border_controls.present is False
+    assert snapshot.border_controls.cell_border_assignment_count == 0
+    assert not any("cell-border" in warning for warning in snapshot.parser_warnings)
+
+
+def test_strict_worksheet_border_assignments_are_supported(tmp_path) -> None:
+    baseline = make_strict_border_model(tmp_path / "baseline.xlsx")
+    candidate = make_strict_border_model(tmp_path / "candidate.xlsx")
+    change_border_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+
+    assert baseline_snapshot.border_controls.cell_border_assignment_count == 2
+    assert baseline_snapshot.border_controls.row_border_assignment_count == 1
+    assert baseline_snapshot.border_controls.column_border_assignment_count == 2
+    assert baseline_snapshot.border_controls.unrecognized_border_count == 0
+    assert not any(
+        "ordinary cell-border" in warning
+        for warning in baseline_snapshot.parser_warnings
+    )
+    assert "FF057" in {finding.rule_id for finding in report.findings}
 
 
 def test_worksheet_display_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:

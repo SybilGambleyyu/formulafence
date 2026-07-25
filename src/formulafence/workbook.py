@@ -40,6 +40,7 @@ from formulafence.formulas import (
 from formulafence.models import (
     AlignmentSnapshot,
     ArrayFormulaRange,
+    BorderSnapshot,
     CellHyperlinkSnapshot,
     CellKey,
     CellProtectionAssignmentSnapshot,
@@ -813,6 +814,14 @@ class _AlignmentMetadata:
     """Raw cell-alignment evidence retained before reader normalization."""
 
     controls: AlignmentSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _BorderMetadata:
+    """Raw ordinary cell-border evidence retained before reader normalization."""
+
+    controls: BorderSnapshot
     warnings: tuple[str, ...]
 
 
@@ -2003,6 +2012,43 @@ def _worksheet_display_xml_paths(archive: ZipFile) -> tuple[str, ...]:
         if relationship_id and (member := relationship_targets.get(relationship_id)):
             members.append(member)
     return tuple(members)
+
+
+def _border_worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
+    """Map worksheet titles to raw transitional or strict worksheet parts.
+
+    Border assignments are a raw visual-control boundary, so it must inspect
+    strict worksheet records even where the ordinary cell reader deliberately
+    limits itself to transitional SpreadsheetML.
+    """
+    workbook = _xml_root(archive, "xl/workbook.xml")
+    relationship_targets = {
+        relationship.relationship_id: relationship.target
+        for relationship in _package_relationships(archive, "xl/workbook.xml")
+        if (
+            relationship.relationship_id
+            and relationship.target is not None
+            and relationship.relationship_type.rsplit("/", maxsplit=1)[-1]
+            == "worksheet"
+        )
+    }
+    members: dict[str, str] = {}
+    for sheet in workbook.iter():
+        if (
+            _xml_local_name(sheet.tag) != "sheet"
+            or _xml_namespace(sheet.tag)
+            not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+        ):
+            continue
+        title = sheet.get("name")
+        relationship_id = sheet.get(f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id")
+        if relationship_id is None:
+            relationship_id = sheet.get(f"{{{_STRICT_DOCUMENT_RELATIONSHIP_NS}}}id")
+        if title and relationship_id and (
+            member := relationship_targets.get(relationship_id)
+        ):
+            members[title] = member
+    return members
 
 
 def _xml_local_name(tag: str) -> str:
@@ -19028,6 +19074,679 @@ def _alignment_metadata(path: Path) -> _AlignmentMetadata:
     return _AlignmentMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_BORDER_COLUMN_UPDATE_BUDGET = 16_777_216
+_BORDER_SIDE_NAMES = (
+    "start",
+    "end",
+    "left",
+    "right",
+    "top",
+    "bottom",
+    "diagonal",
+    "vertical",
+    "horizontal",
+)
+_BORDER_STYLE_VALUES = frozenset(
+    {
+        "none",
+        "thin",
+        "medium",
+        "dashed",
+        "dotted",
+        "thick",
+        "double",
+        "hair",
+        "mediumDashed",
+        "dashDot",
+        "mediumDashDot",
+        "dashDotDot",
+        "mediumDashDotDot",
+        "slantDashDot",
+    }
+)
+_BORDER_ATTRIBUTES = frozenset({"diagonalUp", "diagonalDown", "outline"})
+_BORDER_EDGE_NAMES = frozenset({"start", "end", "left", "right", "top", "bottom"})
+_BORDER_INNER_NAMES = frozenset({"vertical", "horizontal"})
+
+
+@dataclass(frozen=True)
+class _BorderStyle:
+    """One effective ordinary cell border retained only for private comparison."""
+
+    category: str
+    value: str
+
+
+_DEFAULT_BORDER_STYLE = _BorderStyle("default", "0")
+
+
+def _border_private_digest(value: object) -> str:
+    """Hash private border material before it can reach an output model."""
+    payload = repr(value).encode("utf-8", errors="surrogatepass")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _border_unrecognized(*parts: object) -> _BorderStyle:
+    """Fingerprint unsupported border material without public retention."""
+    return _BorderStyle("unrecognized", _border_private_digest(parts))
+
+
+def _border_side_signature(
+    side: ElementTree.Element,
+    *,
+    name: str,
+    namespace: str,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[object, ...] | None, bool]:
+    """Canonicalize one border side while retaining colour material privately."""
+    invalid = _fill_unexpected_text(side, context=context, note_issue=note_issue)
+    if _fill_unexpected_attributes(
+        side,
+        allowed=frozenset({"style"}),
+        context=context,
+        note_issue=note_issue,
+    ):
+        invalid = True
+
+    raw_style = side.get("style")
+    style = raw_style.strip() if raw_style is not None else "none"
+    if style not in _BORDER_STYLE_VALUES:
+        note_issue(f"{context}:invalid-style", raw_style)
+        invalid = True
+        style = "none"
+
+    color_tag = f"{{{namespace}}}color"
+    colour: tuple[tuple[str, object], ...] | None = None
+    for child_index, child in enumerate(side):
+        child_context = f"{context}:child:{child_index}"
+        if child.tag != color_tag:
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            invalid = True
+            continue
+        if colour is not None:
+            note_issue(f"{child_context}:duplicate-colour", child.tag)
+            invalid = True
+            continue
+        colour, colour_invalid = _fill_color_signature(
+            child,
+            context=child_context,
+            note_issue=note_issue,
+        )
+        if colour_invalid:
+            invalid = True
+
+    # A no-border style cannot render a colour. Preserve malformed colour
+    # evidence above, but ignore otherwise inert valid writer declarations.
+    if style == "none":
+        return None, invalid
+    return (name, style, colour or None), invalid
+
+
+def _border_definition_style(
+    border: ElementTree.Element,
+    *,
+    namespace: str,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> _BorderStyle:
+    """Canonicalize one reusable ``border`` record without exposing its values."""
+    invalid = _fill_unexpected_text(border, context=context, note_issue=note_issue)
+    raw_attributes = tuple(
+        sorted(
+            (_xml_display_name(attribute), value)
+            for attribute, value in border.attrib.items()
+        )
+    )
+    for attribute, value in border.attrib.items():
+        local_name = _xml_local_name(attribute)
+        if _xml_namespace(attribute) is not None or local_name not in _BORDER_ATTRIBUTES:
+            note_issue(
+                f"{context}:unsupported-attribute",
+                (_xml_display_name(attribute), value),
+            )
+            invalid = True
+
+    diagonal_up = _number_format_boolean(border.get("diagonalUp"), False)
+    if diagonal_up is None:
+        note_issue(f"{context}:invalid-diagonal-up", border.get("diagonalUp"))
+        invalid = True
+        diagonal_up = False
+    diagonal_down = _number_format_boolean(border.get("diagonalDown"), False)
+    if diagonal_down is None:
+        note_issue(f"{context}:invalid-diagonal-down", border.get("diagonalDown"))
+        invalid = True
+        diagonal_down = False
+    outline = _number_format_boolean(border.get("outline"), True)
+    if outline is None:
+        note_issue(f"{context}:invalid-outline", border.get("outline"))
+        invalid = True
+        outline = True
+
+    side_tags = {
+        name: f"{{{namespace}}}{name}" for name in _BORDER_SIDE_NAMES
+    }
+    sides: dict[str, tuple[object, ...]] = {}
+    opaque_children: list[object] = []
+    for child_index, child in enumerate(border):
+        child_context = f"{context}:child:{child_index}"
+        name = next((key for key, tag in side_tags.items() if child.tag == tag), None)
+        if name is None:
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            opaque_children.append(_xml_fragment(child).sort_key())
+            invalid = True
+            continue
+        if name in sides:
+            note_issue(f"{child_context}:duplicate-side", name)
+            opaque_children.append(_xml_fragment(child).sort_key())
+            invalid = True
+            continue
+        signature, side_invalid = _border_side_signature(
+            child,
+            name=name,
+            namespace=namespace,
+            context=child_context,
+            note_issue=note_issue,
+        )
+        if side_invalid:
+            invalid = True
+        if signature is not None:
+            if name in _BORDER_INNER_NAMES:
+                # The SpreadsheetML schema documents inner borders as
+                # differential-format material. They do not have ordinary
+                # cellXf rendering semantics, so retain a private coverage
+                # warning rather than claiming to model them here.
+                note_issue(f"{child_context}:unsupported-inner-border", name)
+                invalid = True
+            sides[name] = signature
+
+    diagonal = sides.pop("diagonal", None)
+    if diagonal is not None and not (diagonal_up or diagonal_down):
+        diagonal = None
+    edge_sides = [
+        (name, sides[name])
+        for name in _BORDER_SIDE_NAMES
+        if name in _BORDER_EDGE_NAMES and name in sides
+    ]
+    ordinary_sides = [
+        (name, sides[name])
+        for name in _BORDER_SIDE_NAMES
+        if name not in _BORDER_INNER_NAMES and name != "diagonal" and name in sides
+    ]
+    definition_entries: list[object] = [*ordinary_sides]
+    if diagonal is not None:
+        definition_entries.append(
+            ("diagonal", diagonal, diagonal_up, diagonal_down)
+        )
+    # Outline has no effect unless one of the ordinary edge borders exists.
+    if not outline and edge_sides:
+        definition_entries.append(("outline", False))
+    definition = tuple(definition_entries)
+    if invalid:
+        return _border_unrecognized(
+            "border-definition",
+            context,
+            raw_attributes,
+            definition,
+            opaque_children,
+        )
+    if not definition:
+        return _DEFAULT_BORDER_STYLE
+    return _BorderStyle("border", _border_private_digest(definition))
+
+
+def _border_column_state_signature(
+    states: list[_BorderStyle],
+    default: _BorderStyle,
+) -> tuple[tuple[int, int, str, str], ...]:
+    """Compress effective borders so equivalent range splitting stays quiet."""
+    segments: list[tuple[int, int, str, str]] = []
+    start: int | None = None
+    previous: _BorderStyle | None = None
+    for column in range(1, MAX_EXCEL_COLUMN + 1):
+        current = states[column]
+        if current == default:
+            if start is not None and previous is not None:
+                segments.append((start, column - 1, previous.category, previous.value))
+            start = None
+            previous = None
+            continue
+        if start is None:
+            start = column
+            previous = current
+            continue
+        if current != previous:
+            segments.append((start, column - 1, previous.category, previous.value))
+            start = column
+            previous = current
+    if start is not None and previous is not None:
+        segments.append((start, MAX_EXCEL_COLUMN, previous.category, previous.value))
+    return tuple(segments)
+
+
+def _border_metadata(path: Path) -> _BorderMetadata:
+    """Inspect effective ordinary cell borders directly from raw OOXML.
+
+    Borders can alter report grouping, totals, warnings, and printed output
+    without touching a value. The scanner resolves reusable border records,
+    ``xfId`` inheritance, and ``applyBorder`` before retaining a private
+    signature. Border definitions, style indexes, and target locations never
+    leave this process.
+    """
+    warnings: set[str] = set()
+    default_snapshot = BorderSnapshot()
+    entries: list[tuple[str, str]] = []
+    issues: dict[str, str] = {}
+    default_border_definition_count = 0
+    cell_border_assignment_count = 0
+    row_border_assignment_count = 0
+    column_border_assignment_count = 0
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    try:
+        with ZipFile(path) as archive:
+            try:
+                styles = _xml_root(archive, "xl/styles.xml")
+            except KeyError:
+                styles = None
+            styles_namespace = _SPREADSHEETML_NS
+            if styles is not None:
+                namespace = _xml_namespace(styles.tag)
+                if (
+                    namespace not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+                    or _xml_local_name(styles.tag) != "styleSheet"
+                ):
+                    note_issue("style-sheet-root", styles.tag)
+                    styles = None
+                else:
+                    styles_namespace = namespace
+
+            borders: list[_BorderStyle] = []
+            if styles is not None:
+                borders_tag = f"{{{styles_namespace}}}borders"
+                border_tag = f"{{{styles_namespace}}}border"
+                containers = styles.findall(borders_tag)
+                if len(containers) > 1:
+                    note_issue("multiple-border-containers", len(containers))
+                for container_index, container in enumerate(containers):
+                    for border_index, border in enumerate(container):
+                        context = f"border:{container_index}:{border_index}"
+                        if border.tag != border_tag:
+                            note_issue(f"{context}:unsupported-child", border.tag)
+                            continue
+                        borders.append(
+                            _border_definition_style(
+                                border,
+                                namespace=styles_namespace,
+                                context=context,
+                                note_issue=note_issue,
+                            )
+                        )
+
+            def resolve_border(identifier: int, *, context: str) -> _BorderStyle:
+                if 0 <= identifier < len(borders):
+                    return borders[identifier]
+                note_issue(f"{context}:unknown-border", identifier)
+                return _border_unrecognized("unknown-border", context, identifier)
+
+            def parse_style_index(value: str | None, *, context: str) -> int | None:
+                if value is None:
+                    return None
+                parsed = _number_format_unsigned_int(value)
+                if parsed is None:
+                    note_issue(f"{context}:invalid-style-index", value)
+                return parsed
+
+            def resolve_xf(
+                xf: ElementTree.Element,
+                inherited: _BorderStyle,
+                *,
+                context: str,
+            ) -> _BorderStyle:
+                applies = _number_format_boolean(xf.get("applyBorder"), True)
+                if applies is None:
+                    note_issue(
+                        f"{context}:invalid-apply-border",
+                        xf.get("applyBorder"),
+                    )
+                    return _border_unrecognized(
+                        "invalid-apply-border",
+                        context,
+                        xf.get("applyBorder"),
+                    )
+                identifier_value = xf.get("borderId")
+                if not applies or identifier_value is None:
+                    return inherited
+                identifier = _number_format_unsigned_int(identifier_value)
+                if identifier is None:
+                    note_issue(f"{context}:invalid-border-id", identifier_value)
+                    return _border_unrecognized(
+                        "invalid-border-id", context, identifier_value
+                    )
+                return resolve_border(identifier, context=context)
+
+            base_xfs: list[_BorderStyle] = []
+            effective_xfs: list[_BorderStyle] = []
+            if styles is not None:
+                xf_tag = f"{{{styles_namespace}}}xf"
+                cell_style_xfs_tag = f"{{{styles_namespace}}}cellStyleXfs"
+                cell_xfs_tag = f"{{{styles_namespace}}}cellXfs"
+                base_containers = styles.findall(cell_style_xfs_tag)
+                if len(base_containers) > 1:
+                    note_issue("multiple-cell-style-xf-containers", len(base_containers))
+                for container_index, container in enumerate(base_containers):
+                    for index, xf in enumerate(container):
+                        if xf.tag != xf_tag:
+                            note_issue(
+                                f"base-xf:{container_index}:{index}:unsupported-child",
+                                xf.tag,
+                            )
+                            continue
+                        base_xfs.append(
+                            resolve_xf(
+                                xf,
+                                _DEFAULT_BORDER_STYLE,
+                                context=f"base-xf:{container_index}:{index}",
+                            )
+                        )
+                if not base_xfs:
+                    base_xfs.append(_DEFAULT_BORDER_STYLE)
+
+                cell_containers = styles.findall(cell_xfs_tag)
+                if len(cell_containers) > 1:
+                    note_issue("multiple-cell-xf-containers", len(cell_containers))
+                for container_index, container in enumerate(cell_containers):
+                    for index, xf in enumerate(container):
+                        if xf.tag != xf_tag:
+                            note_issue(
+                                f"cell-xf:{container_index}:{index}:unsupported-child",
+                                xf.tag,
+                            )
+                            continue
+                        xf_id_value = xf.get("xfId")
+                        inherited = _DEFAULT_BORDER_STYLE
+                        if xf_id_value is not None:
+                            xf_id = parse_style_index(
+                                xf_id_value,
+                                context=f"cell-xf:{container_index}:{index}:base",
+                            )
+                            if xf_id is None or xf_id >= len(base_xfs):
+                                note_issue(
+                                    f"cell-xf:{container_index}:{index}:unknown-base-style",
+                                    xf_id_value,
+                                )
+                                inherited = _border_unrecognized(
+                                    "unknown-border-base-style",
+                                    container_index,
+                                    index,
+                                    xf_id_value,
+                                )
+                            else:
+                                inherited = base_xfs[xf_id]
+                        effective_xfs.append(
+                            resolve_xf(
+                                xf,
+                                inherited,
+                                context=f"cell-xf:{container_index}:{index}",
+                            )
+                        )
+            if not effective_xfs:
+                effective_xfs.append(_DEFAULT_BORDER_STYLE)
+
+            default_style = effective_xfs[0]
+
+            def style_for_assignment(
+                value: str | None,
+                *,
+                context: str,
+            ) -> _BorderStyle | None:
+                index = parse_style_index(value, context=context)
+                if value is None:
+                    return None
+                if index is None or index >= len(effective_xfs):
+                    note_issue(f"{context}:unknown-style", value)
+                    return _border_unrecognized("unknown-border-style", context, value)
+                return effective_xfs[index]
+
+            if default_style != _DEFAULT_BORDER_STYLE:
+                default_border_definition_count = 1
+                entries.append(("default-border", repr(default_style)))
+
+            for sheet, member in _border_worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                worksheet_namespace = _xml_namespace(worksheet.tag)
+                if (
+                    worksheet_namespace
+                    not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+                    or _xml_local_name(worksheet.tag) != "worksheet"
+                ):
+                    note_issue(
+                        f"worksheet:{sheet.casefold()}:root",
+                        worksheet.tag,
+                    )
+                    continue
+                cols_tag = f"{{{worksheet_namespace}}}cols"
+                col_tag = f"{{{worksheet_namespace}}}col"
+                sheet_data_tag = f"{{{worksheet_namespace}}}sheetData"
+                row_tag = f"{{{worksheet_namespace}}}row"
+                cell_tag = f"{{{worksheet_namespace}}}c"
+                column_states = [default_style] * (MAX_EXCEL_COLUMN + 1)
+                column_updates = 0
+                for columns_index, columns in enumerate(worksheet.findall(cols_tag)):
+                    for column_index, column in enumerate(columns):
+                        context = (
+                            f"column:{sheet.casefold()}:{columns_index}:{column_index}"
+                        )
+                        if column.tag != col_tag:
+                            note_issue(f"{context}:unsupported-child", column.tag)
+                            continue
+                        if column.get("style") is None:
+                            continue
+                        minimum = _number_format_unsigned_int(column.get("min"))
+                        maximum = _number_format_unsigned_int(column.get("max"))
+                        style = style_for_assignment(
+                            column.get("style"),
+                            context=context,
+                        )
+                        if (
+                            minimum is None
+                            or maximum is None
+                            or minimum < 1
+                            or maximum < minimum
+                            or maximum > MAX_EXCEL_COLUMN
+                            or style is None
+                        ):
+                            note_issue(
+                                f"{context}:invalid-column-span",
+                                (
+                                    column.get("min"),
+                                    column.get("max"),
+                                    column.get("style"),
+                                ),
+                            )
+                            continue
+                        span = maximum - minimum + 1
+                        if column_updates + span > _BORDER_COLUMN_UPDATE_BUDGET:
+                            note_issue(f"{context}:column-update-budget", span)
+                            continue
+                        column_states[minimum : maximum + 1] = [style] * span
+                        column_updates += span
+
+                column_signature = _border_column_state_signature(
+                    column_states,
+                    default_style,
+                )
+                if column_signature:
+                    entries.append(
+                        (
+                            f"column-borders:{sheet.casefold()}",
+                            repr(column_signature),
+                        )
+                    )
+                    column_border_assignment_count += sum(
+                        maximum - minimum + 1
+                        for minimum, maximum, _category, _value in column_signature
+                    )
+
+                raw_rows: list[tuple[int, _BorderStyle]] = []
+                for sheet_data_index, sheet_data in enumerate(
+                    worksheet.findall(sheet_data_tag)
+                ):
+                    for row_index, row in enumerate(sheet_data):
+                        context = (
+                            f"row:{sheet.casefold()}:{sheet_data_index}:{row_index}"
+                        )
+                        if row.tag != row_tag:
+                            continue
+                        custom_format = _number_format_boolean(
+                            row.get("customFormat"),
+                            False,
+                        )
+                        if custom_format is None:
+                            note_issue(
+                                f"{context}:invalid-custom-format",
+                                row.get("customFormat"),
+                            )
+                            continue
+                        if not custom_format:
+                            continue
+                        row_number = _number_format_unsigned_int(row.get("r"))
+                        style = style_for_assignment(row.get("s"), context=context)
+                        if (
+                            row_number is None
+                            or row_number < 1
+                            or row_number > MAX_EXCEL_ROW
+                            or style is None
+                        ):
+                            note_issue(
+                                f"{context}:invalid-row-assignment",
+                                (row.get("r"), row.get("s")),
+                            )
+                            continue
+                        raw_rows.append((row_number, style))
+
+                relevant_rows = {
+                    row_number
+                    for row_number, style in raw_rows
+                    if style != default_style
+                }
+                has_relevant_columns = bool(column_signature)
+                for row_number, style in raw_rows:
+                    if style == default_style and not has_relevant_columns:
+                        continue
+                    entries.append(
+                        (
+                            f"row-border:{sheet.casefold()}:{row_number}",
+                            repr(style),
+                        )
+                    )
+                    row_border_assignment_count += 1
+
+                seen_cells: set[str] = set()
+                for cell in worksheet.iter(cell_tag):
+                    if cell.get("s") is None:
+                        continue
+                    context = f"cell:{sheet.casefold()}"
+                    coordinate = cell.get("r")
+                    style = style_for_assignment(cell.get("s"), context=context)
+                    match = (
+                        re.fullmatch(r"([A-Za-z]+)([1-9][0-9]*)", coordinate)
+                        if coordinate is not None
+                        else None
+                    )
+                    if style is None or match is None:
+                        note_issue(
+                            f"{context}:invalid-cell-assignment",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    column_letters, raw_row_number = match.groups()
+                    try:
+                        column_number = (
+                            column_index_from_string(column_letters)
+                            if len(column_letters) <= 3
+                            else 0
+                        )
+                    except ValueError:
+                        column_number = 0
+                    row_number = _number_format_unsigned_int(raw_row_number)
+                    if row_number is None:
+                        note_issue(
+                            f"{context}:invalid-cell-row",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    if (
+                        column_number < 1
+                        or column_number > MAX_EXCEL_COLUMN
+                        or row_number > MAX_EXCEL_ROW
+                    ):
+                        note_issue(
+                            f"{context}:out-of-bounds-cell",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    canonical_coordinate = coordinate.upper()
+                    if canonical_coordinate in seen_cells:
+                        note_issue(
+                            f"{context}:duplicate-cell",
+                            (canonical_coordinate, cell.get("s")),
+                        )
+                    seen_cells.add(canonical_coordinate)
+                    if (
+                        style == default_style
+                        and row_number not in relevant_rows
+                        and column_states[column_number] == default_style
+                    ):
+                        continue
+                    entries.append(
+                        (
+                            f"cell-border:{sheet.casefold()}:{canonical_coordinate}",
+                            repr(style),
+                        )
+                    )
+                    cell_border_assignment_count += 1
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _BorderMetadata(
+            default_snapshot,
+            (
+                "FormulaFence could not inspect ordinary cell-border OOXML "
+                f"({type(error).__name__}); affected visual controls were not compared.",
+            ),
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported ordinary cell-border "
+            "metadata; affected visual controls have a coverage gap."
+        )
+    snapshot = BorderSnapshot(
+        default_border_definition_count=default_border_definition_count,
+        cell_border_assignment_count=cell_border_assignment_count,
+        row_border_assignment_count=row_border_assignment_count,
+        column_border_assignment_count=column_border_assignment_count,
+        unrecognized_border_count=len(issues),
+        definition_signature=(
+            _private_external_data_signature(tuple(sorted(entries))) if entries else None
+        ),
+        unrecognized_signature=(
+            _private_external_data_signature(tuple(sorted(issues.items())))
+            if issues
+            else None
+        ),
+    )
+    return _BorderMetadata(snapshot, tuple(sorted(warnings)))
+
+
 _WORKSHEET_DISPLAY_SHEET_VIEW_KNOWN_ATTRIBUTES = frozenset(
     {
         "colorId",
@@ -32436,6 +33155,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     font_metadata = _font_metadata(source)
     fill_metadata = _fill_metadata(source)
     alignment_metadata = _alignment_metadata(source)
+    border_metadata = _border_metadata(source)
     worksheet_display_metadata = _worksheet_display_metadata(source)
     worksheet_print_layout_metadata = _worksheet_print_layout_metadata(source)
     workbook_theme_metadata = _workbook_theme_metadata(source)
@@ -32491,6 +33211,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(font_metadata.warnings)
     parser_warnings.update(fill_metadata.warnings)
     parser_warnings.update(alignment_metadata.warnings)
+    parser_warnings.update(border_metadata.warnings)
     parser_warnings.update(worksheet_display_metadata.warnings)
     parser_warnings.update(worksheet_print_layout_metadata.warnings)
     parser_warnings.update(workbook_theme_metadata.warnings)
@@ -32730,6 +33451,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         font_controls=font_metadata.controls,
         fill_controls=fill_metadata.controls,
         alignment_controls=alignment_metadata.controls,
+        border_controls=border_metadata.controls,
         worksheet_display_controls=worksheet_display_metadata.controls,
         worksheet_print_layout_controls=worksheet_print_layout_metadata.controls,
         workbook_theme=workbook_theme_metadata.theme,
@@ -32822,6 +33544,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "font_controls": snapshot.font_controls.profile_dict(),
         "fill_controls": snapshot.fill_controls.profile_dict(),
         "alignment_controls": snapshot.alignment_controls.profile_dict(),
+        "border_controls": snapshot.border_controls.profile_dict(),
         "worksheet_display_controls": (
             snapshot.worksheet_display_controls.profile_dict()
         ),
@@ -32870,6 +33593,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_font_controls": snapshot.font_controls.present,
             "has_fill_controls": snapshot.fill_controls.present,
             "has_alignment_controls": snapshot.alignment_controls.present,
+            "has_border_controls": snapshot.border_controls.present,
             "has_worksheet_display_controls": (
                 snapshot.worksheet_display_controls.present
             ),

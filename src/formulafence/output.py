@@ -1476,6 +1476,32 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Alignment definitions, style indexes, and cell/row/column targets are "
             "compared privately and intentionally omitted."
         )
+    border_controls = profile["border_controls"]
+    if border_controls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Cell border controls",
+                "",
+                (
+                    "- **Default definition / direct-cell assignments / row assignments / "
+                    "column assignments:** "
+                    f"{border_controls['default_border_definition_count']} / "
+                    f"{border_controls['cell_border_assignment_count']} / "
+                    f"{border_controls['row_border_assignment_count']} / "
+                    f"{border_controls['column_border_assignment_count']}"
+                ),
+            ]
+        )
+        if border_controls["unrecognized_border_count"]:
+            lines.append(
+                "- **Unrecognized or malformed border controls:** "
+                f"{border_controls['unrecognized_border_count']}"
+            )
+        lines.append(
+            "Border definitions, style indexes, and cell/row/column targets are "
+            "compared privately and intentionally omitted."
+        )
     worksheet_display_controls = profile["worksheet_display_controls"]
     if worksheet_display_controls["present"]:
         lines.extend(

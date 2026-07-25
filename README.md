@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.54.0/formulafence-0.54.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.55.0/formulafence-0.55.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -79,6 +79,7 @@ rules:
   no_cell_fill_changes: true
   no_workbook_theme_changes: true
   no_cell_alignment_changes: true
+  no_cell_border_changes: true
   no_worksheet_display_control_changes: true
   no_worksheet_print_layout_changes: true
   no_formula_cached_result_changes: true
@@ -626,8 +627,8 @@ definitions, invalid style references, invalid/out-of-range targets, conflicting
 definitions, and bounded-parser failures become visible coverage warnings rather
 than silent omissions. FormulaFence compares declarations only: it does not
 render locale-specific output, validate a format code, calculate a value, model
-width/overflow, compose number formats with font/fill/alignment controls, or
-cover borders, quote prefixes, table styles, or arbitrary visual formatting. A
+width/overflow, compose number formats with font/fill/alignment/border controls,
+or cover quote prefixes, table styles, or arbitrary visual formatting. A
 column `style` is recorded as
 the OOXML column default for unallocated/new cells; FormulaFence does not claim
 to apply that default retroactively to existing allocated cells. The boundary
@@ -658,8 +659,9 @@ malformed font/style definitions, invalid IDs/indexes/targets, and bounded-parse
 failures become visible coverage warnings rather than silent omissions.
 FormulaFence compares declarations only: it does not render or resolve theme
 colours, decide whether a font is visible against a fill, calculate
-text/background contrast, compose alignment with other display controls, track
-borders, rich-text run rendering, table styles, or arbitrary visual formatting.
+text/background contrast, compose font rendering with fill/border/alignment or
+other display controls, rich-text run rendering, table styles, or arbitrary
+visual formatting.
 A column `style` is recorded as the
 OOXML default for unallocated/new cells;
 FormulaFence does not claim to apply that default retroactively to existing
@@ -688,7 +690,7 @@ bounded-parser failures become visible coverage warnings rather than silent
 omissions. FormulaFence compares declarations only: it does not resolve theme
 colours, render patterns or gradients, calculate text/background contrast,
 evaluate conditional-format differential styles, apply table styles, calculate
-values, compose alignment with other display controls, or track borders,
+values, compose fill rendering with border/alignment or other display controls,
 rich-text run rendering, width/overflow, or arbitrary visual formatting. A
 column `style` is recorded as the OOXML default for
 unallocated/new cells; FormulaFence does not claim to apply that default
@@ -726,6 +728,41 @@ rendering. A column `style` remains an OOXML default for unallocated/new
 cells, not a claim to restyle allocated cells. The scope follows Microsoft's
 [SpreadsheetML alignment definition](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/e4ad6e3e-7702-4dbe-8c44-f5a4c686c440)
 and [CellFormat alignment semantics](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/68362a4b-5589-4504-b566-e8154dce1de3).
+
+FormulaFence also inventories **effective cell-border controls**. An unchanged
+value can be reframed as a report edge, total, exception box, or warning by a
+border edit alone. FormulaFence reads raw `styles.xml` `<borders>/<border>`
+definitions, base `cellStyleXfs`, effective `cellXfs` records and their
+`borderId`, `xfId`, and `applyBorder` inheritance, plus direct cell `s`, row
+`s` with `customFormat=1`, and worksheet `<cols>/<col style>` assignments. It
+covers left/right/top/bottom edges, Office 2010 logical start/end edges,
+diagonals and their direction, outline, stored line styles, and stored colours.
+A material effective change emits `FF057`; enable `no_cell_border_changes` for
+`FFP057`.
+
+Profiles expose only counts for default definitions, direct-cell, row,
+effective-column, and unrecognized controls. Border definitions, colours,
+style IDs, and cell/row/column targets never enter profiles, Markdown control
+sections, `FF057` details, or SARIF. Equivalent omitted/`none` sides,
+Boolean/colour spellings, unused diagonal payload, ineffective empty
+`outline="false"`, base-XF inheritance, `applyBorder`, and equivalent effective
+column-range splitting are normalized. Missing, duplicate, malformed, or
+unsupported border metadata becomes a visible coverage warning rather than a
+silent omission. Material `vertical` or `horizontal` inner sides under ordinary
+cell styles are also surfaced as a coverage warning: those sides have
+differential-format semantics which this ordinary-cell boundary does not model.
+
+This is a stored-declaration boundary, not a renderer. FormulaFence does not
+resolve theme or palette colours, choose adjacent-cell border precedence,
+render a final visual style, apply conditional-format/table/differential-style
+borders, calculate print output, or infer Excel client behavior. A column
+`style` remains an OOXML default for unallocated/new cells, not a claim to
+restyle allocated cells. The scope follows OOXML's
+[`border`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_border_topic_ID0EVV35.html)
+and [`xf`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_xf_topic_ID0E13S6.html)
+forms, the Open XML SDK's
+[`Border` schema surface](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.border?view=openxml-3.0.1),
+and Microsoft's [cell-border guidance](https://support.microsoft.com/en-us/Excel/apply-or-remove-cell-borders-on-a-worksheet).
 
 FormulaFence also inventories **material worksheet-display controls**. A saved
 worksheet view can make an unchanged zero appear blank, replace displayed

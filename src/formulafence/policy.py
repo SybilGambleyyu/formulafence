@@ -34,6 +34,7 @@ _RULE_FIELDS = {
     "no_cell_fill_changes",
     "no_workbook_theme_changes",
     "no_cell_alignment_changes",
+    "no_cell_border_changes",
     "no_worksheet_display_control_changes",
     "no_worksheet_print_layout_changes",
     "no_formula_cached_result_changes",
@@ -114,6 +115,7 @@ class Policy:
     no_cell_fill_changes: bool = False
     no_workbook_theme_changes: bool = False
     no_cell_alignment_changes: bool = False
+    no_cell_border_changes: bool = False
     no_worksheet_display_control_changes: bool = False
     no_worksheet_print_layout_changes: bool = False
     no_formula_cached_result_changes: bool = False
@@ -176,6 +178,7 @@ rules:
   no_cell_fill_changes: true
   no_workbook_theme_changes: true
   no_cell_alignment_changes: true
+  no_cell_border_changes: true
   no_worksheet_display_control_changes: true
   no_worksheet_print_layout_changes: true
   no_formula_cached_result_changes: true
@@ -326,6 +329,7 @@ def parse_policy(data: object) -> Policy:
         no_cell_alignment_changes=_boolean_rule(
             rules, "no_cell_alignment_changes"
         ),
+        no_cell_border_changes=_boolean_rule(rules, "no_cell_border_changes"),
         no_worksheet_display_control_changes=_boolean_rule(
             rules, "no_worksheet_display_control_changes"
         ),
@@ -789,6 +793,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP054",
                     "high",
                     "Policy forbids cell-alignment control changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_cell_border_changes:
+        for finding in _rule_triggered(report, "FF057"):
+            violations.append(
+                Finding(
+                    "FFP057",
+                    "high",
+                    "Policy forbids cell-border control changes.",
                     details=finding.details,
                 )
             )

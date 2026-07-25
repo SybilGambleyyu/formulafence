@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.55.0 — 2026-07-26
+
+- Inspect material effective cell-border controls directly from raw
+  transitional and strict SpreadsheetML before ordinary readers flatten style
+  inheritance: reusable `<borders>/<border>` definitions, `borderId`, base
+  `cellStyleXfs`, `xfId`/`applyBorder`, direct-cell, custom-row, and column
+  assignments. The boundary covers ordinary edge sides, Office 2010 logical
+  start/end sides, diagonals, outline, styles, and stored colours. Profiles,
+  Markdown, JSON, and SARIF expose aggregate counts only; border definitions,
+  colours, style IDs, and cell/row/column targets remain private.
+- Emit `FF057` for a material effective cell-border control change and add the
+  fail-closed `no_cell_border_changes` policy rule (`FFP057`). This closes the
+  review gap where a report boundary, total, exception box, or warning cue can
+  change while ordinary cell values and formulas stay fixed.
+- Normalize omitted/`none` side declarations, Boolean and colour spellings,
+  unused diagonal payload, ineffective empty `outline="false"`, base-XF
+  inheritance, `applyBorder`, and equivalent effective column-range splitting.
+  Missing, duplicate, malformed, or unsupported metadata is an explicit
+  coverage warning. FormulaFence compares stored declarations only: it does
+  not render Excel, resolve theme/palette colours, choose adjacent-cell border
+  precedence, apply conditional-format/table/differential-style borders,
+  calculate print layout, or infer client behavior.
+
 ## 0.54.0 — 2026-07-26
 
 - Inspect material saved worksheet print-layout controls directly from raw

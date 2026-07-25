@@ -1805,6 +1805,51 @@ class AlignmentSnapshot:
 
 
 @dataclass(frozen=True)
+class BorderSnapshot:
+    """Safe aggregate of effective ordinary cell-border controls.
+
+    A border can change the review and printed surface without changing a
+    stored value or formula: it can remove a total-line, conceal a boundary,
+    alter a warning's visual weight, or add a diagonal mark. Definitions and
+    targets can expose report context, so the private signature retains
+    canonical effective assignments for comparison while public output exposes
+    structural counts only.
+    """
+
+    default_border_definition_count: int = 0
+    cell_border_assignment_count: int = 0
+    row_border_assignment_count: int = 0
+    column_border_assignment_count: int = 0
+    unrecognized_border_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+    unrecognized_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.default_border_definition_count
+            or self.cell_border_assignment_count
+            or self.row_border_assignment_count
+            or self.column_border_assignment_count
+            or self.unrecognized_border_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural border evidence without definitions or targets."""
+        return {
+            "present": self.present,
+            "default_border_definition_count": self.default_border_definition_count,
+            "cell_border_assignment_count": self.cell_border_assignment_count,
+            "row_border_assignment_count": self.row_border_assignment_count,
+            "column_border_assignment_count": self.column_border_assignment_count,
+            "unrecognized_border_count": self.unrecognized_border_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetDisplaySnapshot:
     """Safe aggregate of material worksheet display controls.
 
@@ -3164,6 +3209,7 @@ class WorkbookSnapshot:
     alignment_controls: AlignmentSnapshot = field(
         default_factory=AlignmentSnapshot
     )
+    border_controls: BorderSnapshot = field(default_factory=BorderSnapshot)
     worksheet_display_controls: WorksheetDisplaySnapshot = field(
         default_factory=WorksheetDisplaySnapshot
     )
@@ -3377,6 +3423,13 @@ class WorkbookSnapshot:
                 + self.alignment_controls.column_alignment_assignment_count
             ),
             "has_alignment_controls": self.alignment_controls.present,
+            "border_assignment_count": (
+                self.border_controls.default_border_definition_count
+                + self.border_controls.cell_border_assignment_count
+                + self.border_controls.row_border_assignment_count
+                + self.border_controls.column_border_assignment_count
+            ),
+            "has_border_controls": self.border_controls.present,
             "worksheet_display_control_count": (
                 self.worksheet_display_controls.zero_hidden_view_count
                 + self.worksheet_display_controls.formula_view_count

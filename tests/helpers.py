@@ -19,7 +19,15 @@ from openpyxl.formatting.rule import (
     FormulaRule,
     IconSetRule,
 )
-from openpyxl.styles import Alignment, Font, GradientFill, PatternFill, Protection
+from openpyxl.styles import (
+    Alignment,
+    Border,
+    Font,
+    GradientFill,
+    PatternFill,
+    Protection,
+    Side,
+)
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
@@ -10366,6 +10374,448 @@ def corrupt_alignment_definition(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".alignment-malformed.tmp.xlsx")
+
+
+def make_border_model(path: Path) -> Path:
+    """Create private ordinary cell-border controls without changing values."""
+    workbook = Workbook()
+    report = workbook.active
+    report.title = "Border Report"
+    report["A1"] = "Default presentation"
+    report["A2"] = 1234.5
+    report["B1"] = "Private total boundary"
+    report["B2"] = 1234567.89
+    report["B2"].border = Border(
+        left=Side(style="thin", color="FF112233"),
+        bottom=Side(style="double", color="FF445566"),
+        diagonal=Side(style="dashed", color="FF778899"),
+        diagonalUp=True,
+        outline=False,
+    )
+    report["C1"] = "Private warning boundary"
+    report["C2"] = "PRIVATE-BORDER-REVIEW-TEXT"
+    report["C2"].border = Border(
+        top=Side(style="medium", color="FF99AABB"),
+        right=Side(style="thick", color="FFCCDDEE"),
+    )
+    report["D1"] = "Column-default boundary"
+    report["D2"] = "=B2*A2"
+    report["A4"] = "Row-default boundary"
+    report.row_dimensions[4].border = Border(
+        top=Side(style="thin", color="FF102030")
+    )
+    report.column_dimensions["D"].border = Border(
+        left=Side(style="mediumDashed", color="FF304050")
+    )
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        column = next(
+            current
+            for current in worksheet.iter(col_tag)
+            if current.get("min") == "4" and current.get("max") == "4"
+        )
+        # Column borders are defaults for unallocated/new cells. Keep the span
+        # short so range canonicalization is testable without claiming an
+        # allocated formula cell adopts that default.
+        column.set("max", "5")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".border.tmp.xlsx")
+
+
+def make_strict_border_model(path: Path) -> Path:
+    """Create a strict-SpreadsheetML ordinary-border fixture."""
+    make_border_model(path)
+
+    def strict_name(name: str, source_namespace: str, target_namespace: str) -> str:
+        prefix = f"{{{source_namespace}}}"
+        if name.startswith(prefix):
+            return f"{{{target_namespace}}}{name[len(prefix):]}"
+        return name
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook_member = "xl/workbook.xml"
+        workbook = ElementTree.fromstring(contents[workbook_member])
+        for element in workbook.iter():
+            element.tag = strict_name(
+                element.tag,
+                _SPREADSHEETML_NS,
+                _STRICT_SPREADSHEETML_NS,
+            )
+            attributes = {
+                strict_name(
+                    name,
+                    _DOCUMENT_RELATIONSHIPS_NS,
+                    _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                ): value
+                for name, value in element.attrib.items()
+            }
+            element.attrib.clear()
+            element.attrib.update(attributes)
+        contents[workbook_member] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        for relationship in relationships.findall(relationship_tag):
+            if (relationship.get("Type") or "").casefold().endswith("/worksheet"):
+                relationship.set(
+                    "Type",
+                    f"{_STRICT_DOCUMENT_RELATIONSHIPS_NS}/worksheet",
+                )
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        for member in sorted(
+            name
+            for name in contents
+            if name.startswith("xl/worksheets/") and name.endswith(".xml")
+        ):
+            worksheet = ElementTree.fromstring(contents[member])
+            for element in worksheet.iter():
+                element.tag = strict_name(
+                    element.tag,
+                    _SPREADSHEETML_NS,
+                    _STRICT_SPREADSHEETML_NS,
+                )
+            contents[member] = ElementTree.tostring(
+                worksheet,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".strict-border.tmp.xlsx")
+
+
+def _border_fixture_definition(styles: ElementTree.Element) -> ElementTree.Element:
+    """Return the direct double-bottom border used by border fixtures."""
+    borders_tag = f"{{{_SPREADSHEETML_NS}}}borders"
+    border_tag = f"{{{_SPREADSHEETML_NS}}}border"
+    bottom_tag = f"{{{_SPREADSHEETML_NS}}}bottom"
+    borders = styles.find(borders_tag)
+    if borders is None:
+        raise ValueError("Could not find border fixture definitions")
+    definition = next(
+        (
+            border
+            for border in borders.findall(border_tag)
+            if (bottom := border.find(bottom_tag)) is not None
+            and bottom.get("style") == "double"
+        ),
+        None,
+    )
+    if definition is None:
+        raise ValueError("Could not find direct border fixture definition")
+    return definition
+
+
+def _border_fixture_xf(styles: ElementTree.Element) -> ElementTree.Element:
+    """Return the direct double-bottom border XF used by border fixtures."""
+    borders_tag = f"{{{_SPREADSHEETML_NS}}}borders"
+    border_tag = f"{{{_SPREADSHEETML_NS}}}border"
+    cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+    xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+    definition = _border_fixture_definition(styles)
+    borders = styles.find(borders_tag)
+    if borders is None:
+        raise ValueError("Could not find border fixture definitions")
+    border_index = next(
+        (
+            index
+            for index, border in enumerate(borders.findall(border_tag))
+            if border is definition
+        ),
+        None,
+    )
+    cell_xfs = styles.find(cell_xfs_tag)
+    if border_index is None or cell_xfs is None:
+        raise ValueError("Could not find border XF fixture")
+    direct_xf = next(
+        (
+            current
+            for current in cell_xfs.findall(xf_tag)
+            if current.get("borderId") == str(border_index)
+        ),
+        None,
+    )
+    if direct_xf is None:
+        raise ValueError("Could not find direct border XF fixture")
+    return direct_xf
+
+
+def change_border_definition(path: Path) -> Path:
+    """Change a private direct-cell border without touching its value."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        bottom_tag = f"{{{_SPREADSHEETML_NS}}}bottom"
+        color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        bottom = _border_fixture_definition(styles).find(bottom_tag)
+        if bottom is None:
+            raise ValueError("Could not find direct border definition")
+        color = bottom.find(color_tag)
+        if color is None:
+            color = ElementTree.SubElement(bottom, color_tag)
+        color.attrib.clear()
+        color.set("rgb", "FF556677")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".border-change.tmp.xlsx")
+
+
+def change_border_logical_start_side(path: Path) -> Path:
+    """Add a raw Office 2010 logical start border without changing a cell value."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        start_tag = f"{{{_SPREADSHEETML_NS}}}start"
+        color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        definition = _border_fixture_definition(styles)
+        start = definition.find(start_tag)
+        if start is None:
+            start = ElementTree.SubElement(definition, start_tag)
+        start.attrib.clear()
+        start.set("style", "mediumDashDot")
+        color = start.find(color_tag)
+        if color is None:
+            color = ElementTree.SubElement(start, color_tag)
+        color.attrib.clear()
+        color.set("rgb", "FFABCDEF")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".border-start-change.tmp.xlsx")
+
+
+def change_default_border_definition(path: Path) -> Path:
+    """Change the default cell border without editing any cell record."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        borders_tag = f"{{{_SPREADSHEETML_NS}}}borders"
+        border_tag = f"{{{_SPREADSHEETML_NS}}}border"
+        top_tag = f"{{{_SPREADSHEETML_NS}}}top"
+        color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+        cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        borders = styles.find(borders_tag)
+        cell_xfs = styles.find(cell_xfs_tag)
+        if borders is None or cell_xfs is None or not cell_xfs.findall(xf_tag):
+            raise ValueError("Could not find default border fixture")
+        default_border = borders.findall(border_tag)[0]
+        top = default_border.find(top_tag)
+        if top is None:
+            top = ElementTree.SubElement(default_border, top_tag)
+        top.set("style", "medium")
+        color = top.find(color_tag)
+        if color is None:
+            color = ElementTree.SubElement(top, color_tag)
+        color.attrib.clear()
+        color.set("rgb", "FF8899AA")
+        default_xf = cell_xfs.findall(xf_tag)[0]
+        default_xf.set("borderId", "0")
+        default_xf.set("applyBorder", "true")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".border-default-change.tmp.xlsx")
+
+
+def normalize_border_control_spelling(path: Path) -> Path:
+    """Use equivalent Boolean, colour, no-border, and range spellings."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        right_tag = f"{{{_SPREADSHEETML_NS}}}right"
+        color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        definition = _border_fixture_definition(styles)
+        definition.set("diagonalUp", "true")
+        definition.set("outline", "false")
+        bottom = definition.find(f"{{{_SPREADSHEETML_NS}}}bottom")
+        if bottom is None:
+            raise ValueError("Could not find direct border bottom")
+        color = bottom.find(color_tag)
+        if color is None or color.get("rgb") is None:
+            raise ValueError("Could not find direct border colour")
+        color.set("rgb", color.get("rgb").lower())
+        right = definition.find(right_tag)
+        if right is None:
+            right = ElementTree.SubElement(definition, right_tag)
+        right.set("style", "none")
+        right_color = right.find(color_tag)
+        if right_color is None:
+            right_color = ElementTree.SubElement(right, color_tag)
+        right_color.attrib.clear()
+        right_color.set("rgb", "FFDECADE")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        columns = worksheet.find(cols_tag)
+        if columns is None:
+            raise ValueError("Could not find border column fixture")
+        column = next(
+            current
+            for current in columns.findall(col_tag)
+            if current.get("min") == "4" and current.get("max") == "5"
+        )
+        attributes = dict(column.attrib)
+        columns.remove(column)
+        for minimum, maximum in (("4", "4"), ("5", "5")):
+            split_attributes = {**attributes, "min": minimum, "max": maximum}
+            ElementTree.SubElement(columns, col_tag, split_attributes)
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".border-noise.tmp.xlsx")
+
+
+def normalize_border_inert_declarations(path: Path) -> Path:
+    """Add valid but visually inert default-border declarations."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        borders_tag = f"{{{_SPREADSHEETML_NS}}}borders"
+        border_tag = f"{{{_SPREADSHEETML_NS}}}border"
+        diagonal_tag = f"{{{_SPREADSHEETML_NS}}}diagonal"
+        color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        borders = styles.find(borders_tag)
+        if borders is None or not borders.findall(border_tag):
+            raise ValueError("Could not find default border fixture")
+        default_border = borders.findall(border_tag)[0]
+        default_border.set("outline", "false")
+        default_border.set("diagonalUp", "true")
+        diagonal = default_border.find(diagonal_tag)
+        if diagonal is None:
+            diagonal = ElementTree.SubElement(default_border, diagonal_tag)
+        diagonal.attrib.clear()
+        color = diagonal.find(color_tag)
+        if color is None:
+            color = ElementTree.SubElement(diagonal, color_tag)
+        color.attrib.clear()
+        color.set("rgb", "FFBADC0D")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".border-inert-noise.tmp.xlsx")
+
+
+def normalize_border_inheritance(path: Path) -> Path:
+    """Move one direct border into its base XF without changing its effect."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cell_style_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellStyleXfs"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        cell_style_xfs = styles.find(cell_style_xfs_tag)
+        if cell_style_xfs is None:
+            raise ValueError("Could not find border base XF fixture")
+        direct_xf = _border_fixture_xf(styles)
+        border_id = direct_xf.get("borderId")
+        if border_id is None:
+            raise ValueError("Could not find direct border ID")
+        base_index = len(cell_style_xfs.findall(xf_tag))
+        ElementTree.SubElement(
+            cell_style_xfs,
+            xf_tag,
+            {
+                "numFmtId": "0",
+                "fontId": "0",
+                "fillId": "0",
+                "borderId": border_id,
+                "applyBorder": "1",
+            },
+        )
+        cell_style_xfs.set("count", str(base_index + 1))
+        direct_xf.set("xfId", str(base_index))
+        direct_xf.set("applyBorder", "false")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".border-inheritance.tmp.xlsx")
+
+
+def corrupt_border_column_control(path: Path) -> Path:
+    """Inject an out-of-bounds border-style span for fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        column = next(
+            current
+            for current in worksheet.iter(col_tag)
+            if current.get("min") == "4" and current.get("max") == "5"
+        )
+        column.set("max", "16385")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".border-corrupt.tmp.xlsx")
+
+
+def corrupt_border_definition(path: Path) -> Path:
+    """Inject an unknown border property into a used definition."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        bottom_tag = f"{{{_SPREADSHEETML_NS}}}bottom"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        bottom = _border_fixture_definition(styles).find(bottom_tag)
+        if bottom is None:
+            raise ValueError("Could not find direct border definition")
+        # Keep the package readable by ordinary spreadsheet readers while
+        # exercising FormulaFence's fail-closed handling of a future/unknown
+        # border property.
+        bottom.set(
+            "{urn:formulafence:private-border-test}privateBorderControl",
+            "PRIVATE-INVALID-BORDER-METADATA",
+        )
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".border-malformed.tmp.xlsx")
 
 
 def make_worksheet_display_model(path: Path) -> Path:

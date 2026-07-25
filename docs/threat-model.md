@@ -41,6 +41,9 @@ financial correctness or replace model review.
   printer-setting references, and raw print-layout XML are compared through
   private fingerprints only. Profiles and reports retain only aggregate
   structural counts.
+- Cell-border definitions, colours, style indexes, and cell/row/column targets
+  are compared through private fingerprints only. Profiles and reports retain
+  only aggregate structural counts.
 - Legacy Excel Note text, authors, cell associations, comment properties,
   threaded-comment placeholder links, VML visibility/layout, relationship
   identifiers, targets, and GUIDs are compared through private fingerprints
@@ -217,7 +220,7 @@ review prompt, not proof of an error.
   definitions, and bounded parser failures remain coverage warnings. FormulaFence
   does not render locale-specific output, validate format syntax, calculate
   values, model width/overflow, or compose number formats with separately
-  inventoried font/fill/alignment controls, borders, quote prefixes, table
+  inventoried font/fill/alignment/border controls, quote prefixes, table
   styles, or arbitrary visual formatting. Column styles
   are compared only as OOXML defaults for unallocated/new cells, not as a claim
   to restyle allocated cells.
@@ -234,8 +237,8 @@ review prompt, not proof of an error.
   are normalized. Missing or malformed definitions, invalid IDs/indexes/targets,
   and bounded parser failures remain visible coverage warnings. FormulaFence
   does not render or resolve theme colours, decide whether a font is visible
-  against a fill, calculate text/background contrast or values, compose
-  alignment with other display controls, track borders, rich-text run
+  against a fill, calculate text/background contrast or values, compose font
+  rendering with fill/border/alignment or other display controls, rich-text run
   rendering, table styles, width/overflow, or arbitrary visual formatting. Column
   styles are compared only as OOXML defaults for unallocated/new cells, not as a
   claim to restyle allocated cells.
@@ -279,6 +282,32 @@ review prompt, not proof of an error.
   allocated cells. This boundary follows Microsoft's
   [SpreadsheetML alignment definition](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/e4ad6e3e-7702-4dbe-8c44-f5a4c686c440)
   and [CellFormat alignment semantics](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/68362a4b-5589-4504-b566-e8154dce1de3).
+- Cell borders can redraw a report boundary, total, exception box, or warning
+  without a formula or value edit. FormulaFence privately resolves raw
+  transitional and strict SpreadsheetML `<borders>/<border>` definitions, base
+  `cellStyleXfs`, effective `cellXfs` records with `borderId`, `xfId`, and
+  `applyBorder`, direct cell `s`, `customFormat=1` row `s`, and raw
+  `<cols>/<col style>` assignments. It covers left/right/top/bottom, Office
+  2010 logical start/end, diagonal/direction, outline, stored line styles, and
+  stored colours. A material effective control change emits `FF057`;
+  `no_cell_border_changes` blocks it as `FFP057`. Profiles and reports expose
+  only default/direct/row/effective-column/unrecognized counts; definitions,
+  colours, style IDs, and targets remain private. Omitted/`none` sides,
+  Boolean/colour spelling, unused diagonal payload, ineffective empty
+  `outline="false"`, base-XF inheritance, `applyBorder`, and equivalent
+  column-range splitting normalize away. Missing, duplicate, malformed, or
+  unsupported material remains a visible coverage warning. Material
+  `vertical`/`horizontal` inner sides under ordinary cell styles are also
+  flagged as coverage gaps because their differential-format semantics are not
+  modeled here. FormulaFence does **not** resolve theme/palette colours, choose
+  adjacent-cell precedence, render a final visual style, apply
+  conditional-format/table/differential-style borders, calculate print output,
+  or infer client behavior. Column styles remain OOXML defaults for
+  unallocated/new cells, not a renderer that restyles allocated cells. This
+  boundary follows OOXML's
+  [`border`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_border_topic_ID0EVV35.html)
+  and [`xf`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_xf_topic_ID0E13S6.html)
+  forms, plus Microsoft's [cell-border guidance](https://support.microsoft.com/en-us/Excel/apply-or-remove-cell-borders-on-a-worksheet).
 - A stored worksheet view can change a reviewer’s surface while leaving values
   and formulas untouched: zeroes can appear blank; formulas, gridlines,
   row/column headers, outline symbols, rulers, or page margins can be

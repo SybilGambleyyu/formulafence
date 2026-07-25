@@ -11,6 +11,7 @@ from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
 from formulafence.formulas import resolve_3d_reference
 from formulafence.models import (
     AlignmentSnapshot,
+    BorderSnapshot,
     CellHyperlinkSnapshot,
     CellKey,
     CellSnapshot,
@@ -1622,6 +1623,49 @@ def _workbook_control_changes(
                     "Cell alignment controls changed; values, warnings, or visual "
                     "classifications may be repositioned, rotated, wrapped, shrunk, "
                     "or made less legible."
+                ),
+                details=details,
+            )
+        )
+    if before.border_controls != after.border_controls:
+        old_controls: BorderSnapshot = before.border_controls
+        new_controls: BorderSnapshot = after.border_controls
+        details = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.definition_signature != new_controls.definition_signature:
+            details["border_definition_material_changed"] = True
+        if (
+            old_controls.unrecognized_border_count
+            != new_controls.unrecognized_border_count
+            or (
+                (
+                    old_controls.unrecognized_border_count
+                    or new_controls.unrecognized_border_count
+                )
+                and (
+                    old_controls.unrecognized_signature
+                    != new_controls.unrecognized_signature
+                )
+            )
+        ):
+            details["unrecognized_border_metadata_changed"] = True
+        changes.append(
+            Change(
+                "cell_border_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF057",
+                "high",
+                (
+                    "Cell border controls changed; report boundaries, totals, warnings, "
+                    "or printed presentation may be altered."
                 ),
                 details=details,
             )

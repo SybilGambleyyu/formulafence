@@ -29,6 +29,7 @@ rules:
   no_cell_fill_changes: true
   no_workbook_theme_changes: true
   no_cell_alignment_changes: true
+  no_cell_border_changes: true
   no_worksheet_display_control_changes: true
   no_worksheet_print_layout_changes: true
   no_formula_cached_result_changes: true
@@ -112,6 +113,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
 | `no_workbook_theme_changes` | boolean | A workbook Theme binding, stored colour/font/format scheme, direct Theme-image relationship, or direct Theme-image payload changes. Theme XML, scheme names, colours, font names, image bytes, relationship IDs, and targets are compared privately. |
 | `no_cell_alignment_changes` | boolean | An effective default, direct-cell, row, or column alignment control changes. Alignment values, style IDs, and cell/row/column targets are compared privately. |
+| `no_cell_border_changes` | boolean | An effective default, direct-cell, row, or column border control changes. Border definitions, colours, style IDs, and cell/row/column targets are compared privately. |
 | `no_worksheet_display_control_changes` | boolean | A material raw worksheet view changes hidden-zero, formula-display, gridline/gridline-colour, row/column-header, outline-symbol, ruler, page-whitespace, right-to-left, non-normal-view, or split/frozen-pane controls. Sheet names, targets, pane positions, and raw view XML are compared privately. |
 | `no_worksheet_print_layout_changes` | boolean | A material saved print-area/title, print-option, margin, page-setup, fit-to-page, header/footer, or manual page-break control changes. Print ranges, header/footer text, page values, printer-setting references, and raw XML are compared privately. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
@@ -597,6 +599,35 @@ calculate width, height, merged-cell layout, overflow, final visibility,
 font/fill/conditional-format composition, or Excel client rendering. A raw
 column `style` is compared as a declaration/default for unallocated/new
 cells; it is not treated as a renderer that restyles allocated cells.
+
+Cell-border controls can redraw a report edge, total, exception box, or warning
+without an ordinary cell edit. FormulaFence reads raw transitional and strict
+SpreadsheetML `<borders>/<border>` definitions, base `cellStyleXfs`, effective
+`cellXfs` records with `borderId`, `xfId`, and `applyBorder`, direct cell `s`,
+`customFormat=1` row `s`, and raw `<cols>/<col style>` declarations. It covers
+left/right/top/bottom, Office 2010 logical start/end, diagonal/direction,
+outline, stored line styles, and stored colours. A material effective control
+change emits `FF057`; enable `no_cell_border_changes` to make it `FFP057` in
+CI.
+
+Profiles and `FF057` details expose only counts for default definitions, direct
+cell, row, effective column, and unrecognized controls. Border definitions,
+colours, style indexes, and targets remain private. Omitted/`none` sides,
+Boolean/colour spelling, unused diagonal payload, ineffective empty
+`outline="false"`, base-XF inheritance, `applyBorder`, and equivalent
+column-range splitting are normalized. Missing, duplicate, malformed, or
+unsupported material is an explicit coverage warning. Material `vertical` or
+`horizontal` inner sides under ordinary cell styles are likewise coverage
+warnings because their differential-format semantics are not modeled here.
+FormulaFence compares declarations, not final rendering: it does not resolve
+theme/palette colours, choose adjacent-cell precedence, apply
+conditional-format/table/differential-style borders, calculate print output,
+or infer Excel client behavior. A raw column `style` is compared as a
+declaration/default for unallocated/new cells; it is not treated as a renderer
+that restyles allocated cells. This boundary follows OOXML's
+[`border`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_border_topic_ID0EVV35.html)
+and [`xf`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_xf_topic_ID0E13S6.html)
+forms, plus Microsoft's [cell-border guidance](https://support.microsoft.com/en-us/Excel/apply-or-remove-cell-borders-on-a-worksheet).
 
 Worksheet-display controls can change a reviewer's saved surface without a
 formula or value edit. FormulaFence reads raw transitional and strict

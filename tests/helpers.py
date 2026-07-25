@@ -7490,6 +7490,347 @@ def corrupt_formula_cached_result(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".formula-cached-result-corrupt.tmp.xlsx")
 
 
+def _threaded_comment_part_names(contents: dict[str, bytes]) -> tuple[str, str, str]:
+    """Return the package members used by the threaded-comment fixture."""
+    threaded_member = "xl/threadedComments/threadedComment1.xml"
+    person_member = "xl/persons/person.xml"
+    worksheet_relationships = _relationship_member("xl/worksheets/sheet1.xml")
+    if (
+        threaded_member not in contents
+        or person_member not in contents
+        or worksheet_relationships not in contents
+    ):
+        raise ValueError("Fixture does not contain threaded-comment package parts")
+    return threaded_member, person_member, worksheet_relationships
+
+
+def make_threaded_comment_model(path: Path) -> Path:
+    """Create raw modern-comment data outside ordinary worksheet cells."""
+    make_model(path)
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    threaded_comments = (
+        "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
+    )
+    people = threaded_comments
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        threaded_member = "xl/threadedComments/threadedComment1.xml"
+        person_member = "xl/persons/person.xml"
+        reviewer_id = "{11111111-1111-1111-1111-111111111111}"
+        approver_id = "{22222222-2222-2222-2222-222222222222}"
+        root_comment_id = "{33333333-3333-3333-3333-333333333333}"
+        reply_comment_id = "{44444444-4444-4444-4444-444444444444}"
+
+        threaded_root = ElementTree.Element(f"{{{threaded_comments}}}ThreadedComments")
+        root_comment = ElementTree.SubElement(
+            threaded_root,
+            f"{{{threaded_comments}}}threadedComment",
+            {
+                "ref": "A1",
+                "dT": "2026-07-24T00:00:00Z",
+                "personId": reviewer_id,
+                "id": root_comment_id,
+                "done": "0",
+            },
+        )
+        ElementTree.SubElement(root_comment, f"{{{threaded_comments}}}text").text = (
+            "PRIVATE-THREADED-COMMENT-BASELINE"
+        )
+        mentions = ElementTree.SubElement(root_comment, f"{{{threaded_comments}}}mentions")
+        ElementTree.SubElement(
+            mentions,
+            f"{{{threaded_comments}}}mention",
+            {
+                "mentionpersonId": approver_id,
+                "mentionId": "{55555555-5555-5555-5555-555555555555}",
+                "startIndex": "0",
+                "length": "7",
+            },
+        )
+        reply = ElementTree.SubElement(
+            threaded_root,
+            f"{{{threaded_comments}}}threadedComment",
+            {
+                "ref": "A1",
+                "dT": "2026-07-24T00:01:00Z",
+                "personId": approver_id,
+                "id": reply_comment_id,
+                "parentId": root_comment_id,
+                "done": "1",
+            },
+        )
+        ElementTree.SubElement(reply, f"{{{threaded_comments}}}text").text = (
+            "PRIVATE-THREADED-REPLY-BASELINE"
+        )
+        contents[threaded_member] = serialize(threaded_root)
+
+        people_root = ElementTree.Element(f"{{{people}}}personList")
+        ElementTree.SubElement(
+            people_root,
+            f"{{{people}}}person",
+            {
+                "displayName": "Private Reviewer",
+                "userId": "private-reviewer@example.invalid",
+                "providerId": "private-provider",
+                "id": reviewer_id,
+            },
+        )
+        ElementTree.SubElement(
+            people_root,
+            f"{{{people}}}person",
+            {
+                "displayName": "Private Approver",
+                "userId": "private-approver@example.invalid",
+                "providerId": "private-provider",
+                "id": approver_id,
+            },
+        )
+        contents[person_member] = serialize(people_root)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        for part_name, content_type in (
+            (threaded_member, "application/vnd.ms-excel.threadedcomments+xml"),
+            (person_member, "application/vnd.ms-excel.person+xml"),
+        ):
+            ElementTree.SubElement(
+                types,
+                f"{{{content_types}}}Override",
+                {"PartName": f"/{part_name}", "ContentType": content_type},
+            )
+        contents["[Content_Types].xml"] = serialize(types)
+
+        workbook_relationships_name = _relationship_member("xl/workbook.xml")
+        workbook_relationships = ElementTree.fromstring(contents[workbook_relationships_name])
+        ElementTree.SubElement(
+            workbook_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceThreadedPerson",
+                "Type": "http://schemas.microsoft.com/office/2017/10/relationships/person",
+                "Target": "persons/person.xml",
+            },
+        )
+        contents[workbook_relationships_name] = serialize(workbook_relationships)
+
+        worksheet_relationships_name = _relationship_member("xl/worksheets/sheet1.xml")
+        if worksheet_relationships_name in contents:
+            worksheet_relationships = ElementTree.fromstring(
+                contents[worksheet_relationships_name]
+            )
+        else:
+            worksheet_relationships = ElementTree.Element(
+                f"{{{package_relationships}}}Relationships"
+            )
+        ElementTree.SubElement(
+            worksheet_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceThreadedComment",
+                "Type": (
+                    "http://schemas.microsoft.com/office/2017/10/relationships/"
+                    "threadedComment"
+                ),
+                "Target": "../threadedComments/threadedComment1.xml",
+            },
+        )
+        contents[worksheet_relationships_name] = serialize(worksheet_relationships)
+
+    return _rewrite_archive(path, mutate, ".threaded-comment.tmp.xlsx")
+
+
+def change_threaded_comment_reply(path: Path) -> Path:
+    """Change only a private threaded reply body."""
+    threaded_comments = (
+        "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        threaded_member, _person_member, _worksheet_relationships = (
+            _threaded_comment_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[threaded_member])
+        comments = list(root.findall(f"{{{threaded_comments}}}threadedComment"))
+        comments[-1].find(f"{{{threaded_comments}}}text").text = (
+            "PRIVATE-THREADED-REPLY-CANDIDATE"
+        )
+        contents[threaded_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".threaded-comment-change.tmp.xlsx")
+
+
+def change_threaded_comment_person_identity(path: Path) -> Path:
+    """Change only private collaborator identity material."""
+    people = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _threaded_member, person_member, _worksheet_relationships = (
+            _threaded_comment_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[person_member])
+        person = next(root.iter(f"{{{people}}}person"))
+        person.set("displayName", "Private Reviewer Candidate")
+        contents[person_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".threaded-comment-person-change.tmp.xlsx")
+
+
+def externalize_threaded_comment_relationship(path: Path) -> Path:
+    """Make the worksheet comment relationship unsafe without following it."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _threaded_member, _person_member, worksheet_relationships_name = (
+            _threaded_comment_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[worksheet_relationships_name])
+        relationship = next(
+            item
+            for item in root.findall(f"{{{package_relationships}}}Relationship")
+            if item.get("Id") == "rIdFenceThreadedComment"
+        )
+        relationship.set("Target", "https://example.invalid/private-threaded-comment")
+        relationship.set("TargetMode", "External")
+        contents[worksheet_relationships_name] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".threaded-comment-external.tmp.xlsx")
+
+
+def renumber_threaded_comment_identifiers(path: Path) -> Path:
+    """Rewrite raw person, comment, and package identifiers consistently."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    threaded_comments = (
+        "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
+    )
+    people = threaded_comments
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        threaded_member, person_member, worksheet_relationships_name = (
+            _threaded_comment_part_names(contents)
+        )
+        person_root = ElementTree.fromstring(contents[person_member])
+        person_mapping: dict[str, str] = {}
+        for index, person in enumerate(
+            person_root.iter(f"{{{people}}}person"),
+            start=100,
+        ):
+            old_identifier = person.get("id")
+            new_identifier = f"{{aaaaaaaa-aaaa-aaaa-aaaa-{index:012d}}}"
+            if old_identifier is None:
+                raise ValueError("Fixture person is missing its identifier")
+            person_mapping[old_identifier] = new_identifier
+            person.set("id", new_identifier)
+        contents[person_member] = ElementTree.tostring(
+            person_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        threaded_root = ElementTree.fromstring(contents[threaded_member])
+        comment_mapping: dict[str, str] = {}
+        comments = list(threaded_root.findall(f"{{{threaded_comments}}}threadedComment"))
+        for index, comment in enumerate(comments, start=200):
+            old_identifier = comment.get("id")
+            new_identifier = f"{{bbbbbbbb-bbbb-bbbb-bbbb-{index:012d}}}"
+            if old_identifier is None:
+                raise ValueError("Fixture comment is missing its identifier")
+            comment_mapping[old_identifier] = new_identifier
+            comment.set("id", new_identifier)
+        for comment in comments:
+            person_identifier = comment.get("personId")
+            if person_identifier:
+                comment.set("personId", person_mapping[person_identifier])
+            parent_identifier = comment.get("parentId")
+            if parent_identifier:
+                comment.set("parentId", comment_mapping[parent_identifier])
+            for mention_index, mention in enumerate(
+                comment.iter(f"{{{threaded_comments}}}mention"),
+                start=300,
+            ):
+                mention_identifier = mention.get("mentionpersonId")
+                if mention_identifier:
+                    mention.set(
+                        "mentionpersonId",
+                        person_mapping[mention_identifier],
+                    )
+                mention.set(
+                    "mentionId",
+                    f"{{cccccccc-cccc-cccc-cccc-{mention_index:012d}}}",
+                )
+        contents[threaded_member] = ElementTree.tostring(
+            threaded_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        worksheet_relationships = ElementTree.fromstring(
+            contents[worksheet_relationships_name]
+        )
+        relationship = next(
+            item
+            for item in worksheet_relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if item.get("Id") == "rIdFenceThreadedComment"
+        )
+        relationship.set("Id", "rIdFenceThreadedCommentRenumbered")
+        contents[worksheet_relationships_name] = ElementTree.tostring(
+            worksheet_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        workbook_relationships_name = _relationship_member("xl/workbook.xml")
+        workbook_relationships = ElementTree.fromstring(contents[workbook_relationships_name])
+        relationship = next(
+            item
+            for item in workbook_relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            )
+            if item.get("Id") == "rIdFenceThreadedPerson"
+        )
+        relationship.set("Id", "rIdFenceThreadedPersonRenumbered")
+        contents[workbook_relationships_name] = ElementTree.tostring(
+            workbook_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".threaded-comment-id.tmp.xlsx")
+
+
+def corrupt_threaded_comment_root(path: Path) -> Path:
+    """Replace the threaded-comment root to exercise fail-closed coverage."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        threaded_member, _person_member, _worksheet_relationships = (
+            _threaded_comment_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[threaded_member])
+        root.tag = "notThreadedComments"
+        contents[threaded_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".threaded-comment-corrupt.tmp.xlsx")
+
+
 def _worksheet_drawing_shape_part_names(
     contents: dict[str, bytes],
 ) -> tuple[str, str]:

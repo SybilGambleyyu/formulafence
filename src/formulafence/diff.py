@@ -41,6 +41,7 @@ from formulafence.models import (
     RichTextRunSnapshot,
     ScenarioManagerSnapshot,
     SlicerTimelineCacheSnapshot,
+    ThreadedCommentSnapshot,
     WhatIfDataTableSnapshot,
     WorkbookSnapshot,
     WorksheetDrawingShapeSnapshot,
@@ -1890,6 +1891,61 @@ def _rich_text_run_controls_changed(
     return [change], [finding]
 
 
+def _threaded_comment_controls_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag modern-comment changes that ordinary cell diffs cannot expose."""
+    old_comments: ThreadedCommentSnapshot = before.threaded_comments
+    new_comments: ThreadedCommentSnapshot = after.threaded_comments
+    if old_comments == new_comments:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_comments.to_dict(),
+        "after": new_comments.to_dict(),
+    }
+    if old_comments.declaration_signature != new_comments.declaration_signature:
+        details["threaded_comment_binding_changed"] = True
+    if old_comments.definition_signature != new_comments.definition_signature:
+        details["threaded_comment_definition_material_changed"] = True
+    if old_comments.person_signature != new_comments.person_signature:
+        details["threaded_comment_person_material_changed"] = True
+    if old_comments.relationship_signature != new_comments.relationship_signature:
+        details["threaded_comment_relationships_changed"] = True
+    if (
+        old_comments.unrecognized_threaded_comment_count
+        != new_comments.unrecognized_threaded_comment_count
+        or (
+            (
+                old_comments.unrecognized_threaded_comment_count
+                or new_comments.unrecognized_threaded_comment_count
+            )
+            and (
+                old_comments.definition_signature != new_comments.definition_signature
+                or old_comments.person_signature != new_comments.person_signature
+            )
+        )
+    ):
+        details["unrecognized_threaded_comment_metadata_changed"] = True
+    change = Change(
+        "threaded_comment_controls_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF045",
+        "high",
+        (
+            "Modern threaded comments changed; discussion text, replies, resolution, "
+            "mentions, or collaborator bindings may be altered outside cells."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _worksheet_drawing_shape_controls_changed(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
@@ -2016,6 +2072,13 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(rich_text_run_changes)
     findings.extend(rich_text_run_findings)
+
+    threaded_comment_changes, threaded_comment_findings = _threaded_comment_controls_changed(
+        before,
+        after,
+    )
+    changes.extend(threaded_comment_changes)
+    findings.extend(threaded_comment_findings)
 
     worksheet_drawing_shape_changes, worksheet_drawing_shape_findings = (
         _worksheet_drawing_shape_controls_changed(before, after)

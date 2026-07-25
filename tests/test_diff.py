@@ -58,6 +58,8 @@ from .helpers import (
     change_scenario_manager_input_value,
     change_slicer_timeline_filter_material,
     change_table_filter_visibility_criterion,
+    change_threaded_comment_person_identity,
+    change_threaded_comment_reply,
     change_what_if_data_table_input,
     change_worksheet_drawing_shape_hyperlink,
     change_worksheet_drawing_shape_presentation,
@@ -86,6 +88,7 @@ from .helpers import (
     corrupt_rich_text_run,
     corrupt_scenario_manager_input,
     corrupt_slicer_timeline_cache_root,
+    corrupt_threaded_comment_root,
     corrupt_what_if_data_table_input,
     corrupt_worksheet_drawing_shape_root,
     corrupt_worksheet_embedded_control_activex_root,
@@ -99,6 +102,7 @@ from .helpers import (
     externalize_pivot_table_cache_record_relationship,
     externalize_power_pivot_data_model,
     externalize_slicer_timeline_cache_relationship,
+    externalize_threaded_comment_relationship,
     make_chart_definition_model,
     make_conditional_formatting_model,
     make_current_row_table_model,
@@ -132,6 +136,7 @@ from .helpers import (
     make_slicer_timeline_cache_model,
     make_spill_model,
     make_table_model,
+    make_threaded_comment_model,
     make_three_d_model,
     make_what_if_data_table_model,
     make_worksheet_drawing_shape_model,
@@ -172,6 +177,7 @@ from .helpers import (
     renumber_ribbon_customization_relationships,
     renumber_slicer_timeline_pivot_cache_id,
     renumber_slicer_timeline_relationships,
+    renumber_threaded_comment_identifiers,
     renumber_worksheet_drawing_shape_identifiers,
     renumber_worksheet_embedded_control_relationships,
     renumber_xlm_macro_sheet_relationships,
@@ -5132,6 +5138,163 @@ def test_rich_text_run_malformed_metadata_fails_closed(tmp_path) -> None:
     )
     for sensitive_value in ("PRIVATE-UNSUPPORTED-RUN-CONTROL", "A3", "FF000000"):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_threaded_comments_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_threaded_comment_model(tmp_path / "baseline.xlsx")
+    candidate = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    person_candidate = make_threaded_comment_model(tmp_path / "person-candidate.xlsx")
+    change_threaded_comment_reply(candidate)
+    change_threaded_comment_person_identity(person_candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    person_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(person_candidate),
+    )
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "threaded_comment_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["threaded_comment_count"] == 2
+    assert baseline_snapshot.summary()["threaded_comment_thread_count"] == 1
+    assert baseline_snapshot.summary()["threaded_comment_reply_count"] == 1
+    assert baseline_snapshot.summary()["threaded_comment_person_count"] == 2
+    assert baseline_snapshot.summary()["has_threaded_comments"] is True
+    assert profile["threaded_comments"] == {
+        "present": True,
+        "worksheet_threaded_comment_sheet_count": 1,
+        "threaded_comment_part_count": 1,
+        "comment_thread_count": 1,
+        "comment_count": 2,
+        "reply_count": 1,
+        "resolved_comment_count": 1,
+        "comment_with_text_count": 2,
+        "mention_count": 1,
+        "mentioned_person_count": 1,
+        "person_part_count": 1,
+        "person_count": 2,
+        "orphan_person_count": 0,
+        "binding_relationship_count": 2,
+        "external_relationship_count": 0,
+        "unrecognized_threaded_comment_count": 0,
+    }
+    assert "## Modern threaded comments" in markdown
+    assert change.details["threaded_comment_definition_material_changed"] is True
+    assert "FF045" in {finding.rule_id for finding in report.findings}
+    person_change = next(
+        change
+        for change in person_report.changes
+        if change.kind == "threaded_comment_controls_changed"
+    )
+    assert person_change.details["threaded_comment_person_material_changed"] is True
+    assert "FF045" in {finding.rule_id for finding in person_report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+        json.dumps(person_report.to_dict()),
+        report_to_markdown(person_report),
+        json.dumps(report_to_sarif(person_report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-THREADED-COMMENT-BASELINE",
+        "PRIVATE-THREADED-REPLY-BASELINE",
+        "PRIVATE-THREADED-REPLY-CANDIDATE",
+        "Private Reviewer",
+        "private-reviewer@example.invalid",
+        "2026-07-24T00:00:00Z",
+        "{11111111-1111-1111-1111-111111111111}",
+        "{55555555-5555-5555-5555-555555555555}",
+        "rIdFenceThreadedComment",
+        "A1",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_unsafe_threaded_comment_relationship_fails_closed_and_is_redacted(tmp_path) -> None:
+    baseline = make_threaded_comment_model(tmp_path / "baseline.xlsx")
+    candidate = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    externalize_threaded_comment_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "threaded_comment_controls_changed"
+    )
+
+    assert candidate_snapshot.threaded_comments.external_relationship_count == 1
+    assert candidate_snapshot.threaded_comments.unrecognized_threaded_comment_count >= 1
+    assert change.details["threaded_comment_relationships_changed"] is True
+    assert "FF045" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "https://example.invalid/private-threaded-comment",
+        "rIdFenceThreadedComment",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_threaded_comment_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_threaded_comment_model(tmp_path / "baseline.xlsx")
+    renumbered = make_threaded_comment_model(tmp_path / "renumbered.xlsx")
+    renumber_threaded_comment_identifiers(renumbered)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered))
+
+    assert "threaded_comment_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF045" not in {finding.rule_id for finding in report.findings}
+
+
+def test_malformed_threaded_comments_fail_closed(tmp_path) -> None:
+    baseline = make_threaded_comment_model(tmp_path / "baseline.xlsx")
+    candidate = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    corrupt_threaded_comment_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.threaded_comments.unrecognized_threaded_comment_count >= 1
+    assert any(
+        "threaded-comment part with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "threaded_comment_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF045" in {finding.rule_id for finding in report.findings}
+
+
+def test_threaded_comment_xml_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    workbook = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    monkeypatch.setattr(workbook_module, "_THREADED_COMMENT_MAX_XML_PART_BYTES", 1)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.threaded_comments.unrecognized_threaded_comment_count >= 1
+    assert any(
+        "oversized threaded-comment" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_worksheet_drawing_shapes_are_profiled_diffed_and_redacted(tmp_path) -> None:

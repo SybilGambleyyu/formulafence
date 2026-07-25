@@ -34,6 +34,7 @@ _RULE_FIELDS = {
     "no_cell_fill_changes",
     "no_formula_cached_result_changes",
     "no_rich_text_run_changes",
+    "no_threaded_comment_changes",
     "no_worksheet_drawing_shape_changes",
     "no_worksheet_embedded_control_changes",
     "no_new_parser_warnings",
@@ -102,6 +103,7 @@ class Policy:
     no_cell_fill_changes: bool = False
     no_formula_cached_result_changes: bool = False
     no_rich_text_run_changes: bool = False
+    no_threaded_comment_changes: bool = False
     no_worksheet_drawing_shape_changes: bool = False
     no_worksheet_embedded_control_changes: bool = False
     no_new_parser_warnings: bool = False
@@ -152,6 +154,7 @@ rules:
   no_cell_fill_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
+  no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
@@ -288,6 +291,7 @@ def parse_policy(data: object) -> Policy:
             rules, "no_formula_cached_result_changes"
         ),
         no_rich_text_run_changes=_boolean_rule(rules, "no_rich_text_run_changes"),
+        no_threaded_comment_changes=_boolean_rule(rules, "no_threaded_comment_changes"),
         no_worksheet_drawing_shape_changes=_boolean_rule(
             rules, "no_worksheet_drawing_shape_changes"
         ),
@@ -725,6 +729,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP043",
                     "high",
                     "Policy forbids rich-text run control changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_threaded_comment_changes:
+        for finding in _rule_triggered(report, "FF045"):
+            violations.append(
+                Finding(
+                    "FFP045",
+                    "high",
+                    "Policy forbids modern threaded-comment changes.",
                     details=finding.details,
                 )
             )

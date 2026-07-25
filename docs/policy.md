@@ -29,6 +29,7 @@ rules:
   no_cell_fill_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
+  no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
@@ -100,6 +101,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
 | `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
+| `no_threaded_comment_changes` | boolean | A modern Excel threaded-comment/person package binding, comment/reply graph, text, stored cell/timestamp/resolution declaration, mention range/person association, extension material, or person definition changes. Comment bodies, locations, timestamps, parent links, names, user IDs, provider IDs, relationship IDs, and GUIDs are compared privately. |
 | `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp` or nested `xdr:grpSp` anchor/layout, text/presentation declaration, macro/text link, or referenced click/hover relationship changes. Shape text, formatting, formulas, anchors, IDs, and targets are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
@@ -587,6 +589,34 @@ Malformed, unsupported, or unreadable rich-text metadata becomes an explicit
 coverage warning. FormulaFence does not render cells, resolve theme colours,
 calculate contrast, determine visibility, preserve rich text, or guarantee
 cross-version Excel rendering equivalence.
+
+Modern Excel threaded comments live in worksheet-associated comment parts and a
+workbook-associated persons part instead of ordinary cells. FormulaFence follows
+those package relationships and privately compares the complete stored
+comment/reply tree, comment text, cell/timestamp/resolution declarations,
+mention ranges and person associations, extension material, and person records.
+A material change emits `FF045`; enable
+`no_threaded_comment_changes` to make it `FFP045` in CI.
+
+Profiles and `FF045` details expose only aggregate worksheet/part/thread,
+comment/reply/resolved/text, mention, person/unreferenced-person, relationship,
+and malformed-metadata counts. Bodies, cell references, timestamps, parent
+links, author and mentioned-person identities, and all raw IDs remain private.
+FormulaFence rebuilds person, mention, and reply links before comparison so
+consistent writer-generated GUID/relationship-ID rewrites do not create a
+finding. It normalizes normal OOXML Boolean spellings for `done`; malformed,
+unsafe, unbound, missing, unreadable, oversized, or over-budget parts become
+coverage warnings. XML reads are bounded to 16 MiB per part, 64 MiB per
+workbook, and 512 parts.
+
+This rule compares stored package state only. It does not render comments,
+validate mention offsets against comment text, send notifications, resolve
+accounts, inspect legacy note/placeholder text, or infer collaboration,
+permissions, cloud-sync, or client-visibility behavior. The format boundary
+follows Microsoft's [threaded-comment overview](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/e0fb917a-1107-409a-852f-13b47aea70dc),
+[Threaded Comments part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/66e1875d-c60a-48eb-bf88-41066d45fea8),
+[Persons part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1a170d26-42a2-46f0-b2b6-0ff1dec1c344),
+and [threaded-comment schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/adb84732-9fc8-48b6-bddc-6b0bcdaad940).
 
 Non-chart Worksheet DrawingML can host a regular `xdr:sp` shape or a nested
 `xdr:grpSp` shape group under a standard worksheet drawing anchor. Those shape

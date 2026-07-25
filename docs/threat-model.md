@@ -29,6 +29,10 @@ financial correctness or replace model review.
   macro assignments, text links, descriptions, relationship identifiers, and
   targets are compared through private fingerprints only. Profiles and reports
   retain structural counts, never the underlying shape content.
+- Modern threaded-comment text, cell references, timestamps, reply links,
+  mention ranges, person names/user IDs/provider IDs, relationship identifiers,
+  and GUIDs are compared through private fingerprints only. Profiles and
+  reports retain structural counts, never the underlying collaboration content.
 - Filter criteria, selected values, custom sort lists, table names, sort keys,
   and row/range references are compared through a private signature only.
 - Ignored-error target ranges and exact per-range warning suppressions are
@@ -271,6 +275,26 @@ review prompt, not proof of an error.
   [shared-string-table guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-shared-string-table),
   the Open XML `r` [rich-text-run definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.run?view=openxml-3.0.1),
   and `is` [inline-string definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.inlinestring?view=openxml-3.0.1).
+- Modern threaded comments are stored in worksheet-associated comment parts and
+  a workbook-associated persons part, outside ordinary cells. FormulaFence
+  follows those bindings and privately compares comment/reply graphs, stored
+  text, cell/timestamp/resolution declarations, mention range/person links,
+  extension material, and person records. A material change emits `FF045` and
+  can be blocked with `no_threaded_comment_changes`. It normalizes consistent
+  writer-generated comment, parent, person, mention, and package
+  relationship-ID rewrites by rebuilding the private graph first. Profiles and
+  reports expose only aggregate worksheet/part/thread, comment/reply/resolved/
+  text, mention, person, relationship, and malformed-metadata counts. It does
+  **not** render comments, validate mention offsets, notify or resolve users,
+  inspect legacy note/placeholder content, or infer permissions, cloud state,
+  or client visibility. Missing, duplicate, malformed, unbound, unsafe,
+  unreadable, oversized, or over-budget metadata becomes a visible coverage
+  warning; XML reads are bounded to 16 MiB per part, 64 MiB per workbook, and
+  512 parts. The boundary follows Microsoft's
+  [threaded-comment overview](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/e0fb917a-1107-409a-852f-13b47aea70dc),
+  [Threaded Comments part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/66e1875d-c60a-48eb-bf88-41066d45fea8),
+  [Persons part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1a170d26-42a2-46f0-b2b6-0ff1dec1c344),
+  and [schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/adb84732-9fc8-48b6-bddc-6b0bcdaad940).
 - Non-chart Worksheet DrawingML regular shapes (`xdr:sp`) and nested group
   shapes (`xdr:grpSp`) are followed from standard worksheet `drawing`
   relationships before the workbook reader can discard their text-box
@@ -524,7 +548,8 @@ review prompt, not proof of an error.
   Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and
   Scenario Manager declarations, worksheet/Table AutoFilter and row/column-
   visibility controls, ignored-error warning suppressions, relationship-backed Named Sheet
-  View controls, non-chart Worksheet DrawingML regular/group shape controls, DrawingML chart
+  View controls, modern threaded-comment/person package chains, non-chart Worksheet DrawingML
+  regular/group shape controls, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link

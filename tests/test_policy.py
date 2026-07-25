@@ -28,6 +28,7 @@ from .helpers import (
     change_rich_text_run_color,
     change_scenario_manager_input_value,
     change_slicer_timeline_filter_material,
+    change_threaded_comment_reply,
     change_what_if_data_table_input,
     change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
@@ -58,6 +59,7 @@ from .helpers import (
     make_scenario_manager_model,
     make_slicer_timeline_cache_model,
     make_table_model,
+    make_threaded_comment_model,
     make_three_d_model,
     make_what_if_data_table_model,
     make_worksheet_drawing_shape_model,
@@ -541,6 +543,19 @@ def test_policy_can_block_rich_text_run_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP043"}
+
+
+def test_policy_can_block_threaded_comment_changes(tmp_path) -> None:
+    baseline = make_threaded_comment_model(tmp_path / "baseline.xlsx")
+    candidate = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    change_threaded_comment_reply(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_threaded_comment_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP045"}
 
 
 def test_policy_can_block_worksheet_drawing_shape_changes(tmp_path) -> None:

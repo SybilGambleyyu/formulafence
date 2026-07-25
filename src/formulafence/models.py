@@ -1885,6 +1885,76 @@ class RichTextRunSnapshot:
 
 
 @dataclass(frozen=True)
+class ThreadedCommentSnapshot:
+    """Safe aggregate of modern Excel threaded-comment controls.
+
+    Threaded comments, replies, resolution state, mentions, and collaborator
+    identity records live in OOXML package parts rather than worksheet cells.
+    Private signatures retain their text, locations, timestamps, identity data,
+    and graph bindings for comparison without serialising any of that material
+    into a profile or change report.
+    """
+
+    worksheet_threaded_comment_sheet_count: int = 0
+    threaded_comment_part_count: int = 0
+    comment_thread_count: int = 0
+    comment_count: int = 0
+    reply_count: int = 0
+    resolved_comment_count: int = 0
+    comment_with_text_count: int = 0
+    mention_count: int = 0
+    mentioned_person_count: int = 0
+    person_part_count: int = 0
+    person_count: int = 0
+    orphan_person_count: int = 0
+    binding_relationship_count: int = 0
+    external_relationship_count: int = 0
+    unrecognized_threaded_comment_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    person_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.threaded_comment_part_count
+            or self.person_part_count
+            or self.comment_count
+            or self.person_count
+            or self.unrecognized_threaded_comment_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural comment evidence without content or identities."""
+        return {
+            "present": self.present,
+            "worksheet_threaded_comment_sheet_count": (
+                self.worksheet_threaded_comment_sheet_count
+            ),
+            "threaded_comment_part_count": self.threaded_comment_part_count,
+            "comment_thread_count": self.comment_thread_count,
+            "comment_count": self.comment_count,
+            "reply_count": self.reply_count,
+            "resolved_comment_count": self.resolved_comment_count,
+            "comment_with_text_count": self.comment_with_text_count,
+            "mention_count": self.mention_count,
+            "mentioned_person_count": self.mentioned_person_count,
+            "person_part_count": self.person_part_count,
+            "person_count": self.person_count,
+            "orphan_person_count": self.orphan_person_count,
+            "binding_relationship_count": self.binding_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+            "unrecognized_threaded_comment_count": (
+                self.unrecognized_threaded_comment_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetDrawingShapeSnapshot:
     """Safe aggregate of non-chart Worksheet DrawingML shape controls.
 
@@ -2356,6 +2426,9 @@ class WorkbookSnapshot:
         default_factory=FormulaCachedResultSnapshot
     )
     rich_text_runs: RichTextRunSnapshot = field(default_factory=RichTextRunSnapshot)
+    threaded_comments: ThreadedCommentSnapshot = field(
+        default_factory=ThreadedCommentSnapshot
+    )
     worksheet_drawing_shapes: WorksheetDrawingShapeSnapshot = field(
         default_factory=WorksheetDrawingShapeSnapshot
     )
@@ -2411,6 +2484,11 @@ class WorkbookSnapshot:
             "rich_text_run_count": self.rich_text_runs.rich_text_run_count,
             "phonetic_run_count": self.rich_text_runs.phonetic_run_count,
             "has_rich_text_runs": self.rich_text_runs.present,
+            "threaded_comment_count": self.threaded_comments.comment_count,
+            "threaded_comment_thread_count": self.threaded_comments.comment_thread_count,
+            "threaded_comment_reply_count": self.threaded_comments.reply_count,
+            "threaded_comment_person_count": self.threaded_comments.person_count,
+            "has_threaded_comments": self.threaded_comments.present,
             "worksheet_drawing_shape_count": self.worksheet_drawing_shapes.shape_count,
             "worksheet_drawing_text_shape_count": (
                 self.worksheet_drawing_shapes.text_shape_count

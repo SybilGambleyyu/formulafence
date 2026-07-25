@@ -1497,6 +1497,53 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Character-level text, formatting, phonetic hints, shared-string indexes, "
             "and cell locations are compared privately and intentionally omitted."
         )
+    threaded_comments = profile["threaded_comments"]
+    if threaded_comments["present"]:
+        lines.extend(
+            [
+                "",
+                "## Modern threaded comments",
+                "",
+                (
+                    "- **Worksheets / threaded-comment parts / threads:** "
+                    f"{threaded_comments['worksheet_threaded_comment_sheet_count']} / "
+                    f"{threaded_comments['threaded_comment_part_count']} / "
+                    f"{threaded_comments['comment_thread_count']}"
+                ),
+                (
+                    "- **Comments (replies / resolved / with text):** "
+                    f"{threaded_comments['comment_count']} "
+                    f"({threaded_comments['reply_count']} / "
+                    f"{threaded_comments['resolved_comment_count']} / "
+                    f"{threaded_comments['comment_with_text_count']})"
+                ),
+                (
+                    "- **Mentions / mentioned people:** "
+                    f"{threaded_comments['mention_count']} / "
+                    f"{threaded_comments['mentioned_person_count']}"
+                ),
+                (
+                    "- **Person parts / people / unreferenced people:** "
+                    f"{threaded_comments['person_part_count']} / "
+                    f"{threaded_comments['person_count']} / "
+                    f"{threaded_comments['orphan_person_count']}"
+                ),
+                (
+                    "- **Package binding relationships:** "
+                    f"{threaded_comments['binding_relationship_count']} "
+                    f"({threaded_comments['external_relationship_count']} external)"
+                ),
+            ]
+        )
+        if threaded_comments["unrecognized_threaded_comment_count"]:
+            lines.append(
+                "- **Unrecognized or malformed threaded-comment metadata:** "
+                f"{threaded_comments['unrecognized_threaded_comment_count']}"
+            )
+        lines.append(
+            "Comment text, cell references, timestamps, reply links, person identities, "
+            "and raw IDs are compared privately and intentionally omitted."
+        )
     worksheet_drawing_shapes = profile["worksheet_drawing_shapes"]
     if worksheet_drawing_shapes["present"]:
         lines.extend(

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.42.0/formulafence-0.42.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.43.0/formulafence-0.43.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -79,6 +79,7 @@ rules:
   no_cell_fill_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
+  no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
@@ -117,7 +118,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, character-level rich-text runs/phonetic hints, unexplained stored-formula-result controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, character-level rich-text runs/phonetic hints, unexplained stored-formula-result controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -740,6 +741,42 @@ stored presentation declarations only. The boundary follows Microsoft's
 [shared-string-table guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-shared-string-table),
 the Open XML `r` [rich-text-run definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.run?view=openxml-3.0.1),
 and the `is` [inline-string definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.inlinestring?view=openxml-3.0.1).
+
+FormulaFence also inventories modern **threaded comments**. Excel stores a
+thread's top-level comment and replies outside the cell grid, together with
+resolution state, mention bindings, and separate person records. Those records
+can hold assumptions, instructions, review feedback, and approval context even
+when every ordinary cell is unchanged. FormulaFence follows the documented
+worksheet → threaded-comments and workbook → persons package relationships,
+then privately compares the comment/reply graph, text, cell binding, stored
+timestamp, `done` state, mention range/person association, extension material,
+and person definitions. A material change emits `FF045`; enable
+`no_threaded_comment_changes` for `FFP045` in CI. The package boundary follows
+Microsoft's [threaded-comment overview](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/e0fb917a-1107-409a-852f-13b47aea70dc),
+[Threaded Comments part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/66e1875d-c60a-48eb-bf88-41066d45fea8),
+and [Persons part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1a170d26-42a2-46f0-b2b6-0ff1dec1c344).
+
+Profiles expose only worksheet/part/thread, comment/reply/resolved/text,
+mention, person/unreferenced-person, binding-relationship, and malformed-
+metadata counts. Comment bodies, cell references, timestamps, parent links,
+person names/user IDs/provider IDs, relationship IDs, and GUIDs never enter
+profiles, Markdown, JSON, `FF045` details, or SARIF. The scanner rebuilds the
+thread structure and author/mention association before hashing, so consistent
+writer-generated comment, parent, person, mention, and package relationship-ID
+rewrites stay quiet. It also accepts equivalent Boolean spellings for resolution
+state. Missing, duplicate, unsafe, unbound, malformed, unreadable, oversized,
+or over-budget metadata becomes an explicit coverage warning; XML reads are
+bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts.
+
+The scope is deliberately static and narrow: FormulaFence does not render
+comments, validate that a mention's character offsets match text, send a
+notification, resolve an account, fetch a relationship target, or inspect
+legacy note/placeholder content. It does not infer collaboration permissions,
+cloud-sync state, or whether a comment is visible in a particular Excel client.
+The documented [threaded-comment schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/adb84732-9fc8-48b6-bddc-6b0bcdaad940)
+defines the stored `personId`, parent/reply, `done`, and mention structures;
+FormulaFence compares those declarations without executing any collaboration
+behavior.
 
 FormulaFence also inventories non-chart **Worksheet DrawingML regular and group
 shapes**. A worksheet can point to a DrawingML part whose `xdr:sp` text boxes

@@ -79,6 +79,7 @@ from formulafence.models import (
     SheetSnapshot,
     SlicerTimelineCacheSnapshot,
     TableSnapshot,
+    ThreadedCommentSnapshot,
     WhatIfDataTableSnapshot,
     WorkbookLoadError,
     WorkbookProtectionSnapshot,
@@ -215,6 +216,15 @@ _CHART_RELATED_PART_HASH_CHUNK_BYTES = 1024 * 1024
 _WORKSHEET_DRAWING_SHAPE_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_COUNT = 512
+_THREADED_COMMENT_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_THREADED_COMMENT_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_THREADED_COMMENT_TOTAL_XML_MAX_COUNT = 512
+_THREADED_COMMENT_PART_PATTERN = re.compile(
+    r"^xl/threadedComments/[^/]+\.xml$", re.IGNORECASE
+)
+_THREADED_COMMENT_PERSON_PART_PATTERN = re.compile(
+    r"^xl/persons/[^/]+\.xml$", re.IGNORECASE
+)
 _PIVOT_TABLE_PART_PATTERN = re.compile(r"^xl/pivotTables/[^/]+\.xml$", re.IGNORECASE)
 _PIVOT_CACHE_DEFINITION_PART_PATTERN = re.compile(
     r"^xl/pivotCache/pivotCacheDefinition[^/]*\.xml$", re.IGNORECASE
@@ -255,12 +265,30 @@ _DRAWINGML_CHART_NS = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 _DRAWINGML_CHART_DRAWING_NS = (
     "http://schemas.openxmlformats.org/drawingml/2006/chartDrawing"
 )
+_THREADED_COMMENT_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
+)
+_THREADED_COMMENT_PERSON_NS = _THREADED_COMMENT_NS
+_THREADED_COMMENT_LEGACY_PERSON_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2017/person"
+)
+_THREADED_COMMENT_PERSON_NAMESPACES = frozenset(
+    {_THREADED_COMMENT_PERSON_NS, _THREADED_COMMENT_LEGACY_PERSON_NS}
+)
 _WORKSHEET_CONTROL_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/control"
 _WORKSHEET_CTRLPROP_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/ctrlProp"
 _WORKSHEET_OLE_OBJECT_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/oleObject"
 _WORKSHEET_EMBEDDED_PACKAGE_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/package"
 _WORKSHEET_VML_DRAWING_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/vmlDrawing"
 _WORKSHEET_DRAWING_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/drawing"
+_THREADED_COMMENT_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2017/10/relationships/threadedComment"
+)
+_THREADED_COMMENT_PERSON_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2017/10/relationships/person"
+)
+_THREADED_COMMENT_CONTENT_TYPE = "application/vnd.ms-excel.threadedcomments+xml"
+_THREADED_COMMENT_PERSON_CONTENT_TYPE = "application/vnd.ms-excel.person+xml"
 _CHART_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/chart"
 _CHART_USER_SHAPES_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/chartUserShapes"
 _PIVOT_TABLE_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/pivotTable"
@@ -549,6 +577,14 @@ class _RichTextRunMetadata:
     """Raw character-level string presentation retained before reader loss."""
 
     controls: RichTextRunSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ThreadedCommentMetadata:
+    """Raw modern-comment evidence retained before the workbook reader omits it."""
+
+    comments: ThreadedCommentSnapshot
     warnings: tuple[str, ...]
 
 
@@ -865,6 +901,14 @@ class _WorksheetDrawingShapeBudget:
 
     remaining_bytes: int = _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _ThreadedCommentBudget:
+    """Bound threaded-comment and person XML bytes in one package scan."""
+
+    remaining_bytes: int = _THREADED_COMMENT_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _THREADED_COMMENT_TOTAL_XML_MAX_COUNT
 
 
 @dataclass
@@ -18426,6 +18470,1133 @@ def _rich_text_run_metadata(path: Path) -> _RichTextRunMetadata:
     return _RichTextRunMetadata(snapshot, tuple(sorted(warnings)))
 
 
+@dataclass(frozen=True)
+class _ThreadedCommentRawRelationship:
+    """One private package relationship used to locate modern comments."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+
+@dataclass(frozen=True)
+class _ThreadedCommentPerson:
+    """One private person record with its writer-generated identifier detached."""
+
+    identifier: str | None
+    fragment: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class _ThreadedCommentPersonInspection:
+    """Private result of reading one modern-comment person part."""
+
+    member: str
+    present: bool = False
+    person_count: int = 0
+    people: tuple[_ThreadedCommentPerson, ...] = ()
+    unrecognized_count: int = 0
+    definition_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _ThreadedCommentRawEntry:
+    """One private comment node prior to graph canonicalisation."""
+
+    identifier: str | None
+    parent_identifier: str | None
+    fragment: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class _ThreadedCommentPartInspection:
+    """Private result of reading one worksheet threaded-comment part."""
+
+    member: str
+    present: bool = False
+    comment_thread_count: int = 0
+    comment_count: int = 0
+    reply_count: int = 0
+    resolved_comment_count: int = 0
+    comment_with_text_count: int = 0
+    mention_count: int = 0
+    referenced_person_ids: frozenset[str] = frozenset()
+    mentioned_person_ids: frozenset[str] = frozenset()
+    unrecognized_count: int = 0
+    definition_signature: str | None = None
+
+
+def _threaded_comment_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> tuple[_ThreadedCommentRawRelationship, ...] | None:
+    """Read modern-comment relationships without following their targets."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for threaded-comment inspection "
+            f"({type(error).__name__}); affected comments were not compared."
+        )
+        return None
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting threaded comments; "
+            "affected comments were not compared."
+        )
+        return None
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_ThreadedCommentRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _ThreadedCommentRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting "
+            "threaded comments; affected comments may be incomplete."
+        )
+        return None
+    return tuple(relationships)
+
+
+def _threaded_comment_content_type_member(value: str | None) -> str | None:
+    """Return a safe archive member from one content-types ``PartName``."""
+    if not value or not value.startswith("/"):
+        return None
+    member = posixpath.normpath(value.lstrip("/"))
+    if member in {".", ".."} or member.startswith("../"):
+        return None
+    return member
+
+
+def _threaded_comment_package_members(
+    archive: ZipFile,
+    warnings: set[str],
+) -> tuple[
+    set[str],
+    set[str],
+    dict[str, tuple[str, ...]],
+    list[tuple[str, str]],
+]:
+    """Locate declared and conventionally named modern-comment package parts."""
+    member_counts: dict[str, int] = defaultdict(int)
+    threaded_members: set[str] = set()
+    person_members: set[str] = set()
+    for entry in archive.infolist():
+        member = entry.filename
+        if _THREADED_COMMENT_PART_PATTERN.fullmatch(member):
+            threaded_members.add(member)
+            member_counts[member] += 1
+        elif _THREADED_COMMENT_PERSON_PART_PATTERN.fullmatch(member):
+            person_members.add(member)
+            member_counts[member] += 1
+    content_types: dict[str, list[str]] = defaultdict(list)
+    issues: list[tuple[str, str]] = [
+        ("duplicate-threaded-comment-package-member", repr((member, count)))
+        for member, count in member_counts.items()
+        if count > 1
+    ]
+    try:
+        root = _xml_root(archive, "[Content_Types].xml")
+    except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect OOXML content types for threaded comments "
+            f"({type(error).__name__}); affected comments may be incomplete."
+        )
+        issues.append(("content-type-scan-failure", type(error).__name__))
+        return threaded_members, person_members, {}, issues
+    if (
+        _xml_namespace(root.tag) != _CONTENT_TYPES_NS
+        or _xml_local_name(root.tag) != "Types"
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected OOXML content-types root while inspecting "
+            "threaded comments; affected comments may be incomplete."
+        )
+        issues.append(("unexpected-content-types-root", _xml_display_name(root.tag)))
+        return threaded_members, person_members, {}, issues
+
+    override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
+    default_tag = f"{{{_CONTENT_TYPES_NS}}}Default"
+    for child in root:
+        if child.tag == default_tag:
+            continue
+        if child.tag != override_tag:
+            issues.append(("unrecognised-content-types-child", _xml_display_name(child.tag)))
+            continue
+        member = _threaded_comment_content_type_member(child.get("PartName"))
+        content_type = child.get("ContentType")
+        if member is None or content_type is None:
+            issues.append(("malformed-content-type-override", _xml_display_name(child.tag)))
+            continue
+        content_types[member].append(content_type)
+        if content_type == _THREADED_COMMENT_CONTENT_TYPE:
+            threaded_members.add(member)
+        elif content_type == _THREADED_COMMENT_PERSON_CONTENT_TYPE:
+            person_members.add(member)
+    issues.extend(
+        ("duplicate-threaded-comment-content-type-override", repr((member, types)))
+        for member, types in content_types.items()
+        if len(types) > 1
+    )
+    return (
+        threaded_members,
+        person_members,
+        {member: tuple(sorted(types)) for member, types in content_types.items()},
+        issues,
+    )
+
+
+def _threaded_comment_content_type_status(
+    member: str,
+    content_types: Mapping[str, tuple[str, ...]],
+    expected_content_type: str,
+) -> str:
+    """Classify a part declaration without exposing its package path."""
+    declared = content_types.get(member, ())
+    if expected_content_type in declared:
+        return "declared"
+    return "mismatched" if declared else "unlisted"
+
+
+def _threaded_comment_xml_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _ThreadedCommentBudget,
+    *,
+    kind: str,
+) -> tuple[bytes | None, str | None]:
+    """Read one bounded threaded-comment XML part without following targets."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded threaded-comment XML part count budget; "
+            "affected comments have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("part-count-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a threaded-comment "
+            f"{kind} XML part; affected comments were not compared."
+        )
+        return None, _private_external_data_signature((("missing-member", member),))
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _THREADED_COMMENT_MAX_XML_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized threaded-comment "
+            f"{kind} XML part; affected comments have a coverage gap."
+        )
+        return None, _private_external_data_signature((("oversized-part", metadata),))
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded threaded-comment XML read budget; "
+            "affected comments have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a threaded-comment "
+            f"{kind} XML package part ({type(error).__name__}); affected comments "
+            "were not compared."
+        )
+        return None, _private_external_data_signature((("unreadable-part", metadata),))
+
+
+def _threaded_comment_person_fragment(
+    element: ElementTree.Element,
+) -> tuple[object, ...]:
+    """Canonicalise person XML while excluding its writer-generated identifier."""
+    is_person = (
+        _xml_namespace(element.tag) in _THREADED_COMMENT_PERSON_NAMESPACES
+        and _xml_local_name(element.tag) == "person"
+    )
+    attributes = tuple(
+        sorted(
+            (_xml_display_name(attribute), value)
+            for attribute, value in element.attrib.items()
+            if not (is_person and _xml_local_name(attribute) == "id")
+        )
+    )
+    children = tuple(_threaded_comment_person_fragment(child) for child in element)
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (_xml_display_name(element.tag), attributes, text, children)
+
+
+def _threaded_comment_person_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _ThreadedCommentBudget,
+) -> _ThreadedCommentPersonInspection:
+    """Inspect one person list used by modern Excel comments."""
+    payload, fallback_signature = _threaded_comment_xml_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        kind="person",
+    )
+    if payload is None:
+        return _ThreadedCommentPersonInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a threaded-comment person XML part "
+            f"({type(error).__name__}); affected comments were not compared."
+        )
+        return _ThreadedCommentPersonInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+    if (
+        _xml_namespace(root.tag) not in _THREADED_COMMENT_PERSON_NAMESPACES
+        or _xml_local_name(root.tag) != "personList"
+    ):
+        warnings.add(
+            "FormulaFence found a threaded-comment person part with an unexpected root; "
+            "affected comments were not compared."
+        )
+        return _ThreadedCommentPersonInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    people: list[_ThreadedCommentPerson] = []
+    issue_entries: list[tuple[str, str]] = []
+    extension_fragments: list[tuple[object, ...]] = []
+    try:
+        for child in root:
+            if _xml_local_name(child.tag) == "extLst":
+                extension_fragments.append(_threaded_comment_person_fragment(child))
+                continue
+            if (
+                _xml_namespace(child.tag) not in _THREADED_COMMENT_PERSON_NAMESPACES
+                or _xml_local_name(child.tag) != "person"
+            ):
+                issue_entries.append(
+                    ("unexpected-person-list-child", repr(_threaded_comment_person_fragment(child)))
+                )
+                continue
+            identifier = child.get("id")
+            if not identifier:
+                issue_entries.append(("person-without-identifier", "present"))
+            if not child.get("displayName"):
+                issue_entries.append(("person-without-display-name", "present"))
+            people.append(
+                _ThreadedCommentPerson(
+                    identifier=identifier,
+                    fragment=_threaded_comment_person_fragment(child),
+                )
+            )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested threaded-comment "
+            "person record; affected comments were not compared."
+        )
+        return _ThreadedCommentPersonInspection(
+            member=member,
+            present=True,
+            person_count=len(people),
+            unrecognized_count=len(issue_entries) + 1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    definition_entries = [
+        (f"person:{index}", repr(fragment))
+        for index, fragment in enumerate(sorted((person.fragment for person in people), key=repr))
+    ]
+    definition_entries.extend(sorted(issue_entries))
+    definition_entries.extend(
+        (f"person-list-extension:{index}", repr(fragment))
+        for index, fragment in enumerate(sorted(extension_fragments, key=repr))
+    )
+    if issue_entries:
+        warnings.add(
+            "FormulaFence found malformed or unsupported threaded-comment person metadata; "
+            "affected comments have a coverage gap."
+        )
+    return _ThreadedCommentPersonInspection(
+        member=member,
+        present=True,
+        person_count=len(people),
+        people=tuple(people),
+        unrecognized_count=len(issue_entries),
+        definition_signature=_private_external_data_signature(tuple(definition_entries)),
+    )
+
+
+def _threaded_comment_person_tokens(
+    inspections: list[_ThreadedCommentPersonInspection],
+    warnings: set[str],
+) -> tuple[dict[str, str], int, str | None]:
+    """Resolve person references by private identity material, not GUIDs."""
+    people_by_identifier: dict[str, list[_ThreadedCommentPerson]] = defaultdict(list)
+    fragments: list[tuple[object, ...]] = []
+    for inspection in inspections:
+        for person in inspection.people:
+            fragments.append(person.fragment)
+            if person.identifier:
+                people_by_identifier[person.identifier].append(person)
+
+    tokens: dict[str, str] = {}
+    duplicate_identifier_count = 0
+    for identifier, people in people_by_identifier.items():
+        if len(people) != 1:
+            duplicate_identifier_count += 1
+            continue
+        tokens[identifier] = repr(people[0].fragment)
+    if duplicate_identifier_count:
+        warnings.add(
+            "FormulaFence found duplicate threaded-comment person identifiers; "
+            "affected comments have a coverage gap."
+        )
+    signature_entries = tuple(
+        (f"person:{index}", repr(fragment))
+        for index, fragment in enumerate(sorted(fragments, key=repr))
+    )
+    return (
+        tokens,
+        duplicate_identifier_count,
+        _private_external_data_signature(signature_entries),
+    )
+
+
+def _threaded_comment_boolean(value: str | None) -> tuple[bool, bool]:
+    """Read one ``done`` flag while accepting the normal OOXML spellings."""
+    if value is None:
+        return False, True
+    if value.casefold() in {"1", "true"}:
+        return True, True
+    if value.casefold() in {"0", "false"}:
+        return False, True
+    return False, False
+
+
+def _threaded_comment_xml_fragment(
+    element: ElementTree.Element,
+    person_tokens: Mapping[str, str],
+) -> tuple[object, ...]:
+    """Canonicalise a comment node while replacing volatile linkage IDs."""
+    namespace = _xml_namespace(element.tag)
+    local_name = _xml_local_name(element.tag)
+    is_comment = namespace == _THREADED_COMMENT_NS and local_name == "threadedComment"
+    is_mention = namespace == _THREADED_COMMENT_NS and local_name == "mention"
+    attributes: list[tuple[str, object]] = []
+    for attribute, value in element.attrib.items():
+        attribute_name = _xml_local_name(attribute)
+        if is_comment and attribute_name in {"id", "parentId", "done"}:
+            continue
+        if is_mention and attribute_name == "mentionId":
+            continue
+        if is_comment and attribute_name == "personId":
+            attributes.append(
+                (
+                    _xml_display_name(attribute),
+                    ("person", person_tokens.get(value, "unresolved-person")),
+                )
+            )
+            continue
+        if is_mention and attribute_name == "mentionpersonId":
+            attributes.append(
+                (
+                    _xml_display_name(attribute),
+                    ("person", person_tokens.get(value, "unresolved-person")),
+                )
+            )
+            continue
+        attributes.append((_xml_display_name(attribute), value))
+    if is_comment:
+        done, _valid = _threaded_comment_boolean(element.get("done"))
+        attributes.append(("done", "true" if done else "false"))
+    children = tuple(
+        _threaded_comment_xml_fragment(child, person_tokens) for child in element
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes, key=repr)),
+        text,
+        children,
+    )
+
+
+def _threaded_comment_forest(
+    entries: list[_ThreadedCommentRawEntry],
+) -> tuple[tuple[tuple[object, ...], ...], tuple[tuple[object, ...], ...], list[str]]:
+    """Build an ID-independent discussion forest from one comment part."""
+    entries_by_identifier: dict[str, list[_ThreadedCommentRawEntry]] = defaultdict(list)
+    for entry in entries:
+        if entry.identifier:
+            entries_by_identifier[entry.identifier].append(entry)
+
+    unique_entries = {
+        identifier: candidates[0]
+        for identifier, candidates in entries_by_identifier.items()
+        if len(candidates) == 1
+    }
+    issues: list[str] = [
+        "duplicate-comment-identifier"
+        for candidates in entries_by_identifier.values()
+        if len(candidates) > 1
+    ]
+    children: dict[str, list[str]] = defaultdict(list)
+    roots: list[str] = []
+    invalid_fragments: list[tuple[object, ...]] = []
+    for entry in entries:
+        if not entry.identifier or entry.identifier not in unique_entries:
+            invalid_fragments.append(entry.fragment)
+            if not entry.identifier:
+                issues.append("comment-without-identifier")
+            continue
+        if entry.parent_identifier is None:
+            roots.append(entry.identifier)
+            continue
+        if (
+            entry.parent_identifier == entry.identifier
+            or entry.parent_identifier not in unique_entries
+        ):
+            invalid_fragments.append(entry.fragment)
+            issues.append("unresolved-comment-parent")
+            continue
+        children[entry.parent_identifier].append(entry.identifier)
+
+    visited: set[str] = set()
+
+    def node_fragment(identifier: str, active: set[str]) -> tuple[object, ...]:
+        if identifier in active:
+            raise ValueError("cyclic-comment-parent")
+        active.add(identifier)
+        child_fragments = [
+            node_fragment(child, active)
+            for child in children.get(identifier, ())
+        ]
+        active.remove(identifier)
+        visited.add(identifier)
+        return (
+            unique_entries[identifier].fragment,
+            tuple(sorted(child_fragments, key=repr)),
+        )
+
+    forest: list[tuple[object, ...]] = []
+    for identifier in roots:
+        try:
+            forest.append(node_fragment(identifier, set()))
+        except ValueError:
+            issues.append("cyclic-comment-parent")
+    for identifier, entry in unique_entries.items():
+        if identifier not in visited:
+            invalid_fragments.append(entry.fragment)
+            issues.append("disconnected-comment-graph")
+    return (
+        tuple(sorted(forest, key=repr)),
+        tuple(sorted(invalid_fragments, key=repr)),
+        issues,
+    )
+
+
+def _threaded_comment_part_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _ThreadedCommentBudget,
+    person_tokens: Mapping[str, str],
+) -> _ThreadedCommentPartInspection:
+    """Inspect one worksheet threaded-comment part without rendering its content."""
+    payload, fallback_signature = _threaded_comment_xml_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        kind="threaded-comment",
+    )
+    if payload is None:
+        return _ThreadedCommentPartInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a threaded-comment XML part "
+            f"({type(error).__name__}); affected comments were not compared."
+        )
+        return _ThreadedCommentPartInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+    if (
+        _xml_namespace(root.tag) != _THREADED_COMMENT_NS
+        or _xml_local_name(root.tag) != "ThreadedComments"
+    ):
+        warnings.add(
+            "FormulaFence found a threaded-comment part with an unexpected root; "
+            "affected comments were not compared."
+        )
+        return _ThreadedCommentPartInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    comment_tag = f"{{{_THREADED_COMMENT_NS}}}threadedComment"
+    text_tag = f"{{{_THREADED_COMMENT_NS}}}text"
+    mentions_tag = f"{{{_THREADED_COMMENT_NS}}}mentions"
+    mention_tag = f"{{{_THREADED_COMMENT_NS}}}mention"
+    entries: list[_ThreadedCommentRawEntry] = []
+    root_fragments: list[tuple[object, ...]] = []
+    referenced_person_ids: set[str] = set()
+    mentioned_person_ids: set[str] = set()
+    issue_entries: list[str] = []
+    resolved_comment_count = 0
+    comment_with_text_count = 0
+    mention_count = 0
+    reply_count = 0
+    try:
+        for child in root:
+            if _xml_local_name(child.tag) == "extLst":
+                root_fragments.append(_threaded_comment_xml_fragment(child, person_tokens))
+                continue
+            if child.tag != comment_tag:
+                root_fragments.append(_threaded_comment_xml_fragment(child, person_tokens))
+                issue_entries.append("unexpected-threaded-comment-root-child")
+                continue
+
+            identifier = child.get("id")
+            parent_identifier = child.get("parentId")
+            if not identifier:
+                issue_entries.append("comment-without-identifier")
+            if "parentId" in child.attrib and not parent_identifier:
+                issue_entries.append("comment-with-empty-parent")
+            if parent_identifier is not None:
+                reply_count += 1
+            person_identifier = child.get("personId")
+            if not person_identifier:
+                issue_entries.append("comment-without-person")
+            else:
+                referenced_person_ids.add(person_identifier)
+                if person_identifier not in person_tokens:
+                    issue_entries.append("comment-with-unresolved-person")
+            done, valid_done = _threaded_comment_boolean(child.get("done"))
+            if done:
+                resolved_comment_count += 1
+            if not valid_done:
+                issue_entries.append("comment-with-invalid-resolution-state")
+            text_children = [element for element in child if element.tag == text_tag]
+            if text_children:
+                comment_with_text_count += 1
+            if len(text_children) > 1:
+                issue_entries.append("comment-with-multiple-text-nodes")
+            for element in child:
+                if element.tag == text_tag or _xml_local_name(element.tag) == "extLst":
+                    continue
+                if element.tag != mentions_tag:
+                    issue_entries.append("unexpected-comment-child")
+                    continue
+                for mention in element:
+                    if mention.tag != mention_tag:
+                        issue_entries.append("unexpected-mentions-child")
+                        continue
+                    mention_count += 1
+                    mentioned_identifier = mention.get("mentionpersonId")
+                    if not mentioned_identifier:
+                        issue_entries.append("mention-without-person")
+                        continue
+                    if not mention.get("mentionId"):
+                        issue_entries.append("mention-without-identifier")
+                    if not mention.get("startIndex") or not mention.get("length"):
+                        issue_entries.append("mention-without-text-range")
+                    referenced_person_ids.add(mentioned_identifier)
+                    mentioned_person_ids.add(mentioned_identifier)
+                    if mentioned_identifier not in person_tokens:
+                        issue_entries.append("mention-with-unresolved-person")
+
+            entries.append(
+                _ThreadedCommentRawEntry(
+                    identifier=identifier,
+                    parent_identifier=parent_identifier,
+                    fragment=_threaded_comment_xml_fragment(child, person_tokens),
+                )
+            )
+        forest, malformed_fragments, graph_issues = _threaded_comment_forest(entries)
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested threaded-comment "
+            "record; affected comments were not compared."
+        )
+        return _ThreadedCommentPartInspection(
+            member=member,
+            present=True,
+            comment_count=len(entries),
+            reply_count=reply_count,
+            resolved_comment_count=resolved_comment_count,
+            comment_with_text_count=comment_with_text_count,
+            mention_count=mention_count,
+            referenced_person_ids=frozenset(referenced_person_ids),
+            mentioned_person_ids=frozenset(mentioned_person_ids),
+            unrecognized_count=len(issue_entries) + 1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    issue_entries.extend(graph_issues)
+    definition_entries = [
+        (f"thread:{index}", repr(fragment))
+        for index, fragment in enumerate(forest)
+    ]
+    definition_entries.extend(
+        (f"malformed:{index}", repr(fragment))
+        for index, fragment in enumerate(malformed_fragments)
+    )
+    definition_entries.extend(
+        (f"root-extension:{index}", repr(fragment))
+        for index, fragment in enumerate(sorted(root_fragments, key=repr))
+    )
+    definition_entries.extend(
+        (f"issue:{index}", issue)
+        for index, issue in enumerate(sorted(issue_entries))
+    )
+    if issue_entries:
+        warnings.add(
+            "FormulaFence found malformed or unsupported threaded-comment metadata; "
+            "affected comments have a coverage gap."
+        )
+    return _ThreadedCommentPartInspection(
+        member=member,
+        present=True,
+        comment_thread_count=len(forest),
+        comment_count=len(entries),
+        reply_count=reply_count,
+        resolved_comment_count=resolved_comment_count,
+        comment_with_text_count=comment_with_text_count,
+        mention_count=mention_count,
+        referenced_person_ids=frozenset(referenced_person_ids),
+        mentioned_person_ids=frozenset(mentioned_person_ids),
+        unrecognized_count=len(issue_entries),
+        definition_signature=_private_external_data_signature(tuple(definition_entries)),
+    )
+
+
+def _threaded_comment_metadata(path: Path) -> _ThreadedCommentMetadata:
+    """Inspect modern comments before the workbook reader can omit them.
+
+    The scan follows only package-declared worksheet and workbook relationships,
+    never renders comment UI, resolves accounts, or follows any external target.
+    Text, locations, timestamps, identities, and raw linkage IDs remain in
+    private signatures only.
+    """
+    warnings: set[str] = set()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                sheet_parts = _sheet_xml_parts(archive)
+            except (
+                KeyError,
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                return _ThreadedCommentMetadata(
+                    ThreadedCommentSnapshot(
+                        unrecognized_threaded_comment_count=1,
+                        definition_signature=_private_external_data_signature(
+                            (("sheet-part-scan-failure", type(error).__name__),)
+                        ),
+                    ),
+                    (
+                        "FormulaFence could not inspect worksheet OOXML relationships "
+                        f"for threaded comments ({type(error).__name__}); affected "
+                        "comments were not compared.",
+                    ),
+                )
+
+            (
+                threaded_members,
+                person_members,
+                content_types,
+                package_issues,
+            ) = _threaded_comment_package_members(archive, warnings)
+            declaration_entries: list[tuple[str, str]] = []
+            coverage_entries: list[tuple[str, str]] = list(package_issues)
+            threaded_sources: dict[str, set[str]] = defaultdict(set)
+            person_sources: set[str] = set()
+            selected_relationships: list[tuple[str, _ThreadedCommentRawRelationship]] = []
+            relationship_entries: list[tuple[str, str]] = []
+
+            def inspect_binding_relationships(
+                relationships: tuple[_ThreadedCommentRawRelationship, ...],
+                *,
+                label: str,
+            ) -> None:
+                expected_type = (
+                    _THREADED_COMMENT_RELATIONSHIP
+                    if label == "worksheet-threaded-comment"
+                    else _THREADED_COMMENT_PERSON_RELATIONSHIP
+                )
+                matching_relationships = [
+                    relationship
+                    for relationship in relationships
+                    if relationship.relationship_type.casefold() == expected_type.casefold()
+                ]
+                if not matching_relationships:
+                    return
+                identifiers: dict[str, int] = defaultdict(int)
+                for relationship in relationships:
+                    if relationship.relationship_id:
+                        identifiers[relationship.relationship_id] += 1
+                coverage_entries.extend(
+                    (f"duplicate-{label}-relationship-id", "present")
+                    for count in identifiers.values()
+                    if count > 1
+                )
+                for relationship in matching_relationships:
+                    selected_relationships.append((label, relationship))
+                    if not relationship.relationship_id:
+                        coverage_entries.append(
+                            (f"{label}-relationship-without-id", "present")
+                        )
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.safe_target is None
+                    ):
+                        coverage_entries.append(
+                            (
+                                f"unsafe-{label}-relationship",
+                                repr(
+                                    (
+                                        relationship.relationship_type,
+                                        relationship.target_mode,
+                                        relationship.target,
+                                    )
+                                ),
+                            )
+                        )
+                        relationship_entries.append(
+                            (
+                                label,
+                                repr(
+                                    (
+                                        relationship.relationship_type,
+                                        relationship.target_mode,
+                                        relationship.target,
+                                    )
+                                ),
+                            )
+                        )
+                        continue
+                    if label == "worksheet-threaded-comment":
+                        # The caller adds the source worksheet after this helper.
+                        continue
+                    person_sources.add(relationship.safe_target)
+
+            for sheet, (member, sheet_kind) in sorted(
+                sheet_parts.items(),
+                key=lambda item: item[0].casefold(),
+            ):
+                if sheet_kind != "worksheet":
+                    continue
+                relationships = _threaded_comment_raw_relationships(
+                    archive,
+                    member,
+                    warnings,
+                    context="worksheet",
+                )
+                if relationships is None:
+                    coverage_entries.append(
+                        ("unreadable-worksheet-threaded-comment-relationships", member)
+                    )
+                    continue
+                before_count = len(selected_relationships)
+                inspect_binding_relationships(
+                    relationships,
+                    label="worksheet-threaded-comment",
+                )
+                for _label, relationship in selected_relationships[before_count:]:
+                    if (
+                        relationship.target_mode.casefold() == "internal"
+                        and relationship.safe_target is not None
+                    ):
+                        threaded_sources[relationship.safe_target].add(sheet)
+
+            workbook_relationships = _threaded_comment_raw_relationships(
+                archive,
+                "xl/workbook.xml",
+                warnings,
+                context="workbook",
+            )
+            if workbook_relationships is None:
+                coverage_entries.append(
+                    ("unreadable-workbook-threaded-comment-relationships", "present")
+                )
+            else:
+                inspect_binding_relationships(
+                    workbook_relationships,
+                    label="threaded-comment-person",
+                )
+
+            threaded_members.update(threaded_sources)
+            person_members.update(person_sources)
+            budget = _ThreadedCommentBudget()
+            person_inspections = [
+                _threaded_comment_person_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                for member in sorted(person_members, key=str.casefold)
+            ]
+            person_tokens, duplicate_person_count, person_definition_signature = (
+                _threaded_comment_person_tokens(person_inspections, warnings)
+            )
+            threaded_inspections = [
+                _threaded_comment_part_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                    person_tokens,
+                )
+                for member in sorted(threaded_members, key=str.casefold)
+            ]
+
+            for inspection in threaded_inspections:
+                sources = tuple(
+                    sorted(
+                        threaded_sources.get(inspection.member, ()),
+                        key=str.casefold,
+                    )
+                )
+                content_status = _threaded_comment_content_type_status(
+                    inspection.member,
+                    content_types,
+                    _THREADED_COMMENT_CONTENT_TYPE,
+                )
+                declaration_entries.append(
+                    (
+                        "threaded-comment-binding",
+                        repr((sources, content_status)),
+                    )
+                )
+                if not sources:
+                    coverage_entries.append(
+                        ("unbound-threaded-comment-part", content_status)
+                    )
+                if content_status == "mismatched":
+                    coverage_entries.append(
+                        ("mismatched-threaded-comment-content-type", "present")
+                    )
+
+            for inspection in person_inspections:
+                content_status = _threaded_comment_content_type_status(
+                    inspection.member,
+                    content_types,
+                    _THREADED_COMMENT_PERSON_CONTENT_TYPE,
+                )
+                declaration_entries.append(
+                    ("threaded-comment-person-binding", content_status)
+                )
+                if inspection.member not in person_sources:
+                    coverage_entries.append(
+                        ("unbound-threaded-comment-person-part", content_status)
+                    )
+                if content_status == "mismatched":
+                    coverage_entries.append(
+                        ("mismatched-threaded-comment-person-content-type", "present")
+                    )
+
+            referenced_person_ids = set().union(
+                *(inspection.referenced_person_ids for inspection in threaded_inspections)
+            ) if threaded_inspections else set()
+            mentioned_person_ids = set().union(
+                *(inspection.mentioned_person_ids for inspection in threaded_inspections)
+            ) if threaded_inspections else set()
+            all_people = [
+                person
+                for inspection in person_inspections
+                for person in inspection.people
+            ]
+            orphan_person_count = sum(
+                bool(person.identifier and person.identifier not in referenced_person_ids)
+                for person in all_people
+            )
+
+            definition_entries = [
+                (
+                    "threaded-comment-part",
+                    repr(
+                        (
+                            tuple(
+                                sorted(
+                                    threaded_sources.get(inspection.member, ()),
+                                    key=str.casefold,
+                                )
+                            ),
+                            _threaded_comment_content_type_status(
+                                inspection.member,
+                                content_types,
+                                _THREADED_COMMENT_CONTENT_TYPE,
+                            ),
+                            inspection.definition_signature,
+                        )
+                    ),
+                )
+                for inspection in threaded_inspections
+            ]
+            definition_entries.sort(key=lambda entry: entry[1])
+            person_entries = [
+                (
+                    "threaded-comment-person-part",
+                    repr(
+                        (
+                            _threaded_comment_content_type_status(
+                                inspection.member,
+                                content_types,
+                                _THREADED_COMMENT_PERSON_CONTENT_TYPE,
+                            ),
+                            inspection.definition_signature,
+                        )
+                    ),
+                )
+                for inspection in person_inspections
+            ]
+            person_entries.sort(key=lambda entry: entry[1])
+            if person_definition_signature is not None:
+                person_entries.append(
+                    ("threaded-comment-person-definitions", person_definition_signature)
+                )
+
+            if duplicate_person_count:
+                coverage_entries.extend(
+                    ("duplicate-threaded-comment-person-identifier", "present")
+                    for _ in range(duplicate_person_count)
+                )
+            if coverage_entries:
+                warnings.add(
+                    "FormulaFence found malformed, unbound, or unsupported threaded-comment "
+                    "metadata; affected comments have a coverage gap."
+                )
+
+            worksheet_sheets = {
+                sheet
+                for sources in threaded_sources.values()
+                for sheet in sources
+            }
+            snapshot = ThreadedCommentSnapshot(
+                worksheet_threaded_comment_sheet_count=len(worksheet_sheets),
+                threaded_comment_part_count=len(threaded_inspections),
+                comment_thread_count=sum(
+                    inspection.comment_thread_count for inspection in threaded_inspections
+                ),
+                comment_count=sum(
+                    inspection.comment_count for inspection in threaded_inspections
+                ),
+                reply_count=sum(inspection.reply_count for inspection in threaded_inspections),
+                resolved_comment_count=sum(
+                    inspection.resolved_comment_count for inspection in threaded_inspections
+                ),
+                comment_with_text_count=sum(
+                    inspection.comment_with_text_count for inspection in threaded_inspections
+                ),
+                mention_count=sum(inspection.mention_count for inspection in threaded_inspections),
+                mentioned_person_count=len(mentioned_person_ids),
+                person_part_count=len(person_inspections),
+                person_count=sum(inspection.person_count for inspection in person_inspections),
+                orphan_person_count=orphan_person_count,
+                binding_relationship_count=len(selected_relationships),
+                external_relationship_count=sum(
+                    relationship.target_mode.casefold() != "internal"
+                    for _label, relationship in selected_relationships
+                ),
+                unrecognized_threaded_comment_count=(
+                    len(coverage_entries)
+                    + sum(inspection.unrecognized_count for inspection in threaded_inspections)
+                    + sum(inspection.unrecognized_count for inspection in person_inspections)
+                ),
+                declaration_signature=_private_external_data_signature(
+                    tuple(sorted([*declaration_entries, *coverage_entries]))
+                ),
+                definition_signature=_private_external_data_signature(
+                    tuple(definition_entries)
+                ),
+                person_signature=_private_external_data_signature(tuple(person_entries)),
+                relationship_signature=_private_external_data_signature(
+                    tuple(sorted(relationship_entries))
+                ),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _ThreadedCommentMetadata(
+            ThreadedCommentSnapshot(
+                unrecognized_threaded_comment_count=1,
+                definition_signature=_private_external_data_signature(
+                    (("threaded-comment-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect threaded-comment OOXML "
+                f"({type(error).__name__}); affected comments were not compared.",
+            ),
+        )
+    return _ThreadedCommentMetadata(snapshot, tuple(sorted(warnings)))
+
+
 _WORKSHEET_DRAWING_SHAPE_ANCHORS = frozenset(
     {"twoCellAnchor", "oneCellAnchor", "absoluteAnchor"}
 )
@@ -19992,6 +21163,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     fill_metadata = _fill_metadata(source)
     formula_cached_result_metadata = _formula_cached_result_metadata(source)
     rich_text_run_metadata = _rich_text_run_metadata(source)
+    threaded_comment_metadata = _threaded_comment_metadata(source)
     worksheet_drawing_shape_metadata = _worksheet_drawing_shape_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
@@ -20035,6 +21207,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(fill_metadata.warnings)
     parser_warnings.update(formula_cached_result_metadata.warnings)
     parser_warnings.update(rich_text_run_metadata.warnings)
+    parser_warnings.update(threaded_comment_metadata.warnings)
     parser_warnings.update(worksheet_drawing_shape_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
@@ -20262,6 +21435,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         fill_controls=fill_metadata.controls,
         formula_cached_results=formula_cached_result_metadata.results,
         rich_text_runs=rich_text_run_metadata.controls,
+        threaded_comments=threaded_comment_metadata.comments,
         worksheet_drawing_shapes=worksheet_drawing_shape_metadata.shapes,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
@@ -20342,6 +21516,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "fill_controls": snapshot.fill_controls.profile_dict(),
         "formula_cached_results": snapshot.formula_cached_results.profile_dict(),
         "rich_text_runs": snapshot.rich_text_runs.profile_dict(),
+        "threaded_comments": snapshot.threaded_comments.profile_dict(),
         "worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
@@ -20374,6 +21549,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_fill_controls": snapshot.fill_controls.present,
             "has_formula_cached_results": snapshot.formula_cached_results.present,
             "has_rich_text_runs": snapshot.rich_text_runs.present,
+            "has_threaded_comments": snapshot.threaded_comments.present,
             "has_worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,

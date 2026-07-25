@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.43.0 — 2026-07-24
+
+- Inspect raw modern Excel threaded-comment and person package parts before
+  workbook readers can omit their review annotations. FormulaFence compares the
+  private comment/reply graph, stored text, cell binding, timestamp, resolution
+  state, mention range/person binding, extension material, and author/mentioned
+  person definitions while profiles, Markdown, JSON, and SARIF expose only
+  aggregate counts—never comment text, locations, timestamps, names, user IDs,
+  provider IDs, relationship IDs, or GUIDs.
+- Emit `FF045` for a material threaded-comment control change and add the
+  fail-closed `no_threaded_comment_changes` policy rule (`FFP045`). This closes
+  the review gap where an assumption, instruction, or approval reply can change
+  without changing any ordinary worksheet cell.
+- Rebuild comment trees and person/mention links from their private identities
+  so consistent writer-chosen comment, parent, person, mention, and package
+  relationship-ID rewrites stay quiet. Missing, duplicate, unsafe, unbound,
+  malformed, unreadable, oversized, or over-budget metadata becomes a visible
+  coverage warning rather than a silent omission. FormulaFence compares stored
+  package declarations only: it does not render comments, validate mention text
+  offsets, send notifications, resolve accounts, fetch targets, or inspect
+  legacy note/placeholder content.
+
 ## 0.42.0 — 2026-07-24
 
 - Inspect raw non-chart Worksheet DrawingML regular shapes (`xdr:sp`) and group

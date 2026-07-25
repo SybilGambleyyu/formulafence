@@ -52,6 +52,7 @@ from formulafence.models import (
     WhatIfDataTableSnapshot,
     WorkbookSnapshot,
     WorkbookThemeSnapshot,
+    WorksheetDimensionSnapshot,
     WorksheetDisplaySnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
@@ -1666,6 +1667,49 @@ def _workbook_control_changes(
                 (
                     "Cell border controls changed; report boundaries, totals, warnings, "
                     "or printed presentation may be altered."
+                ),
+                details=details,
+            )
+        )
+    if before.worksheet_dimension_controls != after.worksheet_dimension_controls:
+        old_controls: WorksheetDimensionSnapshot = before.worksheet_dimension_controls
+        new_controls: WorksheetDimensionSnapshot = after.worksheet_dimension_controls
+        details = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.definition_signature != new_controls.definition_signature:
+            details["worksheet_dimension_definition_material_changed"] = True
+        if (
+            old_controls.unrecognized_dimension_count
+            != new_controls.unrecognized_dimension_count
+            or (
+                (
+                    old_controls.unrecognized_dimension_count
+                    or new_controls.unrecognized_dimension_count
+                )
+                and (
+                    old_controls.unrecognized_signature
+                    != new_controls.unrecognized_signature
+                )
+            )
+        ):
+            details["unrecognized_worksheet_dimension_metadata_changed"] = True
+        changes.append(
+            Change(
+                "worksheet_dimension_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF058",
+                "high",
+                (
+                    "Worksheet dimension controls changed; wrapped content may be "
+                    "truncated, report framing altered, or automatic pagination shifted."
                 ),
                 details=details,
             )

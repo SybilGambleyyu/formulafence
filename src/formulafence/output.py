@@ -1502,6 +1502,41 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Border definitions, style indexes, and cell/row/column targets are "
             "compared privately and intentionally omitted."
         )
+    worksheet_dimension_controls = profile["worksheet_dimension_controls"]
+    if worksheet_dimension_controls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Worksheet dimension controls",
+                "",
+                (
+                    "- **Default row-height / default column-width / baseline-adjustment / "
+                    "automatic border-adjustment sheets:** "
+                    f"{worksheet_dimension_controls['default_row_height_count']} / "
+                    f"{worksheet_dimension_controls['default_column_width_count']} / "
+                    f"{worksheet_dimension_controls['default_baseline_adjustment_sheet_count']} / "
+                    f"{worksheet_dimension_controls['default_border_adjustment_sheet_count']}"
+                ),
+                (
+                    "- **Direct row heights / row baseline adjustments / row border "
+                    "adjustments / direct column widths / best-fit columns:** "
+                    f"{worksheet_dimension_controls['row_height_assignment_count']} / "
+                    f"{worksheet_dimension_controls['row_baseline_adjustment_count']} / "
+                    f"{worksheet_dimension_controls['row_border_adjustment_count']} / "
+                    f"{worksheet_dimension_controls['column_width_assignment_count']} / "
+                    f"{worksheet_dimension_controls['best_fit_column_assignment_count']}"
+                ),
+            ]
+        )
+        if worksheet_dimension_controls["unrecognized_dimension_count"]:
+            lines.append(
+                "- **Unrecognized or malformed dimension controls:** "
+                f"{worksheet_dimension_controls['unrecognized_dimension_count']}"
+            )
+        lines.append(
+            "Dimension values, row/column targets, and raw worksheet XML are compared "
+            "privately and intentionally omitted."
+        )
     worksheet_display_controls = profile["worksheet_display_controls"]
     if worksheet_display_controls["present"]:
         lines.extend(

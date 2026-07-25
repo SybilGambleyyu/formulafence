@@ -30,6 +30,7 @@ rules:
   no_workbook_theme_changes: true
   no_cell_alignment_changes: true
   no_cell_border_changes: true
+  no_worksheet_dimension_changes: true
   no_worksheet_display_control_changes: true
   no_worksheet_print_layout_changes: true
   no_formula_cached_result_changes: true
@@ -114,6 +115,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_workbook_theme_changes` | boolean | A workbook Theme binding, stored colour/font/format scheme, direct Theme-image relationship, or direct Theme-image payload changes. Theme XML, scheme names, colours, font names, image bytes, relationship IDs, and targets are compared privately. |
 | `no_cell_alignment_changes` | boolean | An effective default, direct-cell, row, or column alignment control changes. Alignment values, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_border_changes` | boolean | An effective default, direct-cell, row, or column border control changes. Border definitions, colours, style IDs, and cell/row/column targets are compared privately. |
+| `no_worksheet_dimension_changes` | boolean | A material worksheet default row/column size, Office 2010 baseline adjustment, positive direct row/column size, AutoFit, or active thick-border automatic row-height adjustment changes. Dimension values, targets, and raw XML are compared privately. |
 | `no_worksheet_display_control_changes` | boolean | A material raw worksheet view changes hidden-zero, formula-display, gridline/gridline-colour, row/column-header, outline-symbol, ruler, page-whitespace, right-to-left, non-normal-view, or split/frozen-pane controls. Sheet names, targets, pane positions, and raw view XML are compared privately. |
 | `no_worksheet_print_layout_changes` | boolean | A material saved print-area/title, print-option, margin, page-setup, fit-to-page, header/footer, or manual page-break control changes. Print ranges, header/footer text, page values, printer-setting references, and raw XML are compared privately. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
@@ -468,7 +470,8 @@ declarations, exhausted control-update limits, and unsafe or missing table
 relationships are explicit coverage warnings.
 FormulaFence does not apply a filter, evaluate `SUBTOTAL`/`AGGREGATE`, infer
 which formulas are visibility-sensitive, render a report, track arbitrary
-positive dimensions or styles, or model overflow or outline-display settings.
+positive dimensions outside its dedicated worksheet-dimension boundary or
+styles, or model overflow or outline-display settings.
 
 Excel's per-range ignored-error declarations can suppress warnings a reviewer
 would otherwise see without changing a formula or ordinary cell. FormulaFence
@@ -628,6 +631,42 @@ that restyles allocated cells. This boundary follows OOXML's
 [`border`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_border_topic_ID0EVV35.html)
 and [`xf`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_xf_topic_ID0E13S6.html)
 forms, plus Microsoft's [cell-border guidance](https://support.microsoft.com/en-us/Excel/apply-or-remove-cell-borders-on-a-worksheet).
+
+Worksheet dimensions can change the usable report surface while leaving cells
+unchanged: a fixed positive row height can cut off wrapped text, a column width
+can reframe visible fields, and a size change can move automatic page breaks.
+FormulaFence reads raw transitional and strict SpreadsheetML `sheetFormatPr`
+defaults (`defaultRowHeight`, `defaultColWidth`, and `baseColWidth`), explicit
+default `customHeight`, Office 2010 `x14ac:dyDescent` baseline adjustments, and
+active `thickTop`/`thickBottom` automatic-height adjustments. It also reads
+direct row `ht`, `customHeight`, `x14ac:dyDescent`, `thickTop`, and `thickBot`
+declarations, plus raw `<cols>/<col>` positive `width` and
+`bestFit` state. Overlapping columns resolve in file order: a later declaration
+overrides only a width or AutoFit attribute it actually supplies. A material
+change emits `FF058`; enable `no_worksheet_dimension_changes` to make it
+`FFP058` in CI.
+
+Profiles and `FF058` details expose counts only: default row/column controls,
+baseline/automatic border-adjustment sheets, direct row heights/baseline/border
+adjustments, effective positive-width and best-fit columns, and unrecognized
+controls. Sheet names, dimension values, row/column targets, raw XML, and
+writer hints remain private.
+Decimal and Boolean spelling, ordinary baseline defaults, inert thick-border
+flags under a fixed custom height, inert `customWidth`, and equivalent
+effective-column range splitting normalize away. Zero/hidden dimensions remain
+in the `FF036` visibility boundary; a change from zero to a positive width can
+therefore trigger both controls. Malformed, duplicate, unsupported, or
+budget-exhausted metadata is a coverage warning. FormulaFence compares stored
+declarations rather than rendering a workbook: it does not calculate final
+AutoFit sizes, text overflow, merged-cell layout, automatic page geometry, or
+client-specific display. This boundary follows Microsoft's
+[row-height and column-width guidance](https://support.microsoft.com/en-us/excel/change-the-column-width-and-row-height),
+[wrapped-text guidance](https://support.microsoft.com/en-us/excel/wrap-text-in-a-cell-in-excel),
+and [automatic page-break guidance](https://support.microsoft.com/en-US/Excel/insert-move-or-delete-page-breaks-in-a-worksheet),
+plus OOXML's [`sheetFormatPr`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_sheetFormatPr_topic_ID0EVAG5.html),
+[`row`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_row_topic_ID0EIKD5.html),
+and [`col`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_col_topic_ID0ELFQ4.html)
+definitions, plus Microsoft's [`dyDescent` extension documentation](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/f11dfda4-46de-4035-8418-d76b0d3898f1).
 
 Worksheet-display controls can change a reviewer's saved surface without a
 formula or value edit. FormulaFence reads raw transitional and strict

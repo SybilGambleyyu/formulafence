@@ -1850,6 +1850,72 @@ class BorderSnapshot:
 
 
 @dataclass(frozen=True)
+class WorksheetDimensionSnapshot:
+    """Safe aggregate of material worksheet dimension controls.
+
+    Row heights, column widths, AutoFit state, baseline adjustments, and
+    border-driven automatic height adjustments can truncate wrapped content,
+    reframe a report, or alter its automatic pagination without changing a
+    stored cell. Dimension values and row/column targets can reveal report
+    structure, so private signatures retain canonical effective declarations
+    while public output exposes only structural counts.
+    """
+
+    default_row_height_count: int = 0
+    default_column_width_count: int = 0
+    default_baseline_adjustment_sheet_count: int = 0
+    default_border_adjustment_sheet_count: int = 0
+    row_height_assignment_count: int = 0
+    row_baseline_adjustment_count: int = 0
+    row_border_adjustment_count: int = 0
+    column_width_assignment_count: int = 0
+    best_fit_column_assignment_count: int = 0
+    unrecognized_dimension_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+    unrecognized_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.default_row_height_count
+            or self.default_column_width_count
+            or self.default_baseline_adjustment_sheet_count
+            or self.default_border_adjustment_sheet_count
+            or self.row_height_assignment_count
+            or self.row_baseline_adjustment_count
+            or self.row_border_adjustment_count
+            or self.column_width_assignment_count
+            or self.best_fit_column_assignment_count
+            or self.unrecognized_dimension_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural dimension evidence without values or targets."""
+        return {
+            "present": self.present,
+            "default_row_height_count": self.default_row_height_count,
+            "default_column_width_count": self.default_column_width_count,
+            "default_baseline_adjustment_sheet_count": (
+                self.default_baseline_adjustment_sheet_count
+            ),
+            "default_border_adjustment_sheet_count": (
+                self.default_border_adjustment_sheet_count
+            ),
+            "row_height_assignment_count": self.row_height_assignment_count,
+            "row_baseline_adjustment_count": self.row_baseline_adjustment_count,
+            "row_border_adjustment_count": self.row_border_adjustment_count,
+            "column_width_assignment_count": self.column_width_assignment_count,
+            "best_fit_column_assignment_count": (
+                self.best_fit_column_assignment_count
+            ),
+            "unrecognized_dimension_count": self.unrecognized_dimension_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetDisplaySnapshot:
     """Safe aggregate of material worksheet display controls.
 
@@ -3210,6 +3276,9 @@ class WorkbookSnapshot:
         default_factory=AlignmentSnapshot
     )
     border_controls: BorderSnapshot = field(default_factory=BorderSnapshot)
+    worksheet_dimension_controls: WorksheetDimensionSnapshot = field(
+        default_factory=WorksheetDimensionSnapshot
+    )
     worksheet_display_controls: WorksheetDisplaySnapshot = field(
         default_factory=WorksheetDisplaySnapshot
     )
@@ -3430,6 +3499,20 @@ class WorkbookSnapshot:
                 + self.border_controls.column_border_assignment_count
             ),
             "has_border_controls": self.border_controls.present,
+            "worksheet_dimension_control_count": (
+                self.worksheet_dimension_controls.default_row_height_count
+                + self.worksheet_dimension_controls.default_column_width_count
+                + self.worksheet_dimension_controls.default_baseline_adjustment_sheet_count
+                + self.worksheet_dimension_controls.default_border_adjustment_sheet_count
+                + self.worksheet_dimension_controls.row_height_assignment_count
+                + self.worksheet_dimension_controls.row_baseline_adjustment_count
+                + self.worksheet_dimension_controls.row_border_adjustment_count
+                + self.worksheet_dimension_controls.column_width_assignment_count
+                + self.worksheet_dimension_controls.best_fit_column_assignment_count
+            ),
+            "has_worksheet_dimension_controls": (
+                self.worksheet_dimension_controls.present
+            ),
             "worksheet_display_control_count": (
                 self.worksheet_display_controls.zero_hidden_view_count
                 + self.worksheet_display_controls.formula_view_count

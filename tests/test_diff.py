@@ -20,6 +20,7 @@ from .helpers import (
     add_ordinary_dimension_resize,
     add_power_pivot_data_model_direct_relationship,
     add_protected_range,
+    add_worksheet_dimension_baseline_adjustments,
     break_slicer_timeline_pivot_cache_binding,
     change_alignment_definition,
     change_border_definition,
@@ -90,6 +91,7 @@ from .helpers import (
     change_what_if_data_table_input,
     change_workbook_theme_colour,
     change_workbook_theme_image_payload,
+    change_worksheet_dimension_controls,
     change_worksheet_display_controls,
     change_worksheet_drawing_shape_hyperlink,
     change_worksheet_drawing_shape_presentation,
@@ -135,6 +137,7 @@ from .helpers import (
     corrupt_threaded_comment_root,
     corrupt_what_if_data_table_input,
     corrupt_workbook_theme_root,
+    corrupt_worksheet_dimension_control,
     corrupt_worksheet_display_control,
     corrupt_worksheet_drawing_shape_root,
     corrupt_worksheet_embedded_control_activex_root,
@@ -200,6 +203,7 @@ from .helpers import (
     make_spill_model,
     make_strict_border_model,
     make_strict_workbook_theme_image_model,
+    make_strict_worksheet_dimension_model,
     make_strict_worksheet_display_model,
     make_strict_worksheet_print_layout_model,
     make_table_model,
@@ -207,6 +211,7 @@ from .helpers import (
     make_three_d_model,
     make_what_if_data_table_model,
     make_workbook_theme_image_model,
+    make_worksheet_dimension_model,
     make_worksheet_display_model,
     make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
@@ -240,6 +245,8 @@ from .helpers import (
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
     normalize_workbook_theme_relationship_identifiers,
+    normalize_worksheet_dimension_control_spelling,
+    normalize_worksheet_dimension_inert_declarations,
     normalize_worksheet_display_control_spelling,
     normalize_worksheet_print_layout_control_spelling,
     normalize_worksheet_print_layout_inert_controls,
@@ -4406,6 +4413,210 @@ def test_zero_dimension_visibility_normalizes_equivalent_zero_spellings(tmp_path
         change.kind for change in report.changes
     }
     assert "FF036" not in {finding.rule_id for finding in report.findings}
+
+
+def test_positive_dimension_resizes_are_distinct_from_visibility_controls(tmp_path) -> None:
+    baseline = make_zero_dimension_visibility_model(tmp_path / "baseline.xlsx")
+    candidate = make_zero_dimension_visibility_model(tmp_path / "candidate.xlsx")
+    add_ordinary_dimension_resize(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "FF036" not in {finding.rule_id for finding in report.findings}
+    assert "FF058" in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_dimension_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_worksheet_dimension_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_dimension_model(tmp_path / "candidate.xlsx")
+    change_worksheet_dimension_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_dimension_controls_changed"
+    )
+
+    assert baseline_snapshot.cells == candidate_snapshot.cells
+    assert baseline_snapshot.summary()["worksheet_dimension_control_count"] == 9
+    assert baseline_snapshot.summary()["has_worksheet_dimension_controls"] is True
+    assert profile["worksheet_dimension_controls"] == {
+        "present": True,
+        "default_row_height_count": 1,
+        "default_column_width_count": 1,
+        "default_baseline_adjustment_sheet_count": 0,
+        "default_border_adjustment_sheet_count": 1,
+        "row_height_assignment_count": 1,
+        "row_baseline_adjustment_count": 0,
+        "row_border_adjustment_count": 1,
+        "column_width_assignment_count": 2,
+        "best_fit_column_assignment_count": 2,
+        "unrecognized_dimension_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Worksheet dimension controls" in markdown
+    assert change.details["worksheet_dimension_definition_material_changed"] is True
+    assert "FF058" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for private_value in (
+        '"defaultRowHeight": "21"',
+        '"defaultColWidth": "17.5"',
+        '"width": "24"',
+        '"min": "2"',
+        '"r": "3"',
+        "customWidth",
+    ):
+        assert all(private_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_dimension_writer_noise_and_inert_declarations_are_normalized(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_dimension_model(tmp_path / "baseline.xlsx")
+    spelling_equivalent = make_worksheet_dimension_model(
+        tmp_path / "spelling-equivalent.xlsx"
+    )
+    inert_equivalent = make_worksheet_dimension_model(
+        tmp_path / "inert-equivalent.xlsx"
+    )
+    normalize_worksheet_dimension_control_spelling(spelling_equivalent)
+    normalize_worksheet_dimension_inert_declarations(inert_equivalent)
+
+    spelling_report = compare_snapshots(
+        load_snapshot(baseline),
+        load_snapshot(spelling_equivalent),
+    )
+    inert_report = compare_snapshots(
+        load_snapshot(baseline),
+        load_snapshot(inert_equivalent),
+    )
+
+    assert spelling_report.changes == []
+    assert spelling_report.findings == []
+    assert inert_report.changes == []
+    assert inert_report.findings == []
+
+
+def test_worksheet_dimension_baseline_adjustments_are_material(tmp_path) -> None:
+    baseline = make_worksheet_dimension_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_dimension_model(tmp_path / "candidate.xlsx")
+    add_worksheet_dimension_baseline_adjustments(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert (
+        candidate_snapshot.worksheet_dimension_controls.default_baseline_adjustment_sheet_count
+        == 1
+    )
+    assert (
+        candidate_snapshot.worksheet_dimension_controls.row_baseline_adjustment_count
+        == 1
+    )
+    assert (
+        candidate_snapshot.worksheet_dimension_controls.default_border_adjustment_sheet_count
+        == 0
+    )
+    assert candidate_snapshot.worksheet_dimension_controls.unrecognized_dimension_count == 0
+    assert not any(
+        "worksheet-dimension" in warning for warning in candidate_snapshot.parser_warnings
+    )
+    assert "FF058" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("dyDescent" not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_dimension_malformed_controls_fail_closed_and_redact_values(tmp_path) -> None:
+    baseline = make_worksheet_dimension_model(tmp_path / "baseline.xlsx")
+    malformed = make_worksheet_dimension_model(tmp_path / "malformed.xlsx")
+    corrupt_worksheet_dimension_control(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, malformed_snapshot)
+
+    assert malformed_snapshot.cells == baseline_snapshot.cells
+    assert malformed_snapshot.worksheet_dimension_controls.unrecognized_dimension_count >= 1
+    assert any(
+        "malformed or unsupported worksheet-dimension" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF058"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for private_value in ("PRIVATE-INVALID-DIMENSION", '"ht": "NaN"'):
+        assert all(private_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_dimension_preexisting_coverage_gap_stays_distinct(tmp_path) -> None:
+    baseline = make_worksheet_dimension_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_dimension_model(tmp_path / "candidate.xlsx")
+    change_worksheet_dimension_controls(candidate)
+    corrupt_worksheet_dimension_control(baseline)
+    corrupt_worksheet_dimension_control(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_dimension_controls_changed"
+    )
+
+    assert "FF058" in {finding.rule_id for finding in report.findings}
+    assert "unrecognized_worksheet_dimension_metadata_changed" not in change.details
+
+
+def test_ordinary_workbook_has_no_worksheet_dimension_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.worksheet_dimension_controls.present is False
+    assert snapshot.worksheet_dimension_controls.column_width_assignment_count == 0
+    assert not any("worksheet-dimension" in warning for warning in snapshot.parser_warnings)
+
+
+def test_strict_worksheet_dimensions_are_supported(tmp_path) -> None:
+    baseline = make_strict_worksheet_dimension_model(tmp_path / "baseline.xlsx")
+    candidate = make_strict_worksheet_dimension_model(tmp_path / "candidate.xlsx")
+    change_worksheet_dimension_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+
+    assert baseline_snapshot.worksheet_dimension_controls.row_height_assignment_count == 1
+    assert baseline_snapshot.worksheet_dimension_controls.column_width_assignment_count == 2
+    assert baseline_snapshot.worksheet_dimension_controls.best_fit_column_assignment_count == 2
+    assert baseline_snapshot.worksheet_dimension_controls.unrecognized_dimension_count == 0
+    assert not any(
+        "worksheet-dimension" in warning for warning in baseline_snapshot.parser_warnings
+    )
+    assert "FF058" in {finding.rule_id for finding in report.findings}
 
 
 def test_zero_dimension_visibility_malformed_controls_fail_closed(tmp_path) -> None:

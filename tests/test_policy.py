@@ -38,6 +38,7 @@ from .helpers import (
     change_threaded_comment_reply,
     change_what_if_data_table_input,
     change_workbook_theme_colour,
+    change_worksheet_dimension_controls,
     change_worksheet_display_controls,
     change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
@@ -82,6 +83,7 @@ from .helpers import (
     make_three_d_model,
     make_what_if_data_table_model,
     make_workbook_theme_image_model,
+    make_worksheet_dimension_model,
     make_worksheet_display_model,
     make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
@@ -570,6 +572,21 @@ def test_policy_can_block_cell_border_changes(tmp_path) -> None:
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
         "FFP057"
+    }
+
+
+def test_policy_can_block_worksheet_dimension_changes(tmp_path) -> None:
+    baseline = make_worksheet_dimension_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_dimension_model(tmp_path / "candidate.xlsx")
+    change_worksheet_dimension_controls(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_worksheet_dimension_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP058"
     }
 
 

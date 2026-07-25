@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.55.0/formulafence-0.55.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.56.0/formulafence-0.56.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -80,6 +80,7 @@ rules:
   no_workbook_theme_changes: true
   no_cell_alignment_changes: true
   no_cell_border_changes: true
+  no_worksheet_dimension_changes: true
   no_worksheet_display_control_changes: true
   no_worksheet_print_layout_changes: true
   no_formula_cached_result_changes: true
@@ -130,7 +131,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -548,7 +549,8 @@ extensions, malformed declarations, exhausted control-update limits, or
 unsafe/missing table relationships are visible coverage warnings rather than
 silent omissions. FormulaFence does not apply a filter, calculate a result,
 infer which formulas are visibility sensitive, render a report, track ordinary
-positive width/height or style changes, or model outline-display settings. The boundary follows
+positive width/height outside the dedicated worksheet-dimension boundary, or
+model outline-display settings. The boundary follows
 Microsoft's [SUBTOTAL documentation](https://support.microsoft.com/en-us/excel/functions/subtotal-function),
 its [row-height and column-width guidance](https://support.microsoft.com/en-us/excel/change-the-column-width-and-row-height),
 the Open XML [`autoFilter`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_autoFilter_topic_ID0EIDM4.html),
@@ -763,6 +765,45 @@ and [`xf`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_xf_topic_ID0E1
 forms, the Open XML SDK's
 [`Border` schema surface](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.border?view=openxml-3.0.1),
 and Microsoft's [cell-border guidance](https://support.microsoft.com/en-us/Excel/apply-or-remove-cell-borders-on-a-worksheet).
+
+FormulaFence also inventories **material worksheet-dimension controls**. A
+positive row-height or column-width edit can clip wrapped text, suppress visual
+context, or reframe a report without changing a cell value or formula. It can
+also move Excel's automatic page breaks. FormulaFence reads raw transitional
+and strict SpreadsheetML `sheetFormatPr` defaults (`defaultRowHeight`,
+`defaultColWidth`, and `baseColWidth`), explicit/default `customHeight`, Office
+2010 `x14ac:dyDescent` baseline adjustments, and active automatic thick-border
+row adjustments. It also compares direct row
+`ht`/`customHeight`/`x14ac:dyDescent`/automatic `thickTop` or `thickBot` controls and raw
+`<cols>/<col>` positive `width` and `bestFit` declarations. Overlapping column
+records are applied in XML order so only a later *present* width or AutoFit
+attribute overrides the earlier effective state. A material change emits
+`FF058`; enable `no_worksheet_dimension_changes` for `FFP058`.
+
+Profiles expose only counts for default row/column sizing, baseline-adjustment
+and automatic border-adjustment sheets, direct row heights, row baseline/border
+adjustments, effective positive-width columns, AutoFit columns, and malformed
+controls. Dimension values, sheet names, row/column targets,
+`customHeight`/`customWidth` flags, and raw XML never enter profiles, Markdown
+control sections, `FF058` details, or SARIF. Decimal and Boolean spelling,
+baseline defaults, inert thick-border
+flags under a fixed custom height, the `customWidth` writer hint, and equivalent
+effective column-range splitting are normalized. Zero/hidden dimensions remain
+under `FF036` because they conceal content; a later positive width can therefore
+both reveal a column and change an ordinary dimension.
+
+Missing, duplicate, malformed, unsupported, or budget-exhausted metadata is a
+coverage warning rather than a silent omission. FormulaFence compares stored
+declarations, not a rendered workbook: it does not calculate final AutoFit
+sizes, font/merged-cell/overflow layout, exact automatic page breaks, print
+geometry, or client-specific visibility. The boundary follows Microsoft's
+[row-height and column-width guidance](https://support.microsoft.com/en-us/excel/change-the-column-width-and-row-height),
+its [wrapped-text guidance](https://support.microsoft.com/en-us/excel/wrap-text-in-a-cell-in-excel),
+its [automatic page-break guidance](https://support.microsoft.com/en-US/Excel/insert-move-or-delete-page-breaks-in-a-worksheet),
+and OOXML's [`sheetFormatPr`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_sheetFormatPr_topic_ID0EVAG5.html),
+[`row`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_row_topic_ID0EIKD5.html),
+and [`col`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_col_topic_ID0ELFQ4.html)
+forms, plus Microsoft's [`dyDescent` extension documentation](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/f11dfda4-46de-4035-8418-d76b0d3898f1).
 
 FormulaFence also inventories **material worksheet-display controls**. A saved
 worksheet view can make an unchanged zero appear blank, replace displayed

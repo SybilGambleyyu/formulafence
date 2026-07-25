@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.56.0 — 2026-07-26
+
+- Inspect material worksheet-dimension controls directly from raw transitional
+  and strict SpreadsheetML before ordinary readers flatten row/column state:
+  `sheetFormatPr` default row/column/base sizing, positive direct row heights,
+  layered effective positive column widths, `bestFit`, `customHeight`, Office
+  2010 `x14ac:dyDescent` baseline adjustments, and active thick-border automatic
+  row-height adjustments. Profiles, Markdown, JSON, and SARIF expose aggregate
+  counts only; dimension values, sheet names, row/column targets, writer hints,
+  and raw XML remain private.
+- Emit `FF058` for a material worksheet-dimension control change and add the
+  fail-closed `no_worksheet_dimension_changes` policy rule (`FFP058`). This
+  closes the review gap where wrapped content, report framing, baseline layout,
+  or automatic pagination can change without a formula or ordinary cell edit.
+- Keep zero/hidden dimensions in the existing `FF036` visibility boundary while
+  allowing a positive override to be compared as an ordinary sizing change.
+  Normalize decimal/Boolean spelling, ordinary baseline defaults, the
+  `customWidth` writer hint, inert thick-border flags under fixed custom heights,
+  and equivalent layered column-range splitting. Malformed, duplicate,
+  unsupported, or budget-exhausted dimension metadata is explicit coverage
+  evidence; malformed dimensions are isolated only in the temporary ordinary
+  reader copy so the original raw package remains auditable fail-closed.
+
 ## 0.55.0 — 2026-07-26
 
 - Inspect material effective cell-border controls directly from raw

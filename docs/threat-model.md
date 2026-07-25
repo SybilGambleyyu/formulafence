@@ -172,8 +172,28 @@ review prompt, not proof of an error.
   and unsafe/missing table relationships remain visible coverage warnings, and
   `no_filter_visibility_changes` can block the change as `FFP036`.
   FormulaFence does not apply filters, calculate `SUBTOTAL`/`AGGREGATE`, infer
-  formula sensitivity, render views, track ordinary positive widths/heights or
-  styles, or model outline-display settings.
+  formula sensitivity, render views, track ordinary positive widths/heights
+  outside its dedicated worksheet-dimension boundary or styles, or model
+  outline-display settings.
+- Positive worksheet dimensions can conceal wrapped detail, reframe visible
+  report context, or shift automatic pagination while leaving formulas and
+  values untouched. FormulaFence privately compares raw transitional and strict
+  `sheetFormatPr` default row/column/base widths, meaningful default
+  `customHeight`, Office 2010 `x14ac:dyDescent` baseline adjustments, and active
+  thick-border automatic adjustments; direct row
+  height/custom-height/baseline/automatic-thick-border declarations; and effective raw
+  `<cols>/<col>` positive width and `bestFit` state. Layered column records are
+  resolved in XML order, with later records changing only the attributes they
+  supply. `FF058` reports a material declaration change and
+  `no_worksheet_dimension_changes` blocks it as `FFP058`. Profiles expose only
+  aggregate counts; values, sheet names, row/column targets, writer hints, and
+  raw XML remain private. Decimal/Boolean spellings, baseline defaults, inert
+  fixed-height thick-border flags, `customWidth`, and equivalent effective range
+  segmentation normalize away. Zero/hidden dimensions remain `FF036` visibility
+  controls. Malformed, duplicate, unsupported, or budget-exhausted metadata is
+  a coverage warning. FormulaFence does **not** calculate final AutoFit sizes,
+  text overflow, merged-cell layout, exact automatic page breaks, print
+  geometry, or client-specific rendering.
 - Excel ignored-error declarations can suppress evaluation, inconsistent-formula,
   omitted-range, unlocked-formula, empty-reference, list-validation,
   calculated-column, text-number, and two-digit-year warnings without changing
@@ -308,6 +328,25 @@ review prompt, not proof of an error.
   [`border`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_border_topic_ID0EVV35.html)
   and [`xf`](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_xf_topic_ID0E13S6.html)
   forms, plus Microsoft's [cell-border guidance](https://support.microsoft.com/en-us/Excel/apply-or-remove-cell-borders-on-a-worksheet).
+- Positive worksheet dimensions can change a reviewer's usable surface without
+  an ordinary cell edit: fixed row heights can cut off wrapped text, column
+  widths can reframe report fields, and sizing can move automatic page breaks.
+  FormulaFence privately scans raw transitional and strict `sheetFormatPr`
+  defaults (`defaultRowHeight`, `defaultColWidth`, `baseColWidth`), meaningful
+  default `customHeight`, Office 2010 `x14ac:dyDescent` baseline adjustments,
+  and active automatic thick-border adjustments; direct row
+  `ht`/`customHeight`/`x14ac:dyDescent`/`thickTop`/`thickBot`; and raw positive
+  `<cols>/<col width>`/`bestFit` declarations. It resolves overlapping columns
+  in file order, preserving only changes from later present attributes. A
+  material change emits `FF058`; `no_worksheet_dimension_changes` blocks it as
+  `FFP058`. Profiles and reports disclose aggregate counts only; dimensions,
+  targets, raw XML, and writer hints remain private. Baseline defaults,
+  decimal/Boolean spelling, inert fixed-height thick-border flags,
+  `customWidth`, and equivalent effective range splitting normalize away.
+  Zero/hidden dimensions stay under `FF036`. Malformed, duplicate, unsupported,
+  or budget-exhausted controls remain coverage warnings. FormulaFence does
+  **not** compute final AutoFit sizing, wrapped/merged layout, overflow, exact
+  automatic page breaks, print geometry, or client rendering.
 - A stored worksheet view can change a reviewer’s surface while leaving values
   and formulas untouched: zeroes can appear blank; formulas, gridlines,
   row/column headers, outline symbols, rulers, or page margins can be

@@ -5,6 +5,49 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Material worksheet-dimension controls — 2026-07-26
+
+FormulaFence 0.56.0 was validated against two independently maintained
+workbooks. The transitional baseline was generated locally from XlsxWriter's
+public [`autofit.py`](https://github.com/jmcnamara/XlsxWriter/blob/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011/examples/autofit.py)
+example at commit `cf3fe78d3eab5e4c7d825d4451af3a60e2a04011`; its SHA-256 was
+`f44bbb48d36c6f6cf0b08f8219370ea63d44948cb9b751be225538d3c57946f4` and
+the candidate's was
+`2e6e8c386dc05083c091d49cb52693d5a12e8d0987c1f8970d25d650431710a0`.
+The strict baseline was the Open XML SDK's
+[`2D Rotation-O12-XL-OartEffects.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/O14ISOStrict/Excel/2D%20Rotation-O12-XL-OartEffects.xlsx)
+fixture at commit `cd2b359ef824737edb93f1c6157c19551aae1e52`; its SHA-256 was
+`0e0017c70a5362ef3c49be3fb82c3e80210cfda0e813413c2b28a5ee141c0ad3`
+and the candidate's was
+`151a0c2b48777865dbc060fe25827721753f6d656757899e21da712a7fd9defc`.
+
+A standalone raw-ZIP script outside this repository changed a material
+worksheet-default dimension in each package without using FormulaFence or a
+workbook writer. ZIP-member comparison and archive integrity checks confirmed
+that exactly `xl/worksheets/sheet1.xml` changed in each candidate; cells,
+formulas, and every other member remained fixed. The XlsxWriter profile exposed
+four effective positive-width/AutoFit columns; the strict profile exposed three
+recognized Office 2010 baseline-adjustment sheets and no dimension coverage
+gap.
+
+A clean Python virtual environment installed the staged 0.56.0 wheel (SHA-256
+`7fc133877c4cd095994d28dd1e593cc478ff4e22b1cb9db5f7a02144b334ee83`) and
+returned `FormulaFence 0.56.0`. Each pair emitted exactly one
+`worksheet_dimension_controls_changed` change and `FF058`; a policy enabling
+`no_worksheet_dimension_changes` exited 1 and added `FFP058`. JSON and
+Markdown profiles/diffs, SARIF diffs, and JSON policy reports were checked to
+ensure changed dimension values, raw worksheet member names, `customHeight`,
+`x14ac:dyDescent`, and source cell values were absent.
+
+The suite separately validates default/direct sizing, AutoFit, layered ranges,
+strict worksheet namespaces, Office 2010 baseline adjustment and custom-height
+side effects, automatic thick-border adjustments, equivalent numeric/Boolean
+spelling, inert writer declarations, malformed raw metadata, temporary-reader
+isolation, redaction, policy enforcement, and separation from `FF036`
+zero/hidden visibility controls. FormulaFence compares stored declarations; it
+does not render final layout, calculate AutoFit, wrapped/merged-cell overflow,
+or automatic page geometry.
+
 ## Effective cell-border controls — 2026-07-26
 
 FormulaFence 0.55.0 was validated against two independently maintained Open
@@ -588,7 +631,9 @@ zero-height/zero-width/default-zero counts and visible-row overrides; raw dimens
 row/column targets, and raw declarations stay private. The suite verifies a
 zero-change self-diff, `FF036` and `FFP036` for direct zero dimensions, an
 effective all-column zero-width default with a later positive-width reveal,
-equivalent zero spellings, and no `FF036` for ordinary positive resizes.
+equivalent zero spellings, and no `FF036` for ordinary positive resizes. As of
+0.56.0, those ordinary positive resizes are guarded separately as `FF058`
+worksheet-dimension controls rather than being silently out of scope.
 
 Negative, non-finite, and out-of-range dimensions produce an explicit
 parser-coverage warning, `FF010`, and `FF036` rather than a silent omission.

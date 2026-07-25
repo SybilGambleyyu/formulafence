@@ -58,6 +58,7 @@ _STRICT_SPREADSHEETML_NS = "http://purl.oclc.org/ooxml/spreadsheetml/main"
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 _XML_SCHEMA_NS = "http://www.w3.org/2001/XMLSchema"
 _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+_OFFICE_2010_AC_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
 _OFFICE_2013_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"
 _OFFICE_2014_REVISION_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
 _OFFICE_2016_REVISION10_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision10"
@@ -8903,6 +8904,296 @@ def add_ordinary_dimension_resize(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".ordinary-dimension-resize.tmp.xlsx")
+
+
+def make_worksheet_dimension_model(path: Path) -> Path:
+    """Create material positive sizing controls without changing cell values."""
+    make_zero_dimension_visibility_model(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        sheet_format_tag = f"{{{_SPREADSHEETML_NS}}}sheetFormatPr"
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+        row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        sheet_format = worksheet.find(sheet_format_tag)
+        if sheet_format is None:
+            sheet_format = ElementTree.Element(sheet_format_tag)
+            worksheet.insert(0, sheet_format)
+        sheet_format.set("baseColWidth", "10")
+        sheet_format.set("defaultColWidth", "17.5")
+        sheet_format.set("defaultRowHeight", "21")
+        sheet_format.set("customHeight", "false")
+        sheet_format.set("thickTop", "true")
+        sheet_format.set("thickBottom", "false")
+
+        columns = worksheet.find(cols_tag)
+        if columns is None:
+            columns = ElementTree.Element(cols_tag)
+            sheet_data_index = next(
+                index
+                for index, child in enumerate(worksheet)
+                if child.tag == sheet_data_tag
+            )
+            worksheet.insert(sheet_data_index, columns)
+        ElementTree.SubElement(
+            columns,
+            col_tag,
+            {
+                "min": "2",
+                "max": "3",
+                "width": "24",
+                "bestFit": "1",
+                "customWidth": "true",
+            },
+        )
+        row = next(current for current in worksheet.iter(row_tag) if current.get("r") == "3")
+        row.set("ht", "22")
+        row.set("customHeight", "true")
+        automatic_row = next(
+            current for current in worksheet.iter(row_tag) if current.get("r") == "4"
+        )
+        automatic_row.set("thickTop", "1")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-dimension.tmp.xlsx")
+
+
+def change_worksheet_dimension_controls(path: Path) -> Path:
+    """Change raw positive dimensions and AutoFit without editing cells."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        namespace = worksheet.tag.removeprefix("{").split("}", maxsplit=1)[0]
+        sheet_format_tag = f"{{{namespace}}}sheetFormatPr"
+        col_tag = f"{{{namespace}}}col"
+        row_tag = f"{{{namespace}}}row"
+        sheet_format = worksheet.find(sheet_format_tag)
+        if sheet_format is None:
+            raise ValueError("Could not find worksheet dimension sheet format")
+        sheet_format.set("defaultRowHeight", "23")
+        sheet_format.set("defaultColWidth", "18.25")
+        sheet_format.set("thickBottom", "true")
+        column = next(
+            current
+            for current in worksheet.iter(col_tag)
+            if current.get("min") == "2" and current.get("max") == "3"
+        )
+        column.set("width", "31")
+        column.set("bestFit", "false")
+        row = next(current for current in worksheet.iter(row_tag) if current.get("r") == "3")
+        row.set("ht", "27")
+        automatic_row = next(
+            current for current in worksheet.iter(row_tag) if current.get("r") == "4"
+        )
+        automatic_row.set("thickTop", "false")
+        automatic_row.set("thickBot", "true")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-dimension-change.tmp.xlsx")
+
+
+def normalize_worksheet_dimension_control_spelling(path: Path) -> Path:
+    """Use equivalent numeric, Boolean, and layered-range encodings."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        namespace = worksheet.tag.removeprefix("{").split("}", maxsplit=1)[0]
+        sheet_format_tag = f"{{{namespace}}}sheetFormatPr"
+        cols_tag = f"{{{namespace}}}cols"
+        col_tag = f"{{{namespace}}}col"
+        row_tag = f"{{{namespace}}}row"
+        sheet_format = worksheet.find(sheet_format_tag)
+        columns = worksheet.find(cols_tag)
+        if sheet_format is None or columns is None:
+            raise ValueError("Could not find worksheet dimension fixture")
+        sheet_format.set("baseColWidth", "010")
+        sheet_format.set("defaultColWidth", "17.50")
+        sheet_format.set("defaultRowHeight", "2.1e1")
+        sheet_format.set("customHeight", "0")
+        sheet_format.set("thickTop", "1")
+        sheet_format.set("thickBottom", "0")
+        column = next(
+            current
+            for current in columns.findall(col_tag)
+            if current.get("min") == "2" and current.get("max") == "3"
+        )
+        attributes = dict(column.attrib)
+        columns.remove(column)
+        for minimum, maximum in (("2", "2"), ("3", "3")):
+            ElementTree.SubElement(
+                columns,
+                col_tag,
+                {
+                    **attributes,
+                    "min": minimum,
+                    "max": maximum,
+                    "width": "2.4e1",
+                    "bestFit": "true",
+                    "customWidth": "1",
+                },
+            )
+        row = next(current for current in worksheet.iter(row_tag) if current.get("r") == "3")
+        row.set("ht", "2.20e1")
+        row.set("customHeight", "1")
+        automatic_row = next(
+            current for current in worksheet.iter(row_tag) if current.get("r") == "4"
+        )
+        automatic_row.set("thickTop", "true")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-dimension-noise.tmp.xlsx")
+
+
+def normalize_worksheet_dimension_inert_declarations(path: Path) -> Path:
+    """Add valid inert writer hints to fixed-height dimension controls."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        namespace = worksheet.tag.removeprefix("{").split("}", maxsplit=1)[0]
+        col_tag = f"{{{namespace}}}col"
+        row_tag = f"{{{namespace}}}row"
+        column = next(current for current in worksheet.iter(col_tag) if current.get("min") == "2")
+        column.set("customWidth", "false")
+        row = next(current for current in worksheet.iter(row_tag) if current.get("r") == "3")
+        # Fixed custom heights supersede thick-border auto-adjustment.
+        row.set("thickTop", "true")
+        row.set("thickBot", "true")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-dimension-inert.tmp.xlsx")
+
+
+def add_worksheet_dimension_baseline_adjustments(path: Path) -> Path:
+    """Add Office 2010 baseline controls with custom-height side effects."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        namespace = worksheet.tag.removeprefix("{").split("}", maxsplit=1)[0]
+        sheet_format_tag = f"{{{namespace}}}sheetFormatPr"
+        row_tag = f"{{{namespace}}}row"
+        dy_descent_attribute = f"{{{_OFFICE_2010_AC_NS}}}dyDescent"
+        sheet_format = worksheet.find(sheet_format_tag)
+        if sheet_format is None:
+            raise ValueError("Could not find worksheet dimension sheet format")
+        sheet_format.set(dy_descent_attribute, "0.25")
+        row = next(current for current in worksheet.iter(row_tag) if current.get("r") == "3")
+        row.set(dy_descent_attribute, "0.375")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-dimension-baseline.tmp.xlsx")
+
+
+def corrupt_worksheet_dimension_control(path: Path) -> Path:
+    """Inject malformed raw sizing metadata for fail-closed coverage tests."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        namespace = worksheet.tag.removeprefix("{").split("}", maxsplit=1)[0]
+        col_tag = f"{{{namespace}}}col"
+        row_tag = f"{{{namespace}}}row"
+        column = next(current for current in worksheet.iter(col_tag) if current.get("min") == "2")
+        column.set("width", "PRIVATE-INVALID-DIMENSION")
+        row = next(current for current in worksheet.iter(row_tag) if current.get("r") == "3")
+        row.set("ht", "NaN")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-dimension-corrupt.tmp.xlsx")
+
+
+def make_strict_worksheet_dimension_model(path: Path) -> Path:
+    """Create a strict-SpreadsheetML worksheet-dimension fixture."""
+    make_worksheet_dimension_model(path)
+
+    def strict_name(name: str, source_namespace: str, target_namespace: str) -> str:
+        prefix = f"{{{source_namespace}}}"
+        if name.startswith(prefix):
+            return f"{{{target_namespace}}}{name[len(prefix):]}"
+        return name
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook_member = "xl/workbook.xml"
+        workbook = ElementTree.fromstring(contents[workbook_member])
+        for element in workbook.iter():
+            element.tag = strict_name(
+                element.tag,
+                _SPREADSHEETML_NS,
+                _STRICT_SPREADSHEETML_NS,
+            )
+            attributes = {
+                strict_name(
+                    name,
+                    _DOCUMENT_RELATIONSHIPS_NS,
+                    _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                ): value
+                for name, value in element.attrib.items()
+            }
+            element.attrib.clear()
+            element.attrib.update(attributes)
+        contents[workbook_member] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        for relationship in relationships.findall(relationship_tag):
+            if (relationship.get("Type") or "").casefold().endswith("/worksheet"):
+                relationship.set(
+                    "Type",
+                    f"{_STRICT_DOCUMENT_RELATIONSHIPS_NS}/worksheet",
+                )
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        for member in sorted(
+            name
+            for name in contents
+            if name.startswith("xl/worksheets/") and name.endswith(".xml")
+        ):
+            worksheet = ElementTree.fromstring(contents[member])
+            for element in worksheet.iter():
+                element.tag = strict_name(
+                    element.tag,
+                    _SPREADSHEETML_NS,
+                    _STRICT_SPREADSHEETML_NS,
+                )
+            contents[member] = ElementTree.tostring(
+                worksheet,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".strict-worksheet-dimension.tmp.xlsx")
 
 
 def normalize_zero_dimension_visibility_control_spelling(path: Path) -> Path:

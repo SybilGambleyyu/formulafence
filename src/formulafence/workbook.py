@@ -92,6 +92,7 @@ from formulafence.models import (
     WorkbookProtectionSnapshot,
     WorkbookSnapshot,
     WorkbookThemeSnapshot,
+    WorksheetDimensionSnapshot,
     WorksheetDisplaySnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
@@ -130,6 +131,7 @@ _STRICT_DOCUMENT_RELATIONSHIP_NS = (
 )
 _DYNAMIC_ARRAY_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"
 _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+_OFFICE_2010_AC_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
 _OFFICE_2013_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"
 _OFFICE_2014_REVISION_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
 _OFFICE_2015_REVISION2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2015/revision2"
@@ -822,6 +824,14 @@ class _BorderMetadata:
     """Raw ordinary cell-border evidence retained before reader normalization."""
 
     controls: BorderSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _WorksheetDimensionMetadata:
+    """Raw material worksheet-dimension evidence retained before reader loss."""
+
+    controls: WorksheetDimensionSnapshot
     warnings: tuple[str, ...]
 
 
@@ -2014,12 +2024,12 @@ def _worksheet_display_xml_paths(archive: ZipFile) -> tuple[str, ...]:
     return tuple(members)
 
 
-def _border_worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
+def _visual_worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
     """Map worksheet titles to raw transitional or strict worksheet parts.
 
-    Border assignments are a raw visual-control boundary, so it must inspect
-    strict worksheet records even where the ordinary cell reader deliberately
-    limits itself to transitional SpreadsheetML.
+    Visual-control boundaries inspect strict worksheet records too, even where
+    the ordinary cell reader deliberately limits itself to transitional
+    SpreadsheetML.
     """
     workbook = _xml_root(archive, "xl/workbook.xml")
     relationship_targets = {
@@ -11524,6 +11534,168 @@ def _worksheet_sparkline_reader_replacements(
     return replacements, tuple(sorted(reader_warnings))
 
 
+def _worksheet_dimension_reader_replacements(
+    path: Path,
+    prior_replacements: Mapping[str, bytes] | None = None,
+) -> tuple[dict[str, bytes], tuple[str, ...]]:
+    """Keep malformed dimension declarations out of the ordinary reader.
+
+    The raw dimension scanner runs on the original package and retains a
+    fail-closed coverage finding. This narrowly sanitizes only malformed
+    dimension attributes in the temporary reader copy so an otherwise usable
+    workbook can still produce that finding instead of failing inside
+    ``openpyxl`` before review output is available.
+    """
+    replacements: dict[str, bytes] = {}
+    reader_warnings: set[str] = set()
+    prior_replacements = prior_replacements or {}
+    try:
+        with ZipFile(path) as archive:
+            def reader_xml_root(member: str) -> ElementTree.Element:
+                """Read an earlier safe overlay before falling back to the package."""
+                if (payload := prior_replacements.get(member)) is not None:
+                    return _xml_root_from_payload(payload)
+                return _xml_root(archive, member)
+
+            for member in _visual_worksheet_xml_paths(archive).values():
+                try:
+                    worksheet = reader_xml_root(member)
+                except (
+                    KeyError,
+                    ElementTree.ParseError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ):
+                    continue
+                namespace = _xml_namespace(worksheet.tag)
+                if (
+                    namespace
+                    not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+                    or _xml_local_name(worksheet.tag) != "worksheet"
+                ):
+                    continue
+                sheet_format_tag = f"{{{namespace}}}sheetFormatPr"
+                cols_tag = f"{{{namespace}}}cols"
+                col_tag = f"{{{namespace}}}col"
+                sheet_data_tag = f"{{{namespace}}}sheetData"
+                row_tag = f"{{{namespace}}}row"
+                changed = False
+
+                for sheet_format in worksheet.findall(sheet_format_tag):
+                    decimal_attributes = {
+                        "defaultRowHeight": _WORKSHEET_DIMENSION_MAX_ROW_HEIGHT,
+                        "defaultColWidth": _WORKSHEET_DIMENSION_MAX_COLUMN_WIDTH,
+                    }
+                    for name, maximum in decimal_attributes.items():
+                        if (
+                            name in sheet_format.attrib
+                            and _worksheet_dimension_decimal(
+                                sheet_format.get(name), maximum=maximum
+                            )
+                            is None
+                        ):
+                            sheet_format.attrib.pop(name, None)
+                            changed = True
+                    if (
+                        "baseColWidth" in sheet_format.attrib
+                        and _worksheet_dimension_unsigned_int(
+                            sheet_format.get("baseColWidth"),
+                            maximum=int(_WORKSHEET_DIMENSION_MAX_COLUMN_WIDTH),
+                        )
+                        is None
+                    ):
+                        sheet_format.attrib.pop("baseColWidth", None)
+                        changed = True
+                    for name in ("customHeight", "thickTop", "thickBottom"):
+                        if (
+                            name in sheet_format.attrib
+                            and _number_format_boolean(sheet_format.get(name), False)
+                            is None
+                        ):
+                            sheet_format.attrib.pop(name, None)
+                            changed = True
+
+                for columns in worksheet.findall(cols_tag):
+                    for column in list(columns):
+                        if column.tag != col_tag:
+                            continue
+                        minimum = _worksheet_dimension_unsigned_int(
+                            column.get("min"), maximum=MAX_EXCEL_COLUMN
+                        )
+                        maximum = _worksheet_dimension_unsigned_int(
+                            column.get("max"), maximum=MAX_EXCEL_COLUMN
+                        )
+                        has_dimension_metadata = any(
+                            name in column.attrib
+                            for name in ("width", "bestFit", "customWidth")
+                        )
+                        if has_dimension_metadata and (
+                            minimum is None
+                            or maximum is None
+                            or minimum < 1
+                            or maximum < minimum
+                        ):
+                            columns.remove(column)
+                            changed = True
+                            continue
+                        if (
+                            "width" in column.attrib
+                            and _worksheet_dimension_decimal(
+                                column.get("width"),
+                                maximum=_WORKSHEET_DIMENSION_MAX_COLUMN_WIDTH,
+                            )
+                            is None
+                        ):
+                            column.attrib.pop("width", None)
+                            changed = True
+                        for name in ("bestFit", "customWidth"):
+                            if (
+                                name in column.attrib
+                                and _number_format_boolean(column.get(name), False)
+                                is None
+                            ):
+                                column.attrib.pop(name, None)
+                                changed = True
+
+                for sheet_data in worksheet.findall(sheet_data_tag):
+                    for row in sheet_data.findall(row_tag):
+                        if (
+                            "ht" in row.attrib
+                            and _worksheet_dimension_decimal(
+                                row.get("ht"),
+                                maximum=_WORKSHEET_DIMENSION_MAX_ROW_HEIGHT,
+                            )
+                            is None
+                        ):
+                            row.attrib.pop("ht", None)
+                            changed = True
+                        for name in ("customHeight", "thickTop", "thickBot"):
+                            if (
+                                name in row.attrib
+                                and _number_format_boolean(row.get(name), False) is None
+                            ):
+                                row.attrib.pop(name, None)
+                                changed = True
+                if changed:
+                    replacements[member] = ElementTree.tostring(
+                        worksheet,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+                    reader_warnings.add(
+                        "FormulaFence isolated malformed worksheet-dimension metadata "
+                        "before the underlying workbook reader ran; raw dimension controls "
+                        "remain fail-closed."
+                    )
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        reader_warnings.add(
+            "FormulaFence could not isolate malformed worksheet-dimension metadata "
+            f"before the underlying workbook reader ran ({type(error).__name__})."
+        )
+    return replacements, tuple(sorted(reader_warnings))
+
+
 def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...]]:
     """Return a temporary source that limits unsafe ordinary-reader behavior."""
     replacements, reader_warnings = _pivot_reader_cache_record_replacements(path)
@@ -11541,9 +11713,17 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
     worksheet_sparkline_replacements, worksheet_sparkline_reader_warnings = (
         _worksheet_sparkline_reader_replacements(path, prior_replacements)
     )
+    prior_replacements = {
+        **prior_replacements,
+        **worksheet_sparkline_replacements,
+    }
+    worksheet_dimension_replacements, worksheet_dimension_reader_warnings = (
+        _worksheet_dimension_reader_replacements(path, prior_replacements)
+    )
     replacements.update(legacy_replacements)
     replacements.update(cell_hyperlink_replacements)
     replacements.update(worksheet_sparkline_replacements)
+    replacements.update(worksheet_dimension_replacements)
     reader_warnings = tuple(
         sorted(
             {
@@ -11551,6 +11731,7 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
                 *legacy_reader_warnings,
                 *cell_hyperlink_reader_warnings,
                 *worksheet_sparkline_reader_warnings,
+                *worksheet_dimension_reader_warnings,
             }
         )
     )
@@ -19514,7 +19695,7 @@ def _border_metadata(path: Path) -> _BorderMetadata:
                 default_border_definition_count = 1
                 entries.append(("default-border", repr(default_style)))
 
-            for sheet, member in _border_worksheet_xml_paths(archive).items():
+            for sheet, member in _visual_worksheet_xml_paths(archive).items():
                 worksheet = _xml_root(archive, member)
                 worksheet_namespace = _xml_namespace(worksheet.tag)
                 if (
@@ -19745,6 +19926,700 @@ def _border_metadata(path: Path) -> _BorderMetadata:
         ),
     )
     return _BorderMetadata(snapshot, tuple(sorted(warnings)))
+
+
+_WORKSHEET_DIMENSION_MAX_COLUMN_WIDTH = Decimal("255")
+_WORKSHEET_DIMENSION_MAX_ROW_HEIGHT = Decimal("409")
+_WORKSHEET_DIMENSION_COLUMN_UPDATE_BUDGET = 16_777_216
+_WORKSHEET_DIMENSION_DECIMAL_PATTERN = re.compile(
+    r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[Ee][+-]?[0-9]+)?"
+)
+_WORKSHEET_DIMENSION_DY_DESCENT_ATTRIBUTE = (
+    f"{{{_OFFICE_2010_AC_NS}}}dyDescent"
+)
+_WORKSHEET_DIMENSION_SHEET_FORMAT_ATTRIBUTES = frozenset(
+    {
+        "baseColWidth",
+        "defaultColWidth",
+        "defaultRowHeight",
+        "customHeight",
+        "zeroHeight",
+        "thickTop",
+        "thickBottom",
+        "outlineLevelRow",
+        "outlineLevelCol",
+    }
+)
+_WORKSHEET_DIMENSION_ROW_ATTRIBUTES = frozenset(
+    {
+        "r",
+        "spans",
+        "s",
+        "customFormat",
+        "ht",
+        "hidden",
+        "customHeight",
+        "outlineLevel",
+        "collapsed",
+        "thickTop",
+        "thickBot",
+        "ph",
+    }
+)
+_WORKSHEET_DIMENSION_COLUMN_ATTRIBUTES = frozenset(
+    {
+        "min",
+        "max",
+        "width",
+        "style",
+        "hidden",
+        "bestFit",
+        "customWidth",
+        "phonetic",
+        "outlineLevel",
+        "collapsed",
+    }
+)
+
+
+def _worksheet_dimension_decimal(
+    value: str | None,
+    *,
+    maximum: Decimal | None,
+    minimum: Decimal | None = Decimal("0"),
+) -> str | None:
+    """Normalize one finite SpreadsheetML dimension privately."""
+    if value is None:
+        return None
+    candidate = value.strip()
+    if not _WORKSHEET_DIMENSION_DECIMAL_PATTERN.fullmatch(candidate):
+        return None
+    try:
+        parsed = Decimal(candidate)
+    except (InvalidOperation, ValueError):
+        return None
+    if (
+        not parsed.is_finite()
+        or (minimum is not None and parsed < minimum)
+        or (maximum is not None and parsed > maximum)
+    ):
+        return None
+    if parsed == 0:
+        return "0"
+    return format(parsed.normalize(), "f")
+
+
+def _worksheet_dimension_unsigned_int(
+    value: str | None,
+    *,
+    maximum: int,
+) -> int | None:
+    """Read one bounded unsigned integer without retaining malformed text."""
+    parsed = _number_format_unsigned_int(value)
+    if parsed is None or parsed > maximum:
+        return None
+    return parsed
+
+
+def _worksheet_dimension_unexpected_attributes(
+    element: ElementTree.Element,
+    *,
+    known: frozenset[str],
+    allowed_namespaced: frozenset[tuple[str, str]] = frozenset(),
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> None:
+    """Record unsupported raw metadata without letting it leave the scanner."""
+    for attribute, value in element.attrib.items():
+        namespace = _xml_namespace(attribute)
+        local_name = _xml_local_name(attribute)
+        if (
+            (namespace is not None and (namespace, local_name) not in allowed_namespaced)
+            or (namespace is None and local_name not in known)
+        ):
+            note_issue(
+                f"{context}:unsupported-attribute",
+                (_xml_display_name(attribute), value),
+            )
+
+
+def _worksheet_dimension_column_state_signature(
+    states: list[tuple[str | None, bool]],
+) -> tuple[tuple[int, int, str | None, bool], ...]:
+    """Compress layered effective columns so range splitting stays quiet."""
+    segments: list[tuple[int, int, str | None, bool]] = []
+    start: int | None = None
+    previous: tuple[str | None, bool] | None = None
+    for column in range(1, MAX_EXCEL_COLUMN + 1):
+        current = states[column]
+        if current == (None, False):
+            if start is not None and previous is not None:
+                segments.append((start, column - 1, *previous))
+            start = None
+            previous = None
+            continue
+        if start is None:
+            start = column
+            previous = current
+            continue
+        if current != previous:
+            segments.append((start, column - 1, *previous))
+            start = column
+            previous = current
+    if start is not None and previous is not None:
+        segments.append((start, MAX_EXCEL_COLUMN, *previous))
+    return tuple(segments)
+
+
+def _worksheet_dimension_metadata(path: Path) -> _WorksheetDimensionMetadata:
+    """Inspect material worksheet dimensions directly from raw SpreadsheetML.
+
+    Height and width values, row/column targets, and writer metadata remain in
+    private canonical signatures. The public snapshot only counts the kinds of
+    sizing controls present. Zero and hidden dimensions stay in FF036's
+    visibility boundary; this scanner covers ordinary positive sizing, AutoFit,
+    Office 2010 baseline adjustments, and automatic border-driven row-height
+    adjustments.
+    """
+    warnings: set[str] = set()
+    default_snapshot = WorksheetDimensionSnapshot()
+    entries: list[tuple[str, str]] = []
+    issues: dict[str, str] = {}
+    default_row_height_count = 0
+    default_column_width_count = 0
+    default_baseline_adjustment_sheet_count = 0
+    default_border_adjustment_sheet_count = 0
+    row_height_assignment_count = 0
+    row_baseline_adjustment_count = 0
+    row_border_adjustment_count = 0
+    column_width_assignment_count = 0
+    best_fit_column_assignment_count = 0
+    column_update_count = 0
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    def boolean_attribute(
+        element: ElementTree.Element,
+        name: str,
+        *,
+        default: bool,
+        context: str,
+    ) -> bool | None:
+        parsed = _number_format_boolean(element.get(name), default)
+        if name in element.attrib and parsed is None:
+            note_issue(f"{context}:invalid-{name}", element.get(name))
+        return parsed
+
+    try:
+        with ZipFile(path) as archive:
+            for sheet, member in _visual_worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                worksheet_namespace = _xml_namespace(worksheet.tag)
+                sheet_key = sheet.casefold()
+                if (
+                    worksheet_namespace
+                    not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+                    or _xml_local_name(worksheet.tag) != "worksheet"
+                ):
+                    note_issue(f"worksheet:{sheet_key}:root", worksheet.tag)
+                    continue
+
+                sheet_format_tag = f"{{{worksheet_namespace}}}sheetFormatPr"
+                cols_tag = f"{{{worksheet_namespace}}}cols"
+                col_tag = f"{{{worksheet_namespace}}}col"
+                sheet_data_tag = f"{{{worksheet_namespace}}}sheetData"
+                row_tag = f"{{{worksheet_namespace}}}row"
+                sheet_formats = worksheet.findall(sheet_format_tag)
+                if len(sheet_formats) > 1:
+                    note_issue(
+                        f"sheet-format:{sheet_key}:multiple",
+                        len(sheet_formats),
+                    )
+                if sheet_formats:
+                    sheet_format = sheet_formats[0]
+                    format_context = f"sheet-format:{sheet_key}"
+                    _worksheet_dimension_unexpected_attributes(
+                        sheet_format,
+                        known=_WORKSHEET_DIMENSION_SHEET_FORMAT_ATTRIBUTES,
+                        allowed_namespaced=frozenset(
+                            {(_OFFICE_2010_AC_NS, "dyDescent")}
+                        ),
+                        context=format_context,
+                        note_issue=note_issue,
+                    )
+                    if list(sheet_format):
+                        note_issue(
+                            f"{format_context}:unexpected-children",
+                            len(sheet_format),
+                        )
+                    if (sheet_format.text or "").strip():
+                        note_issue(
+                            f"{format_context}:unexpected-text",
+                            sheet_format.text,
+                        )
+
+                    default_row_height = None
+                    if "defaultRowHeight" in sheet_format.attrib:
+                        default_row_height = _worksheet_dimension_decimal(
+                            sheet_format.get("defaultRowHeight"),
+                            maximum=_WORKSHEET_DIMENSION_MAX_ROW_HEIGHT,
+                        )
+                        if default_row_height is None:
+                            note_issue(
+                                f"{format_context}:invalid-default-row-height",
+                                sheet_format.get("defaultRowHeight"),
+                            )
+                    default_column_width = None
+                    if "defaultColWidth" in sheet_format.attrib:
+                        default_column_width = _worksheet_dimension_decimal(
+                            sheet_format.get("defaultColWidth"),
+                            maximum=_WORKSHEET_DIMENSION_MAX_COLUMN_WIDTH,
+                        )
+                        if default_column_width is None:
+                            note_issue(
+                                f"{format_context}:invalid-default-column-width",
+                                sheet_format.get("defaultColWidth"),
+                            )
+                    base_column_width = None
+                    if "baseColWidth" in sheet_format.attrib:
+                        base_column_width = _worksheet_dimension_unsigned_int(
+                            sheet_format.get("baseColWidth"),
+                            maximum=int(_WORKSHEET_DIMENSION_MAX_COLUMN_WIDTH),
+                        )
+                        if base_column_width is None:
+                            note_issue(
+                                f"{format_context}:invalid-base-column-width",
+                                sheet_format.get("baseColWidth"),
+                            )
+                    dy_descent = None
+                    if _WORKSHEET_DIMENSION_DY_DESCENT_ATTRIBUTE in sheet_format.attrib:
+                        dy_descent = _worksheet_dimension_decimal(
+                            sheet_format.get(_WORKSHEET_DIMENSION_DY_DESCENT_ATTRIBUTE),
+                            maximum=None,
+                            minimum=None,
+                        )
+                        if dy_descent is None:
+                            note_issue(
+                                f"{format_context}:invalid-dy-descent",
+                                sheet_format.get(_WORKSHEET_DIMENSION_DY_DESCENT_ATTRIBUTE),
+                            )
+                    custom_height = boolean_attribute(
+                        sheet_format,
+                        "customHeight",
+                        default=False,
+                        context=format_context,
+                    )
+                    # dyDescent has a documented side effect of making the row
+                    # custom-height even if the ordinary Boolean says otherwise.
+                    effective_custom_height = (
+                        True if dy_descent is not None else custom_height
+                    )
+                    # A custom-height flag without a corresponding numeric default
+                    # or baseline adjustment is not a stable rendered declaration.
+                    if (
+                        custom_height is True
+                        and default_row_height is None
+                        and dy_descent is None
+                    ):
+                        note_issue(
+                            f"{format_context}:custom-height-without-default-row-height",
+                            "true",
+                        )
+
+                    default_row_components: list[tuple[str, object]] = []
+                    if default_row_height not in {None, "0"} and (
+                        default_row_height != "15"
+                        or (
+                            effective_custom_height is True
+                            and dy_descent is None
+                        )
+                    ):
+                        default_row_components.append(
+                            ("height", default_row_height)
+                        )
+                        default_row_components.append(
+                            ("customHeight", effective_custom_height)
+                        )
+                        default_row_height_count += 1
+
+                    baseline_adjustment_components: list[tuple[str, object]] = []
+                    if dy_descent is not None:
+                        baseline_adjustment_components.append(
+                            ("dyDescent", dy_descent)
+                        )
+                        default_baseline_adjustment_sheet_count += 1
+
+                    default_column_components: list[tuple[str, object]] = []
+                    if (
+                        default_column_width is not None
+                        and default_column_width != "0"
+                    ):
+                        default_column_components.append(
+                            ("width", default_column_width)
+                        )
+                    if base_column_width is not None and base_column_width != 8:
+                        default_column_components.append(
+                            ("baseWidth", base_column_width)
+                        )
+                    if default_column_components:
+                        default_column_width_count += 1
+
+                    # In automatic-height mode, thick top/bottom borders add a
+                    # documented vertical adjustment. With a custom height they
+                    # are inert and intentionally normalized away.
+                    border_adjustment_components: list[tuple[str, object]] = []
+                    if (
+                        effective_custom_height is False
+                        and default_row_height != "0"
+                    ):
+                        thick_top = boolean_attribute(
+                            sheet_format,
+                            "thickTop",
+                            default=False,
+                            context=format_context,
+                        )
+                        thick_bottom = boolean_attribute(
+                            sheet_format,
+                            "thickBottom",
+                            default=False,
+                            context=format_context,
+                        )
+                        if thick_top or thick_bottom:
+                            border_adjustment_components.extend(
+                                (
+                                    ("thickTop", thick_top),
+                                    ("thickBottom", thick_bottom),
+                                )
+                            )
+                            default_border_adjustment_sheet_count += 1
+
+                    sheet_components = (
+                        default_row_components
+                        + baseline_adjustment_components
+                        + default_column_components
+                        + border_adjustment_components
+                    )
+                    if sheet_components:
+                        entries.append(
+                            (
+                                f"default-dimension:{sheet_key}",
+                                repr(tuple(sheet_components)),
+                            )
+                        )
+
+                column_states: list[tuple[str | None, bool]] = [
+                    (None, False)
+                ] * (MAX_EXCEL_COLUMN + 1)
+                column_sets = worksheet.findall(cols_tag)
+                if len(column_sets) > 1:
+                    note_issue(f"columns:{sheet_key}:multiple", len(column_sets))
+                for columns_index, columns in enumerate(column_sets):
+                    columns_context = f"columns:{sheet_key}:{columns_index}"
+                    if (columns.text or "").strip():
+                        note_issue(
+                            f"{columns_context}:unexpected-text",
+                            columns.text,
+                        )
+                    for column_index, column in enumerate(columns):
+                        context = (
+                            f"column:{sheet_key}:{columns_index}:{column_index}"
+                        )
+                        if column.tag != col_tag:
+                            note_issue(f"{context}:unsupported-child", column.tag)
+                            continue
+                        _worksheet_dimension_unexpected_attributes(
+                            column,
+                            known=_WORKSHEET_DIMENSION_COLUMN_ATTRIBUTES,
+                            context=context,
+                            note_issue=note_issue,
+                        )
+                        if list(column):
+                            note_issue(
+                                f"{context}:unexpected-children", len(column)
+                            )
+                        if (column.text or "").strip():
+                            note_issue(
+                                f"{context}:unexpected-text", column.text
+                            )
+
+                        has_width = "width" in column.attrib
+                        has_best_fit = "bestFit" in column.attrib
+                        has_custom_width = "customWidth" in column.attrib
+                        if not (has_width or has_best_fit or has_custom_width):
+                            continue
+                        minimum = _worksheet_dimension_unsigned_int(
+                            column.get("min"), maximum=MAX_EXCEL_COLUMN
+                        )
+                        maximum = _worksheet_dimension_unsigned_int(
+                            column.get("max"), maximum=MAX_EXCEL_COLUMN
+                        )
+                        if (
+                            minimum is None
+                            or maximum is None
+                            or minimum < 1
+                            or maximum < minimum
+                        ):
+                            note_issue(
+                                f"{context}:invalid-column-bounds",
+                                (column.get("min"), column.get("max")),
+                            )
+                            continue
+
+                        width: str | None = None
+                        valid_width = False
+                        if has_width:
+                            parsed_width = _worksheet_dimension_decimal(
+                                column.get("width"),
+                                maximum=_WORKSHEET_DIMENSION_MAX_COLUMN_WIDTH,
+                            )
+                            if parsed_width is None:
+                                note_issue(
+                                    f"{context}:invalid-column-width",
+                                    column.get("width"),
+                                )
+                            else:
+                                # Zero-sized columns are FF036 visibility
+                                # controls. A later positive declaration can
+                                # still override it, so it clears this scanner's
+                                # ordinary-width state in XML order.
+                                width = (
+                                    parsed_width
+                                    if parsed_width != "0"
+                                    else None
+                                )
+                                valid_width = True
+
+                        best_fit: bool | None = None
+                        if has_best_fit:
+                            best_fit = boolean_attribute(
+                                column,
+                                "bestFit",
+                                default=False,
+                                context=context,
+                            )
+                        if has_custom_width:
+                            # customWidth is a writer/manual-setting hint, not
+                            # an independent current dimension. Validate it but
+                            # deliberately omit it from effective state.
+                            boolean_attribute(
+                                column,
+                                "customWidth",
+                                default=False,
+                                context=context,
+                            )
+
+                        update_count = int(valid_width) + int(best_fit is not None)
+                        if not update_count:
+                            continue
+                        span = maximum - minimum + 1
+                        if (
+                            column_update_count + span * update_count
+                            > _WORKSHEET_DIMENSION_COLUMN_UPDATE_BUDGET
+                        ):
+                            note_issue(
+                                f"{context}:column-update-budget",
+                                span * update_count,
+                            )
+                            continue
+                        for column_number in range(minimum, maximum + 1):
+                            old_width, old_best_fit = column_states[column_number]
+                            column_states[column_number] = (
+                                width if valid_width else old_width,
+                                best_fit if best_fit is not None else old_best_fit,
+                            )
+                        column_update_count += span * update_count
+
+                column_signature = _worksheet_dimension_column_state_signature(
+                    column_states
+                )
+                if column_signature:
+                    entries.append(
+                        (
+                            f"column-dimensions:{sheet_key}",
+                            repr(column_signature),
+                        )
+                    )
+                    column_width_assignment_count += sum(
+                        maximum - minimum + 1
+                        for minimum, maximum, width, _best_fit in column_signature
+                        if width is not None
+                    )
+                    best_fit_column_assignment_count += sum(
+                        maximum - minimum + 1
+                        for minimum, maximum, _width, best_fit in column_signature
+                        if best_fit
+                    )
+
+                seen_rows: set[int] = set()
+                for sheet_data_index, sheet_data in enumerate(
+                    worksheet.findall(sheet_data_tag)
+                ):
+                    for row_index, row in enumerate(sheet_data):
+                        if row.tag != row_tag:
+                            continue
+                        relevant = {
+                            "ht",
+                            "customHeight",
+                            "thickTop",
+                            "thickBot",
+                        }
+                        if not (
+                            any(attribute in row.attrib for attribute in relevant)
+                            or _WORKSHEET_DIMENSION_DY_DESCENT_ATTRIBUTE in row.attrib
+                        ):
+                            continue
+                        context = f"row:{sheet_key}:{sheet_data_index}:{row_index}"
+                        _worksheet_dimension_unexpected_attributes(
+                            row,
+                            known=_WORKSHEET_DIMENSION_ROW_ATTRIBUTES,
+                            allowed_namespaced=frozenset(
+                                {(_OFFICE_2010_AC_NS, "dyDescent")}
+                            ),
+                            context=context,
+                            note_issue=note_issue,
+                        )
+                        row_number = _worksheet_dimension_unsigned_int(
+                            row.get("r"), maximum=MAX_EXCEL_ROW
+                        )
+                        if row_number is None or row_number < 1:
+                            note_issue(
+                                f"{context}:invalid-row-index", row.get("r")
+                            )
+                            continue
+                        if row_number in seen_rows:
+                            note_issue(
+                                f"{context}:duplicate-row", row_number
+                            )
+                            continue
+                        seen_rows.add(row_number)
+
+                        custom_height = boolean_attribute(
+                            row,
+                            "customHeight",
+                            default=False,
+                            context=context,
+                        )
+                        dy_descent = None
+                        if _WORKSHEET_DIMENSION_DY_DESCENT_ATTRIBUTE in row.attrib:
+                            dy_descent = _worksheet_dimension_decimal(
+                                row.get(_WORKSHEET_DIMENSION_DY_DESCENT_ATTRIBUTE),
+                                maximum=None,
+                                minimum=None,
+                            )
+                            if dy_descent is None:
+                                note_issue(
+                                    f"{context}:invalid-dy-descent",
+                                    row.get(
+                                        _WORKSHEET_DIMENSION_DY_DESCENT_ATTRIBUTE
+                                    ),
+                                )
+                        effective_custom_height = (
+                            True if dy_descent is not None else custom_height
+                        )
+                        height = None
+                        if "ht" in row.attrib:
+                            height = _worksheet_dimension_decimal(
+                                row.get("ht"),
+                                maximum=_WORKSHEET_DIMENSION_MAX_ROW_HEIGHT,
+                            )
+                            if height is None:
+                                note_issue(
+                                    f"{context}:invalid-row-height", row.get("ht")
+                                )
+                        elif custom_height is True and dy_descent is None:
+                            note_issue(
+                                f"{context}:custom-height-without-height", "true"
+                            )
+
+                        row_components: list[tuple[str, object]] = []
+                        if height not in {None, "0"}:
+                            row_components.extend(
+                                (
+                                    ("height", height),
+                                    ("customHeight", effective_custom_height),
+                                )
+                            )
+                            row_height_assignment_count += 1
+
+                        if dy_descent is not None:
+                            row_components.append(("dyDescent", dy_descent))
+                            row_baseline_adjustment_count += 1
+
+                        # A fixed custom height supersedes border-driven
+                        # adjustment, so normalize any thick flags away there.
+                        if effective_custom_height is False and height != "0":
+                            thick_top = boolean_attribute(
+                                row,
+                                "thickTop",
+                                default=False,
+                                context=context,
+                            )
+                            thick_bottom = boolean_attribute(
+                                row,
+                                "thickBot",
+                                default=False,
+                                context=context,
+                            )
+                            if thick_top or thick_bottom:
+                                row_components.extend(
+                                    (
+                                        ("thickTop", thick_top),
+                                        ("thickBottom", thick_bottom),
+                                    )
+                                )
+                                row_border_adjustment_count += 1
+                        if row_components:
+                            entries.append(
+                                (
+                                    f"row-dimension:{sheet_key}:{row_number}",
+                                    repr(tuple(row_components)),
+                                )
+                            )
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _WorksheetDimensionMetadata(
+            default_snapshot,
+            (
+                "FormulaFence could not inspect material worksheet-dimension OOXML "
+                f"({type(error).__name__}); affected visual controls were not compared.",
+            ),
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported worksheet-dimension "
+            "metadata; affected visual controls have a coverage gap."
+        )
+    snapshot = WorksheetDimensionSnapshot(
+        default_row_height_count=default_row_height_count,
+        default_column_width_count=default_column_width_count,
+        default_baseline_adjustment_sheet_count=(
+            default_baseline_adjustment_sheet_count
+        ),
+        default_border_adjustment_sheet_count=default_border_adjustment_sheet_count,
+        row_height_assignment_count=row_height_assignment_count,
+        row_baseline_adjustment_count=row_baseline_adjustment_count,
+        row_border_adjustment_count=row_border_adjustment_count,
+        column_width_assignment_count=column_width_assignment_count,
+        best_fit_column_assignment_count=best_fit_column_assignment_count,
+        unrecognized_dimension_count=len(issues),
+        definition_signature=(
+            _private_external_data_signature(tuple(sorted(entries))) if entries else None
+        ),
+        unrecognized_signature=(
+            _private_external_data_signature(tuple(sorted(issues.items())))
+            if issues
+            else None
+        ),
+    )
+    return _WorksheetDimensionMetadata(snapshot, tuple(sorted(warnings)))
 
 
 _WORKSHEET_DISPLAY_SHEET_VIEW_KNOWN_ATTRIBUTES = frozenset(
@@ -33156,6 +34031,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     fill_metadata = _fill_metadata(source)
     alignment_metadata = _alignment_metadata(source)
     border_metadata = _border_metadata(source)
+    worksheet_dimension_metadata = _worksheet_dimension_metadata(source)
     worksheet_display_metadata = _worksheet_display_metadata(source)
     worksheet_print_layout_metadata = _worksheet_print_layout_metadata(source)
     workbook_theme_metadata = _workbook_theme_metadata(source)
@@ -33212,6 +34088,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(fill_metadata.warnings)
     parser_warnings.update(alignment_metadata.warnings)
     parser_warnings.update(border_metadata.warnings)
+    parser_warnings.update(worksheet_dimension_metadata.warnings)
     parser_warnings.update(worksheet_display_metadata.warnings)
     parser_warnings.update(worksheet_print_layout_metadata.warnings)
     parser_warnings.update(workbook_theme_metadata.warnings)
@@ -33452,6 +34329,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         fill_controls=fill_metadata.controls,
         alignment_controls=alignment_metadata.controls,
         border_controls=border_metadata.controls,
+        worksheet_dimension_controls=worksheet_dimension_metadata.controls,
         worksheet_display_controls=worksheet_display_metadata.controls,
         worksheet_print_layout_controls=worksheet_print_layout_metadata.controls,
         workbook_theme=workbook_theme_metadata.theme,
@@ -33545,6 +34423,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "fill_controls": snapshot.fill_controls.profile_dict(),
         "alignment_controls": snapshot.alignment_controls.profile_dict(),
         "border_controls": snapshot.border_controls.profile_dict(),
+        "worksheet_dimension_controls": (
+            snapshot.worksheet_dimension_controls.profile_dict()
+        ),
         "worksheet_display_controls": (
             snapshot.worksheet_display_controls.profile_dict()
         ),
@@ -33594,6 +34475,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_fill_controls": snapshot.fill_controls.present,
             "has_alignment_controls": snapshot.alignment_controls.present,
             "has_border_controls": snapshot.border_controls.present,
+            "has_worksheet_dimension_controls": (
+                snapshot.worksheet_dimension_controls.present
+            ),
             "has_worksheet_display_controls": (
                 snapshot.worksheet_display_controls.present
             ),

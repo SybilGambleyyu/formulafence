@@ -33,6 +33,10 @@ financial correctness or replace model review.
   references, relationship identifiers, and revision UIDs are compared through
   private fingerprints only. Profiles and reports retain structural counts,
   never the underlying link material, and the CLI never follows a target.
+- Worksheet sparkline source formulas, date-axis sources, destination cells,
+  group properties, and colour definitions are compared through private
+  fingerprints only. Profiles and reports retain aggregate structural counts,
+  never the underlying source or presentation material.
 - Legacy Excel Note text, authors, cell associations, comment properties,
   threaded-comment placeholder links, VML visibility/layout, relationship
   identifiers, targets, and GUIDs are compared through private fingerprints
@@ -309,6 +313,29 @@ review prompt, not proof of an error.
   [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.hyperlink?view=openxml-3.0.1)
   and Office 2016
   [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2016.excel.hyperlink?view=openxml-3.0.1)
+  definitions.
+- Office 2010 worksheet sparklines live in `x14:sparklineGroups` worksheet
+  extensions, outside ordinary cell values. A group can be retargeted, moved,
+  or have its type, axes, display, marker, line-weight, or colour controls
+  changed; a nested sparkline can change its source formula or destination
+  cell. FormulaFence reads raw x14 declarations before the ordinary reader
+  drops them and privately compares group membership, source/date-axis
+  formulas, destinations, and visual controls. A material change emits
+  `FF048` and `no_worksheet_sparkline_changes` blocks it as `FFP048`. Profiles
+  and reports expose only aggregate worksheet/group/sparkline,
+  source/date-axis-source, colour-control, and malformed-metadata counts;
+  formulas, locations, group properties, and colours remain private.
+  Equivalent local direct-range spelling, Boolean/numeric spelling, colour
+  case, and declaration order normalize away. Missing, duplicate, malformed,
+  unreadable, oversized, or over-budget metadata becomes a coverage warning;
+  raw worksheet XML is bounded to 16 MiB per worksheet, 64 MiB per workbook,
+  and 512 parts. A Sparkline Group-removed temporary reader copy is made only
+  after raw inspection, so lossy reader support cannot erase the evidence.
+  FormulaFence does **not** calculate source values, resolve names/external
+  sources, render a sparkline, assess visual accessibility, or guarantee
+  cross-version Excel rendering equivalence. This boundary follows the Open
+  XML [SparklineGroup](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2010.excel.sparklinegroup?view=openxml-3.0.1)
+  and [CT_Sparkline](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/6b28a993-e0fd-451d-860e-35097c6baa77)
   definitions.
 - Traditional Excel Notes are stored in worksheet-associated SpreadsheetML
   comments parts and their display declarations live in worksheet
@@ -612,6 +639,7 @@ review prompt, not proof of an error.
   Scenario Manager declarations, worksheet/Table AutoFilter and row/column-
   visibility controls, ignored-error warning suppressions, relationship-backed Named Sheet
   View controls, ordinary worksheet-cell hyperlink declarations/relationships,
+  Office 2010 worksheet sparkline declarations,
   legacy Excel Note/comments/VML and threaded-placeholder package chains,
   modern threaded-comment/person package chains, non-chart Worksheet DrawingML
   regular/group shape controls, DrawingML chart

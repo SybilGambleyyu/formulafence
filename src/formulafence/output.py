@@ -1532,6 +1532,36 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "ScreenTips, and relationship IDs are compared privately and intentionally "
             "omitted."
         )
+    worksheet_sparklines = profile["worksheet_sparklines"]
+    if worksheet_sparklines["present"]:
+        lines.extend(
+            [
+                "",
+                "## Worksheet sparklines",
+                "",
+                (
+                    "- **Worksheets / groups / sparklines:** "
+                    f"{worksheet_sparklines['worksheet_sparkline_sheet_count']} / "
+                    f"{worksheet_sparklines['sparkline_group_count']} / "
+                    f"{worksheet_sparklines['sparkline_count']}"
+                ),
+                (
+                    "- **With data source / date-axis source / colour controls:** "
+                    f"{worksheet_sparklines['sparkline_with_source_count']} / "
+                    f"{worksheet_sparklines['group_date_axis_source_count']} / "
+                    f"{worksheet_sparklines['color_control_count']}"
+                ),
+            ]
+        )
+        if worksheet_sparklines["unrecognized_worksheet_sparkline_count"]:
+            lines.append(
+                "- **Unrecognized or malformed worksheet-sparkline metadata:** "
+                f"{worksheet_sparklines['unrecognized_worksheet_sparkline_count']}"
+            )
+        lines.append(
+            "Sparkline source formulas, destination cells, group properties, and "
+            "colour definitions are compared privately and intentionally omitted."
+        )
     legacy_comments = profile["legacy_comments"]
     if legacy_comments["present"]:
         lines.extend(

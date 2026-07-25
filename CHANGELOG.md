@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.46.0 — 2026-07-24
+
+- Inspect raw Office 2010 `x14:sparklineGroups` worksheet extensions before
+  ordinary workbook readers discard them. FormulaFence privately compares
+  sparkline source/date-axis formulas, destination cells, group membership,
+  type/axis/display/marker controls, line weight, and colour definitions while
+  profiles, Markdown, JSON, and SARIF expose aggregate counts only—never
+  source formulas, locations, control values, or colour definitions.
+- Emit `FF048` for a material worksheet-sparkline control change and add the
+  fail-closed `no_worksheet_sparkline_changes` policy rule (`FFP048`). This
+  closes the review gap where a compact trend can be retargeted or restyled
+  without changing ordinary worksheet values.
+- Normalize equivalent direct local-range, Boolean/numeric, colour-case, and
+  declaration-order spelling. Missing, duplicate, malformed, unreadable,
+  oversized, or over-budget metadata produces a visible coverage warning. A
+  Sparkline Group-removed temporary reader copy is made only after raw
+  inspection, so reader loss cannot suppress evidence; FormulaFence does not
+  calculate, render, resolve, or fetch sparkline sources or assess visual
+  accessibility.
+
 ## 0.45.1 — 2026-07-24
 
 - Stabilize the cross-version redaction test for an unknown custom number

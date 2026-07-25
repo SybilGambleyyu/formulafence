@@ -1932,6 +1932,53 @@ class CellHyperlinkSnapshot:
 
 
 @dataclass(frozen=True)
+class WorksheetSparklineSnapshot:
+    """Safe aggregate of worksheet sparkline controls.
+
+    Office 2010 x14:sparklineGroup extensions can change a compact visual
+    summary without changing any ordinary cell value. Private signatures retain
+    source formulas, destination cells, group controls, and colour definitions
+    for comparison without serialising them into a profile or change report.
+    """
+
+    worksheet_sparkline_sheet_count: int = 0
+    sparkline_group_count: int = 0
+    sparkline_count: int = 0
+    sparkline_with_source_count: int = 0
+    group_date_axis_source_count: int = 0
+    color_control_count: int = 0
+    unrecognized_worksheet_sparkline_count: int = 0
+    binding_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.sparkline_group_count
+            or self.sparkline_count
+            or self.unrecognized_worksheet_sparkline_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural sparkline evidence without formulas or locations."""
+        return {
+            "present": self.present,
+            "worksheet_sparkline_sheet_count": self.worksheet_sparkline_sheet_count,
+            "sparkline_group_count": self.sparkline_group_count,
+            "sparkline_count": self.sparkline_count,
+            "sparkline_with_source_count": self.sparkline_with_source_count,
+            "group_date_axis_source_count": self.group_date_axis_source_count,
+            "color_control_count": self.color_control_count,
+            "unrecognized_worksheet_sparkline_count": (
+                self.unrecognized_worksheet_sparkline_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class LegacyCommentSnapshot:
     """Safe aggregate of legacy Excel note and placeholder controls.
 
@@ -2549,6 +2596,9 @@ class WorkbookSnapshot:
     cell_hyperlinks: CellHyperlinkSnapshot = field(
         default_factory=CellHyperlinkSnapshot
     )
+    worksheet_sparklines: WorksheetSparklineSnapshot = field(
+        default_factory=WorksheetSparklineSnapshot
+    )
     legacy_comments: LegacyCommentSnapshot = field(
         default_factory=LegacyCommentSnapshot
     )
@@ -2615,6 +2665,11 @@ class WorkbookSnapshot:
                 self.cell_hyperlinks.external_relationship_count
             ),
             "has_cell_hyperlinks": self.cell_hyperlinks.present,
+            "worksheet_sparkline_group_count": (
+                self.worksheet_sparklines.sparkline_group_count
+            ),
+            "worksheet_sparkline_count": self.worksheet_sparklines.sparkline_count,
+            "has_worksheet_sparklines": self.worksheet_sparklines.present,
             "legacy_comment_count": self.legacy_comments.comment_count,
             "legacy_comment_author_count": self.legacy_comments.comment_author_count,
             "legacy_comment_note_shape_count": self.legacy_comments.note_shape_count,

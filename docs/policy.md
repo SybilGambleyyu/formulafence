@@ -30,6 +30,7 @@ rules:
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
+  no_worksheet_sparkline_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -104,6 +105,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
 | `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
 | `no_cell_hyperlink_changes` | boolean | A standard or Office 2016 revision worksheet-cell hyperlink binding, location, display override, ScreenTip, or selected relationship target/type/mode changes. Targets, cell references, locations, display strings, ScreenTips, relationship IDs, and revision UIDs are compared privately. |
+| `no_worksheet_sparkline_changes` | boolean | An Office 2010 worksheet sparkline source or date-axis formula, destination cell, group membership, type/axis/display/marker control, line weight, or colour definition changes. Source formulas, destination cells, control values, and colours are compared privately. |
 | `no_legacy_comment_changes` | boolean | A legacy Excel Note/comments binding, author association, Note text/rich-text/property declaration, threaded-comment placeholder reconciliation declaration, Note VML visibility/layout, or related relationship changes. Note text, authors, locations, VML, targets, IDs, and GUIDs are compared privately. |
 | `no_threaded_comment_changes` | boolean | A modern Excel threaded-comment/person package binding, comment/reply graph, text, stored cell/timestamp/resolution declaration, mention range/person association, extension material, or person definition changes. Comment bodies, locations, timestamps, parent links, names, user IDs, provider IDs, relationship IDs, and GUIDs are compared privately. |
 | `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp` or nested `xdr:grpSp` anchor/layout, text/presentation declaration, macro/text link, or referenced click/hover relationship changes. Shape text, formatting, formulas, anchors, IDs, and targets are compared privately. |
@@ -623,6 +625,32 @@ follows the Open XML
 [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.hyperlink?view=openxml-3.0.1)
 and Office 2016
 [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2016.excel.hyperlink?view=openxml-3.0.1)
+definitions.
+
+Office 2010 worksheet sparklines are stored as `x14:sparklineGroups` worksheet
+extensions, not ordinary cells. A group can change its type, axes, display,
+markers, colours, and optional date-axis source; each nested sparkline can
+change the private source formula or destination cell without modifying the
+visible data cells. FormulaFence reads the raw extension before the ordinary
+reader drops it, privately compares those bindings and controls, and emits
+`FF048`. Enable `no_worksheet_sparkline_changes` to block it as `FFP048`.
+
+Profiles and `FF048` details expose only aggregate worksheet/group/sparkline,
+source/date-axis-source, colour-control, and malformed-metadata counts. Source
+formulas, destination cells, group properties, and colour values remain
+private. Equivalent local direct-range spelling, Boolean/numeric spelling,
+colour case, and declaration ordering normalize away. Missing, duplicate,
+malformed, unreadable, oversized, or over-budget records become an explicit
+coverage warning; raw worksheet XML is bounded to 16 MiB per worksheet, 64 MiB
+per workbook, and 512 parts. FormulaFence uses a Sparkline Group-removed
+temporary reader copy only after raw inspection, so a reader that omits the
+extension cannot suppress the evidence.
+
+FormulaFence does not calculate source values, resolve names or external
+sources, render a sparkline, assess visual accessibility, or guarantee
+cross-version Excel rendering equivalence. This scope follows the Open XML
+[SparklineGroup](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2010.excel.sparklinegroup?view=openxml-3.0.1)
+and [CT_Sparkline](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/6b28a993-e0fd-451d-860e-35097c6baa77)
 definitions.
 
 Traditional Excel Notes are stored in worksheet-associated SpreadsheetML

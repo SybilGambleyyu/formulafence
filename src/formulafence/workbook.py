@@ -88,6 +88,7 @@ from formulafence.models import (
     WorkbookSnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
+    WorksheetSparklineSnapshot,
     XlmMacroSheetSnapshot,
     XmlFragmentSnapshot,
     display_location,
@@ -248,6 +249,10 @@ _CELL_HYPERLINK_MAX_WORKSHEET_XML_BYTES = 16 * 1024 * 1024
 _CELL_HYPERLINK_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _CELL_HYPERLINK_TOTAL_XML_MAX_COUNT = 512
 _CELL_HYPERLINK_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/hyperlink"
+_WORKSHEET_SPARKLINE_MAX_WORKSHEET_XML_BYTES = 16 * 1024 * 1024
+_WORKSHEET_SPARKLINE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_WORKSHEET_SPARKLINE_TOTAL_XML_MAX_COUNT = 512
+_WORKSHEET_SPARKLINE_EXTENSION_URI = "{05C60535-1F16-4FD2-B633-F4F36F0B64E0}"
 _PIVOT_TABLE_PART_PATTERN = re.compile(r"^xl/pivotTables/[^/]+\.xml$", re.IGNORECASE)
 _PIVOT_CACHE_DEFINITION_PART_PATTERN = re.compile(
     r"^xl/pivotCache/pivotCacheDefinition[^/]*\.xml$", re.IGNORECASE
@@ -608,6 +613,14 @@ class _CellHyperlinkMetadata:
     """Raw cell-hyperlink evidence retained before the workbook reader omits it."""
 
     hyperlinks: CellHyperlinkSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _WorksheetSparklineMetadata:
+    """Raw worksheet-sparkline evidence retained before reader loss."""
+
+    sparklines: WorksheetSparklineSnapshot
     warnings: tuple[str, ...]
 
 
@@ -11058,6 +11071,95 @@ def _cell_hyperlink_reader_replacements(
     return replacements, tuple(sorted(reader_warnings))
 
 
+def _worksheet_sparkline_reader_replacements(
+    path: Path,
+    prior_replacements: Mapping[str, bytes] | None = None,
+) -> tuple[dict[str, bytes], tuple[str, ...]]:
+    """Keep unsupported Sparkline Group extensions out of the ordinary reader.
+
+    FormulaFence records the original x14 declarations before constructing this
+    temporary copy. Removing only extensions that contain sparklineGroups avoids
+    an openpyxl warning and prevents its lossy extension handling from affecting
+    the ordinary worksheet snapshot.
+    """
+    replacements: dict[str, bytes] = {}
+    reader_warnings: set[str] = set()
+    prior_replacements = prior_replacements or {}
+    try:
+        with ZipFile(path) as archive:
+            def reader_xml_root(member: str) -> ElementTree.Element:
+                """Read an earlier safe overlay before falling back to the package."""
+                if (payload := prior_replacements.get(member)) is not None:
+                    return _xml_root_from_payload(payload)
+                return _xml_root(archive, member)
+
+            sheet_parts = _sheet_xml_parts(archive)
+            extension_list_tag = f"{{{_SPREADSHEETML_NS}}}extLst"
+            extension_tag = f"{{{_SPREADSHEETML_NS}}}ext"
+            group_container_tag = (
+                f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklineGroups"
+            )
+            for _sheet, (member, sheet_kind) in sheet_parts.items():
+                if sheet_kind != "worksheet":
+                    continue
+                try:
+                    worksheet = reader_xml_root(member)
+                except (
+                    KeyError,
+                    ElementTree.ParseError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ):
+                    continue
+                if (
+                    _xml_namespace(worksheet.tag) != _SPREADSHEETML_NS
+                    or _xml_local_name(worksheet.tag) != "worksheet"
+                ):
+                    continue
+                parent_by_child = {
+                    child: parent
+                    for parent in worksheet.iter()
+                    for child in parent
+                }
+                extensions_to_remove: set[ElementTree.Element] = set()
+                changed_worksheet = False
+                for container in list(worksheet.iter(group_container_tag)):
+                    ancestor = parent_by_child.get(container)
+                    while ancestor is not None and ancestor.tag != extension_tag:
+                        ancestor = parent_by_child.get(ancestor)
+                    if ancestor is not None:
+                        extensions_to_remove.add(ancestor)
+                        continue
+                    parent = parent_by_child.get(container)
+                    if parent is not None:
+                        parent.remove(container)
+                        changed_worksheet = True
+                for extension in extensions_to_remove:
+                    parent = parent_by_child.get(extension)
+                    if parent is not None:
+                        parent.remove(extension)
+                        changed_worksheet = True
+                for extension_list in list(worksheet.findall(extension_list_tag)):
+                    if list(extension_list):
+                        continue
+                    worksheet.remove(extension_list)
+                    changed_worksheet = True
+                if changed_worksheet:
+                    replacements[member] = ElementTree.tostring(
+                        worksheet,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        reader_warnings.add(
+            "FormulaFence could not isolate worksheet sparklines before the "
+            f"underlying workbook reader ran ({type(error).__name__}); raw "
+            "sparkline metadata remains fail-closed."
+        )
+    return replacements, tuple(sorted(reader_warnings))
+
+
 def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...]]:
     """Return a temporary source that limits unsafe ordinary-reader behavior."""
     replacements, reader_warnings = _pivot_reader_cache_record_replacements(path)
@@ -11068,14 +11170,23 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
     cell_hyperlink_replacements, cell_hyperlink_reader_warnings = (
         _cell_hyperlink_reader_replacements(path, prior_replacements)
     )
+    prior_replacements = {
+        **prior_replacements,
+        **cell_hyperlink_replacements,
+    }
+    worksheet_sparkline_replacements, worksheet_sparkline_reader_warnings = (
+        _worksheet_sparkline_reader_replacements(path, prior_replacements)
+    )
     replacements.update(legacy_replacements)
     replacements.update(cell_hyperlink_replacements)
+    replacements.update(worksheet_sparkline_replacements)
     reader_warnings = tuple(
         sorted(
             {
                 *reader_warnings,
                 *legacy_reader_warnings,
                 *cell_hyperlink_reader_warnings,
+                *worksheet_sparkline_reader_warnings,
             }
         )
     )
@@ -19448,6 +19559,934 @@ def _cell_hyperlink_metadata(path: Path) -> _CellHyperlinkMetadata:
     return _CellHyperlinkMetadata(snapshot, tuple(sorted(warnings)))
 
 
+@dataclass
+class _WorksheetSparklineBudget:
+    """Bounded raw worksheet XML reads for worksheet-sparkline inspection."""
+
+    remaining_bytes: int = _WORKSHEET_SPARKLINE_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _WORKSHEET_SPARKLINE_TOTAL_XML_MAX_COUNT
+
+
+@dataclass(frozen=True)
+class _WorksheetSparklineWorksheetInspection:
+    """Private result of parsing one worksheet's x14 sparkline extensions."""
+
+    sheet: str
+    member: str
+    sparkline_group_count: int = 0
+    sparkline_count: int = 0
+    sparkline_with_source_count: int = 0
+    group_date_axis_source_count: int = 0
+    color_control_count: int = 0
+    unrecognized_count: int = 0
+    binding_signature: str | None = None
+    definition_signature: str | None = None
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.sparkline_group_count
+            or self.sparkline_count
+            or self.unrecognized_count
+        )
+
+
+def _worksheet_sparkline_xml_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _WorksheetSparklineBudget,
+) -> tuple[bytes | None, str | None]:
+    """Read one bounded worksheet part before the ordinary reader drops x14 data."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded worksheet-sparkline XML part count "
+            "budget; affected sparklines have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("worksheet-sparkline-part-count-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a worksheet XML part while inspecting "
+            "worksheet sparklines; affected sparklines were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("missing-worksheet-sparkline-worksheet", member),)
+        )
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _WORKSHEET_SPARKLINE_MAX_WORKSHEET_XML_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized worksheet XML part while "
+            "inspecting worksheet sparklines; affected sparklines have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("oversized-worksheet-sparkline-worksheet", metadata),)
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded worksheet-sparkline XML read budget; "
+            "affected sparklines have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("worksheet-sparkline-read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a worksheet XML part while inspecting "
+            f"worksheet sparklines ({type(error).__name__}); affected sparklines "
+            "were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("unreadable-worksheet-sparkline-worksheet", metadata),)
+        )
+
+
+def _worksheet_sparkline_boolean(value: str) -> str | None:
+    """Normalise an XML boolean without accepting a non-standard spelling."""
+    return {
+        "0": "false",
+        "false": "false",
+        "1": "true",
+        "true": "true",
+    }.get(value.strip().casefold())
+
+
+def _worksheet_sparkline_decimal(value: str) -> str | None:
+    """Normalise a finite XML decimal without evaluating it."""
+    try:
+        decimal = Decimal(value.strip())
+    except (InvalidOperation, ValueError):
+        return None
+    if not decimal.is_finite():
+        return None
+    normalised = decimal.normalize()
+    return "0" if normalised == 0 else format(normalised, "f")
+
+
+def _worksheet_sparkline_formula_material(
+    value: str | None,
+    *,
+    sheet: str,
+) -> tuple[object, ...] | None:
+    """Retain a private source formula while normalising a direct local range."""
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+    reference = parse_reference_token(candidate)
+    if (
+        reference is not None
+        and not reference.is_external
+        and reference.min_column is not None
+        and reference.min_row is not None
+        and reference.max_column is not None
+        and reference.max_row is not None
+    ):
+        return (
+            "range",
+            (reference.sheet or sheet).casefold(),
+            reference.min_column,
+            reference.min_row,
+            reference.max_column,
+            reference.max_row,
+        )
+    return ("formula", candidate)
+
+
+def _worksheet_sparkline_destination(value: str | None) -> str | None:
+    """Normalise the required single-cell destination from a sparkline sqref."""
+    if value is None or not (candidate := value.strip()):
+        return None
+    try:
+        min_column, min_row, max_column, max_row = range_boundaries(candidate)
+    except ValueError:
+        return None
+    if (
+        min_column is None
+        or min_row is None
+        or max_column is None
+        or max_row is None
+        or min_column != max_column
+        or min_row != max_row
+        or min_column < 1
+        or min_row < 1
+        or max_column > MAX_EXCEL_COLUMN
+        or max_row > MAX_EXCEL_ROW
+    ):
+        return None
+    return f"{get_column_letter(min_column)}{min_row}"
+
+
+def _worksheet_sparkline_group_attributes(
+    group: ElementTree.Element,
+    *,
+    context: tuple[object, ...],
+    coverage_entries: list[tuple[str, str]],
+) -> tuple[tuple[str, str], ...]:
+    """Normalise the supported x14:sparklineGroup attribute vocabulary."""
+    boolean_attributes = frozenset(
+        {
+            "dateAxis",
+            "displayHidden",
+            "displayXAxis",
+            "first",
+            "high",
+            "last",
+            "low",
+            "markers",
+            "negative",
+            "rightToLeft",
+        }
+    )
+    decimal_attributes = frozenset({"lineWeight", "manualMax", "manualMin"})
+    enum_values = {
+        "displayEmptyCellsAs": frozenset({"gap", "span", "zero"}),
+        "maxAxisType": frozenset({"custom", "group", "individual"}),
+        "minAxisType": frozenset({"custom", "group", "individual"}),
+        "type": frozenset({"column", "line", "stacked"}),
+    }
+    known_attributes = boolean_attributes | decimal_attributes | frozenset(enum_values)
+    attribute_values: dict[str, str] = {}
+    material: list[tuple[str, str]] = []
+    for attribute, value in sorted(group.attrib.items()):
+        attribute_name = _xml_local_name(attribute)
+        attribute_values[attribute_name] = value
+        if attribute_name not in known_attributes or _xml_namespace(attribute):
+            coverage_entries.append(
+                (
+                    "unsupported-worksheet-sparkline-group-attribute",
+                    repr((context, attribute, value)),
+                )
+            )
+            material.append((attribute, value))
+            continue
+        if attribute_name in boolean_attributes:
+            normalised = _worksheet_sparkline_boolean(value)
+        elif attribute_name in decimal_attributes:
+            normalised = _worksheet_sparkline_decimal(value)
+        else:
+            normalised = value.strip().casefold()
+            if normalised not in enum_values[attribute_name]:
+                normalised = None
+        if normalised is None:
+            coverage_entries.append(
+                (
+                    "invalid-worksheet-sparkline-group-attribute",
+                    repr((context, attribute_name, value)),
+                )
+            )
+            normalised = value
+        material.append((attribute_name, normalised))
+
+    line_weight = attribute_values.get("lineWeight")
+    if line_weight is not None:
+        normalised_weight = _worksheet_sparkline_decimal(line_weight)
+        if normalised_weight is None or not (
+            Decimal("0") <= Decimal(normalised_weight) <= Decimal("1584")
+        ):
+            coverage_entries.append(
+                (
+                    "invalid-worksheet-sparkline-line-weight",
+                    repr((context, line_weight)),
+                )
+            )
+    if (
+        "manualMax" in attribute_values
+        and attribute_values.get("maxAxisType", "").casefold() != "custom"
+    ):
+        coverage_entries.append(
+            (
+                "worksheet-sparkline-manual-max-without-custom-axis",
+                repr(context),
+            )
+        )
+    if (
+        "manualMin" in attribute_values
+        and attribute_values.get("minAxisType", "").casefold() != "custom"
+    ):
+        coverage_entries.append(
+            (
+                "worksheet-sparkline-manual-min-without-custom-axis",
+                repr(context),
+            )
+        )
+    return tuple(material)
+
+
+def _worksheet_sparkline_color_material(
+    color: ElementTree.Element,
+    *,
+    context: tuple[object, ...],
+    coverage_entries: list[tuple[str, str]],
+) -> tuple[tuple[str, str], ...]:
+    """Return private CT_Color material while failing closed on extensions."""
+    known_attributes = frozenset({"auto", "indexed", "rgb", "theme", "tint"})
+    material: list[tuple[str, str]] = []
+    for attribute, value in sorted(color.attrib.items()):
+        attribute_name = _xml_local_name(attribute)
+        normalised = value
+        if attribute_name not in known_attributes or _xml_namespace(attribute):
+            coverage_entries.append(
+                (
+                    "unsupported-worksheet-sparkline-colour-attribute",
+                    repr((context, attribute, value)),
+                )
+            )
+        elif attribute_name == "auto":
+            boolean = _worksheet_sparkline_boolean(value)
+            if boolean is None:
+                coverage_entries.append(
+                    (
+                        "invalid-worksheet-sparkline-colour-auto",
+                        repr((context, value)),
+                    )
+                )
+            else:
+                normalised = boolean
+        elif attribute_name == "rgb":
+            normalised = value.upper()
+        elif attribute_name == "tint":
+            normalised = _worksheet_sparkline_decimal(value) or value
+            if normalised == value and _worksheet_sparkline_decimal(value) is None:
+                coverage_entries.append(
+                    (
+                        "invalid-worksheet-sparkline-colour-tint",
+                        repr((context, value)),
+                    )
+                )
+        material.append((attribute_name, normalised))
+    if list(color) or (color.text is not None and color.text.strip()):
+        coverage_entries.append(
+            (
+                "nonleaf-worksheet-sparkline-colour",
+                _private_payload_signature(
+                    ElementTree.tostring(color, encoding="utf-8")
+                ),
+            )
+        )
+    return tuple(material)
+
+
+def _worksheet_sparkline_worksheet_inspection(
+    archive: ZipFile,
+    *,
+    sheet: str,
+    member: str,
+    warnings: set[str],
+    budget: _WorksheetSparklineBudget,
+) -> _WorksheetSparklineWorksheetInspection:
+    """Inspect a worksheet's Office 2010 sparkline extension privately."""
+    payload, fallback_signature = _worksheet_sparkline_xml_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+    )
+    if payload is None:
+        return _WorksheetSparklineWorksheetInspection(
+            sheet=sheet,
+            member=member,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+        )
+    try:
+        worksheet = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect worksheet XML for worksheet sparklines "
+            f"({type(error).__name__}); affected sparklines were not compared."
+        )
+        return _WorksheetSparklineWorksheetInspection(
+            sheet=sheet,
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+    if (
+        _xml_namespace(worksheet.tag) != _SPREADSHEETML_NS
+        or _xml_local_name(worksheet.tag) != "worksheet"
+    ):
+        warnings.add(
+            "FormulaFence found a worksheet part with an unexpected root while "
+            "inspecting worksheet sparklines; affected sparklines were not compared."
+        )
+        return _WorksheetSparklineWorksheetInspection(
+            sheet=sheet,
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    extension_list_tag = f"{{{_SPREADSHEETML_NS}}}extLst"
+    extension_tag = f"{{{_SPREADSHEETML_NS}}}ext"
+    group_container_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklineGroups"
+    group_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklineGroup"
+    sparklines_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklines"
+    sparkline_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparkline"
+    formula_tag = f"{{{_EXCEL_2006_MAIN_NS}}}f"
+    destination_tag = f"{{{_EXCEL_2006_MAIN_NS}}}sqref"
+    colour_names = frozenset(
+        {
+            "colorAxis",
+            "colorFirst",
+            "colorHigh",
+            "colorLast",
+            "colorLow",
+            "colorMarkers",
+            "colorNegative",
+            "colorSeries",
+        }
+    )
+    colour_tags = {
+        f"{{{_OFFICE_2010_SPREADSHEET_NS}}}{name}" for name in colour_names
+    }
+    coverage_entries: list[tuple[str, str]] = []
+    accepted_containers: list[ElementTree.Element] = []
+    accepted_container_ids: set[int] = set()
+    for extension_list_index, extension_list in enumerate(
+        worksheet.findall(extension_list_tag)
+    ):
+        for extension_index, extension in enumerate(extension_list):
+            if extension.tag != extension_tag:
+                continue
+            if (
+                extension.get("uri", "").casefold()
+                != _WORKSHEET_SPARKLINE_EXTENSION_URI.casefold()
+            ):
+                continue
+            context = (sheet, extension_list_index, extension_index)
+            if set(extension.attrib) != {"uri"} or (
+                extension.text is not None and extension.text.strip()
+            ):
+                coverage_entries.append(
+                    (
+                        "malformed-worksheet-sparkline-extension",
+                        repr((context, tuple(sorted(extension.attrib.items())))),
+                    )
+                )
+            containers = [
+                child for child in extension if child.tag == group_container_tag
+            ]
+            if len(containers) != 1:
+                coverage_entries.append(
+                    (
+                        "invalid-worksheet-sparkline-group-container-count",
+                        repr((context, len(containers))),
+                    )
+                )
+            for child_index, child in enumerate(extension):
+                if child.tag != group_container_tag:
+                    coverage_entries.append(
+                        (
+                            "unexpected-worksheet-sparkline-extension-child",
+                            repr((context, child_index, _xml_display_name(child.tag))),
+                        )
+                    )
+            accepted_containers.extend(containers)
+            accepted_container_ids.update(id(container) for container in containers)
+
+    for container in worksheet.iter(group_container_tag):
+        if id(container) in accepted_container_ids:
+            continue
+        coverage_entries.append(
+            (
+                "out-of-container-worksheet-sparkline-groups",
+                _private_payload_signature(
+                    ElementTree.tostring(container, encoding="utf-8")
+                ),
+            )
+        )
+
+    if not accepted_containers and not coverage_entries:
+        return _WorksheetSparklineWorksheetInspection(sheet=sheet, member=member)
+
+    binding_entries: list[tuple[str, str]] = []
+    definition_entries: list[tuple[str, str]] = []
+    sparkline_group_count = 0
+    sparkline_count = 0
+    sparkline_with_source_count = 0
+    group_date_axis_source_count = 0
+    colour_control_count = 0
+    destinations: dict[str, int] = defaultdict(int)
+
+    for container_index, container in enumerate(accepted_containers):
+        container_context = (sheet, container_index)
+        if container.attrib or (
+            container.text is not None and container.text.strip()
+        ):
+            coverage_entries.append(
+                (
+                    "malformed-worksheet-sparkline-groups",
+                    repr((container_context, tuple(sorted(container.attrib.items())))),
+                )
+            )
+        groups: list[ElementTree.Element] = []
+        for child_index, child in enumerate(container):
+            if child.tag != group_tag:
+                coverage_entries.append(
+                    (
+                        "unexpected-worksheet-sparkline-groups-child",
+                        repr(
+                            (
+                                container_context,
+                                child_index,
+                                _xml_display_name(child.tag),
+                            )
+                        ),
+                    )
+                )
+                continue
+            groups.append(child)
+        if not groups:
+            coverage_entries.append(
+                ("empty-worksheet-sparkline-groups", repr(container_context))
+            )
+
+        for group_index, group in enumerate(groups):
+            sparkline_group_count += 1
+            group_context = (sheet, container_index, group_index)
+            if group.text is not None and group.text.strip():
+                coverage_entries.append(
+                    (
+                        "nonleaf-worksheet-sparkline-group",
+                        _private_payload_signature(
+                            ElementTree.tostring(group, encoding="utf-8")
+                        ),
+                    )
+                )
+            group_attributes = _worksheet_sparkline_group_attributes(
+                group,
+                context=group_context,
+                coverage_entries=coverage_entries,
+            )
+            children_by_tag: dict[str, list[ElementTree.Element]] = defaultdict(list)
+            for child_index, child in enumerate(group):
+                if child.tag not in colour_tags | {formula_tag, sparklines_tag}:
+                    coverage_entries.append(
+                        (
+                            "unexpected-worksheet-sparkline-group-child",
+                            repr(
+                                (
+                                    group_context,
+                                    child_index,
+                                    _xml_display_name(child.tag),
+                                )
+                            ),
+                        )
+                    )
+                    continue
+                children_by_tag[child.tag].append(child)
+
+            colours: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+            for colour_tag in sorted(colour_tags):
+                colour_elements = children_by_tag.get(colour_tag, [])
+                if len(colour_elements) > 1:
+                    coverage_entries.append(
+                        (
+                            "duplicate-worksheet-sparkline-colour",
+                            repr((group_context, _xml_local_name(colour_tag))),
+                        )
+                    )
+                for colour_index, colour in enumerate(colour_elements):
+                    colour_control_count += 1
+                    colours.append(
+                        (
+                            _xml_local_name(colour.tag),
+                            _worksheet_sparkline_color_material(
+                                colour,
+                                context=(
+                                    *group_context,
+                                    _xml_local_name(colour.tag),
+                                    colour_index,
+                                ),
+                                coverage_entries=coverage_entries,
+                            ),
+                        )
+                    )
+
+            group_formula_elements = children_by_tag.get(formula_tag, [])
+            if len(group_formula_elements) > 1:
+                coverage_entries.append(
+                    (
+                        "duplicate-worksheet-sparkline-group-formula",
+                        repr(group_context),
+                    )
+                )
+            group_formula_material: tuple[object, ...] | None = None
+            if group_formula_elements:
+                group_formula = group_formula_elements[0]
+                if group_formula.attrib or list(group_formula):
+                    coverage_entries.append(
+                        (
+                            "malformed-worksheet-sparkline-group-formula",
+                            _private_payload_signature(
+                                ElementTree.tostring(group_formula, encoding="utf-8")
+                            ),
+                        )
+                    )
+                group_formula_material = _worksheet_sparkline_formula_material(
+                    group_formula.text,
+                    sheet=sheet,
+                )
+                if group_formula_material is None:
+                    coverage_entries.append(
+                        (
+                            "empty-worksheet-sparkline-group-formula",
+                            repr(group_context),
+                        )
+                    )
+                else:
+                    group_date_axis_source_count += 1
+
+            sparklines_containers = children_by_tag.get(sparklines_tag, [])
+            if len(sparklines_containers) != 1:
+                coverage_entries.append(
+                    (
+                        "invalid-worksheet-sparklines-container-count",
+                        repr((group_context, len(sparklines_containers))),
+                    )
+                )
+            sparkline_definitions: list[tuple[object, ...]] = []
+            for sparklines_index, sparklines in enumerate(sparklines_containers):
+                sparklines_context = (*group_context, sparklines_index)
+                if sparklines.attrib or (
+                    sparklines.text is not None and sparklines.text.strip()
+                ):
+                    coverage_entries.append(
+                        (
+                            "malformed-worksheet-sparklines-container",
+                            repr(
+                                (
+                                    sparklines_context,
+                                    tuple(sorted(sparklines.attrib.items())),
+                                )
+                            ),
+                        )
+                    )
+                sparkline_elements: list[ElementTree.Element] = []
+                for child_index, child in enumerate(sparklines):
+                    if child.tag != sparkline_tag:
+                        coverage_entries.append(
+                            (
+                                "unexpected-worksheet-sparklines-child",
+                                repr(
+                                    (
+                                        sparklines_context,
+                                        child_index,
+                                        _xml_display_name(child.tag),
+                                    )
+                                ),
+                            )
+                        )
+                        continue
+                    sparkline_elements.append(child)
+                if not sparkline_elements:
+                    coverage_entries.append(
+                        (
+                            "empty-worksheet-sparklines-container",
+                            repr(sparklines_context),
+                        )
+                    )
+
+                for sparkline_index, sparkline in enumerate(sparkline_elements):
+                    sparkline_count += 1
+                    sparkline_context = (*sparklines_context, sparkline_index)
+                    if sparkline.attrib or (
+                        sparkline.text is not None and sparkline.text.strip()
+                    ):
+                        coverage_entries.append(
+                            (
+                                "malformed-worksheet-sparkline",
+                                _private_payload_signature(
+                                    ElementTree.tostring(sparkline, encoding="utf-8")
+                                ),
+                            )
+                        )
+                    sparkline_children: dict[str, list[ElementTree.Element]] = (
+                        defaultdict(list)
+                    )
+                    for child_index, child in enumerate(sparkline):
+                        if child.tag not in {formula_tag, destination_tag}:
+                            coverage_entries.append(
+                                (
+                                    "unexpected-worksheet-sparkline-child",
+                                    repr(
+                                        (
+                                            sparkline_context,
+                                            child_index,
+                                            _xml_display_name(child.tag),
+                                        )
+                                    ),
+                                )
+                            )
+                            continue
+                        sparkline_children[child.tag].append(child)
+
+                    source_elements = sparkline_children.get(formula_tag, [])
+                    if len(source_elements) > 1:
+                        coverage_entries.append(
+                            (
+                                "duplicate-worksheet-sparkline-source",
+                                repr(sparkline_context),
+                            )
+                        )
+                    source_material: tuple[object, ...] | None = None
+                    if source_elements:
+                        source = source_elements[0]
+                        if source.attrib or list(source):
+                            coverage_entries.append(
+                                (
+                                    "malformed-worksheet-sparkline-source",
+                                    _private_payload_signature(
+                                        ElementTree.tostring(source, encoding="utf-8")
+                                    ),
+                                )
+                            )
+                        source_material = _worksheet_sparkline_formula_material(
+                            source.text,
+                            sheet=sheet,
+                        )
+                        if source_material is None:
+                            coverage_entries.append(
+                                (
+                                    "empty-worksheet-sparkline-source",
+                                    repr(sparkline_context),
+                                )
+                            )
+                        else:
+                            sparkline_with_source_count += 1
+                            if (
+                                source_material[0] == "range"
+                                and source_material[2] != source_material[4]
+                                and source_material[3] != source_material[5]
+                            ):
+                                coverage_entries.append(
+                                    (
+                                        "nonlinear-worksheet-sparkline-source",
+                                        repr((sparkline_context, source_material)),
+                                    )
+                                )
+
+                    destination_elements = sparkline_children.get(destination_tag, [])
+                    if len(destination_elements) != 1:
+                        coverage_entries.append(
+                            (
+                                "invalid-worksheet-sparkline-destination-count",
+                                repr((sparkline_context, len(destination_elements))),
+                            )
+                        )
+                    destination_material: object = ("missing",)
+                    if destination_elements:
+                        destination = destination_elements[0]
+                        if destination.attrib or list(destination):
+                            coverage_entries.append(
+                                (
+                                    "malformed-worksheet-sparkline-destination",
+                                    _private_payload_signature(
+                                        ElementTree.tostring(
+                                            destination,
+                                            encoding="utf-8",
+                                        )
+                                    ),
+                                )
+                            )
+                        location = _worksheet_sparkline_destination(destination.text)
+                        if location is None:
+                            coverage_entries.append(
+                                (
+                                    "invalid-worksheet-sparkline-destination",
+                                    repr(
+                                        (
+                                            sparkline_context,
+                                            (destination.text or "").strip(),
+                                        )
+                                    ),
+                                )
+                            )
+                            destination_material = (
+                                "invalid",
+                                (destination.text or "").strip(),
+                            )
+                        else:
+                            destinations[location] += 1
+                            destination_material = location
+
+                    binding_material = (
+                        group_formula_material,
+                        source_material,
+                        destination_material,
+                    )
+                    binding_entries.append(
+                        (
+                            "worksheet-sparkline-binding",
+                            repr((sheet, binding_material)),
+                        )
+                    )
+                    sparkline_definitions.append(binding_material)
+
+            definition_entries.append(
+                (
+                    "worksheet-sparkline-group",
+                    repr(
+                        (
+                            sheet,
+                            group_attributes,
+                            tuple(sorted(colours)),
+                            group_formula_material,
+                            tuple(sorted(sparkline_definitions, key=repr)),
+                        )
+                    ),
+                )
+            )
+
+    for destination, count in destinations.items():
+        if count > 1:
+            coverage_entries.append(
+                (
+                    "duplicate-worksheet-sparkline-destination",
+                    repr((sheet, destination, count)),
+                )
+            )
+    definition_entries.extend(coverage_entries)
+    return _WorksheetSparklineWorksheetInspection(
+        sheet=sheet,
+        member=member,
+        sparkline_group_count=sparkline_group_count,
+        sparkline_count=sparkline_count,
+        sparkline_with_source_count=sparkline_with_source_count,
+        group_date_axis_source_count=group_date_axis_source_count,
+        color_control_count=colour_control_count,
+        unrecognized_count=len(coverage_entries),
+        binding_signature=_private_external_data_signature(
+            tuple(sorted(binding_entries))
+        ),
+        definition_signature=_private_external_data_signature(
+            tuple(sorted(definition_entries))
+        ),
+    )
+
+
+def _worksheet_sparkline_metadata(path: Path) -> _WorksheetSparklineMetadata:
+    """Inspect raw worksheet sparklines before the ordinary reader omits them."""
+    warnings: set[str] = set()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                sheet_parts = _sheet_xml_parts(archive)
+            except (
+                KeyError,
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                return _WorksheetSparklineMetadata(
+                    WorksheetSparklineSnapshot(
+                        unrecognized_worksheet_sparkline_count=1,
+                        definition_signature=_private_external_data_signature(
+                            (
+                                (
+                                    "worksheet-sparkline-sheet-part-scan-failure",
+                                    type(error).__name__,
+                                ),
+                            )
+                        ),
+                    ),
+                    (
+                        "FormulaFence could not inspect worksheet OOXML parts for "
+                        f"worksheet sparklines ({type(error).__name__}); affected "
+                        "sparklines were not compared.",
+                    ),
+                )
+            budget = _WorksheetSparklineBudget()
+            inspections = [
+                _worksheet_sparkline_worksheet_inspection(
+                    archive,
+                    sheet=sheet,
+                    member=member,
+                    warnings=warnings,
+                    budget=budget,
+                )
+                for sheet, (member, sheet_kind) in sorted(
+                    sheet_parts.items(),
+                    key=lambda item: item[0].casefold(),
+                )
+                if sheet_kind == "worksheet"
+            ]
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _WorksheetSparklineMetadata(
+            WorksheetSparklineSnapshot(
+                unrecognized_worksheet_sparkline_count=1,
+                definition_signature=_private_external_data_signature(
+                    (("worksheet-sparkline-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect worksheet-sparkline OOXML "
+                f"({type(error).__name__}); affected sparklines were not compared.",
+            ),
+        )
+
+    if any(inspection.unrecognized_count for inspection in inspections):
+        warnings.add(
+            "FormulaFence found malformed or unsupported worksheet-sparkline "
+            "metadata; affected sparklines have a coverage gap."
+        )
+    present_inspections = [inspection for inspection in inspections if inspection.present]
+    snapshot = WorksheetSparklineSnapshot(
+        worksheet_sparkline_sheet_count=len(present_inspections),
+        sparkline_group_count=sum(
+            inspection.sparkline_group_count for inspection in present_inspections
+        ),
+        sparkline_count=sum(
+            inspection.sparkline_count for inspection in present_inspections
+        ),
+        sparkline_with_source_count=sum(
+            inspection.sparkline_with_source_count
+            for inspection in present_inspections
+        ),
+        group_date_axis_source_count=sum(
+            inspection.group_date_axis_source_count
+            for inspection in present_inspections
+        ),
+        color_control_count=sum(
+            inspection.color_control_count for inspection in present_inspections
+        ),
+        unrecognized_worksheet_sparkline_count=sum(
+            inspection.unrecognized_count for inspection in present_inspections
+        ),
+        binding_signature=_private_external_data_signature(
+            tuple(
+                sorted(
+                    (
+                        "worksheet-sparkline-bindings",
+                        repr((inspection.sheet, inspection.binding_signature)),
+                    )
+                    for inspection in present_inspections
+                )
+            )
+        ),
+        definition_signature=_private_external_data_signature(
+            tuple(
+                sorted(
+                    (
+                        "worksheet-sparkline-definition",
+                        repr((inspection.sheet, inspection.definition_signature)),
+                    )
+                    for inspection in present_inspections
+                )
+            )
+        ),
+    )
+    return _WorksheetSparklineMetadata(snapshot, tuple(sorted(warnings)))
+
+
 @dataclass(frozen=True)
 class _LegacyCommentRawRelationship:
     """One private package relationship used to locate legacy notes."""
@@ -23576,6 +24615,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     formula_cached_result_metadata = _formula_cached_result_metadata(source)
     rich_text_run_metadata = _rich_text_run_metadata(source)
     cell_hyperlink_metadata = _cell_hyperlink_metadata(source)
+    worksheet_sparkline_metadata = _worksheet_sparkline_metadata(source)
     legacy_comment_metadata = _legacy_comment_metadata(source)
     threaded_comment_metadata = _threaded_comment_metadata(source)
     worksheet_drawing_shape_metadata = _worksheet_drawing_shape_metadata(source)
@@ -23622,6 +24662,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(formula_cached_result_metadata.warnings)
     parser_warnings.update(rich_text_run_metadata.warnings)
     parser_warnings.update(cell_hyperlink_metadata.warnings)
+    parser_warnings.update(worksheet_sparkline_metadata.warnings)
     parser_warnings.update(legacy_comment_metadata.warnings)
     parser_warnings.update(threaded_comment_metadata.warnings)
     parser_warnings.update(worksheet_drawing_shape_metadata.warnings)
@@ -23852,6 +24893,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         formula_cached_results=formula_cached_result_metadata.results,
         rich_text_runs=rich_text_run_metadata.controls,
         cell_hyperlinks=cell_hyperlink_metadata.hyperlinks,
+        worksheet_sparklines=worksheet_sparkline_metadata.sparklines,
         legacy_comments=legacy_comment_metadata.comments,
         threaded_comments=threaded_comment_metadata.comments,
         worksheet_drawing_shapes=worksheet_drawing_shape_metadata.shapes,
@@ -23935,6 +24977,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "formula_cached_results": snapshot.formula_cached_results.profile_dict(),
         "rich_text_runs": snapshot.rich_text_runs.profile_dict(),
         "cell_hyperlinks": snapshot.cell_hyperlinks.profile_dict(),
+        "worksheet_sparklines": snapshot.worksheet_sparklines.profile_dict(),
         "legacy_comments": snapshot.legacy_comments.profile_dict(),
         "threaded_comments": snapshot.threaded_comments.profile_dict(),
         "worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.profile_dict(),
@@ -23970,6 +25013,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_formula_cached_results": snapshot.formula_cached_results.present,
             "has_rich_text_runs": snapshot.rich_text_runs.present,
             "has_cell_hyperlinks": snapshot.cell_hyperlinks.present,
+            "has_worksheet_sparklines": snapshot.worksheet_sparklines.present,
             "has_legacy_comments": snapshot.legacy_comments.present,
             "has_threaded_comments": snapshot.threaded_comments.present,
             "has_worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.present,

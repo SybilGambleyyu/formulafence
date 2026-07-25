@@ -34,6 +34,7 @@ from .helpers import (
     change_what_if_data_table_input,
     change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
+    change_worksheet_sparkline_source,
     change_xlm_macro_sheet_controls,
     change_zero_dimension_visibility_controls,
     make_cell_hyperlink_model,
@@ -68,6 +69,7 @@ from .helpers import (
     make_what_if_data_table_model,
     make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
+    make_worksheet_sparkline_model,
     make_xlm_macro_sheet_model,
     make_zero_dimension_visibility_model,
     mark_array_formula_dynamic,
@@ -561,6 +563,21 @@ def test_policy_can_block_cell_hyperlink_changes(tmp_path) -> None:
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
         "FFP047"
+    }
+
+
+def test_policy_can_block_worksheet_sparkline_changes(tmp_path) -> None:
+    baseline = make_worksheet_sparkline_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_sparkline_model(tmp_path / "candidate.xlsx")
+    change_worksheet_sparkline_source(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_worksheet_sparkline_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP048"
     }
 
 

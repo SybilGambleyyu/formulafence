@@ -35,6 +35,7 @@ _RULE_FIELDS = {
     "no_formula_cached_result_changes",
     "no_rich_text_run_changes",
     "no_cell_hyperlink_changes",
+    "no_worksheet_sparkline_changes",
     "no_legacy_comment_changes",
     "no_threaded_comment_changes",
     "no_worksheet_drawing_shape_changes",
@@ -106,6 +107,7 @@ class Policy:
     no_formula_cached_result_changes: bool = False
     no_rich_text_run_changes: bool = False
     no_cell_hyperlink_changes: bool = False
+    no_worksheet_sparkline_changes: bool = False
     no_legacy_comment_changes: bool = False
     no_threaded_comment_changes: bool = False
     no_worksheet_drawing_shape_changes: bool = False
@@ -159,6 +161,7 @@ rules:
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
+  no_worksheet_sparkline_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -299,6 +302,9 @@ def parse_policy(data: object) -> Policy:
         no_rich_text_run_changes=_boolean_rule(rules, "no_rich_text_run_changes"),
         no_cell_hyperlink_changes=_boolean_rule(
             rules, "no_cell_hyperlink_changes"
+        ),
+        no_worksheet_sparkline_changes=_boolean_rule(
+            rules, "no_worksheet_sparkline_changes"
         ),
         no_legacy_comment_changes=_boolean_rule(rules, "no_legacy_comment_changes"),
         no_threaded_comment_changes=_boolean_rule(rules, "no_threaded_comment_changes"),
@@ -749,6 +755,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP047",
                     "high",
                     "Policy forbids worksheet cell hyperlink changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_worksheet_sparkline_changes:
+        for finding in _rule_triggered(report, "FF048"):
+            violations.append(
+                Finding(
+                    "FFP048",
+                    "high",
+                    "Policy forbids worksheet sparkline changes.",
                     details=finding.details,
                 )
             )

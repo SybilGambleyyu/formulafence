@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Worksheet sparklines — 2026-07-24
+
+FormulaFence 0.46.0 is validated with a controlled `.xlsx` pair built outside
+this repository with XlsxWriter 3.2.9. The workbook contains a real Office 2010
+line sparkline with marker, axis, custom min/max, date-axis, and colour
+controls. The baseline SHA-256 was
+`b84f2bbd16d070ffc440c6880d77ab6259d383768c4b538e60ac8b2c773ae659`;
+the candidate SHA-256 was
+`798fb57dcfbed545522b0fd6516d7f4ced9a1aeaf701dc7fddf52280874f312d`.
+All ordinary cells and every other uncompressed package member stayed fixed.
+Comparing ZIP members showed exactly one changed member:
+`xl/worksheets/sheet1.xml`, where only the sparkline source changed from one
+stored row range to another.
+
+A clean virtual environment using the published 0.45.1 wheel (SHA-256
+`34cc951a5ecad227b46f832a36ef172d5932b674eff36a6c7984326536da837a`)
+reported zero changes and zero findings. A clean environment using the staged
+0.46.0 wheel (SHA-256
+`da4a0582b39a15c6cf217652cbbe26b1450aeee35cfd91afd20fe1b0f48092b9`)
+emitted exactly one `worksheet_sparkline_controls_changed` change and `FF048`.
+A policy enabling `no_worksheet_sparkline_changes` exited `1` with `FF048` and
+`FFP048`. JSON reports, policy output, and profiles were checked to ensure the
+old/new source formulas, date-axis formula, output cell, and colour value were
+absent.
+
+The suite separately validates source-only and presentation-only changes,
+equivalent source/destination/Boolean/numeric/colour spelling, declaration
+reordering, malformed destinations, bounded XML reads, private redaction, and
+reader isolation of the unsupported Sparkline Group extension. The scanner
+compares stored declarations only; it does not calculate source values, render
+the visual result, resolve names/external sources, or assess visual
+accessibility.
+
 ## Worksheet cell hyperlinks — 2026-07-24
 
 FormulaFence 0.45.1 is validated with a controlled `.xlsx` pair built outside

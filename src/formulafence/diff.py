@@ -48,6 +48,7 @@ from formulafence.models import (
     WorkbookSnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
+    WorksheetSparklineSnapshot,
     XlmMacroSheetSnapshot,
 )
 
@@ -2005,6 +2006,55 @@ def _cell_hyperlink_controls_changed(
     return [change], [finding]
 
 
+def _worksheet_sparkline_controls_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag stored sparkline changes that ordinary cell values cannot expose."""
+    old_sparklines: WorksheetSparklineSnapshot = before.worksheet_sparklines
+    new_sparklines: WorksheetSparklineSnapshot = after.worksheet_sparklines
+    if old_sparklines == new_sparklines:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_sparklines.to_dict(),
+        "after": new_sparklines.to_dict(),
+    }
+    if old_sparklines.binding_signature != new_sparklines.binding_signature:
+        details["worksheet_sparkline_bindings_changed"] = True
+    if old_sparklines.definition_signature != new_sparklines.definition_signature:
+        details["worksheet_sparkline_definition_material_changed"] = True
+    if (
+        old_sparklines.unrecognized_worksheet_sparkline_count
+        != new_sparklines.unrecognized_worksheet_sparkline_count
+        or (
+            (
+                old_sparklines.unrecognized_worksheet_sparkline_count
+                or new_sparklines.unrecognized_worksheet_sparkline_count
+            )
+            and old_sparklines.definition_signature
+            != new_sparklines.definition_signature
+        )
+    ):
+        details["unrecognized_worksheet_sparkline_metadata_changed"] = True
+    change = Change(
+        "worksheet_sparkline_controls_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF048",
+        "high",
+        (
+            "Worksheet sparklines changed; a compact visual trend summary may "
+            "now show different source data, output cells, or rendering controls."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _threaded_comment_controls_changed(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
@@ -2193,6 +2243,12 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(cell_hyperlink_changes)
     findings.extend(cell_hyperlink_findings)
+
+    worksheet_sparkline_changes, worksheet_sparkline_findings = (
+        _worksheet_sparkline_controls_changed(before, after)
+    )
+    changes.extend(worksheet_sparkline_changes)
+    findings.extend(worksheet_sparkline_findings)
 
     legacy_comment_changes, legacy_comment_findings = _legacy_comment_controls_changed(
         before,

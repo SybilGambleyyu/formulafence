@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.45.1/formulafence-0.45.1-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.46.0/formulafence-0.46.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -80,6 +80,7 @@ rules:
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
+  no_worksheet_sparkline_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -120,7 +121,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -781,6 +782,41 @@ and Office 2016
 [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2016.excel.hyperlink?view=openxml-3.0.1)
 definitions, plus Microsoft's guidance for
 [working with links in Excel](https://support.microsoft.com/en-US/Excel/work-with-links-in-excel).
+
+FormulaFence also inventories Office 2010 **worksheet sparklines**. A compact
+trend in a cell can be retargeted to a different source range, moved to a
+different output cell, converted between line/column/win-loss presentation, or
+have its axis, empty-cell, marker, hidden-data, and colour controls changed
+without changing any ordinary cell value. SpreadsheetML stores these records in
+an `x14:sparklineGroups` worksheet extension: each group can hold visual
+controls and an optional date-axis source, while each nested sparkline holds a
+source formula and destination `xm:sqref`.
+
+FormulaFence reads that raw extension before the ordinary workbook reader drops
+it. It privately compares group membership, source and date-axis formulas,
+destination cells, type/axis/display/marker controls, line weight, and colour
+definitions. A material change emits `FF048`; enable
+`no_worksheet_sparkline_changes` to make that boundary `FFP048` in CI.
+
+Profiles and `FF048` details expose only aggregate worksheet/group/sparkline,
+source/date-axis-source, colour-control, and malformed-metadata counts. Source
+formulas, destination cells, group properties, and colour definitions never
+enter profiles, Markdown, JSON, or SARIF. Equivalent direct local-range
+spelling, Boolean/numeric spelling, colour case, and declaration order are
+normalized. Missing, duplicate, malformed, unreadable, oversized, or
+over-budget metadata produces a visible coverage warning; raw reads are bounded
+to 16 MiB per worksheet, 64 MiB per workbook, and 512 parts. After raw
+inspection, FormulaFence removes only Sparkline Group extensions from its
+temporary reader copy so lossy reader support cannot suppress evidence.
+
+This is a stored-declaration boundary, not spreadsheet rendering or
+calculation. FormulaFence does not calculate sparkline values, resolve names or
+external sources, render a line/column/win-loss graphic, assess visual
+accessibility, or guarantee cross-version Excel rendering equivalence. The
+scope follows Microsoft's Open XML
+[SparklineGroup](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2010.excel.sparklinegroup?view=openxml-3.0.1)
+and [CT_Sparkline](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/6b28a993-e0fd-451d-860e-35097c6baa77)
+definitions.
 
 FormulaFence also inventories legacy **Excel Notes** and the legacy placeholders
 that can accompany modern threaded comments. Conventional Notes keep author

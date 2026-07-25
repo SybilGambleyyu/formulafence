@@ -75,6 +75,8 @@ from .helpers import (
     change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
     change_worksheet_embedded_control_payload,
+    change_worksheet_sparkline_presentation,
+    change_worksheet_sparkline_source,
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
     change_zero_dimension_visibility_controls,
@@ -104,6 +106,7 @@ from .helpers import (
     corrupt_what_if_data_table_input,
     corrupt_worksheet_drawing_shape_root,
     corrupt_worksheet_embedded_control_activex_root,
+    corrupt_worksheet_sparkline_destination,
     corrupt_xlm_macro_sheet_root,
     corrupt_zero_dimension_visibility_controls,
     delete_what_if_data_table_input,
@@ -119,6 +122,7 @@ from .helpers import (
     externalize_threaded_comment_relationship,
     lowercase_legacy_threaded_placeholder_identifiers,
     make_cell_hyperlink_model,
+    make_cell_hyperlink_sparkline_model,
     make_chart_definition_model,
     make_conditional_formatting_model,
     make_current_row_table_model,
@@ -159,6 +163,7 @@ from .helpers import (
     make_what_if_data_table_model,
     make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
+    make_worksheet_sparkline_model,
     make_xlm_macro_sheet_model,
     make_zero_dimension_visibility_model,
     mark_array_formula_dynamic,
@@ -177,6 +182,7 @@ from .helpers import (
     normalize_rich_text_run_property_spelling,
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
+    normalize_worksheet_sparkline_control_spelling,
     normalize_zero_dimension_visibility_control_spelling,
     overlap_what_if_data_table_outputs,
     rebind_external_link_declaration,
@@ -204,6 +210,7 @@ from .helpers import (
     renumber_worksheet_embedded_control_relationships,
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
+    reorder_worksheet_sparklines,
     rewrite,
     rewrite_cell_hyperlink_as_revision_declaration,
     rewrite_chart_internal_target_spelling,
@@ -5380,6 +5387,194 @@ def test_cell_hyperlink_xml_budget_fails_closed(tmp_path, monkeypatch) -> None:
         for warning in candidate_snapshot.parser_warnings
     )
     assert {"FF010", "FF047"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_sparklines_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_worksheet_sparkline_model(tmp_path / "baseline.xlsx")
+    source_candidate = make_worksheet_sparkline_model(
+        tmp_path / "source-candidate.xlsx"
+    )
+    presentation_candidate = make_worksheet_sparkline_model(
+        tmp_path / "presentation-candidate.xlsx"
+    )
+    reordered = make_worksheet_sparkline_model(tmp_path / "reordered.xlsx")
+    change_worksheet_sparkline_source(source_candidate)
+    change_worksheet_sparkline_presentation(presentation_candidate)
+    reorder_worksheet_sparklines(reordered)
+    normalised = make_worksheet_sparkline_model(tmp_path / "normalised.xlsx")
+    normalize_worksheet_sparkline_control_spelling(normalised)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    source_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(source_candidate),
+    )
+    presentation_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(presentation_candidate),
+    )
+    reordered_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(reordered),
+    )
+    normalised_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(normalised),
+    )
+    source_change = next(
+        change
+        for change in source_report.changes
+        if change.kind == "worksheet_sparkline_controls_changed"
+    )
+    presentation_change = next(
+        change
+        for change in presentation_report.changes
+        if change.kind == "worksheet_sparkline_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["worksheet_sparkline_group_count"] == 1
+    assert baseline_snapshot.summary()["worksheet_sparkline_count"] == 2
+    assert baseline_snapshot.summary()["has_worksheet_sparklines"] is True
+    assert profile["worksheet_sparklines"] == {
+        "present": True,
+        "worksheet_sparkline_sheet_count": 1,
+        "sparkline_group_count": 1,
+        "sparkline_count": 2,
+        "sparkline_with_source_count": 2,
+        "group_date_axis_source_count": 1,
+        "color_control_count": 2,
+        "unrecognized_worksheet_sparkline_count": 0,
+    }
+    assert "## Worksheet sparklines" in markdown
+    assert (
+        "Sparkline Group extension is not supported and will be removed"
+        not in baseline_snapshot.parser_warnings
+    )
+    assert source_change.details["worksheet_sparkline_bindings_changed"] is True
+    assert (
+        source_change.details["worksheet_sparkline_definition_material_changed"]
+        is True
+    )
+    assert (
+        presentation_change.details["worksheet_sparkline_definition_material_changed"]
+        is True
+    )
+    assert "worksheet_sparkline_bindings_changed" not in presentation_change.details
+    assert "FF048" in {finding.rule_id for finding in source_report.findings}
+    assert "FF048" in {finding.rule_id for finding in presentation_report.findings}
+    assert "worksheet_sparkline_controls_changed" not in {
+        change.kind for change in reordered_report.changes
+    }
+    assert "FF048" not in {finding.rule_id for finding in reordered_report.findings}
+    assert "worksheet_sparkline_controls_changed" not in {
+        change.kind for change in normalised_report.changes
+    }
+    assert "FF048" not in {finding.rule_id for finding in normalised_report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(source_report.to_dict()),
+        report_to_markdown(source_report),
+        json.dumps(report_to_sarif(source_report)),
+        json.dumps(presentation_report.to_dict()),
+        report_to_markdown(presentation_report),
+        json.dumps(report_to_sarif(presentation_report)),
+    )
+    for sensitive_value in (
+        "Inputs!$A$2:$A$4",
+        "Inputs!$B$2:$B$4",
+        "Inputs!$B$3:$B$5",
+        "$F$1",
+        "$F$2",
+        "FF112233",
+        "FF778899",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_malformed_worksheet_sparkline_metadata_fails_closed_and_is_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_sparkline_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_sparkline_model(tmp_path / "candidate.xlsx")
+    corrupt_worksheet_sparkline_destination(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_sparkline_controls_changed"
+    )
+
+    assert (
+        candidate_snapshot.worksheet_sparklines.unrecognized_worksheet_sparkline_count
+        >= 1
+    )
+    assert any(
+        "malformed or unsupported worksheet-sparkline metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert (
+        change.details["unrecognized_worksheet_sparkline_metadata_changed"] is True
+    )
+    assert {"FF010", "FF048"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-NOT-A-SPARKLINE-CELL",
+        "Inputs!$B$2:$B$4",
+        "$F$1",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_sparkline_xml_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    baseline = make_worksheet_sparkline_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_sparkline_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKSHEET_SPARKLINE_MAX_WORKSHEET_XML_BYTES",
+        1,
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert (
+        candidate_snapshot.worksheet_sparklines.unrecognized_worksheet_sparkline_count
+        >= 1
+    )
+    assert any(
+        "oversized worksheet XML part while inspecting worksheet sparklines"
+        in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF048"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_sparkline_reader_overlay_preserves_hyperlink_isolation(tmp_path) -> None:
+    workbook = make_cell_hyperlink_sparkline_model(tmp_path / "combined.xlsx")
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.cell_hyperlinks.hyperlink_count == 2
+    assert snapshot.worksheet_sparklines.sparkline_count == 1
+    assert snapshot.cells[("Inputs", "A1")].value == "Open approved source"
+    assert (
+        "Sparkline Group extension is not supported and will be removed"
+        not in snapshot.parser_warnings
+    )
 
 
 def test_legacy_excel_notes_are_profiled_diffed_and_redacted(tmp_path) -> None:

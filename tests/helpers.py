@@ -35,6 +35,7 @@ _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml
 _OFFICE_2013_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"
 _OFFICE_2014_REVISION_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
 _OFFICE_2016_REVISION10_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision10"
+_EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
 _NAMED_SHEET_VIEW_NS = "http://schemas.microsoft.com/office/spreadsheetml/2019/namedsheetviews"
 
 
@@ -377,6 +378,264 @@ def unbind_cell_hyperlink_relationship(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".cell-hyperlink-unbound.tmp.xlsx")
+
+
+def _worksheet_sparkline_group(
+    worksheet: ElementTree.Element,
+) -> ElementTree.Element:
+    """Return the first x14 sparkline group from the ordinary Inputs sheet."""
+    group_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklineGroup"
+    group = next(worksheet.iter(group_tag), None)
+    if group is None:
+        raise ValueError("Fixture does not contain a worksheet sparkline group")
+    return group
+
+
+def make_worksheet_sparkline_model(path: Path) -> Path:
+    """Create Office 2010 worksheet sparklines outside ordinary cell values."""
+    make_model(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        extension_list_tag = f"{{{_SPREADSHEETML_NS}}}extLst"
+        extension_tag = f"{{{_SPREADSHEETML_NS}}}ext"
+        group_container_tag = (
+            f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklineGroups"
+        )
+        group_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklineGroup"
+        sparklines_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklines"
+        sparkline_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparkline"
+        formula_tag = f"{{{_EXCEL_2006_MAIN_NS}}}f"
+        destination_tag = f"{{{_EXCEL_2006_MAIN_NS}}}sqref"
+        extension_list = worksheet.find(extension_list_tag)
+        if extension_list is None:
+            extension_list = ElementTree.SubElement(worksheet, extension_list_tag)
+        extension = ElementTree.SubElement(
+            extension_list,
+            extension_tag,
+            {"uri": "{05C60535-1F16-4FD2-B633-F4F36F0B64E0}"},
+        )
+        groups = ElementTree.SubElement(extension, group_container_tag)
+        group = ElementTree.SubElement(
+            groups,
+            group_tag,
+            {
+                "type": "line",
+                "dateAxis": "1",
+                "displayEmptyCellsAs": "span",
+                "displayHidden": "1",
+                "displayXAxis": "1",
+                "first": "1",
+                "high": "1",
+                "last": "1",
+                "low": "1",
+                "markers": "1",
+                "negative": "1",
+                "rightToLeft": "1",
+                "maxAxisType": "custom",
+                "manualMax": "100",
+                "minAxisType": "custom",
+                "manualMin": "0",
+                "lineWeight": "0.75",
+            },
+        )
+        ElementTree.SubElement(
+            group,
+            f"{{{_OFFICE_2010_SPREADSHEET_NS}}}colorSeries",
+            {"rgb": "FF112233"},
+        )
+        ElementTree.SubElement(
+            group,
+            f"{{{_OFFICE_2010_SPREADSHEET_NS}}}colorMarkers",
+            {"rgb": "FF445566"},
+        )
+        ElementTree.SubElement(group, formula_tag).text = "Inputs!$A$2:$A$4"
+        sparklines = ElementTree.SubElement(group, sparklines_tag)
+        first = ElementTree.SubElement(sparklines, sparkline_tag)
+        ElementTree.SubElement(first, formula_tag).text = "Inputs!$B$2:$B$4"
+        ElementTree.SubElement(first, destination_tag).text = "$F$1"
+        second = ElementTree.SubElement(sparklines, sparkline_tag)
+        ElementTree.SubElement(second, formula_tag).text = "Inputs!$B$2:$B$4"
+        ElementTree.SubElement(second, destination_tag).text = "$F$2"
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-sparkline-model.tmp.xlsx")
+
+
+def make_cell_hyperlink_sparkline_model(path: Path) -> Path:
+    """Create one worksheet carrying both raw hyperlinks and sparklines."""
+    make_cell_hyperlink_model(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        extension_list_tag = f"{{{_SPREADSHEETML_NS}}}extLst"
+        extension_tag = f"{{{_SPREADSHEETML_NS}}}ext"
+        group_container_tag = (
+            f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklineGroups"
+        )
+        group_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklineGroup"
+        sparklines_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklines"
+        sparkline_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparkline"
+        formula_tag = f"{{{_EXCEL_2006_MAIN_NS}}}f"
+        destination_tag = f"{{{_EXCEL_2006_MAIN_NS}}}sqref"
+        extension_list = worksheet.find(extension_list_tag)
+        if extension_list is None:
+            extension_list = ElementTree.SubElement(worksheet, extension_list_tag)
+        extension = ElementTree.SubElement(
+            extension_list,
+            extension_tag,
+            {"uri": "{05C60535-1F16-4FD2-B633-F4F36F0B64E0}"},
+        )
+        groups = ElementTree.SubElement(extension, group_container_tag)
+        group = ElementTree.SubElement(groups, group_tag, {"type": "line"})
+        sparklines = ElementTree.SubElement(group, sparklines_tag)
+        sparkline = ElementTree.SubElement(sparklines, sparkline_tag)
+        ElementTree.SubElement(sparkline, formula_tag).text = "Inputs!$B$2:$B$4"
+        ElementTree.SubElement(sparkline, destination_tag).text = "F1"
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(
+        path,
+        mutate,
+        ".cell-hyperlink-sparkline-model.tmp.xlsx",
+    )
+
+
+def change_worksheet_sparkline_source(path: Path) -> Path:
+    """Retarget a private sparkline source without changing ordinary cell values."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        formula_tag = f"{{{_EXCEL_2006_MAIN_NS}}}f"
+        sparklines_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklines"
+        sparklines = _worksheet_sparkline_group(worksheet).find(sparklines_tag)
+        if sparklines is None:
+            raise ValueError("Fixture sparkline group has no sparklines")
+        source = next(sparklines.iter(formula_tag), None)
+        if source is None:
+            raise ValueError("Fixture sparkline is missing a source formula")
+        source.text = "Inputs!$B$3:$B$5"
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-sparkline-source.tmp.xlsx")
+
+
+def change_worksheet_sparkline_presentation(path: Path) -> Path:
+    """Change sparkline style controls without changing source cells or values."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        group = _worksheet_sparkline_group(worksheet)
+        group.set("type", "column")
+        colour = group.find(
+            f"{{{_OFFICE_2010_SPREADSHEET_NS}}}colorSeries"
+        )
+        if colour is None:
+            raise ValueError("Fixture sparkline group is missing its series colour")
+        colour.set("rgb", "FF778899")
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-sparkline-style.tmp.xlsx")
+
+
+def reorder_worksheet_sparklines(path: Path) -> Path:
+    """Reorder equivalent declarations to exercise order-independent comparison."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        sparklines_tag = f"{{{_OFFICE_2010_SPREADSHEET_NS}}}sparklines"
+        sparklines = _worksheet_sparkline_group(worksheet).find(sparklines_tag)
+        if sparklines is None or len(sparklines) < 2:
+            raise ValueError("Fixture needs two sparkline declarations to reorder")
+        children = list(sparklines)
+        for child in children:
+            sparklines.remove(child)
+        for child in reversed(children):
+            sparklines.append(child)
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-sparkline-reorder.tmp.xlsx")
+
+
+def normalize_worksheet_sparkline_control_spelling(path: Path) -> Path:
+    """Rewrite equivalent range, Boolean, numeric, and colour spellings."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        formula_tag = f"{{{_EXCEL_2006_MAIN_NS}}}f"
+        destination_tag = f"{{{_EXCEL_2006_MAIN_NS}}}sqref"
+        group = _worksheet_sparkline_group(worksheet)
+        group.set("dateAxis", "true")
+        group.set("displayHidden", "true")
+        group.set("markers", "true")
+        group.set("manualMax", "100.0")
+        group.set("manualMin", "0.0")
+        group.set("lineWeight", "0.750")
+        colour = group.find(
+            f"{{{_OFFICE_2010_SPREADSHEET_NS}}}colorSeries"
+        )
+        if colour is None:
+            raise ValueError("Fixture sparkline group is missing its series colour")
+        colour.set("rgb", "ff112233")
+        formulas = list(group.iter(formula_tag))
+        if len(formulas) != 3:
+            raise ValueError("Fixture has an unexpected sparkline formula count")
+        formulas[0].text = "inputs!A2:A4"
+        formulas[1].text = "inputs!B2:B4"
+        formulas[2].text = "inputs!B2:B4"
+        destinations = list(group.iter(destination_tag))
+        if len(destinations) != 2:
+            raise ValueError("Fixture has an unexpected sparkline destination count")
+        destinations[0].text = "F1"
+        destinations[1].text = "F2"
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-sparkline-normalize.tmp.xlsx")
+
+
+def corrupt_worksheet_sparkline_destination(path: Path) -> Path:
+    """Inject an invalid private sqref that the ordinary reader must not parse."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        destination_tag = f"{{{_EXCEL_2006_MAIN_NS}}}sqref"
+        destination = next(worksheet.iter(destination_tag), None)
+        if destination is None:
+            raise ValueError("Fixture sparkline is missing a destination")
+        destination.text = "PRIVATE-NOT-A-SPARKLINE-CELL"
+        contents[worksheet_member] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-sparkline-corrupt.tmp.xlsx")
 
 
 def _legacy_comment_part_names(contents: dict[str, bytes]) -> tuple[str, str, str]:

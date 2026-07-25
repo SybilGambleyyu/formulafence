@@ -1885,6 +1885,79 @@ class RichTextRunSnapshot:
 
 
 @dataclass(frozen=True)
+class LegacyCommentSnapshot:
+    """Safe aggregate of legacy Excel note and placeholder controls.
+
+    Legacy comments store author and rich-text note content outside worksheet
+    cells. Their VML note shapes separately retain visibility, layout, and
+    display controls. Private signatures preserve those declarations for
+    comparison without serialising text, locations, identities, or VML.
+    """
+
+    worksheet_comment_sheet_count: int = 0
+    comment_part_count: int = 0
+    comment_author_count: int = 0
+    comment_count: int = 0
+    comment_with_text_count: int = 0
+    rich_text_comment_count: int = 0
+    phonetic_comment_count: int = 0
+    comment_property_count: int = 0
+    threaded_placeholder_count: int = 0
+    worksheet_note_drawing_sheet_count: int = 0
+    note_vml_drawing_part_count: int = 0
+    note_shape_count: int = 0
+    visible_note_shape_count: int = 0
+    anchored_note_shape_count: int = 0
+    binding_relationship_count: int = 0
+    external_relationship_count: int = 0
+    unrecognized_legacy_comment_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    note_shape_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.comment_part_count
+            or self.comment_count
+            or self.note_vml_drawing_part_count
+            or self.note_shape_count
+            or self.unrecognized_legacy_comment_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural note evidence without content or identities."""
+        return {
+            "present": self.present,
+            "worksheet_comment_sheet_count": self.worksheet_comment_sheet_count,
+            "comment_part_count": self.comment_part_count,
+            "comment_author_count": self.comment_author_count,
+            "comment_count": self.comment_count,
+            "comment_with_text_count": self.comment_with_text_count,
+            "rich_text_comment_count": self.rich_text_comment_count,
+            "phonetic_comment_count": self.phonetic_comment_count,
+            "comment_property_count": self.comment_property_count,
+            "threaded_placeholder_count": self.threaded_placeholder_count,
+            "worksheet_note_drawing_sheet_count": (
+                self.worksheet_note_drawing_sheet_count
+            ),
+            "note_vml_drawing_part_count": self.note_vml_drawing_part_count,
+            "note_shape_count": self.note_shape_count,
+            "visible_note_shape_count": self.visible_note_shape_count,
+            "anchored_note_shape_count": self.anchored_note_shape_count,
+            "binding_relationship_count": self.binding_relationship_count,
+            "external_relationship_count": self.external_relationship_count,
+            "unrecognized_legacy_comment_count": (
+                self.unrecognized_legacy_comment_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class ThreadedCommentSnapshot:
     """Safe aggregate of modern Excel threaded-comment controls.
 
@@ -2426,6 +2499,9 @@ class WorkbookSnapshot:
         default_factory=FormulaCachedResultSnapshot
     )
     rich_text_runs: RichTextRunSnapshot = field(default_factory=RichTextRunSnapshot)
+    legacy_comments: LegacyCommentSnapshot = field(
+        default_factory=LegacyCommentSnapshot
+    )
     threaded_comments: ThreadedCommentSnapshot = field(
         default_factory=ThreadedCommentSnapshot
     )
@@ -2484,6 +2560,10 @@ class WorkbookSnapshot:
             "rich_text_run_count": self.rich_text_runs.rich_text_run_count,
             "phonetic_run_count": self.rich_text_runs.phonetic_run_count,
             "has_rich_text_runs": self.rich_text_runs.present,
+            "legacy_comment_count": self.legacy_comments.comment_count,
+            "legacy_comment_author_count": self.legacy_comments.comment_author_count,
+            "legacy_comment_note_shape_count": self.legacy_comments.note_shape_count,
+            "has_legacy_comments": self.legacy_comments.present,
             "threaded_comment_count": self.threaded_comments.comment_count,
             "threaded_comment_thread_count": self.threaded_comments.comment_thread_count,
             "threaded_comment_reply_count": self.threaded_comments.reply_count,

@@ -8,9 +8,10 @@ from pathlib import Path
 from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.chartsheet.protection import ChartsheetProtection
+from openpyxl.comments import Comment
 from openpyxl.formatting.rule import (
     CellIsRule,
     ColorScaleRule,
@@ -63,6 +64,334 @@ def make_model(path: Path) -> Path:
     workbook.defined_names.add(DefinedName("HeadlineOutput", attr_text="Dashboard!$B$12"))
     workbook.save(path)
     return path
+
+
+def make_legacy_comment_model(path: Path) -> Path:
+    """Create a real Excel Note whose data lives outside worksheet cells."""
+    make_model(path)
+    workbook = load_workbook(path)
+    note = Comment(
+        "PRIVATE-LEGACY-NOTE-BASELINE",
+        "Private Legacy Note Author",
+    )
+    note.width = 240
+    note.height = 120
+    workbook["Inputs"]["A1"].comment = note
+    workbook.save(path)
+    return path
+
+
+def _legacy_comment_part_names(contents: dict[str, bytes]) -> tuple[str, str, str]:
+    """Return the comments, VML, and worksheet relationship members for a Note."""
+    comment_members = sorted(
+        member
+        for member in contents
+        if member.startswith("xl/comments/") and member.endswith(".xml")
+    )
+    drawing_members = sorted(
+        member
+        for member in contents
+        if member.startswith("xl/drawings/") and member.endswith(".vml")
+    )
+    worksheet_relationships = _relationship_member("xl/worksheets/sheet1.xml")
+    if (
+        len(comment_members) != 1
+        or len(drawing_members) != 1
+        or worksheet_relationships not in contents
+    ):
+        raise ValueError("Fixture does not contain one legacy Excel Note package")
+    return comment_members[0], drawing_members[0], worksheet_relationships
+
+
+def change_legacy_comment_text(path: Path) -> Path:
+    """Change private conventional Note text without changing worksheet cells."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        comment_member, _drawing_member, _relationships_member = (
+            _legacy_comment_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[comment_member])
+        comment = next(root.iter(f"{{{_SPREADSHEETML_NS}}}comment"), None)
+        if comment is None:
+            raise ValueError("Fixture does not contain a legacy comment")
+        text = comment.find(f"{{{_SPREADSHEETML_NS}}}text")
+        value = (
+            text.find(f"{{{_SPREADSHEETML_NS}}}t") if text is not None else None
+        )
+        if value is None:
+            raise ValueError("Fixture does not contain plain legacy comment text")
+        value.text = "PRIVATE-LEGACY-NOTE-CANDIDATE"
+        contents[comment_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-comment-text.tmp.xlsx")
+
+
+def change_legacy_note_visibility(path: Path) -> Path:
+    """Reveal a Note VML shape without changing its corresponding cell."""
+    vml = "urn:schemas-microsoft-com:vml"
+    vml_excel = "urn:schemas-microsoft-com:office:excel"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _comment_member, drawing_member, _relationships_member = (
+            _legacy_comment_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[drawing_member])
+        parent_by_child = {
+            child: parent
+            for parent in root.iter()
+            for child in parent
+        }
+        note_data = next(
+            (
+                client_data
+                for client_data in root.iter(f"{{{vml_excel}}}ClientData")
+                if (client_data.get("ObjectType") or "").casefold() == "note"
+            ),
+            None,
+        )
+        if note_data is None:
+            raise ValueError("Fixture does not contain a Note VML shape")
+        shape = parent_by_child.get(note_data)
+        if shape is None or shape.tag != f"{{{vml}}}shape":
+            raise ValueError("Fixture Note VML shape is malformed")
+        declarations = [
+            declaration.strip()
+            for declaration in (shape.get("style") or "").split(";")
+            if declaration.strip()
+        ]
+        updated = False
+        for index, declaration in enumerate(declarations):
+            name, separator, _value = declaration.partition(":")
+            if separator and name.strip().casefold() == "visibility":
+                declarations[index] = "visibility:visible"
+                updated = True
+        if not updated:
+            declarations.append("visibility:visible")
+        shape.set("style", ";".join(declarations))
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-comment-visibility.tmp.xlsx")
+
+
+def externalize_legacy_comment_relationship(path: Path) -> Path:
+    """Make a conventional comments relationship unsafe without opening it."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _comment_member, _drawing_member, relationships_member = (
+            _legacy_comment_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            (
+                item
+                for item in root.findall(f"{{{package_relationships}}}Relationship")
+                if (item.get("Type") or "").endswith("/comments")
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain a comments relationship")
+        relationship.set("Target", "https://example.invalid/private-legacy-note")
+        relationship.set("TargetMode", "External")
+        contents[relationships_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-comment-external.tmp.xlsx")
+
+
+def rebind_legacy_comment_relationship(path: Path) -> Path:
+    """Point a Note at an equivalent but distinct comments package part."""
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        comment_member, _drawing_member, relationships_member = (
+            _legacy_comment_part_names(contents)
+        )
+        replacement_member = "xl/comments/comment2.xml"
+        contents[replacement_member] = contents.pop(comment_member)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        override = next(
+            (
+                item
+                for item in types.findall(f"{{{content_types}}}Override")
+                if item.get("PartName") == f"/{comment_member}"
+            ),
+            None,
+        )
+        if override is None:
+            raise ValueError("Fixture does not declare its comments package part")
+        override.set("PartName", f"/{replacement_member}")
+        contents["[Content_Types].xml"] = ElementTree.tostring(
+            types,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            (
+                item
+                for item in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if (item.get("Type") or "").endswith("/comments")
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain a comments relationship")
+        relationship.set("Target", "../comments/comment2.xml")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-comment-rebind.tmp.xlsx")
+
+
+def externalize_legacy_note_vml_relationship(path: Path) -> Path:
+    """Make a Note VML relationship unsafe without opening its target."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _comment_member, _drawing_member, relationships_member = (
+            _legacy_comment_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            (
+                item
+                for item in root.findall(f"{{{package_relationships}}}Relationship")
+                if (item.get("Type") or "").endswith("/vmlDrawing")
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain a Note VML relationship")
+        relationship.set("Target", "https://example.invalid/private-legacy-note-vml")
+        relationship.set("TargetMode", "External")
+        contents[relationships_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-note-vml-external.tmp.xlsx")
+
+
+def renumber_legacy_comment_identifiers(path: Path) -> Path:
+    """Rewrite volatile Note shape and relationship identifiers consistently."""
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    vml = "urn:schemas-microsoft-com:vml"
+    vml_excel = "urn:schemas-microsoft-com:office:excel"
+    vml_office = "urn:schemas-microsoft-com:office:office"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        comment_member, drawing_member, relationships_member = (
+            _legacy_comment_part_names(contents)
+        )
+        comment_root = ElementTree.fromstring(contents[comment_member])
+        for index, comment in enumerate(
+            comment_root.iter(f"{{{_SPREADSHEETML_NS}}}comment"),
+            start=900,
+        ):
+            comment.set("shapeId", str(index))
+        contents[comment_member] = ElementTree.tostring(
+            comment_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        drawing_root = ElementTree.fromstring(contents[drawing_member])
+        parent_by_child = {
+            child: parent
+            for parent in drawing_root.iter()
+            for child in parent
+        }
+        for index, client_data in enumerate(
+            drawing_root.iter(f"{{{vml_excel}}}ClientData"),
+            start=900,
+        ):
+            if (client_data.get("ObjectType") or "").casefold() != "note":
+                continue
+            shape = parent_by_child.get(client_data)
+            if shape is None or shape.tag != f"{{{vml}}}shape":
+                raise ValueError("Fixture Note VML shape is malformed")
+            shape.set("id", f"_x0000_s{index}")
+            shape.set(f"{{{vml_office}}}spid", f"_x0000_s{index}")
+        contents[drawing_member] = ElementTree.tostring(
+            drawing_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships_root = ElementTree.fromstring(contents[relationships_member])
+        relationship_ids: dict[str, str] = {}
+        for relationship in relationships_root.findall(
+            f"{{{package_relationships}}}Relationship"
+        ):
+            relationship_type = relationship.get("Type") or ""
+            if relationship_type.endswith("/comments"):
+                old_identifier = relationship.get("Id")
+                if old_identifier:
+                    relationship_ids[old_identifier] = "rIdFenceCommentRenumbered"
+                    relationship.set("Id", "rIdFenceCommentRenumbered")
+            elif relationship_type.endswith("/vmlDrawing"):
+                old_identifier = relationship.get("Id")
+                if old_identifier:
+                    relationship_ids[old_identifier] = "rIdFenceNoteVmlRenumbered"
+                    relationship.set("Id", "rIdFenceNoteVmlRenumbered")
+        if len(relationship_ids) != 2:
+            raise ValueError("Fixture does not contain both Note relationships")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        worksheet = _inputs_worksheet_root(contents)
+        relationship_attribute = f"{{{document_relationships}}}id"
+        for legacy_drawing in worksheet.iter(
+            f"{{{_SPREADSHEETML_NS}}}legacyDrawing"
+        ):
+            old_identifier = legacy_drawing.get(relationship_attribute)
+            if old_identifier in relationship_ids:
+                legacy_drawing.set(relationship_attribute, relationship_ids[old_identifier])
+        _save_inputs_worksheet(contents, worksheet)
+
+    return _rewrite_archive(path, mutate, ".legacy-comment-id.tmp.xlsx")
+
+
+def corrupt_legacy_comment_root(path: Path) -> Path:
+    """Replace a comments root to exercise legacy-note fail-closed coverage."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        comment_member, _drawing_member, _relationships_member = (
+            _legacy_comment_part_names(contents)
+        )
+        root = ElementTree.fromstring(contents[comment_member])
+        root.tag = "notComments"
+        contents[comment_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-comment-corrupt.tmp.xlsx")
 
 
 def make_table_model(path: Path) -> Path:
@@ -7640,6 +7969,244 @@ def make_threaded_comment_model(path: Path) -> Path:
         contents[worksheet_relationships_name] = serialize(worksheet_relationships)
 
     return _rewrite_archive(path, mutate, ".threaded-comment.tmp.xlsx")
+
+
+def make_legacy_threaded_placeholder_model(path: Path) -> Path:
+    """Create an Excel threaded comment with its conventional Note placeholder."""
+    make_legacy_comment_model(path)
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    threaded_comments = (
+        "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
+    )
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root_identifier = "{33333333-3333-3333-3333-333333333333}"
+        reviewer_identifier = "{11111111-1111-1111-1111-111111111111}"
+        comment_member, _drawing_member, worksheet_relationships_name = (
+            _legacy_comment_part_names(contents)
+        )
+        comments_root = ElementTree.fromstring(contents[comment_member])
+        author = next(
+            comments_root.iter(f"{{{_SPREADSHEETML_NS}}}author"),
+            None,
+        )
+        comment = next(
+            comments_root.iter(f"{{{_SPREADSHEETML_NS}}}comment"),
+            None,
+        )
+        if author is None or comment is None:
+            raise ValueError("Fixture does not contain a conventional Note placeholder")
+        author.text = f"tc={root_identifier}"
+        comment.set("guid", root_identifier)
+        contents[comment_member] = serialize(comments_root)
+
+        threaded_member = "xl/threadedComments/threadedComment1.xml"
+        person_member = "xl/persons/person.xml"
+        threaded_root = ElementTree.Element(f"{{{threaded_comments}}}ThreadedComments")
+        threaded_comment = ElementTree.SubElement(
+            threaded_root,
+            f"{{{threaded_comments}}}threadedComment",
+            {
+                "ref": "A1",
+                "dT": "2026-07-24T00:00:00Z",
+                "personId": reviewer_identifier,
+                "id": root_identifier,
+                "done": "0",
+            },
+        )
+        ElementTree.SubElement(
+            threaded_comment,
+            f"{{{threaded_comments}}}text",
+        ).text = "PRIVATE-THREADED-PLACEHOLDER-THREAD"
+        contents[threaded_member] = serialize(threaded_root)
+
+        people_root = ElementTree.Element(f"{{{threaded_comments}}}personList")
+        ElementTree.SubElement(
+            people_root,
+            f"{{{threaded_comments}}}person",
+            {
+                "displayName": "Private Placeholder Reviewer",
+                "userId": "private-placeholder@example.invalid",
+                "providerId": "private-provider",
+                "id": reviewer_identifier,
+            },
+        )
+        contents[person_member] = serialize(people_root)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        for part_name, content_type in (
+            (threaded_member, "application/vnd.ms-excel.threadedcomments+xml"),
+            (person_member, "application/vnd.ms-excel.person+xml"),
+        ):
+            ElementTree.SubElement(
+                types,
+                f"{{{content_types}}}Override",
+                {"PartName": f"/{part_name}", "ContentType": content_type},
+            )
+        contents["[Content_Types].xml"] = serialize(types)
+
+        workbook_relationships_name = _relationship_member("xl/workbook.xml")
+        workbook_relationships = ElementTree.fromstring(
+            contents[workbook_relationships_name]
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFencePlaceholderPerson",
+                "Type": (
+                    "http://schemas.microsoft.com/office/2017/10/relationships/person"
+                ),
+                "Target": "persons/person.xml",
+            },
+        )
+        contents[workbook_relationships_name] = serialize(workbook_relationships)
+
+        worksheet_relationships = ElementTree.fromstring(
+            contents[worksheet_relationships_name]
+        )
+        ElementTree.SubElement(
+            worksheet_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFencePlaceholderThread",
+                "Type": (
+                    "http://schemas.microsoft.com/office/2017/10/relationships/"
+                    "threadedComment"
+                ),
+                "Target": "../threadedComments/threadedComment1.xml",
+            },
+        )
+        contents[worksheet_relationships_name] = serialize(worksheet_relationships)
+
+    return _rewrite_archive(path, mutate, ".legacy-threaded-placeholder.tmp.xlsx")
+
+
+def renumber_legacy_threaded_placeholder_identifiers(path: Path) -> Path:
+    """Rekey a threaded-comment placeholder and its thread consistently."""
+    threaded_comments = (
+        "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        new_identifier = "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"
+        comment_member, _drawing_member, _relationships_member = (
+            _legacy_comment_part_names(contents)
+        )
+        comments_root = ElementTree.fromstring(contents[comment_member])
+        author = next(
+            comments_root.iter(f"{{{_SPREADSHEETML_NS}}}author"),
+            None,
+        )
+        comment = next(
+            comments_root.iter(f"{{{_SPREADSHEETML_NS}}}comment"),
+            None,
+        )
+        if author is None or comment is None:
+            raise ValueError("Fixture does not contain a conventional Note placeholder")
+        author.text = f"tc={new_identifier}"
+        comment.set("guid", new_identifier)
+        contents[comment_member] = ElementTree.tostring(
+            comments_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        threaded_member, _person_member, _worksheet_relationships = (
+            _threaded_comment_part_names(contents)
+        )
+        threaded_root = ElementTree.fromstring(contents[threaded_member])
+        threaded_comment = next(
+            threaded_root.iter(f"{{{threaded_comments}}}threadedComment"),
+            None,
+        )
+        if threaded_comment is None:
+            raise ValueError("Fixture does not contain a threaded placeholder comment")
+        threaded_comment.set("id", new_identifier)
+        contents[threaded_member] = ElementTree.tostring(
+            threaded_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-threaded-placeholder-id.tmp.xlsx")
+
+
+def lowercase_legacy_threaded_placeholder_identifiers(path: Path) -> Path:
+    """Use lowercase GUID spelling that strict workbook readers reject."""
+    threaded_comments = (
+        "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        new_identifier = "{aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}"
+        comment_member, _drawing_member, _relationships_member = (
+            _legacy_comment_part_names(contents)
+        )
+        comments_root = ElementTree.fromstring(contents[comment_member])
+        author = next(
+            comments_root.iter(f"{{{_SPREADSHEETML_NS}}}author"),
+            None,
+        )
+        comment = next(
+            comments_root.iter(f"{{{_SPREADSHEETML_NS}}}comment"),
+            None,
+        )
+        if author is None or comment is None:
+            raise ValueError("Fixture does not contain a conventional Note placeholder")
+        author.text = f"tc={new_identifier}"
+        comment.set("guid", new_identifier)
+        contents[comment_member] = ElementTree.tostring(
+            comments_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        threaded_member, _person_member, _worksheet_relationships = (
+            _threaded_comment_part_names(contents)
+        )
+        threaded_root = ElementTree.fromstring(contents[threaded_member])
+        threaded_comment = next(
+            threaded_root.iter(f"{{{threaded_comments}}}threadedComment"),
+            None,
+        )
+        if threaded_comment is None:
+            raise ValueError("Fixture does not contain a threaded placeholder comment")
+        threaded_comment.set("id", new_identifier)
+        contents[threaded_member] = ElementTree.tostring(
+            threaded_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-threaded-placeholder-lower.tmp.xlsx")
+
+
+def change_legacy_placeholder_author_context(path: Path) -> Path:
+    """Add author context around a placeholder token without changing its GUID."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        comment_member, _drawing_member, _relationships_member = (
+            _legacy_comment_part_names(contents)
+        )
+        comments_root = ElementTree.fromstring(contents[comment_member])
+        author = next(
+            comments_root.iter(f"{{{_SPREADSHEETML_NS}}}author"),
+            None,
+        )
+        if author is None or not author.text:
+            raise ValueError("Fixture does not contain a placeholder author")
+        author.text = f"Private context {author.text}"
+        contents[comment_member] = ElementTree.tostring(
+            comments_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".legacy-placeholder-author.tmp.xlsx")
 
 
 def change_threaded_comment_reply(path: Path) -> Path:

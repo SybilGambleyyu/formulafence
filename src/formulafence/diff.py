@@ -26,6 +26,7 @@ from formulafence.models import (
     FontSnapshot,
     FormulaCachedResultSnapshot,
     IgnoredErrorSnapshot,
+    LegacyCommentSnapshot,
     NamedSheetViewSnapshot,
     NumberFormatSnapshot,
     OfficeWebAddinSnapshot,
@@ -1891,6 +1892,63 @@ def _rich_text_run_controls_changed(
     return [change], [finding]
 
 
+def _legacy_comment_controls_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag legacy note changes that ordinary cell diffs cannot expose."""
+    old_comments: LegacyCommentSnapshot = before.legacy_comments
+    new_comments: LegacyCommentSnapshot = after.legacy_comments
+    if old_comments == new_comments:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_comments.to_dict(),
+        "after": new_comments.to_dict(),
+    }
+    if old_comments.declaration_signature != new_comments.declaration_signature:
+        details["legacy_comment_binding_changed"] = True
+    if old_comments.definition_signature != new_comments.definition_signature:
+        details["legacy_comment_definition_material_changed"] = True
+    if old_comments.note_shape_signature != new_comments.note_shape_signature:
+        details["legacy_note_vml_material_changed"] = True
+    if old_comments.relationship_signature != new_comments.relationship_signature:
+        details["legacy_note_relationships_changed"] = True
+    if (
+        old_comments.unrecognized_legacy_comment_count
+        != new_comments.unrecognized_legacy_comment_count
+        or (
+            (
+                old_comments.unrecognized_legacy_comment_count
+                or new_comments.unrecognized_legacy_comment_count
+            )
+            and (
+                old_comments.definition_signature != new_comments.definition_signature
+                or old_comments.note_shape_signature
+                != new_comments.note_shape_signature
+            )
+        )
+    ):
+        details["unrecognized_legacy_comment_metadata_changed"] = True
+    change = Change(
+        "legacy_comment_controls_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF046",
+        "high",
+        (
+            "Legacy Excel notes or threaded-comment placeholders changed; review "
+            "text, author context, cell association, visibility, or layout may "
+            "be altered outside cells."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _threaded_comment_controls_changed(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
@@ -2072,6 +2130,13 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(rich_text_run_changes)
     findings.extend(rich_text_run_findings)
+
+    legacy_comment_changes, legacy_comment_findings = _legacy_comment_controls_changed(
+        before,
+        after,
+    )
+    changes.extend(legacy_comment_changes)
+    findings.extend(legacy_comment_findings)
 
     threaded_comment_changes, threaded_comment_findings = _threaded_comment_controls_changed(
         before,

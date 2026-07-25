@@ -58,6 +58,7 @@ from formulafence.models import (
     FormulaCachedResultEntry,
     FormulaCachedResultSnapshot,
     IgnoredErrorSnapshot,
+    LegacyCommentSnapshot,
     NamedSheetViewSnapshot,
     NumberFormatSnapshot,
     OfficeWebAddinSnapshot,
@@ -224,6 +225,23 @@ _THREADED_COMMENT_PART_PATTERN = re.compile(
 )
 _THREADED_COMMENT_PERSON_PART_PATTERN = re.compile(
     r"^xl/persons/[^/]+\.xml$", re.IGNORECASE
+)
+_LEGACY_COMMENT_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_LEGACY_COMMENT_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_LEGACY_COMMENT_TOTAL_XML_MAX_COUNT = 512
+_LEGACY_COMMENT_PART_PATTERN = re.compile(r"^xl/comments/[^/]+\.xml$", re.IGNORECASE)
+_LEGACY_COMMENT_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"
+)
+_LEGACY_COMMENT_RELATIONSHIP = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
+)
+_LEGACY_VML_RELATIONSHIP = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing"
+)
+_LEGACY_COMMENT_PLACEHOLDER_AUTHOR_PATTERN = re.compile(
+    r"^tc=(\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\})$"
 )
 _PIVOT_TABLE_PART_PATTERN = re.compile(r"^xl/pivotTables/[^/]+\.xml$", re.IGNORECASE)
 _PIVOT_CACHE_DEFINITION_PART_PATTERN = re.compile(
@@ -581,6 +599,14 @@ class _RichTextRunMetadata:
 
 
 @dataclass(frozen=True)
+class _LegacyCommentMetadata:
+    """Raw legacy-note evidence retained before the workbook reader normalizes it."""
+
+    comments: LegacyCommentSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _ThreadedCommentMetadata:
     """Raw modern-comment evidence retained before the workbook reader omits it."""
 
@@ -909,6 +935,14 @@ class _ThreadedCommentBudget:
 
     remaining_bytes: int = _THREADED_COMMENT_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _THREADED_COMMENT_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _LegacyCommentBudget:
+    """Bound legacy-comment and note-VML XML bytes in one package scan."""
+
+    remaining_bytes: int = _LEGACY_COMMENT_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _LEGACY_COMMENT_TOTAL_XML_MAX_COUNT
 
 
 @dataclass
@@ -10783,9 +10817,136 @@ def _pivot_reader_cache_record_replacements(
     return replacements, tuple(sorted(reader_warnings))
 
 
+def _legacy_note_reader_relationship_replacements(
+    path: Path,
+) -> tuple[dict[str, bytes], tuple[str, ...]]:
+    """Keep legacy Note markup out of the ordinary workbook reader.
+
+    FormulaFence has already inspected the original package through its bounded
+    raw scanner. The ordinary workbook reader is only needed for cells, and its
+    legacy-comment parser can differ in tolerance across writer versions. Unsafe
+    external or absent VML targets are additionally removed before it follows
+    them.
+    """
+    replacements: dict[str, bytes] = {}
+    reader_warnings: set[str] = set()
+    try:
+        with ZipFile(path) as archive:
+            sheet_parts = _sheet_xml_parts(archive)
+            relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+            relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+            legacy_drawing_tag = f"{{{_SPREADSHEETML_NS}}}legacyDrawing"
+            archive_members = set(archive.namelist())
+            for _sheet, (member, sheet_kind) in sheet_parts.items():
+                if sheet_kind != "worksheet":
+                    continue
+                relationship_member = _relationship_part_path(member)
+                try:
+                    relationships = _xml_root(archive, relationship_member)
+                except KeyError:
+                    continue
+                if (
+                    _xml_namespace(relationships.tag) != _PACKAGE_RELATIONSHIP_NS
+                    or _xml_local_name(relationships.tag) != "Relationships"
+                ):
+                    continue
+
+                unsafe_vml_identifiers: set[str] = set()
+                removed = False
+                isolated_unsafe_target = False
+                for relationship in list(relationships.findall(relationship_tag)):
+                    relationship_type = relationship.get("Type", "")
+                    relationship_type_key = relationship_type.casefold()
+                    if relationship_type_key not in {
+                        _LEGACY_COMMENT_RELATIONSHIP.casefold(),
+                        _LEGACY_VML_RELATIONSHIP.casefold(),
+                    }:
+                        continue
+                    target = relationship.get("Target")
+                    target_mode = relationship.get("TargetMode", "Internal")
+                    safe_target = (
+                        _normalise_part_target(member, target)
+                        if target is not None and target_mode.casefold() == "internal"
+                        else None
+                    )
+                    target_is_safe = (
+                        safe_target is not None and safe_target in archive_members
+                    )
+                    if relationship_type_key == _LEGACY_COMMENT_RELATIONSHIP.casefold():
+                        # FormulaFence has already captured Notes from raw OOXML.
+                        # Keep openpyxl from reparsing comment markup, whose
+                        # permissiveness differs across writer versions.
+                        relationships.remove(relationship)
+                        removed = True
+                        isolated_unsafe_target = (
+                            isolated_unsafe_target or not target_is_safe
+                        )
+                        continue
+                    if target_is_safe:
+                        continue
+                    relationship_id = relationship.get("Id")
+                    if (
+                        relationship_type_key == _LEGACY_VML_RELATIONSHIP.casefold()
+                        and relationship_id
+                    ):
+                        unsafe_vml_identifiers.add(relationship_id)
+                    relationships.remove(relationship)
+                    removed = True
+                    isolated_unsafe_target = True
+
+                if removed:
+                    replacements[relationship_member] = ElementTree.tostring(
+                        relationships,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+                    if isolated_unsafe_target:
+                        reader_warnings.add(
+                            "FormulaFence isolated unsafe legacy Excel Note relationships "
+                            "before the underlying workbook reader ran; raw Note metadata "
+                            "remains fail-closed."
+                        )
+                if not unsafe_vml_identifiers:
+                    continue
+                try:
+                    worksheet = _xml_root(archive, member)
+                except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError):
+                    continue
+                parent_by_child = {
+                    child: parent
+                    for parent in worksheet.iter()
+                    for child in parent
+                }
+                changed_worksheet = False
+                for legacy_drawing in list(worksheet.iter(legacy_drawing_tag)):
+                    if legacy_drawing.get(relationship_attribute) not in unsafe_vml_identifiers:
+                        continue
+                    parent = parent_by_child.get(legacy_drawing)
+                    if parent is not None:
+                        parent.remove(legacy_drawing)
+                        changed_worksheet = True
+                if changed_worksheet:
+                    replacements[member] = ElementTree.tostring(
+                        worksheet,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        reader_warnings.add(
+            "FormulaFence could not isolate unsafe legacy Excel Note relationships "
+            f"before the underlying workbook reader ran ({type(error).__name__})."
+        )
+    return replacements, tuple(sorted(reader_warnings))
+
+
 def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...]]:
-    """Return a temporary source that prevents unbounded PivotTable record reads."""
+    """Return a temporary source that limits unsafe ordinary-reader behavior."""
     replacements, reader_warnings = _pivot_reader_cache_record_replacements(path)
+    legacy_replacements, legacy_reader_warnings = (
+        _legacy_note_reader_relationship_replacements(path)
+    )
+    replacements.update(legacy_replacements)
+    reader_warnings = tuple(sorted({*reader_warnings, *legacy_reader_warnings}))
     if not replacements:
         return path, None, reader_warnings
 
@@ -12299,7 +12460,7 @@ def _worksheet_embedded_control_metadata(
                         ("legacy-vml-drawing-part", repr((member, declarations)))
                     )
             declaration_entries.extend(
-                ("legacy-vml-worksheet-relationship", declaration)
+                ("legacy-vml-worksheet-relationship", repr(declaration))
                 for declaration in unresolved_legacy_vml_declarations
             )
 
@@ -18471,6 +18632,1440 @@ def _rich_text_run_metadata(path: Path) -> _RichTextRunMetadata:
 
 
 @dataclass(frozen=True)
+class _LegacyCommentRawRelationship:
+    """One private package relationship used to locate legacy notes."""
+
+    relationship_id: str | None
+    relationship_type: str
+    target: str | None
+    target_mode: str
+    safe_target: str | None
+
+    def semantic_key(self) -> tuple[str, str, str]:
+        """Return relationship semantics while ignoring writer-selected IDs."""
+        target = self.target or ""
+        if self.target_mode.casefold() == "internal" and self.safe_target is not None:
+            target = self.safe_target
+        return (
+            self.relationship_type,
+            self.target_mode.casefold(),
+            target,
+        )
+
+
+@dataclass(frozen=True)
+class _LegacyCommentPartInspection:
+    """Private result of reading one legacy SpreadsheetML comments part."""
+
+    member: str
+    present: bool = False
+    author_count: int = 0
+    comment_count: int = 0
+    comment_with_text_count: int = 0
+    rich_text_comment_count: int = 0
+    phonetic_comment_count: int = 0
+    comment_property_count: int = 0
+    threaded_placeholder_count: int = 0
+    unrecognized_count: int = 0
+    definition_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _LegacyNoteVmlInspection:
+    """Private result of reading VML Note shapes for one worksheet."""
+
+    member: str
+    present: bool = False
+    note_shape_count: int = 0
+    visible_note_shape_count: int = 0
+    anchored_note_shape_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    unrecognized_count: int = 0
+    definition_signature: str | None = None
+    relationship_signature: str | None = None
+
+
+def _legacy_comment_raw_relationships(
+    archive: ZipFile,
+    source_member: str,
+    warnings: set[str],
+    *,
+    context: str,
+) -> tuple[_LegacyCommentRawRelationship, ...] | None:
+    """Read legacy-note package relationships without opening their targets."""
+    relationship_member = _relationship_part_path(source_member)
+    try:
+        root = _xml_root(archive, relationship_member)
+    except KeyError:
+        return ()
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect "
+            f"{context} relationships for legacy-note inspection "
+            f"({type(error).__name__}); affected notes were not compared."
+        )
+        return None
+    if (
+        _xml_local_name(root.tag) != "Relationships"
+        or _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected "
+            f"{context} relationship root while inspecting legacy notes; affected "
+            "notes were not compared."
+        )
+        return None
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_LegacyCommentRawRelationship] = []
+    for relationship in root.findall(relationship_tag):
+        target = relationship.get("Target")
+        target_mode = relationship.get("TargetMode", "Internal")
+        safe_target = (
+            _normalise_part_target(source_member, target)
+            if target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        relationships.append(
+            _LegacyCommentRawRelationship(
+                relationship_id=relationship.get("Id"),
+                relationship_type=relationship.get("Type", ""),
+                target=target,
+                target_mode=target_mode,
+                safe_target=safe_target,
+            )
+        )
+    if len(relationships) != len(root):
+        warnings.add(
+            "FormulaFence found unmodelled relationship XML while inspecting legacy "
+            "notes; affected notes may be incomplete."
+        )
+        return None
+    return tuple(relationships)
+
+
+def _legacy_comment_relationship_signature(
+    relationships: tuple[_LegacyCommentRawRelationship, ...],
+) -> str | None:
+    """Fingerprint note relationship semantics without exposing identifiers."""
+    material = sorted(relationship.semantic_key() for relationship in relationships)
+    return _private_external_data_signature(
+        tuple(
+            (f"relationship:{index}", repr(relationship))
+            for index, relationship in enumerate(material)
+        )
+    )
+
+
+def _legacy_comment_relationship_semantics(
+    relationships: tuple[_LegacyCommentRawRelationship, ...],
+    warnings: set[str],
+    *,
+    context: str,
+) -> dict[str, tuple[str, str, str]]:
+    """Resolve private relationship IDs to stable relationship semantics."""
+    relationships_by_id: dict[str, list[_LegacyCommentRawRelationship]] = defaultdict(
+        list
+    )
+    for relationship in relationships:
+        if relationship.relationship_id:
+            relationships_by_id[relationship.relationship_id].append(relationship)
+        else:
+            warnings.add(
+                "FormulaFence found a legacy-note "
+                f"{context} relationship without an id; affected notes have a coverage gap."
+            )
+    semantics: dict[str, tuple[str, str, str]] = {}
+    for relationship_id, matches in relationships_by_id.items():
+        values = sorted(match.semantic_key() for match in matches)
+        if len(values) > 1:
+            warnings.add(
+                "FormulaFence found duplicate legacy-note "
+                f"{context} relationship ids; affected notes have a coverage gap."
+            )
+        semantics[relationship_id] = values[0]
+    return semantics
+
+
+def _legacy_comment_content_type_member(value: str | None) -> str | None:
+    """Return a safe archive member from one content-types PartName."""
+    if not value or not value.startswith("/"):
+        return None
+    member = posixpath.normpath(value.lstrip("/"))
+    if member in {".", ".."} or member.startswith("../"):
+        return None
+    return member
+
+
+def _legacy_comment_package_members(
+    archive: ZipFile,
+    warnings: set[str],
+) -> tuple[set[str], dict[str, tuple[str, ...]], list[tuple[str, str]]]:
+    """Locate standard and declared legacy SpreadsheetML comment parts."""
+    member_counts: dict[str, int] = defaultdict(int)
+    members: set[str] = set()
+    for entry in archive.infolist():
+        if _LEGACY_COMMENT_PART_PATTERN.fullmatch(entry.filename):
+            members.add(entry.filename)
+            member_counts[entry.filename] += 1
+    content_types: dict[str, list[str]] = defaultdict(list)
+    issues: list[tuple[str, str]] = [
+        ("duplicate-legacy-comment-package-member", repr((member, count)))
+        for member, count in member_counts.items()
+        if count > 1
+    ]
+    try:
+        root = _xml_root(archive, "[Content_Types].xml")
+    except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect OOXML content types for legacy notes "
+            f"({type(error).__name__}); affected notes may be incomplete."
+        )
+        issues.append(("content-type-scan-failure", type(error).__name__))
+        return members, {}, issues
+    if (
+        _xml_namespace(root.tag) != _CONTENT_TYPES_NS
+        or _xml_local_name(root.tag) != "Types"
+    ):
+        warnings.add(
+            "FormulaFence found an unexpected OOXML content-types root while inspecting "
+            "legacy notes; affected notes may be incomplete."
+        )
+        issues.append(("unexpected-content-types-root", _xml_display_name(root.tag)))
+        return members, {}, issues
+
+    override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
+    default_tag = f"{{{_CONTENT_TYPES_NS}}}Default"
+    for child in root:
+        if child.tag == default_tag:
+            continue
+        if child.tag != override_tag:
+            issues.append(("unrecognised-content-types-child", _xml_display_name(child.tag)))
+            continue
+        member = _legacy_comment_content_type_member(child.get("PartName"))
+        content_type = child.get("ContentType")
+        if member is None or content_type is None:
+            issues.append(("malformed-content-type-override", _xml_display_name(child.tag)))
+            continue
+        if (
+            _LEGACY_COMMENT_PART_PATTERN.fullmatch(member)
+            or content_type == _LEGACY_COMMENT_CONTENT_TYPE
+        ):
+            content_types[member].append(content_type)
+        if content_type == _LEGACY_COMMENT_CONTENT_TYPE:
+            members.add(member)
+    issues.extend(
+        ("duplicate-legacy-comment-content-type-override", repr((member, types)))
+        for member, types in content_types.items()
+        if len(types) > 1
+    )
+    return (
+        members,
+        {member: tuple(sorted(types)) for member, types in content_types.items()},
+        issues,
+    )
+
+
+def _legacy_comment_content_type_status(
+    member: str,
+    content_types: Mapping[str, tuple[str, ...]],
+) -> str:
+    """Classify a legacy-note part declaration without exposing its path."""
+    declared = content_types.get(member, ())
+    if _LEGACY_COMMENT_CONTENT_TYPE in declared:
+        return "declared"
+    return "mismatched" if declared else "unlisted"
+
+
+def _legacy_comment_xml_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _LegacyCommentBudget,
+    *,
+    kind: str,
+) -> tuple[bytes | None, str | None]:
+    """Read one bounded legacy-note or VML XML part without resolving targets."""
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded legacy-note XML part count budget; "
+            "affected notes have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("part-count-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate a legacy-note "
+            f"{kind} XML part; affected notes were not compared."
+        )
+        return None, _private_external_data_signature((("missing-member", member),))
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _LEGACY_COMMENT_MAX_XML_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized legacy-note "
+            f"{kind} XML part; affected notes have a coverage gap."
+        )
+        return None, _private_external_data_signature((("oversized-part", metadata),))
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded legacy-note XML read budget; affected "
+            "notes have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a legacy-note "
+            f"{kind} XML package part ({type(error).__name__}); affected notes "
+            "were not compared."
+        )
+        return None, _private_external_data_signature((("unreadable-part", metadata),))
+
+
+def _legacy_comment_cell_reference(value: str | None) -> str | None:
+    """Normalize one local A1 note reference without exposing invalid values."""
+    if value is None or not (candidate := value.strip()):
+        return None
+    try:
+        min_column, min_row, max_column, max_row = range_boundaries(candidate)
+    except ValueError:
+        return None
+    if (
+        min_column is None
+        or min_row is None
+        or max_column is None
+        or max_row is None
+        or min_column != max_column
+        or min_row != max_row
+        or min_column < 1
+        or min_row < 1
+        or min_column > MAX_EXCEL_COLUMN
+        or min_row > MAX_EXCEL_ROW
+    ):
+        return None
+    return f"{get_column_letter(min_column)}{min_row}"
+
+
+def _legacy_comment_text_material(
+    element: ElementTree.Element,
+    *,
+    context: str,
+) -> tuple[tuple[object, ...], bool, bool, bool]:
+    """Canonicalize one private comment text body and its rich presentation."""
+    if (
+        _xml_namespace(element.tag) != _SPREADSHEETML_NS
+        or _xml_local_name(element.tag) != "text"
+    ):
+        return (
+            (
+                "unexpected-comment-text-root",
+                _private_payload_signature(
+                    ElementTree.tostring(element, encoding="utf-8")
+                ),
+            ),
+            False,
+            False,
+            True,
+        )
+    rich_text = _rich_text_item(element, context=context)
+    if rich_text is not None:
+        material = (
+            "rich",
+            rich_text.text_signature,
+            rich_text.style_sequence_signature,
+            rich_text.style_layout_signature,
+            rich_text.issue_signature,
+        )
+        return (
+            material,
+            rich_text.has_rich_runs,
+            bool(
+                rich_text.phonetic_run_count
+                or rich_text.phonetic_property_count
+            ),
+            rich_text.unrecognized,
+        )
+
+    issues: list[tuple[str, str]] = []
+
+    def note_issue(issue_context: str, detail: object) -> None:
+        issues.append((issue_context, repr(detail)))
+
+    text_tag = f"{{{_SPREADSHEETML_NS}}}t"
+    direct_texts: list[ElementTree.Element] = []
+    if element.attrib:
+        note_issue(f"{context}:unsupported-attributes", tuple(sorted(element.attrib.items())))
+    if element.text is not None and element.text.strip():
+        note_issue(f"{context}:unexpected-text", element.text)
+    for child_index, child in enumerate(element):
+        if child.tag == text_tag:
+            direct_texts.append(child)
+        else:
+            note_issue(f"{context}:child:{child_index}", child.tag)
+    if len(direct_texts) != 1:
+        note_issue(f"{context}:direct-text-count", len(direct_texts))
+    value = ""
+    preserve_space = False
+    invalid = bool(issues)
+    if direct_texts:
+        value, preserve_space, text_invalid = _rich_text_text_value(
+            direct_texts[0],
+            context=f"{context}:direct-text",
+            note_issue=note_issue,
+        )
+        invalid = invalid or text_invalid or bool(issues)
+    material: tuple[object, ...] = (
+        "plain",
+        _rich_text_text_signature(value),
+        preserve_space,
+    )
+    if invalid:
+        material = (
+            "unrecognized",
+            _private_payload_signature(
+                ElementTree.tostring(element, encoding="utf-8")
+            ),
+            _rich_text_private_digest(tuple(sorted(issues))),
+        )
+    return material, False, False, invalid
+
+
+def _legacy_comment_part_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _LegacyCommentBudget,
+) -> _LegacyCommentPartInspection:
+    """Inspect one legacy comments part without rendering a note or its VML."""
+    payload, fallback_signature = _legacy_comment_xml_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        kind="comments",
+    )
+    if payload is None:
+        return _LegacyCommentPartInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a legacy comments XML part "
+            f"({type(error).__name__}); affected notes were not compared."
+        )
+        return _LegacyCommentPartInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+    if (
+        _xml_namespace(root.tag) != _SPREADSHEETML_NS
+        or _xml_local_name(root.tag) != "comments"
+    ):
+        warnings.add(
+            "FormulaFence found a legacy comments part with an unexpected root; "
+            "affected notes were not compared."
+        )
+        return _LegacyCommentPartInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    authors_tag = f"{{{_SPREADSHEETML_NS}}}authors"
+    author_tag = f"{{{_SPREADSHEETML_NS}}}author"
+    comment_list_tag = f"{{{_SPREADSHEETML_NS}}}commentList"
+    comment_tag = f"{{{_SPREADSHEETML_NS}}}comment"
+    text_tag = f"{{{_SPREADSHEETML_NS}}}text"
+    comment_properties_tag = f"{{{_SPREADSHEETML_NS}}}commentPr"
+    issues: list[tuple[str, str]] = []
+    root_fragments: list[tuple[object, ...]] = []
+    author_nodes = [child for child in root if child.tag == authors_tag]
+    comment_list_nodes = [child for child in root if child.tag == comment_list_tag]
+    for child in root:
+        if child.tag not in {authors_tag, comment_list_tag}:
+            root_fragments.append(_xml_fragment(child).sort_key())
+            issues.append(("unexpected-comments-root-child", _xml_display_name(child.tag)))
+    if len(author_nodes) != 1:
+        issues.append(("authors-container-count", str(len(author_nodes))))
+    if len(comment_list_nodes) != 1:
+        issues.append(("comment-list-container-count", str(len(comment_list_nodes))))
+
+    authors: list[str] = []
+    if author_nodes:
+        authors_element = author_nodes[0]
+        if authors_element.attrib or (
+            authors_element.text is not None and authors_element.text.strip()
+        ):
+            issues.append(("malformed-authors-container", "present"))
+        for child_index, author in enumerate(authors_element):
+            if author.tag != author_tag:
+                issues.append(
+                    (
+                        "unexpected-authors-child",
+                        repr((child_index, _xml_display_name(author.tag))),
+                    )
+                )
+                continue
+            if author.attrib or any(author) or (
+                author.tail is not None and author.tail.strip()
+            ):
+                issues.append(("malformed-author-record", str(child_index)))
+            authors.append(author.text or "")
+    if len(set(authors)) != len(authors):
+        issues.append(("duplicate-comment-author", "present"))
+
+    comment_fragments: list[tuple[object, ...]] = []
+    comment_count = 0
+    comment_with_text_count = 0
+    rich_text_comment_count = 0
+    phonetic_comment_count = 0
+    comment_property_count = 0
+    threaded_placeholder_count = 0
+    references: set[str] = set()
+    try:
+        if comment_list_nodes:
+            comment_list = comment_list_nodes[0]
+            if comment_list.attrib or (
+                comment_list.text is not None and comment_list.text.strip()
+            ):
+                issues.append(("malformed-comment-list-container", "present"))
+            for child_index, comment in enumerate(comment_list):
+                if comment.tag != comment_tag:
+                    issues.append(
+                        (
+                            "unexpected-comment-list-child",
+                            repr((child_index, _xml_display_name(comment.tag))),
+                        )
+                    )
+                    continue
+                comment_count += 1
+                reference_raw = comment.get("ref")
+                reference = _legacy_comment_cell_reference(reference_raw)
+                if reference is None:
+                    issues.append(("invalid-comment-reference", str(child_index)))
+                    reference_signature = (
+                        "invalid-reference",
+                        reference_raw or "",
+                    )
+                else:
+                    reference_signature = ("reference", reference)
+                    if reference in references:
+                        issues.append(("duplicate-comment-reference", reference))
+                    references.add(reference)
+
+                author_identifier = comment.get("authorId")
+                author_value: str | None = None
+                if (
+                    author_identifier is not None
+                    and author_identifier.isascii()
+                    and author_identifier.isdecimal()
+                    and int(author_identifier) < len(authors)
+                ):
+                    author_value = authors[int(author_identifier)]
+                else:
+                    issues.append(("invalid-comment-author-reference", str(child_index)))
+
+                placeholder_match = (
+                    _LEGACY_COMMENT_PLACEHOLDER_AUTHOR_PATTERN.search(author_value)
+                    if author_value is not None
+                    else None
+                )
+                is_placeholder = placeholder_match is not None
+                if is_placeholder:
+                    threaded_placeholder_count += 1
+                    identifier = placeholder_match.group(1)
+                    guid = comment.get("guid")
+                    author_signature: object = (
+                        "threaded-placeholder",
+                        (
+                            "guid-matches"
+                            if guid is not None
+                            and guid.casefold() == identifier.casefold()
+                            else "guid-mismatch"
+                        ),
+                    )
+                    if (
+                        guid is None
+                        or guid.casefold() != identifier.casefold()
+                    ):
+                        issues.append(("invalid-threaded-placeholder-guid", str(child_index)))
+                elif author_value is not None:
+                    author_signature = (
+                        "author",
+                        author_value,
+                        "guid-present" if comment.get("guid") else "guid-absent",
+                    )
+                else:
+                    author_signature = (
+                        "invalid-author",
+                        author_identifier or "",
+                    )
+
+                text_children = [child for child in comment if child.tag == text_tag]
+                property_children = [
+                    child for child in comment if child.tag == comment_properties_tag
+                ]
+                if text_children:
+                    comment_with_text_count += 1
+                if len(text_children) != 1:
+                    issues.append(("comment-text-count", str(child_index)))
+                    text_material: tuple[object, ...] = (
+                        "unrecognized-text-count",
+                        _private_payload_signature(
+                            ElementTree.tostring(comment, encoding="utf-8")
+                        ),
+                    )
+                    text_unrecognized = True
+                    has_rich_text = False
+                    has_phonetic = False
+                else:
+                    (
+                        text_material,
+                        has_rich_text,
+                        has_phonetic,
+                        text_unrecognized,
+                    ) = _legacy_comment_text_material(
+                        text_children[0],
+                        context=f"legacy-comment:{member}:{child_index}",
+                    )
+                rich_text_comment_count += int(has_rich_text)
+                phonetic_comment_count += int(has_phonetic)
+                if text_unrecognized:
+                    issues.append(("unsupported-comment-text", str(child_index)))
+                if len(property_children) > 1:
+                    issues.append(("multiple-comment-properties", str(child_index)))
+                comment_property_count += len(property_children)
+                property_fragments = tuple(
+                    sorted(
+                        (_xml_fragment(properties).sort_key() for properties in property_children),
+                        key=repr,
+                    )
+                )
+                unexpected_children = tuple(
+                    _xml_fragment(child).sort_key()
+                    for child in comment
+                    if child.tag not in {text_tag, comment_properties_tag}
+                )
+                if unexpected_children:
+                    issues.append(("unexpected-comment-child", str(child_index)))
+                unknown_attributes = tuple(
+                    sorted(
+                        (_xml_display_name(attribute), value)
+                        for attribute, value in comment.attrib.items()
+                        if _xml_local_name(attribute)
+                        not in {"ref", "authorId", "shapeId", "guid"}
+                    )
+                )
+                if unknown_attributes:
+                    issues.append(("unknown-comment-attribute", str(child_index)))
+                comment_fragments.append(
+                    (
+                        reference_signature,
+                        author_signature,
+                        text_material,
+                        property_fragments,
+                        unknown_attributes,
+                        unexpected_children,
+                    )
+                )
+    except RecursionError:
+        warnings.add(
+            "FormulaFence could not fully traverse an excessively nested legacy "
+            "comment record; affected notes were not compared."
+        )
+        return _LegacyCommentPartInspection(
+            member=member,
+            present=True,
+            author_count=len(authors),
+            comment_count=comment_count,
+            comment_with_text_count=comment_with_text_count,
+            rich_text_comment_count=rich_text_comment_count,
+            phonetic_comment_count=phonetic_comment_count,
+            comment_property_count=comment_property_count,
+            threaded_placeholder_count=threaded_placeholder_count,
+            unrecognized_count=len(issues) + 1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    definition_entries = [
+        (f"comment:{index}", repr(fragment))
+        for index, fragment in enumerate(sorted(comment_fragments, key=repr))
+    ]
+    definition_entries.extend(
+        (f"root-fragment:{index}", repr(fragment))
+        for index, fragment in enumerate(sorted(root_fragments, key=repr))
+    )
+    definition_entries.extend(sorted(issues))
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported legacy-comment metadata; "
+            "affected notes have a coverage gap."
+        )
+    return _LegacyCommentPartInspection(
+        member=member,
+        present=True,
+        author_count=len(authors),
+        comment_count=comment_count,
+        comment_with_text_count=comment_with_text_count,
+        rich_text_comment_count=rich_text_comment_count,
+        phonetic_comment_count=phonetic_comment_count,
+        comment_property_count=comment_property_count,
+        threaded_placeholder_count=threaded_placeholder_count,
+        unrecognized_count=len(issues),
+        definition_signature=_private_external_data_signature(tuple(definition_entries)),
+    )
+
+
+def _legacy_note_coordinate(
+    client_data: ElementTree.Element,
+) -> str | None:
+    """Translate one VML Note row/column binding to a private A1 location."""
+    row_tag = f"{{{_VML_EXCEL_NS}}}Row"
+    column_tag = f"{{{_VML_EXCEL_NS}}}Column"
+    rows = [child for child in client_data if child.tag == row_tag]
+    columns = [child for child in client_data if child.tag == column_tag]
+    if len(rows) != 1 or len(columns) != 1:
+        return None
+    row_value = (rows[0].text or "").strip()
+    column_value = (columns[0].text or "").strip()
+    if (
+        not row_value.isascii()
+        or not row_value.isdecimal()
+        or not column_value.isascii()
+        or not column_value.isdecimal()
+    ):
+        return None
+    row = int(row_value)
+    column = int(column_value)
+    if (
+        row < 0
+        or column < 0
+        or row >= MAX_EXCEL_ROW
+        or column >= MAX_EXCEL_COLUMN
+    ):
+        return None
+    return f"{get_column_letter(column + 1)}{row + 1}"
+
+
+def _legacy_note_vml_style(
+    value: str | None,
+) -> tuple[tuple[tuple[str, str], ...], bool]:
+    """Normalize a VML style declaration while retaining invalid material privately."""
+    if value is None:
+        return (), False
+    properties: dict[str, str] = {}
+    invalid = False
+    for item in value.split(";"):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        if ":" not in candidate:
+            invalid = True
+            continue
+        name, setting = candidate.split(":", maxsplit=1)
+        name = name.strip().casefold()
+        setting = setting.strip()
+        if not name or not setting or name in properties:
+            invalid = True
+            continue
+        properties[name] = setting
+    return tuple(sorted(properties.items())), invalid
+
+
+def _legacy_note_vml_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+    shape_type_fragments: Mapping[str, tuple[object, ...]],
+    *,
+    relationship_attributes: frozenset[str],
+) -> tuple[object, ...]:
+    """Canonicalize one VML Note declaration without volatile VML IDs."""
+    namespace = _xml_namespace(element.tag)
+    local_name = _xml_local_name(element.tag)
+    is_shape = namespace == _VML_NS and local_name == "shape"
+    is_shape_type = namespace == _VML_NS and local_name == "shapetype"
+    attributes: list[tuple[str, object]] = []
+    for attribute, value in element.attrib.items():
+        attribute_local_name = _xml_local_name(attribute)
+        if (
+            namespace == _VML_NS
+            and attribute_local_name == "id"
+            and (is_shape or is_shape_type)
+        ):
+            continue
+        if (
+            _xml_namespace(attribute) == _VML_OFFICE_NS
+            and attribute_local_name == "spid"
+        ):
+            continue
+        if attribute in relationship_attributes:
+            relationship = relationship_semantics.get(value)
+            resolved: object = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+            continue
+        if is_shape and attribute_local_name == "type":
+            type_identifier = value.lstrip("#")
+            type_fragment = shape_type_fragments.get(type_identifier)
+            attributes.append(
+                (
+                    _xml_display_name(attribute),
+                    repr(
+                        ("shape-type", type_fragment)
+                        if type_fragment is not None
+                        else ("missing-shape-type", type_identifier)
+                    ),
+                )
+            )
+            continue
+        if attribute_local_name == "style":
+            style, invalid_style = _legacy_note_vml_style(value)
+            attributes.append(
+                (
+                    _xml_display_name(attribute),
+                    repr(("invalid-style", value) if invalid_style else style),
+                )
+            )
+            continue
+        attributes.append((_xml_display_name(attribute), value))
+    children = tuple(
+        _legacy_note_vml_fragment(
+            child,
+            relationship_semantics,
+            shape_type_fragments,
+            relationship_attributes=relationship_attributes,
+        )
+        for child in element
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes, key=repr)),
+        text,
+        children,
+    )
+
+
+def _legacy_note_vml_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _LegacyCommentBudget,
+) -> _LegacyNoteVmlInspection:
+    """Inspect VML Note visibility and layout without rendering VML."""
+    payload, fallback_signature = _legacy_comment_xml_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        kind="VML note drawing",
+    )
+    if payload is None:
+        return _LegacyNoteVmlInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect a legacy VML note drawing "
+            f"({type(error).__name__}); affected notes were not compared."
+        )
+        return _LegacyNoteVmlInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+    if _xml_local_name(root.tag) != "xml" or _xml_namespace(root.tag) not in {
+        None,
+        _VML_NS,
+    }:
+        warnings.add(
+            "FormulaFence found a legacy VML note drawing with an unexpected root; "
+            "affected notes were not compared."
+        )
+        return _LegacyNoteVmlInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    relationships = _legacy_comment_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="legacy VML note drawing",
+    )
+    if relationships is None:
+        return _LegacyNoteVmlInspection(
+            member=member,
+            present=True,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+    relationship_semantics = _legacy_comment_relationship_semantics(
+        relationships,
+        warnings,
+        context="legacy VML note drawing",
+    )
+    relationship_by_id = {
+        relationship.relationship_id: relationship
+        for relationship in relationships
+        if relationship.relationship_id
+    }
+    relationship_attributes = frozenset(
+        {
+            f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
+            f"{{{_VML_OFFICE_NS}}}relid",
+        }
+    )
+    parent_by_child = {
+        child: parent
+        for parent in root.iter()
+        for child in parent
+    }
+    client_data_tag = f"{{{_VML_EXCEL_NS}}}ClientData"
+    shape_tag = f"{{{_VML_NS}}}shape"
+    shape_type_tag = f"{{{_VML_NS}}}shapetype"
+    raw_shape_type_fragments: dict[str, tuple[object, ...]] = {}
+    for shape_type in root.iter(shape_type_tag):
+        identifier = shape_type.get("id")
+        if identifier:
+            raw_shape_type_fragments[identifier] = _legacy_note_vml_fragment(
+                shape_type,
+                relationship_semantics,
+                {},
+                relationship_attributes=relationship_attributes,
+            )
+
+    note_records: list[tuple[ElementTree.Element, ElementTree.Element]] = []
+    seen_shapes: set[int] = set()
+    issues: list[tuple[str, str]] = []
+    for client_data in root.iter(client_data_tag):
+        if (client_data.get("ObjectType") or "").strip().casefold() != "note":
+            continue
+        container = parent_by_child.get(client_data)
+        while container is not None and container.tag != shape_tag:
+            container = parent_by_child.get(container)
+        if container is None:
+            issues.append(("note-without-vml-shape", "present"))
+            continue
+        if id(container) in seen_shapes:
+            issues.append(("multiple-note-client-data-in-one-shape", "present"))
+            continue
+        seen_shapes.add(id(container))
+        note_records.append((container, client_data))
+
+    if not note_records:
+        return _LegacyNoteVmlInspection(member=member)
+
+    referenced_relationship_ids = {
+        relationship_id
+        for container, _client_data in note_records
+        for element in container.iter()
+        for relationship_attribute in relationship_attributes
+        if (relationship_id := element.get(relationship_attribute)) is not None
+    }
+    selected_relationships: list[_LegacyCommentRawRelationship] = []
+    for relationship_id in sorted(referenced_relationship_ids):
+        relationship = relationship_by_id.get(relationship_id)
+        if relationship is None:
+            issues.append(("note-relationship-without-target", relationship_id))
+            continue
+        selected_relationships.append(relationship)
+        if (
+            relationship.target_mode.casefold() != "internal"
+            or relationship.safe_target is None
+        ):
+            issues.append(("unsafe-note-relationship", repr(relationship.semantic_key())))
+
+    note_fragments: list[tuple[str, tuple[object, ...]]] = []
+    visible_note_shape_count = 0
+    anchored_note_shape_count = 0
+    for index, (container, client_data) in enumerate(note_records):
+        coordinate = _legacy_note_coordinate(client_data)
+        if coordinate is None:
+            issues.append(("invalid-note-coordinate", str(index)))
+            coordinate_key = f"invalid:{index}"
+        else:
+            coordinate_key = coordinate
+        anchor_tag = f"{{{_VML_EXCEL_NS}}}Anchor"
+        anchored_note_shape_count += int(
+            any(child.tag == anchor_tag for child in client_data)
+        )
+        style, invalid_style = _legacy_note_vml_style(container.get("style"))
+        if invalid_style:
+            issues.append(("invalid-note-vml-style", str(index)))
+        style_map = dict(style)
+        visibility = style_map.get("visibility", "visible").casefold()
+        if visibility not in {"visible", "hidden", "inherit"}:
+            issues.append(("invalid-note-visibility", str(index)))
+        if visibility != "hidden":
+            visible_note_shape_count += 1
+        shape_type_reference = (container.get("type") or "").lstrip("#")
+        if shape_type_reference and shape_type_reference not in raw_shape_type_fragments:
+            issues.append(("missing-note-shape-type", str(index)))
+        note_fragments.append(
+            (
+                coordinate_key,
+                _legacy_note_vml_fragment(
+                    container,
+                    relationship_semantics,
+                    raw_shape_type_fragments,
+                    relationship_attributes=relationship_attributes,
+                ),
+            )
+        )
+
+    definition_entries = [
+        (f"note:{index}", repr(fragment))
+        for index, fragment in enumerate(note_fragments)
+    ]
+    definition_entries.extend(sorted(issues))
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported legacy VML note metadata; "
+            "affected notes have a coverage gap."
+        )
+    return _LegacyNoteVmlInspection(
+        member=member,
+        present=True,
+        note_shape_count=len(note_records),
+        visible_note_shape_count=visible_note_shape_count,
+        anchored_note_shape_count=anchored_note_shape_count,
+        related_relationship_count=len(selected_relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in selected_relationships
+        ),
+        unrecognized_count=len(issues),
+        definition_signature=_private_external_data_signature(tuple(definition_entries)),
+        relationship_signature=_legacy_comment_relationship_signature(
+            tuple(selected_relationships)
+        ),
+    )
+
+
+def _legacy_comment_metadata(path: Path) -> _LegacyCommentMetadata:
+    """Inspect legacy notes and threaded-comment placeholders before reader loss.
+
+    The scan follows only worksheet relationships that bind Comments and VML
+    legacy drawings. It compares content, author associations, placeholder
+    reconciliation fields, visibility, and layout through private signatures;
+    it never renders VML, resolves a user, or exposes note text.
+    """
+    warnings: set[str] = set()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                sheet_parts = _sheet_xml_parts(archive)
+            except (
+                KeyError,
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                return _LegacyCommentMetadata(
+                    LegacyCommentSnapshot(
+                        unrecognized_legacy_comment_count=1,
+                        definition_signature=_private_external_data_signature(
+                            (("sheet-part-scan-failure", type(error).__name__),)
+                        ),
+                    ),
+                    (
+                        "FormulaFence could not inspect worksheet OOXML relationships "
+                        f"for legacy notes ({type(error).__name__}); affected notes "
+                        "were not compared.",
+                    ),
+                )
+
+            comment_members, content_types, package_issues = (
+                _legacy_comment_package_members(archive, warnings)
+            )
+            coverage_entries: list[tuple[str, str]] = list(package_issues)
+            declaration_entries: list[tuple[str, str]] = []
+            relationship_entries: list[tuple[str, str]] = []
+            comment_sources: dict[str, set[str]] = defaultdict(set)
+            note_vml_sources: dict[str, set[str]] = defaultdict(set)
+            selected_relationships: list[tuple[str, _LegacyCommentRawRelationship]] = []
+
+            for sheet, (member, sheet_kind) in sorted(
+                sheet_parts.items(),
+                key=lambda item: item[0].casefold(),
+            ):
+                if sheet_kind != "worksheet":
+                    continue
+                relationships = _legacy_comment_raw_relationships(
+                    archive,
+                    member,
+                    warnings,
+                    context="worksheet",
+                )
+                if relationships is None:
+                    coverage_entries.append(
+                        ("unreadable-worksheet-legacy-note-relationships", member)
+                    )
+                    continue
+                relationship_ids: dict[str, int] = defaultdict(int)
+                for relationship in relationships:
+                    if relationship.relationship_id:
+                        relationship_ids[relationship.relationship_id] += 1
+                for relationship_id, count in relationship_ids.items():
+                    if count > 1:
+                        coverage_entries.append(
+                            (
+                                "duplicate-worksheet-legacy-note-relationship-id",
+                                relationship_id,
+                            )
+                        )
+                comment_relationships = [
+                    relationship
+                    for relationship in relationships
+                    if relationship.relationship_type.casefold()
+                    == _LEGACY_COMMENT_RELATIONSHIP.casefold()
+                ]
+                for relationship in comment_relationships:
+                    selected_relationships.append(("comments", relationship))
+                    if (
+                        not relationship.relationship_id
+                        or relationship.target_mode.casefold() != "internal"
+                        or relationship.safe_target is None
+                    ):
+                        coverage_entries.append(
+                            (
+                                "unsafe-legacy-comment-relationship",
+                                repr(relationship.semantic_key()),
+                            )
+                        )
+                        relationship_entries.append(
+                            ("comments", repr(relationship.semantic_key()))
+                        )
+                        continue
+                    comment_sources[relationship.safe_target].add(sheet)
+
+                if not comment_relationships:
+                    continue
+                try:
+                    worksheet = _xml_root(archive, member)
+                except (
+                    KeyError,
+                    ElementTree.ParseError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    coverage_entries.append(
+                        (
+                            "unreadable-worksheet-legacy-drawing",
+                            type(error).__name__,
+                        )
+                    )
+                    continue
+                if (
+                    _xml_namespace(worksheet.tag) != _SPREADSHEETML_NS
+                    or _xml_local_name(worksheet.tag) != "worksheet"
+                ):
+                    coverage_entries.append(
+                        ("unexpected-worksheet-root-for-legacy-notes", sheet)
+                    )
+                    continue
+                relationship_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+                legacy_drawing_tag = f"{{{_SPREADSHEETML_NS}}}legacyDrawing"
+                legacy_drawing_ids = {
+                    relationship_id
+                    for legacy_drawing in worksheet.iter(legacy_drawing_tag)
+                    if (relationship_id := legacy_drawing.get(relationship_attribute))
+                    is not None
+                }
+                vml_relationships = [
+                    relationship
+                    for relationship in relationships
+                    if relationship.relationship_type.casefold()
+                    == _LEGACY_VML_RELATIONSHIP.casefold()
+                ]
+                vml_by_id = {
+                    relationship.relationship_id: relationship
+                    for relationship in vml_relationships
+                    if relationship.relationship_id
+                }
+                for relationship_id in legacy_drawing_ids:
+                    relationship = vml_by_id.get(relationship_id)
+                    if relationship is None:
+                        coverage_entries.append(
+                            (
+                                "legacy-drawing-without-vml-relationship",
+                                relationship_id,
+                            )
+                        )
+                        continue
+                    selected_relationships.append(("note-vml", relationship))
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.safe_target is None
+                    ):
+                        coverage_entries.append(
+                            (
+                                "unsafe-legacy-note-vml-relationship",
+                                repr(relationship.semantic_key()),
+                            )
+                        )
+                        relationship_entries.append(
+                            ("note-vml", repr(relationship.semantic_key()))
+                        )
+                        continue
+                    note_vml_sources[relationship.safe_target].add(sheet)
+                for relationship in vml_relationships:
+                    if relationship.relationship_id not in legacy_drawing_ids:
+                        coverage_entries.append(
+                            (
+                                "unbound-legacy-note-vml-relationship",
+                                repr(relationship.semantic_key()),
+                            )
+                        )
+
+            comment_members.update(comment_sources)
+            for member in sorted(comment_members, key=str.casefold):
+                if member not in comment_sources:
+                    coverage_entries.append(("unbound-legacy-comment-part", member))
+            budget = _LegacyCommentBudget()
+            comment_inspections = [
+                _legacy_comment_part_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                for member in sorted(comment_members, key=str.casefold)
+            ]
+            note_inspections = [
+                _legacy_note_vml_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                for member in sorted(note_vml_sources, key=str.casefold)
+            ]
+
+            for inspection in comment_inspections:
+                sources = tuple(
+                    sorted(comment_sources.get(inspection.member, ()), key=str.casefold)
+                )
+                content_status = _legacy_comment_content_type_status(
+                    inspection.member,
+                    content_types,
+                )
+                declaration_entries.append(
+                    (
+                        "legacy-comment-binding",
+                        repr((sources, content_status)),
+                    )
+                )
+                if content_status != "declared":
+                    coverage_entries.append(
+                        ("invalid-legacy-comment-content-type", content_status)
+                    )
+            note_definition_entries: list[tuple[str, str]] = []
+            for inspection in note_inspections:
+                if not inspection.present:
+                    continue
+                sources = tuple(
+                    sorted(
+                        note_vml_sources.get(inspection.member, ()),
+                        key=str.casefold,
+                    )
+                )
+                declaration_entries.append(
+                    ("legacy-note-vml-binding", repr(sources))
+                )
+                note_definition_entries.append(
+                    (
+                        "legacy-note-vml",
+                        repr((sources, inspection.definition_signature)),
+                    )
+                )
+                if inspection.relationship_signature is not None:
+                    relationship_entries.append(
+                        (
+                            "legacy-note-vml-relationship",
+                            inspection.relationship_signature,
+                        )
+                    )
+            relationship_entries.extend(
+                (
+                    f"legacy-note-{label}-relationship",
+                    repr(relationship.semantic_key()),
+                )
+                for label, relationship in selected_relationships
+            )
+
+            if coverage_entries:
+                warnings.add(
+                    "FormulaFence found malformed, unbound, or unsupported legacy-note "
+                    "metadata; affected notes have a coverage gap."
+                )
+            comment_definition_entries = [
+                (
+                    "legacy-comment-part",
+                    repr(
+                        (
+                            tuple(
+                                sorted(
+                                    comment_sources.get(inspection.member, ()),
+                                    key=str.casefold,
+                                )
+                            ),
+                            _legacy_comment_content_type_status(
+                                inspection.member,
+                                content_types,
+                            ),
+                            inspection.definition_signature,
+                        )
+                    ),
+                )
+                for inspection in comment_inspections
+            ]
+            comment_definition_entries.sort(key=lambda entry: entry[1])
+            note_definition_entries.sort(key=lambda entry: entry[1])
+            comment_sheets = {
+                sheet
+                for sources in comment_sources.values()
+                for sheet in sources
+            }
+            note_sheets = {
+                sheet
+                for inspection in note_inspections
+                if inspection.present
+                for sheet in note_vml_sources.get(inspection.member, ())
+            }
+            snapshot = LegacyCommentSnapshot(
+                worksheet_comment_sheet_count=len(comment_sheets),
+                comment_part_count=len(comment_inspections),
+                comment_author_count=sum(
+                    inspection.author_count for inspection in comment_inspections
+                ),
+                comment_count=sum(
+                    inspection.comment_count for inspection in comment_inspections
+                ),
+                comment_with_text_count=sum(
+                    inspection.comment_with_text_count
+                    for inspection in comment_inspections
+                ),
+                rich_text_comment_count=sum(
+                    inspection.rich_text_comment_count
+                    for inspection in comment_inspections
+                ),
+                phonetic_comment_count=sum(
+                    inspection.phonetic_comment_count
+                    for inspection in comment_inspections
+                ),
+                comment_property_count=sum(
+                    inspection.comment_property_count
+                    for inspection in comment_inspections
+                ),
+                threaded_placeholder_count=sum(
+                    inspection.threaded_placeholder_count
+                    for inspection in comment_inspections
+                ),
+                worksheet_note_drawing_sheet_count=len(note_sheets),
+                note_vml_drawing_part_count=sum(
+                    inspection.present for inspection in note_inspections
+                ),
+                note_shape_count=sum(
+                    inspection.note_shape_count for inspection in note_inspections
+                ),
+                visible_note_shape_count=sum(
+                    inspection.visible_note_shape_count
+                    for inspection in note_inspections
+                ),
+                anchored_note_shape_count=sum(
+                    inspection.anchored_note_shape_count
+                    for inspection in note_inspections
+                ),
+                binding_relationship_count=(
+                    len(selected_relationships)
+                    + sum(
+                        inspection.related_relationship_count
+                        for inspection in note_inspections
+                    )
+                ),
+                external_relationship_count=sum(
+                    relationship.target_mode.casefold() != "internal"
+                    for _label, relationship in selected_relationships
+                )
+                + sum(
+                    inspection.external_relationship_count
+                    for inspection in note_inspections
+                ),
+                unrecognized_legacy_comment_count=(
+                    len(coverage_entries)
+                    + sum(
+                        inspection.unrecognized_count
+                        for inspection in comment_inspections
+                    )
+                    + sum(
+                        inspection.unrecognized_count
+                        for inspection in note_inspections
+                    )
+                ),
+                declaration_signature=_private_external_data_signature(
+                    tuple(sorted([*declaration_entries, *coverage_entries]))
+                ),
+                definition_signature=_private_external_data_signature(
+                    tuple(comment_definition_entries)
+                ),
+                note_shape_signature=_private_external_data_signature(
+                    tuple(note_definition_entries)
+                ),
+                relationship_signature=_private_external_data_signature(
+                    tuple(sorted(relationship_entries))
+                ),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _LegacyCommentMetadata(
+            LegacyCommentSnapshot(
+                unrecognized_legacy_comment_count=1,
+                definition_signature=_private_external_data_signature(
+                    (("legacy-comment-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect legacy-note OOXML "
+                f"({type(error).__name__}); affected notes were not compared.",
+            ),
+        )
+    return _LegacyCommentMetadata(snapshot, tuple(sorted(warnings)))
+
+
+@dataclass(frozen=True)
 class _ThreadedCommentRawRelationship:
     """One private package relationship used to locate modern comments."""
 
@@ -21163,6 +22758,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     fill_metadata = _fill_metadata(source)
     formula_cached_result_metadata = _formula_cached_result_metadata(source)
     rich_text_run_metadata = _rich_text_run_metadata(source)
+    legacy_comment_metadata = _legacy_comment_metadata(source)
     threaded_comment_metadata = _threaded_comment_metadata(source)
     worksheet_drawing_shape_metadata = _worksheet_drawing_shape_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
@@ -21207,6 +22803,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(fill_metadata.warnings)
     parser_warnings.update(formula_cached_result_metadata.warnings)
     parser_warnings.update(rich_text_run_metadata.warnings)
+    parser_warnings.update(legacy_comment_metadata.warnings)
     parser_warnings.update(threaded_comment_metadata.warnings)
     parser_warnings.update(worksheet_drawing_shape_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
@@ -21435,6 +23032,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         fill_controls=fill_metadata.controls,
         formula_cached_results=formula_cached_result_metadata.results,
         rich_text_runs=rich_text_run_metadata.controls,
+        legacy_comments=legacy_comment_metadata.comments,
         threaded_comments=threaded_comment_metadata.comments,
         worksheet_drawing_shapes=worksheet_drawing_shape_metadata.shapes,
         chart_definitions=chart_definition_metadata.charts,
@@ -21516,6 +23114,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "fill_controls": snapshot.fill_controls.profile_dict(),
         "formula_cached_results": snapshot.formula_cached_results.profile_dict(),
         "rich_text_runs": snapshot.rich_text_runs.profile_dict(),
+        "legacy_comments": snapshot.legacy_comments.profile_dict(),
         "threaded_comments": snapshot.threaded_comments.profile_dict(),
         "worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
@@ -21549,6 +23148,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_fill_controls": snapshot.fill_controls.present,
             "has_formula_cached_results": snapshot.formula_cached_results.present,
             "has_rich_text_runs": snapshot.rich_text_runs.present,
+            "has_legacy_comments": snapshot.legacy_comments.present,
             "has_threaded_comments": snapshot.threaded_comments.present,
             "has_worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.present,
             "has_chart_definitions": snapshot.chart_definitions.present,

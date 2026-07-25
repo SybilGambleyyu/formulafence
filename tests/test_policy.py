@@ -17,6 +17,7 @@ from .helpers import (
     change_font_definition,
     change_formula_cached_result,
     change_ignored_error_target,
+    change_legacy_comment_text,
     change_legacy_vml_control_controls,
     change_named_sheet_view_criterion,
     change_number_format_code,
@@ -45,6 +46,7 @@ from .helpers import (
     make_formula_cached_result_model,
     make_ignored_error_model,
     make_legacy_array_model,
+    make_legacy_comment_model,
     make_legacy_vml_control_model,
     make_model,
     make_named_sheet_view_model,
@@ -556,6 +558,19 @@ def test_policy_can_block_threaded_comment_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP045"}
+
+
+def test_policy_can_block_legacy_excel_note_changes(tmp_path) -> None:
+    baseline = make_legacy_comment_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    change_legacy_comment_text(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_legacy_comment_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP046"}
 
 
 def test_policy_can_block_worksheet_drawing_shape_changes(tmp_path) -> None:

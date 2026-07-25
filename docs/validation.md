@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Legacy Excel Notes and threaded placeholders — 2026-07-24
+
+FormulaFence 0.44.0 is validated with a controlled .xlsx pair built outside
+this repository from a clean openpyxl 3.1.5 workbook and a standard
+SpreadsheetML comments/VML Note package. The baseline SHA-256 was
+`d173971d92bf1d2db0e31001c1e2141f6207051610f561061150006ccf749d86`; the
+candidate SHA-256 was
+`422eb34e927d4ce395df25dab1b7e66854fadc5b024a27bce253e14fea1f6d04`.
+Ordinary cells, the author record, cell binding, comment property/layout, and
+all VML stayed fixed. Comparing uncompressed ZIP members showed exactly one
+changed member: `xl/comments/comment1.xml`, where only the Note body changed.
+
+A clean virtual environment using the published 0.43.0 wheel (SHA-256
+`0e686551d7a6df9edaa71bc1e44f4a177334bd736ffe8953b970d95be39e7ad5`)
+reported zero changes and zero findings for that pair. A clean environment
+using the staged 0.44.0 wheel (SHA-256
+`d8fc0abcad15991a09c290239ab62f20f499eb73e94f54ab4fc2788606dd7ff5`)
+emitted exactly one `legacy_comment_controls_changed` change and `FF046`.
+A policy enabling `no_legacy_comment_changes` exited 1 with `FF046` and
+`FFP046`. JSON reports were checked to ensure Note text, the author, and the
+cell reference were absent.
+
+The suite separately validates a conventional Note text edit, VML
+visibility-only change, a threaded-comment Note placeholder, consistent VML/
+comment/relationship/placeholder identifier rewrites, malformed comments XML,
+bounded XML reads, external comments relationships, and external VML
+relationships. External Note relationships are quarantined for the ordinary
+reader only after raw inspection, so the candidate remains reviewable and
+fail-closed rather than raising a reader error. The scanner compares stored
+package declarations; it does not prove Excel rendering, author identity,
+notification, reconciliation behavior, or cloud/client state.
+
 ## Modern threaded comments — 2026-07-24
 
 FormulaFence 0.43.0 is validated with a controlled `.xlsx` pair built outside

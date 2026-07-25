@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.44.0 — 2026-07-24
+
+- Inspect raw legacy Excel Note comments parts and their worksheet-bound VML
+  Note shapes before workbook readers can omit author/text or display
+  declarations. FormulaFence privately compares note text and rich-text
+  presentation, author association, cell binding, comment properties, Note
+  visibility/layout, and relationship semantics while profiles, Markdown, JSON,
+  and SARIF expose aggregate counts only—never note text, authors, locations,
+  VML, targets, relationship IDs, or GUIDs.
+- Recognize the documented legacy Note placeholder that Excel can retain beside
+  a modern threaded comment. A consistent placeholder GUID/author rekey stays
+  quiet, while a changed placeholder reconciliation declaration remains guarded
+  independently of the modern thread.
+- Emit FF046 for a material legacy Note or threaded-placeholder change and add
+  the fail-closed no_legacy_comment_changes policy rule (FFP046). This closes
+  the review gap where an instruction, review context, or its visibility/layout
+  can change outside ordinary worksheet cells.
+- Bound raw comments/VML XML reads to 16 MiB per part, 64 MiB per workbook, and
+  512 parts. Missing, duplicate, malformed, unsafe, external, unbound, or
+  oversized metadata produces a visible coverage warning. The ordinary workbook
+  reader receives a temporary Note-quarantined copy after raw inspection, so
+  parser tolerance cannot suppress Note evidence; FormulaFence does not render
+  Notes, resolve authors, fetch targets, execute linked content, or infer
+  client/cloud state.
+
 ## 0.43.0 — 2026-07-24
 
 - Inspect raw modern Excel threaded-comment and person package parts before

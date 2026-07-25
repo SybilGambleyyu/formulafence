@@ -29,6 +29,7 @@ rules:
   no_cell_fill_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
+  no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
   no_worksheet_embedded_control_changes: true
@@ -101,6 +102,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
 | `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
+| `no_legacy_comment_changes` | boolean | A legacy Excel Note/comments binding, author association, Note text/rich-text/property declaration, threaded-comment placeholder reconciliation declaration, Note VML visibility/layout, or related relationship changes. Note text, authors, locations, VML, targets, IDs, and GUIDs are compared privately. |
 | `no_threaded_comment_changes` | boolean | A modern Excel threaded-comment/person package binding, comment/reply graph, text, stored cell/timestamp/resolution declaration, mention range/person association, extension material, or person definition changes. Comment bodies, locations, timestamps, parent links, names, user IDs, provider IDs, relationship IDs, and GUIDs are compared privately. |
 | `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp` or nested `xdr:grpSp` anchor/layout, text/presentation declaration, macro/text link, or referenced click/hover relationship changes. Shape text, formatting, formulas, anchors, IDs, and targets are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
@@ -590,6 +592,42 @@ coverage warning. FormulaFence does not render cells, resolve theme colours,
 calculate contrast, determine visibility, preserve rich text, or guarantee
 cross-version Excel rendering equivalence.
 
+Traditional Excel Notes are stored in worksheet-associated SpreadsheetML
+comments parts, not in ordinary cells. Their author association, text, cell
+binding, comment properties, and optional rich-text material sit in that part;
+their visible/hidden state and layout sit in a worksheet `legacyDrawing` VML
+part. A modern threaded comment can retain a legacy Note placeholder whose
+author carries `tc={GUID}` for reconciliation.
+
+FormulaFence follows these comments and VML bindings and privately compares
+author association, text/presentation, comment properties, cell association,
+placeholder reconciliation state, Note VML visibility/layout, and relationship
+semantics. A material change emits `FF046`; enable
+`no_legacy_comment_changes` to make it `FFP046` in CI. Profiles and finding
+details expose only aggregate worksheet/part, author/comment/text/rich-text/
+property/placeholder, Note-shape/visibility/anchor, relationship, and
+malformed-metadata counts. Note bodies, authors, cell locations, raw VML,
+targets, raw relationship IDs, and GUIDs remain private.
+
+Writer-generated comment shape IDs, VML shape IDs, package relationship IDs,
+and consistently rekeyed placeholder GUIDs normalize away. Missing, duplicate,
+unsafe, unbound, malformed, unreadable, oversized, or over-budget metadata
+becomes a coverage warning; XML reads are bounded to 16 MiB per part, 64 MiB
+per workbook, and 512 parts. The ordinary workbook reader uses a
+Note-quarantined copy only after the raw scanner has recorded the original
+package, so parser tolerance or a bad target cannot turn a review finding into
+a reader crash.
+
+This rule compares stored package state only. It does not render Note text/VML,
+resolve authors, fetch a relationship target, execute linked content, determine
+client display placement, or infer notifications, permissions, account,
+cloud-sync, or client-visibility behavior. The format boundary follows the
+Open XML [Comment](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.comment?view=openxml-3.0.1),
+[Authors](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.authors?view=openxml-3.0.1),
+and [LegacyDrawing](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.legacydrawing?view=openxml-3.0.1)
+definitions, plus Microsoft's [threaded-comment placeholder
+rule](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/6383f002-c90b-401c-a1d7-66b97b14cb3e).
+
 Modern Excel threaded comments live in worksheet-associated comment parts and a
 workbook-associated persons part instead of ordinary cells. FormulaFence follows
 those package relationships and privately compares the complete stored
@@ -611,8 +649,8 @@ workbook, and 512 parts.
 
 This rule compares stored package state only. It does not render comments,
 validate mention offsets against comment text, send notifications, resolve
-accounts, inspect legacy note/placeholder text, or infer collaboration,
-permissions, cloud-sync, or client-visibility behavior. The format boundary
+accounts, determine whether a legacy placeholder renders, or infer
+collaboration, permissions, cloud-sync, or client-visibility behavior. The format boundary
 follows Microsoft's [threaded-comment overview](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/e0fb917a-1107-409a-852f-13b47aea70dc),
 [Threaded Comments part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/66e1875d-c60a-48eb-bf88-41066d45fea8),
 [Persons part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1a170d26-42a2-46f0-b2b6-0ff1dec1c344),

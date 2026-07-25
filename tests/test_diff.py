@@ -36,6 +36,9 @@ from .helpers import (
     change_ignored_error_extension_target,
     change_ignored_error_target,
     change_inline_rich_text_run_color,
+    change_legacy_comment_text,
+    change_legacy_note_visibility,
+    change_legacy_placeholder_author_context,
     change_legacy_vml_control_controls,
     change_legacy_vml_note,
     change_named_sheet_view_criterion,
@@ -78,6 +81,7 @@ from .helpers import (
     corrupt_font_definition,
     corrupt_formula_cached_result,
     corrupt_ignored_error_control,
+    corrupt_legacy_comment_root,
     corrupt_legacy_vml_control_root,
     corrupt_named_sheet_view_control,
     corrupt_number_format_column_control,
@@ -99,10 +103,13 @@ from .helpers import (
     duplicate_external_link_sheet_names,
     duplicate_ignored_error_container,
     externalize_chart_overlay_relationship,
+    externalize_legacy_comment_relationship,
+    externalize_legacy_note_vml_relationship,
     externalize_pivot_table_cache_record_relationship,
     externalize_power_pivot_data_model,
     externalize_slicer_timeline_cache_relationship,
     externalize_threaded_comment_relationship,
+    lowercase_legacy_threaded_placeholder_identifiers,
     make_chart_definition_model,
     make_conditional_formatting_model,
     make_current_row_table_model,
@@ -116,6 +123,8 @@ from .helpers import (
     make_ignored_error_model,
     make_implicit_intersection_model,
     make_legacy_array_model,
+    make_legacy_comment_model,
+    make_legacy_threaded_placeholder_model,
     make_legacy_vml_control_model,
     make_legacy_vml_note_model,
     make_let_model,
@@ -162,6 +171,7 @@ from .helpers import (
     normalize_zero_dimension_visibility_control_spelling,
     overlap_what_if_data_table_outputs,
     rebind_external_link_declaration,
+    rebind_legacy_comment_relationship,
     rebind_pivot_table_cache_records,
     rebind_power_pivot_data_model,
     rebind_slicer_timeline_cache,
@@ -169,6 +179,8 @@ from .helpers import (
     remove_xlm_macro_sheet_related_part_payload,
     renumber_chart_relationships,
     renumber_external_link_declaration_relationships,
+    renumber_legacy_comment_identifiers,
+    renumber_legacy_threaded_placeholder_identifiers,
     renumber_legacy_vml_control_relationships,
     renumber_office_web_addin_relationships,
     renumber_pivot_table_cache_id,
@@ -2639,7 +2651,11 @@ def test_worksheet_embedded_control_identifier_rewrites_are_ignored(tmp_path) ->
     assert "worksheet_embedded_controls_changed" not in {
         change.kind for change in report.changes
     }
+    assert "legacy_comment_controls_changed" not in {
+        change.kind for change in report.changes
+    }
     assert "FF029" not in {finding.rule_id for finding in report.findings}
+    assert "FF046" not in {finding.rule_id for finding in report.findings}
 
 
 def test_worksheet_embedded_control_equivalent_target_spellings_are_ignored(tmp_path) -> None:
@@ -5138,6 +5154,269 @@ def test_rich_text_run_malformed_metadata_fails_closed(tmp_path) -> None:
     )
     for sensitive_value in ("PRIVATE-UNSUPPORTED-RUN-CONTROL", "A3", "FF000000"):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_legacy_excel_notes_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_legacy_comment_model(tmp_path / "baseline.xlsx")
+    text_candidate = make_legacy_comment_model(tmp_path / "text-candidate.xlsx")
+    visibility_candidate = make_legacy_comment_model(
+        tmp_path / "visibility-candidate.xlsx"
+    )
+    change_legacy_comment_text(text_candidate)
+    change_legacy_note_visibility(visibility_candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    text_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(text_candidate),
+    )
+    visibility_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(visibility_candidate),
+    )
+    text_change = next(
+        change
+        for change in text_report.changes
+        if change.kind == "legacy_comment_controls_changed"
+    )
+    visibility_change = next(
+        change
+        for change in visibility_report.changes
+        if change.kind == "legacy_comment_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["legacy_comment_count"] == 1
+    assert baseline_snapshot.summary()["legacy_comment_author_count"] == 1
+    assert baseline_snapshot.summary()["legacy_comment_note_shape_count"] == 1
+    assert baseline_snapshot.summary()["has_legacy_comments"] is True
+    assert profile["legacy_comments"] == {
+        "present": True,
+        "worksheet_comment_sheet_count": 1,
+        "comment_part_count": 1,
+        "comment_author_count": 1,
+        "comment_count": 1,
+        "comment_with_text_count": 1,
+        "rich_text_comment_count": 0,
+        "phonetic_comment_count": 0,
+        "comment_property_count": 0,
+        "threaded_placeholder_count": 0,
+        "worksheet_note_drawing_sheet_count": 1,
+        "note_vml_drawing_part_count": 1,
+        "note_shape_count": 1,
+        "visible_note_shape_count": 0,
+        "anchored_note_shape_count": 0,
+        "binding_relationship_count": 2,
+        "external_relationship_count": 0,
+        "unrecognized_legacy_comment_count": 0,
+    }
+    assert "## Legacy Excel Notes and threaded placeholders" in markdown
+    assert text_change.details["legacy_comment_definition_material_changed"] is True
+    assert visibility_change.details["legacy_note_vml_material_changed"] is True
+    assert "FF046" in {finding.rule_id for finding in text_report.findings}
+    assert "FF046" in {finding.rule_id for finding in visibility_report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(text_report.to_dict()),
+        report_to_markdown(text_report),
+        json.dumps(report_to_sarif(text_report)),
+        json.dumps(visibility_report.to_dict()),
+        report_to_markdown(visibility_report),
+        json.dumps(report_to_sarif(visibility_report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-LEGACY-NOTE-BASELINE",
+        "PRIVATE-LEGACY-NOTE-CANDIDATE",
+        "Private Legacy Note Author",
+        "A1",
+        "_x0000_s",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_unsafe_legacy_comment_relationship_fails_closed_and_is_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_legacy_comment_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    externalize_legacy_comment_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "legacy_comment_controls_changed"
+    )
+
+    assert candidate_snapshot.legacy_comments.external_relationship_count == 1
+    assert candidate_snapshot.legacy_comments.unrecognized_legacy_comment_count >= 1
+    assert change.details["legacy_note_relationships_changed"] is True
+    assert "FF046" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "https://example.invalid/private-legacy-note",
+        "rId",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_legacy_comment_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_legacy_comment_model(tmp_path / "baseline.xlsx")
+    renumbered = make_legacy_comment_model(tmp_path / "renumbered.xlsx")
+    renumber_legacy_comment_identifiers(renumbered)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered))
+
+    assert "legacy_comment_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF046" not in {finding.rule_id for finding in report.findings}
+
+
+def test_legacy_comment_relationship_rebinding_is_guarded_and_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_legacy_comment_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    rebind_legacy_comment_relationship(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "legacy_comment_controls_changed"
+    )
+    rendered_artifacts = (
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+
+    assert change.details["legacy_note_relationships_changed"] is True
+    assert "FF046" in {finding.rule_id for finding in report.findings}
+    assert all("comment2.xml" not in artifact for artifact in rendered_artifacts)
+
+
+def test_unsafe_legacy_note_vml_relationship_is_quarantined_for_reader(
+    tmp_path,
+) -> None:
+    baseline = make_legacy_comment_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    externalize_legacy_note_vml_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.legacy_comments.external_relationship_count == 1
+    assert candidate_snapshot.legacy_comments.unrecognized_legacy_comment_count >= 1
+    assert any(
+        "isolated unsafe legacy Excel Note relationships" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "legacy_comment_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF046" in {finding.rule_id for finding in report.findings}
+
+
+def test_threaded_comment_placeholders_are_guarded_without_duplicating_threads(
+    tmp_path,
+) -> None:
+    baseline = make_legacy_threaded_placeholder_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_threaded_placeholder_model(tmp_path / "candidate.xlsx")
+    renumbered = make_legacy_threaded_placeholder_model(tmp_path / "renumbered.xlsx")
+    lowercase = make_legacy_threaded_placeholder_model(tmp_path / "lowercase.xlsx")
+    author_candidate = make_legacy_threaded_placeholder_model(
+        tmp_path / "author-candidate.xlsx"
+    )
+    change_legacy_comment_text(candidate)
+    renumber_legacy_threaded_placeholder_identifiers(renumbered)
+    lowercase_legacy_threaded_placeholder_identifiers(lowercase)
+    change_legacy_placeholder_author_context(author_candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    renumber_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(renumbered),
+    )
+    lowercase_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(lowercase),
+    )
+    author_snapshot = load_snapshot(author_candidate)
+    author_report = compare_snapshots(baseline_snapshot, author_snapshot)
+
+    assert baseline_snapshot.legacy_comments.threaded_placeholder_count == 1
+    assert baseline_snapshot.threaded_comments.comment_count == 1
+    assert author_snapshot.legacy_comments.threaded_placeholder_count == 0
+    assert "legacy_comment_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "threaded_comment_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF046" in {finding.rule_id for finding in report.findings}
+    assert "FF045" not in {finding.rule_id for finding in report.findings}
+    assert "legacy_comment_controls_changed" not in {
+        change.kind for change in renumber_report.changes
+    }
+    assert "threaded_comment_controls_changed" not in {
+        change.kind for change in renumber_report.changes
+    }
+    assert "legacy_comment_controls_changed" not in {
+        change.kind for change in lowercase_report.changes
+    }
+    assert "threaded_comment_controls_changed" not in {
+        change.kind for change in lowercase_report.changes
+    }
+    assert "legacy_comment_controls_changed" in {
+        change.kind for change in author_report.changes
+    }
+    assert "FF046" in {finding.rule_id for finding in author_report.findings}
+
+
+def test_malformed_legacy_comments_fail_closed(tmp_path) -> None:
+    baseline = make_legacy_comment_model(tmp_path / "baseline.xlsx")
+    candidate = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    corrupt_legacy_comment_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.legacy_comments.unrecognized_legacy_comment_count >= 1
+    assert any(
+        "legacy comments part with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "legacy_comment_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF046" in {finding.rule_id for finding in report.findings}
+
+
+def test_legacy_comment_xml_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    workbook = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    monkeypatch.setattr(workbook_module, "_LEGACY_COMMENT_MAX_XML_PART_BYTES", 1)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.legacy_comments.unrecognized_legacy_comment_count >= 1
+    assert any(
+        "oversized legacy-note" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_threaded_comments_are_profiled_diffed_and_redacted(tmp_path) -> None:

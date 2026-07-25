@@ -1497,6 +1497,58 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Character-level text, formatting, phonetic hints, shared-string indexes, "
             "and cell locations are compared privately and intentionally omitted."
         )
+    legacy_comments = profile["legacy_comments"]
+    if legacy_comments["present"]:
+        lines.extend(
+            [
+                "",
+                "## Legacy Excel Notes and threaded placeholders",
+                "",
+                (
+                    "- **Worksheets / comment parts / authors / comments:** "
+                    f"{legacy_comments['worksheet_comment_sheet_count']} / "
+                    f"{legacy_comments['comment_part_count']} / "
+                    f"{legacy_comments['comment_author_count']} / "
+                    f"{legacy_comments['comment_count']}"
+                ),
+                (
+                    "- **Comments with text / rich text / phonetic hints / properties:** "
+                    f"{legacy_comments['comment_with_text_count']} / "
+                    f"{legacy_comments['rich_text_comment_count']} / "
+                    f"{legacy_comments['phonetic_comment_count']} / "
+                    f"{legacy_comments['comment_property_count']}"
+                ),
+                (
+                    "- **Threaded-comment placeholders:** "
+                    f"{legacy_comments['threaded_placeholder_count']}"
+                ),
+                (
+                    "- **Note VML worksheets / drawings / shapes:** "
+                    f"{legacy_comments['worksheet_note_drawing_sheet_count']} / "
+                    f"{legacy_comments['note_vml_drawing_part_count']} / "
+                    f"{legacy_comments['note_shape_count']}"
+                ),
+                (
+                    "- **Visible / anchored Note shapes:** "
+                    f"{legacy_comments['visible_note_shape_count']} / "
+                    f"{legacy_comments['anchored_note_shape_count']}"
+                ),
+                (
+                    "- **Package binding relationships:** "
+                    f"{legacy_comments['binding_relationship_count']} "
+                    f"({legacy_comments['external_relationship_count']} external)"
+                ),
+            ]
+        )
+        if legacy_comments["unrecognized_legacy_comment_count"]:
+            lines.append(
+                "- **Unrecognized or malformed Note metadata:** "
+                f"{legacy_comments['unrecognized_legacy_comment_count']}"
+            )
+        lines.append(
+            "Note text, authors, cell references, placeholder IDs, VML markup, and "
+            "layout declarations are compared privately and intentionally omitted."
+        )
     threaded_comments = profile["threaded_comments"]
     if threaded_comments["present"]:
         lines.extend(

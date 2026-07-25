@@ -29,6 +29,11 @@ financial correctness or replace model review.
   macro assignments, text links, descriptions, relationship identifiers, and
   targets are compared through private fingerprints only. Profiles and reports
   retain structural counts, never the underlying shape content.
+- Legacy Excel Note text, authors, cell associations, comment properties,
+  threaded-comment placeholder links, VML visibility/layout, relationship
+  identifiers, targets, and GUIDs are compared through private fingerprints
+  only. Profiles and reports retain aggregate structural counts, never the
+  underlying Note content or VML.
 - Modern threaded-comment text, cell references, timestamps, reply links,
   mention ranges, person names/user IDs/provider IDs, relationship identifiers,
   and GUIDs are compared through private fingerprints only. Profiles and
@@ -275,6 +280,34 @@ review prompt, not proof of an error.
   [shared-string-table guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-shared-string-table),
   the Open XML `r` [rich-text-run definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.run?view=openxml-3.0.1),
   and `is` [inline-string definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.inlinestring?view=openxml-3.0.1).
+- Traditional Excel Notes are stored in worksheet-associated SpreadsheetML
+  comments parts and their display declarations live in worksheet
+  `legacyDrawing` VML parts. FormulaFence follows the worksheet bindings and
+  privately compares author association, text/rich-text presentation, cell
+  association, comment properties, Note VML visibility/layout, and relationship
+  semantics. It recognizes the `tc={GUID}` legacy placeholder used to reconcile
+  a threaded comment, and treats that declaration as a separate guarded surface.
+  A material change emits `FF046` and `no_legacy_comment_changes` blocks it as
+  `FFP046`. Profiles and reports expose only aggregate worksheet/part,
+  author/comment/text/rich-text/property/placeholder, Note-shape/visibility/
+  anchor, relationship, and malformed-metadata counts; Note text, author
+  identities, references, VML, targets, IDs, and GUIDs remain private.
+  Consistent writer-generated VML shape/comment shape/relationship IDs and
+  placeholder GUIDs normalize away. Missing, duplicate, malformed, unbound,
+  unsafe, unreadable, oversized, or over-budget metadata becomes a visible
+  coverage warning; XML reads are bounded to 16 MiB per part, 64 MiB per
+  workbook, and 512 parts. The ordinary reader uses a Note-quarantined
+  temporary copy only after raw inspection, so unsafe targets and
+  parser-tolerance differences cannot erase evidence. FormulaFence does
+  **not** render Notes/VML, resolve authors, fetch
+  targets, execute linked content, calculate client placement, or infer
+  notification, permission, account, cloud, or client-visibility behavior.
+  This boundary follows the Open XML
+  [Comment](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.comment?view=openxml-3.0.1),
+  [Authors](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.authors?view=openxml-3.0.1),
+  and [LegacyDrawing](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.legacydrawing?view=openxml-3.0.1)
+  definitions, plus Microsoft's [threaded-comment placeholder
+  rule](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/6383f002-c90b-401c-a1d7-66b97b14cb3e).
 - Modern threaded comments are stored in worksheet-associated comment parts and
   a workbook-associated persons part, outside ordinary cells. FormulaFence
   follows those bindings and privately compares comment/reply graphs, stored
@@ -286,7 +319,7 @@ review prompt, not proof of an error.
   reports expose only aggregate worksheet/part/thread, comment/reply/resolved/
   text, mention, person, relationship, and malformed-metadata counts. It does
   **not** render comments, validate mention offsets, notify or resolve users,
-  inspect legacy note/placeholder content, or infer permissions, cloud state,
+  determine legacy-placeholder rendering, or infer permissions, cloud state,
   or client visibility. Missing, duplicate, malformed, unbound, unsafe,
   unreadable, oversized, or over-budget metadata becomes a visible coverage
   warning; XML reads are bounded to 16 MiB per part, 64 MiB per workbook, and
@@ -548,8 +581,9 @@ review prompt, not proof of an error.
   Power Pivot/Data Model declaration/raw-payload chains, What-If Data Table and
   Scenario Manager declarations, worksheet/Table AutoFilter and row/column-
   visibility controls, ignored-error warning suppressions, relationship-backed Named Sheet
-  View controls, modern threaded-comment/person package chains, non-chart Worksheet DrawingML
-  regular/group shape controls, DrawingML chart
+  View controls, legacy Excel Note/comments/VML and threaded-placeholder
+  package chains, modern threaded-comment/person package chains, non-chart
+  Worksheet DrawingML regular/group shape controls, DrawingML chart
   definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link

@@ -20,6 +20,7 @@ from formulafence.models import (
     DiffReport,
     ExternalDataConnectionSnapshot,
     ExternalLinkPackageSnapshot,
+    FillSnapshot,
     FilterVisibilitySnapshot,
     Finding,
     FontSnapshot,
@@ -1483,6 +1484,32 @@ def _workbook_control_changes(
                 "high",
                 "Cell font controls changed; values or warnings may be made less visible "
                 "or misleading.",
+                details=details,
+            )
+        )
+    if before.fill_controls != after.fill_controls:
+        old_controls: FillSnapshot = before.fill_controls
+        new_controls: FillSnapshot = after.fill_controls
+        details = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.definition_signature != new_controls.definition_signature:
+            details["fill_definition_material_changed"] = True
+        changes.append(
+            Change(
+                "fill_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF041",
+                "high",
+                "Cell fill controls changed; values, warnings, or visual classifications "
+                "may be made less visible or misleading.",
                 details=details,
             )
         )

@@ -1701,6 +1701,50 @@ class FontSnapshot:
 
 
 @dataclass(frozen=True)
+class FillSnapshot:
+    """Safe aggregate of effective cell-fill controls.
+
+    A fill can change the review surface without changing a stored value or
+    formula: for example, a matching fill can make text or an error indicator
+    much less visible, while patterns and gradients can alter visual meaning.
+    Fill definitions and targets can expose report context, so the private
+    signature retains canonical effective assignments for comparison while
+    public output exposes structural counts only.
+    """
+
+    default_fill_definition_count: int = 0
+    cell_fill_assignment_count: int = 0
+    row_fill_assignment_count: int = 0
+    column_fill_assignment_count: int = 0
+    unrecognized_fill_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.default_fill_definition_count
+            or self.cell_fill_assignment_count
+            or self.row_fill_assignment_count
+            or self.column_fill_assignment_count
+            or self.unrecognized_fill_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural fill evidence without definitions or targets."""
+        return {
+            "present": self.present,
+            "default_fill_definition_count": self.default_fill_definition_count,
+            "cell_fill_assignment_count": self.cell_fill_assignment_count,
+            "row_fill_assignment_count": self.row_fill_assignment_count,
+            "column_fill_assignment_count": self.column_fill_assignment_count,
+            "unrecognized_fill_count": self.unrecognized_fill_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetEmbeddedControlSnapshot:
     """Safe aggregate of worksheet control and OLE package data.
 
@@ -2106,6 +2150,7 @@ class WorkbookSnapshot:
         default_factory=NumberFormatSnapshot
     )
     font_controls: FontSnapshot = field(default_factory=FontSnapshot)
+    fill_controls: FillSnapshot = field(default_factory=FillSnapshot)
     chart_definitions: ChartDefinitionSnapshot = field(
         default_factory=ChartDefinitionSnapshot
     )
@@ -2190,6 +2235,13 @@ class WorkbookSnapshot:
                 + self.font_controls.column_font_assignment_count
             ),
             "has_font_controls": self.font_controls.present,
+            "fill_assignment_count": (
+                self.fill_controls.default_fill_definition_count
+                + self.fill_controls.cell_fill_assignment_count
+                + self.fill_controls.row_fill_assignment_count
+                + self.fill_controls.column_fill_assignment_count
+            ),
+            "has_fill_controls": self.fill_controls.present,
             "defined_names": len(self.defined_names),
             "table_count": len(self.tables),
             "data_validation_rules": len(self.data_validations),

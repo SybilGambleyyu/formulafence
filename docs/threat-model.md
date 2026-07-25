@@ -188,7 +188,7 @@ review prompt, not proof of an error.
   Missing custom definitions, invalid IDs/indexes/targets, conflicting
   definitions, and bounded parser failures remain coverage warnings. FormulaFence
   does not render locale-specific output, validate format syntax, calculate
-  values, model width/overflow, or track fills/borders/alignment, quote
+  values, model width/overflow, or track fonts/fills/borders/alignment, quote
   prefixes, table styles, or arbitrary visual formatting. Column styles
   are compared only as OOXML defaults for unallocated/new cells, not as a claim
   to restyle allocated cells.
@@ -205,8 +205,27 @@ review prompt, not proof of an error.
   are normalized. Missing or malformed definitions, invalid IDs/indexes/targets,
   and bounded parser failures remain visible coverage warnings. FormulaFence
   does not render or resolve theme colours, decide whether a font is visible
-  against a fill, calculate values, track fills/borders/alignment, rich-text
-  runs, table styles, width/overflow, or arbitrary visual formatting. Column
+  against a fill, calculate text/background contrast or values, track
+  borders/alignment, rich-text runs, table styles, width/overflow, or arbitrary
+  visual formatting. Column
+  styles are compared only as OOXML defaults for unallocated/new cells, not as a
+  claim to restyle allocated cells.
+- Excel cell fills can make unchanged text, warnings, or input/output cues less
+  visible without changing a formula or value. FormulaFence privately resolves
+  raw `<fills>` definitions, including patterned and gradient fills, base
+  `<cellStyleXfs>`, effective `<cellXfs>` with `xfId` and `applyFill`, direct
+  cell `s`, `customFormat=1` row `s`, and raw `<cols>/<col style>` assignments.
+  It emits `FF041`; `no_cell_fill_changes` can block it as `FFP041`. Profiles
+  and `FF041` details expose only default-definition, direct/row/effective-column,
+  and malformed-control counts—never fill colours, pattern types, gradient
+  geometry/stops, style IDs, or targets. Equivalent fill-ID remapping, valid
+  pattern-colour child ordering, Boolean spelling, base-XF inheritance,
+  semantically inert no-fill/solid-background declarations, and effective
+  column-range splitting are normalized. Missing or malformed definitions,
+  invalid IDs/indexes/targets, and bounded parser failures remain visible
+  coverage warnings. FormulaFence does not resolve theme colours, render fills,
+  calculate text/background contrast, evaluate conditional-format differential
+  styles, apply table styles, or claim arbitrary visual-style coverage. Column
   styles are compared only as OOXML defaults for unallocated/new cells, not as a
   claim to restyle allocated cells.
 - Worksheet data-validation controls are inventoried and diffed as compact

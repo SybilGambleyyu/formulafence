@@ -5,6 +5,46 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel cell-fill controls — 2026-07-24
+
+FormulaFence 0.38.0 was validated with controlled raw-OOXML `.xlsx` packages
+containing two private solid direct fills, one private gradient direct fill, one
+`customFormat=1` row fill, and a two-column raw style default. The safe profile
+records three direct-cell, one row, and two effective-column assignments; no
+fill colour, pattern type, gradient stop, style ID, or target. The suite
+verifies a zero-change self-diff, `FF041` for a private-colour-only fill change,
+`FFP041` under `no_cell_fill_changes`, `FF041` for a gradient-direction-only
+change, and `FF041` when only the default fill definition changes—without a
+cell value or formula change.
+
+Equivalent fill-ID reallocation, valid pattern-child ordering, semantically
+inert no-fill/solid-background declarations, explicit versus omitted
+`applyFill`, base-XF inheritance, and equivalent split column-style ranges are
+exercised without a finding. An out-of-bounds column maximum produces an
+explicit parser-coverage warning, `FF010`, and `FF041` rather than a silent
+omission. Fill colours, pattern/gradient material, style IDs, and cell/row/
+column targets are verified absent from JSON, Markdown, ordinary reports, and
+SARIF. The scanner compares fill declarations only; the tests do not assert
+Excel's theme-colour resolution, pattern/gradient rendering, text/background
+contrast, conditional-format differential styles, table styling, formula
+calculation, width/overflow, or arbitrary visual formatting.
+
+As an independent package-compatibility check, FormulaFence profiled
+XlsxWriter 3.2.9's public
+[`tutorial2.py`](https://github.com/jmcnamara/XlsxWriter/blob/cf3fe78d3eab5e4c7d825d4451af3a60e2a04011/examples/tutorial2.py)
+example at commit `cf3fe78d3eab5e4c7d825d4451af3a60e2a04011`, generated locally
+and not bundled with this repository. The resulting `Expenses02.xlsx` SHA-256
+was `272036dfdfc75257483b8a8509827cb677c2bd641c0e1f6059825391d0893225`.
+FormulaFence found no fill assignments and no coverage warning. Changing only
+the first money cell's fill to a black solid fill produced `candidate.xlsx`
+SHA-256 `648a600bb5f3824420288a0f179355d23dcb0a5e07a57839002aa3834bcb36a9`.
+The published 0.37.0 wheel (SHA-256
+`9db5e438bb501986b81d3d32d5e80b0996f09dc79e944cd321ebec36c154def0`)
+reported `0` changes and no findings, while a fresh 0.38.0 wheel emits exactly
+one `fill_controls_changed` change and `FF041` (wheel SHA-256
+`a07f638f9afd6861cd6b2127b62f572e2285174a6c7e2f7eace82ac8a18a83b0`);
+the starter policy exits `1` with `FF041` and `FFP041`.
+
 ## Excel cell-font controls — 2026-07-24
 
 FormulaFence 0.37.0 was validated with controlled raw-OOXML `.xlsx` packages

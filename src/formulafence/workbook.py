@@ -52,6 +52,7 @@ from formulafence.models import (
     ExternalDataOpaqueMetadataSnapshot,
     ExternalDataRefreshSettingsSnapshot,
     ExternalLinkPackageSnapshot,
+    FillSnapshot,
     FilterVisibilitySnapshot,
     FontSnapshot,
     IgnoredErrorSnapshot,
@@ -508,6 +509,14 @@ class _FontMetadata:
     """Raw cell-font evidence retained before reader normalization."""
 
     controls: FontSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _FillMetadata:
+    """Raw cell-fill evidence retained before reader normalization."""
+
+    controls: FillSnapshot
     warnings: tuple[str, ...]
 
 
@@ -16482,6 +16491,829 @@ def _font_metadata(path: Path) -> _FontMetadata:
     return _FontMetadata(snapshot, tuple(sorted(warnings)))
 
 
+_FILL_COLUMN_UPDATE_BUDGET = 16_777_216
+_FILL_MAX_GRADIENT_STOPS = 4_096
+_FILL_COLOR_ATTRIBUTES = frozenset({"rgb", "indexed", "auto", "theme", "tint"})
+_FILL_PATTERN_TYPES = frozenset(
+    {
+        "none",
+        "solid",
+        "mediumGray",
+        "darkGray",
+        "lightGray",
+        "darkHorizontal",
+        "darkVertical",
+        "darkDown",
+        "darkUp",
+        "darkGrid",
+        "darkTrellis",
+        "lightHorizontal",
+        "lightVertical",
+        "lightDown",
+        "lightUp",
+        "lightGrid",
+        "lightTrellis",
+        "gray125",
+        "gray0625",
+    }
+)
+_FILL_GRADIENT_TYPES = frozenset({"linear", "path"})
+
+
+@dataclass(frozen=True)
+class _FillStyle:
+    """One effective cell fill retained only for private comparison."""
+
+    category: str
+    value: str
+
+
+_DEFAULT_FILL_STYLE = _FillStyle("default", "0")
+
+
+def _fill_private_digest(value: object) -> str:
+    """Hash private fill material before it can reach an output model."""
+    payload = repr(value).encode("utf-8", errors="surrogatepass")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _fill_unrecognized(*parts: object) -> _FillStyle:
+    """Fingerprint unsupported fill material without retaining it in output models."""
+    return _FillStyle("unrecognized", _fill_private_digest(parts))
+
+
+def _fill_decimal(value: str | None) -> str | None:
+    """Normalize one finite OOXML decimal without accepting malformed text."""
+    if value is None:
+        return None
+    try:
+        parsed = Decimal(value.strip())
+    except InvalidOperation:
+        return None
+    if not parsed.is_finite():
+        return None
+    if parsed == 0:
+        return "0"
+    normalized = parsed.normalize()
+    return format(normalized, "f")
+
+
+def _fill_unit_interval_decimal(value: str | None) -> str | None:
+    """Normalize an OOXML decimal constrained to the inclusive [0, 1] interval."""
+    normalized = _fill_decimal(value)
+    if normalized is None:
+        return None
+    parsed = Decimal(normalized)
+    if parsed < 0 or parsed > 1:
+        return None
+    return normalized
+
+
+def _fill_unexpected_attributes(
+    element: ElementTree.Element,
+    *,
+    allowed: frozenset[str],
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> bool:
+    """Record unsupported attributes while keeping their values private."""
+    invalid = False
+    for attribute, value in element.attrib.items():
+        local_name = _xml_local_name(attribute)
+        if _xml_namespace(attribute) is not None or local_name not in allowed:
+            note_issue(
+                f"{context}:unsupported-attribute",
+                (_xml_display_name(attribute), value),
+            )
+            invalid = True
+    return invalid
+
+
+def _fill_unexpected_text(
+    element: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> bool:
+    """Record unexpected character data without including it in public output."""
+    invalid = False
+    if element.text is not None and element.text.strip():
+        note_issue(f"{context}:unexpected-text", element.text)
+        invalid = True
+    if element.tail is not None and element.tail.strip():
+        note_issue(f"{context}:unexpected-tail", element.tail)
+        invalid = True
+    return invalid
+
+
+def _fill_color_signature(
+    color: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[tuple[str, object], ...], bool]:
+    """Canonicalize one private OOXML colour expression used by a fill."""
+    invalid = _fill_unexpected_text(color, context=context, note_issue=note_issue)
+    if any(color):
+        note_issue(f"{context}:unexpected-child", tuple(child.tag for child in color))
+        invalid = True
+    if _fill_unexpected_attributes(
+        color,
+        allowed=_FILL_COLOR_ATTRIBUTES,
+        context=context,
+        note_issue=note_issue,
+    ):
+        invalid = True
+
+    entries: list[tuple[str, object]] = []
+    selected = 0
+    for attribute, value in color.attrib.items():
+        local_name = _xml_local_name(attribute)
+        if _xml_namespace(attribute) is not None or local_name not in _FILL_COLOR_ATTRIBUTES:
+            continue
+        candidate = value.strip()
+        if local_name == "rgb":
+            selected += 1
+            if not re.fullmatch(r"[0-9A-Fa-f]{8}", candidate):
+                note_issue(f"{context}:invalid-rgb", value)
+                invalid = True
+            candidate = candidate.upper()
+        elif local_name in {"indexed", "theme"}:
+            selected += 1
+            parsed = _number_format_unsigned_int(candidate)
+            if parsed is None:
+                note_issue(f"{context}:invalid-{local_name}", value)
+                invalid = True
+            else:
+                candidate = str(parsed)
+        elif local_name == "auto":
+            selected += 1
+            parsed_boolean = _number_format_boolean(candidate, True)
+            if parsed_boolean is None:
+                note_issue(f"{context}:invalid-auto", value)
+                invalid = True
+            else:
+                candidate = "true" if parsed_boolean else "false"
+        else:  # ``tint`` can accompany exactly one colour source.
+            parsed_decimal = _fill_decimal(candidate)
+            if parsed_decimal is None:
+                note_issue(f"{context}:invalid-tint", value)
+                invalid = True
+            else:
+                candidate = parsed_decimal
+        entries.append((local_name, candidate))
+    if selected > 1:
+        note_issue(f"{context}:conflicting-colour-source", tuple(entries))
+        invalid = True
+    return tuple(sorted(entries)), invalid
+
+
+def _fill_pattern_signature(
+    pattern_fill: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[object, ...], bool]:
+    """Canonicalize a pattern fill while normalizing semantically inert fields."""
+    invalid = _fill_unexpected_text(pattern_fill, context=context, note_issue=note_issue)
+    if _fill_unexpected_attributes(
+        pattern_fill,
+        allowed=frozenset({"patternType"}),
+        context=context,
+        note_issue=note_issue,
+    ):
+        invalid = True
+    raw_pattern_type = pattern_fill.get("patternType")
+    pattern_type = raw_pattern_type.strip() if raw_pattern_type is not None else "none"
+    if pattern_type not in _FILL_PATTERN_TYPES:
+        note_issue(f"{context}:invalid-pattern-type", raw_pattern_type)
+        invalid = True
+        pattern_type = "none"
+
+    color_tags = {
+        "fgColor": f"{{{_SPREADSHEETML_NS}}}fgColor",
+        "bgColor": f"{{{_SPREADSHEETML_NS}}}bgColor",
+    }
+    colors: dict[str, tuple[tuple[str, object], ...]] = {}
+    for child_index, child in enumerate(pattern_fill):
+        child_context = f"{context}:child:{child_index}"
+        color_name = next(
+            (name for name, tag in color_tags.items() if child.tag == tag),
+            None,
+        )
+        if color_name is None:
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            invalid = True
+            continue
+        if color_name in colors:
+            note_issue(f"{child_context}:duplicate-child", color_name)
+            invalid = True
+            continue
+        signature, color_invalid = _fill_color_signature(
+            child,
+            context=child_context,
+            note_issue=note_issue,
+        )
+        if color_invalid:
+            invalid = True
+        colors[color_name] = signature
+
+    # OOXML specifies ``none`` as the default. Neither colour is rendered for
+    # it, and only fgColor is rendered for solid fills, so disregarding inert
+    # valid declarations avoids alerting on writer-only noise.
+    if pattern_type == "none":
+        return (("pattern", "none"), invalid)
+    if pattern_type == "solid":
+        return (("pattern", "solid", colors.get("fgColor")), invalid)
+    return (
+        (
+            "pattern",
+            pattern_type,
+            colors.get("fgColor"),
+            colors.get("bgColor"),
+        ),
+        invalid,
+    )
+
+
+def _fill_gradient_stop_signature(
+    stop: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[object, ...], bool]:
+    """Canonicalize one gradient stop and its private colour expression."""
+    invalid = _fill_unexpected_text(stop, context=context, note_issue=note_issue)
+    if _fill_unexpected_attributes(
+        stop,
+        allowed=frozenset({"position"}),
+        context=context,
+        note_issue=note_issue,
+    ):
+        invalid = True
+    position = _fill_unit_interval_decimal(stop.get("position"))
+    if position is None:
+        note_issue(f"{context}:invalid-position", stop.get("position"))
+        invalid = True
+        position = ""
+
+    color_tag = f"{{{_SPREADSHEETML_NS}}}color"
+    color_signature: tuple[tuple[str, object], ...] | None = None
+    for child_index, child in enumerate(stop):
+        child_context = f"{context}:child:{child_index}"
+        if child.tag != color_tag:
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            invalid = True
+            continue
+        if color_signature is not None:
+            note_issue(f"{child_context}:duplicate-colour", child.tag)
+            invalid = True
+            continue
+        color_signature, color_invalid = _fill_color_signature(
+            child,
+            context=child_context,
+            note_issue=note_issue,
+        )
+        if color_invalid:
+            invalid = True
+    if color_signature is None:
+        note_issue(f"{context}:missing-colour", stop.tag)
+        invalid = True
+    return (("stop", position, color_signature), invalid)
+
+
+def _fill_gradient_signature(
+    gradient_fill: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> tuple[tuple[object, ...], bool]:
+    """Canonicalize a linear or path gradient fill without rendering it."""
+    invalid = _fill_unexpected_text(gradient_fill, context=context, note_issue=note_issue)
+    if _fill_unexpected_attributes(
+        gradient_fill,
+        allowed=frozenset({"type", "degree", "left", "right", "top", "bottom"}),
+        context=context,
+        note_issue=note_issue,
+    ):
+        invalid = True
+    raw_gradient_type = gradient_fill.get("type")
+    gradient_type = (
+        raw_gradient_type.strip() if raw_gradient_type is not None else "linear"
+    )
+    if gradient_type not in _FILL_GRADIENT_TYPES:
+        note_issue(f"{context}:invalid-gradient-type", raw_gradient_type)
+        invalid = True
+        gradient_type = "linear"
+
+    degree = _fill_decimal(gradient_fill.get("degree", "0"))
+    if degree is None:
+        note_issue(f"{context}:invalid-degree", gradient_fill.get("degree"))
+        invalid = True
+        degree = ""
+    boundaries: list[tuple[str, str]] = []
+    for name in ("left", "right", "top", "bottom"):
+        normalized = _fill_unit_interval_decimal(gradient_fill.get(name, "0"))
+        if normalized is None:
+            note_issue(f"{context}:invalid-{name}", gradient_fill.get(name))
+            invalid = True
+            normalized = ""
+        boundaries.append((name, normalized))
+
+    stop_tag = f"{{{_SPREADSHEETML_NS}}}stop"
+    stops: list[tuple[object, ...]] = []
+    for child_index, child in enumerate(gradient_fill):
+        child_context = f"{context}:child:{child_index}"
+        if child_index >= _FILL_MAX_GRADIENT_STOPS:
+            note_issue(f"{context}:gradient-stop-budget", child_index + 1)
+            invalid = True
+            break
+        if child.tag != stop_tag:
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            invalid = True
+            continue
+        signature, stop_invalid = _fill_gradient_stop_signature(
+            child,
+            context=child_context,
+            note_issue=note_issue,
+        )
+        if stop_invalid:
+            invalid = True
+        stops.append(signature)
+    if len(stops) < 2:
+        note_issue(f"{context}:insufficient-gradient-stops", len(stops))
+        invalid = True
+
+    # Path boundaries do not affect linear gradients, while degree does not
+    # affect path gradients. Parse both kinds fail-closed, but retain only the
+    # rendering-relevant values in the canonical signature.
+    if gradient_type == "linear":
+        return (("gradient", "linear", degree, tuple(stops)), invalid)
+    return (("gradient", "path", tuple(boundaries), tuple(stops)), invalid)
+
+
+def _fill_definition_style(
+    fill: ElementTree.Element,
+    *,
+    context: str,
+    note_issue: Callable[[str, object], None],
+) -> _FillStyle:
+    """Canonicalize one ``fill`` record without exposing private values."""
+    invalid = _fill_unexpected_text(fill, context=context, note_issue=note_issue)
+    if fill.attrib:
+        note_issue(
+            f"{context}:unsupported-attributes", tuple(sorted(fill.attrib.items()))
+        )
+        invalid = True
+
+    pattern_fill_tag = f"{{{_SPREADSHEETML_NS}}}patternFill"
+    gradient_fill_tag = f"{{{_SPREADSHEETML_NS}}}gradientFill"
+    definitions: list[tuple[object, ...]] = []
+    opaque_children: list[object] = []
+    for child_index, child in enumerate(fill):
+        child_context = f"{context}:child:{child_index}"
+        if child.tag == pattern_fill_tag:
+            signature, child_invalid = _fill_pattern_signature(
+                child,
+                context=child_context,
+                note_issue=note_issue,
+            )
+        elif child.tag == gradient_fill_tag:
+            signature, child_invalid = _fill_gradient_signature(
+                child,
+                context=child_context,
+                note_issue=note_issue,
+            )
+        else:
+            note_issue(f"{child_context}:unsupported-child", child.tag)
+            opaque_children.append(_xml_fragment(child).sort_key())
+            invalid = True
+            continue
+        if definitions:
+            note_issue(f"{child_context}:multiple-fill-definitions", child.tag)
+            invalid = True
+            continue
+        definitions.append(signature)
+        if child_invalid:
+            invalid = True
+    if not definitions:
+        note_issue(f"{context}:missing-fill-definition", fill.tag)
+        invalid = True
+
+    definition = tuple(definitions)
+    if invalid:
+        return _fill_unrecognized("fill-definition", context, definition, opaque_children)
+    if definition == (("pattern", "none"),):
+        return _DEFAULT_FILL_STYLE
+    return _FillStyle("fill", _fill_private_digest(definition))
+
+
+def _fill_column_state_signature(
+    states: list[_FillStyle],
+    default: _FillStyle,
+) -> tuple[tuple[int, int, str, str], ...]:
+    """Compress effective column fills so equivalent range splitting stays quiet."""
+    segments: list[tuple[int, int, str, str]] = []
+    start: int | None = None
+    previous: _FillStyle | None = None
+    for column in range(1, MAX_EXCEL_COLUMN + 1):
+        current = states[column]
+        if current == default:
+            if start is not None and previous is not None:
+                segments.append((start, column - 1, previous.category, previous.value))
+            start = None
+            previous = None
+            continue
+        if start is None:
+            start = column
+            previous = current
+            continue
+        if current != previous:
+            segments.append((start, column - 1, previous.category, previous.value))
+            start = column
+            previous = current
+    if start is not None and previous is not None:
+        segments.append((start, MAX_EXCEL_COLUMN, previous.category, previous.value))
+    return tuple(segments)
+
+
+def _fill_metadata(path: Path) -> _FillMetadata:
+    """Inspect effective cell, row, and column fills from raw OOXML.
+
+    A fill can make a value, warning, or visual classification much less
+    visible without changing its stored content. The scanner resolves reusable
+    style records, ``xfId`` inheritance, and ``applyFill`` before keeping a
+    private signature. Fill definitions, style IDs, and report locations never
+    leave this process.
+    """
+    warnings: set[str] = set()
+    default_snapshot = FillSnapshot()
+    entries: list[tuple[str, str]] = []
+    issues: dict[str, str] = {}
+    default_fill_definition_count = 0
+    cell_fill_assignment_count = 0
+    row_fill_assignment_count = 0
+    column_fill_assignment_count = 0
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    try:
+        with ZipFile(path) as archive:
+            try:
+                styles = _xml_root(archive, "xl/styles.xml")
+            except KeyError:
+                styles = None
+            if styles is not None and (
+                _xml_namespace(styles.tag) != _SPREADSHEETML_NS
+                or _xml_local_name(styles.tag) != "styleSheet"
+            ):
+                note_issue("style-sheet-root", styles.tag)
+                styles = None
+
+            fills: list[_FillStyle] = []
+            if styles is not None:
+                fills_tag = f"{{{_SPREADSHEETML_NS}}}fills"
+                fill_tag = f"{{{_SPREADSHEETML_NS}}}fill"
+                fill_containers = styles.findall(fills_tag)
+                if len(fill_containers) > 1:
+                    note_issue("multiple-fill-containers", len(fill_containers))
+                for container_index, container in enumerate(fill_containers):
+                    for fill_index, fill in enumerate(container):
+                        context = f"fill:{container_index}:{fill_index}"
+                        if fill.tag != fill_tag:
+                            note_issue(f"{context}:unsupported-child", fill.tag)
+                            continue
+                        fills.append(
+                            _fill_definition_style(
+                                fill,
+                                context=context,
+                                note_issue=note_issue,
+                            )
+                        )
+
+            def resolve_fill(identifier: int, *, context: str) -> _FillStyle:
+                if 0 <= identifier < len(fills):
+                    return fills[identifier]
+                note_issue(f"{context}:unknown-fill", identifier)
+                return _fill_unrecognized("unknown-fill", context, identifier)
+
+            def parse_style_index(value: str | None, *, context: str) -> int | None:
+                if value is None:
+                    return None
+                parsed = _number_format_unsigned_int(value)
+                if parsed is None:
+                    note_issue(f"{context}:invalid-style-index", value)
+                return parsed
+
+            def resolve_xf(
+                xf: ElementTree.Element,
+                inherited: _FillStyle,
+                *,
+                context: str,
+            ) -> _FillStyle:
+                applies = _number_format_boolean(xf.get("applyFill"), True)
+                if applies is None:
+                    note_issue(f"{context}:invalid-apply-fill", xf.get("applyFill"))
+                    return _fill_unrecognized(
+                        "invalid-apply-fill", context, xf.get("applyFill")
+                    )
+                identifier_value = xf.get("fillId")
+                if not applies or identifier_value is None:
+                    return inherited
+                identifier = _number_format_unsigned_int(identifier_value)
+                if identifier is None:
+                    note_issue(f"{context}:invalid-fill-id", identifier_value)
+                    return _fill_unrecognized("invalid-fill-id", context, identifier_value)
+                return resolve_fill(identifier, context=context)
+
+            base_xfs: list[_FillStyle] = []
+            effective_xfs: list[_FillStyle] = []
+            if styles is not None:
+                xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+                cell_style_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellStyleXfs"
+                cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+                base_containers = styles.findall(cell_style_xfs_tag)
+                if len(base_containers) > 1:
+                    note_issue("multiple-cell-style-xf-containers", len(base_containers))
+                for container_index, container in enumerate(base_containers):
+                    for index, xf in enumerate(container):
+                        if xf.tag != xf_tag:
+                            note_issue(
+                                f"base-xf:{container_index}:{index}:unsupported-child",
+                                xf.tag,
+                            )
+                            continue
+                        base_xfs.append(
+                            resolve_xf(
+                                xf,
+                                _DEFAULT_FILL_STYLE,
+                                context=f"base-xf:{container_index}:{index}",
+                            )
+                        )
+                if not base_xfs:
+                    base_xfs.append(_DEFAULT_FILL_STYLE)
+
+                cell_containers = styles.findall(cell_xfs_tag)
+                if len(cell_containers) > 1:
+                    note_issue("multiple-cell-xf-containers", len(cell_containers))
+                for container_index, container in enumerate(cell_containers):
+                    for index, xf in enumerate(container):
+                        if xf.tag != xf_tag:
+                            note_issue(
+                                f"cell-xf:{container_index}:{index}:unsupported-child",
+                                xf.tag,
+                            )
+                            continue
+                        xf_id_value = xf.get("xfId")
+                        inherited = _DEFAULT_FILL_STYLE
+                        if xf_id_value is not None:
+                            xf_id = parse_style_index(
+                                xf_id_value,
+                                context=f"cell-xf:{container_index}:{index}:base",
+                            )
+                            if xf_id is None or xf_id >= len(base_xfs):
+                                note_issue(
+                                    f"cell-xf:{container_index}:{index}:unknown-base-style",
+                                    xf_id_value,
+                                )
+                                inherited = _fill_unrecognized(
+                                    "unknown-fill-base-style",
+                                    container_index,
+                                    index,
+                                    xf_id_value,
+                                )
+                            else:
+                                inherited = base_xfs[xf_id]
+                        effective_xfs.append(
+                            resolve_xf(
+                                xf,
+                                inherited,
+                                context=f"cell-xf:{container_index}:{index}",
+                            )
+                        )
+            if not effective_xfs:
+                effective_xfs.append(_DEFAULT_FILL_STYLE)
+
+            default_style = effective_xfs[0]
+
+            def style_for_assignment(
+                value: str | None,
+                *,
+                context: str,
+            ) -> _FillStyle | None:
+                index = parse_style_index(value, context=context)
+                if value is None:
+                    return None
+                if index is None or index >= len(effective_xfs):
+                    note_issue(f"{context}:unknown-style", value)
+                    return _fill_unrecognized("unknown-fill-style", context, value)
+                return effective_xfs[index]
+
+            if default_style != _DEFAULT_FILL_STYLE:
+                default_fill_definition_count = 1
+                entries.append(("default-fill", repr(default_style)))
+
+            cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+            col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+            sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+            row_tag = f"{{{_SPREADSHEETML_NS}}}row"
+            cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+            for sheet, member in _worksheet_xml_paths(archive).items():
+                worksheet = _xml_root(archive, member)
+                column_states = [default_style] * (MAX_EXCEL_COLUMN + 1)
+                column_updates = 0
+                for columns_index, columns in enumerate(worksheet.findall(cols_tag)):
+                    for column_index, column in enumerate(columns):
+                        context = f"column:{sheet.casefold()}:{columns_index}:{column_index}"
+                        if column.tag != col_tag:
+                            note_issue(f"{context}:unsupported-child", column.tag)
+                            continue
+                        if column.get("style") is None:
+                            continue
+                        minimum = _number_format_unsigned_int(column.get("min"))
+                        maximum = _number_format_unsigned_int(column.get("max"))
+                        style = style_for_assignment(column.get("style"), context=context)
+                        if (
+                            minimum is None
+                            or maximum is None
+                            or minimum < 1
+                            or maximum < minimum
+                            or maximum > MAX_EXCEL_COLUMN
+                            or style is None
+                        ):
+                            note_issue(
+                                f"{context}:invalid-column-span",
+                                (column.get("min"), column.get("max"), column.get("style")),
+                            )
+                            continue
+                        span = maximum - minimum + 1
+                        if column_updates + span > _FILL_COLUMN_UPDATE_BUDGET:
+                            note_issue(f"{context}:column-update-budget", span)
+                            continue
+                        column_states[minimum : maximum + 1] = [style] * span
+                        column_updates += span
+
+                column_signature = _fill_column_state_signature(
+                    column_states, default_style
+                )
+                if column_signature:
+                    entries.append(
+                        (f"column-fills:{sheet.casefold()}", repr(column_signature))
+                    )
+                    column_fill_assignment_count += sum(
+                        maximum - minimum + 1
+                        for minimum, maximum, _category, _value in column_signature
+                    )
+
+                raw_rows: list[tuple[int, _FillStyle]] = []
+                for sheet_data_index, sheet_data in enumerate(worksheet.findall(sheet_data_tag)):
+                    for row_index, row in enumerate(sheet_data):
+                        context = f"row:{sheet.casefold()}:{sheet_data_index}:{row_index}"
+                        if row.tag != row_tag:
+                            continue
+                        custom_format = _number_format_boolean(
+                            row.get("customFormat"), False
+                        )
+                        if custom_format is None:
+                            note_issue(
+                                f"{context}:invalid-custom-format",
+                                row.get("customFormat"),
+                            )
+                            continue
+                        if not custom_format:
+                            continue
+                        row_number = _number_format_unsigned_int(row.get("r"))
+                        style = style_for_assignment(row.get("s"), context=context)
+                        if (
+                            row_number is None
+                            or row_number < 1
+                            or row_number > MAX_EXCEL_ROW
+                            or style is None
+                        ):
+                            note_issue(
+                                f"{context}:invalid-row-assignment",
+                                (row.get("r"), row.get("s")),
+                            )
+                            continue
+                        raw_rows.append((row_number, style))
+
+                relevant_rows = {
+                    row_number
+                    for row_number, style in raw_rows
+                    if style != default_style
+                }
+                has_relevant_columns = bool(column_signature)
+                for row_number, style in raw_rows:
+                    if style == default_style and not has_relevant_columns:
+                        continue
+                    entries.append(
+                        (f"row-fill:{sheet.casefold()}:{row_number}", repr(style))
+                    )
+                    row_fill_assignment_count += 1
+
+                seen_cells: set[str] = set()
+                for cell in worksheet.iter(cell_tag):
+                    if cell.get("s") is None:
+                        continue
+                    context = f"cell:{sheet.casefold()}"
+                    coordinate = cell.get("r")
+                    style = style_for_assignment(cell.get("s"), context=context)
+                    match = (
+                        re.fullmatch(r"([A-Za-z]+)([1-9][0-9]*)", coordinate)
+                        if coordinate is not None
+                        else None
+                    )
+                    if style is None or match is None:
+                        note_issue(
+                            f"{context}:invalid-cell-assignment",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    column_letters, raw_row_number = match.groups()
+                    try:
+                        column_number = (
+                            column_index_from_string(column_letters)
+                            if len(column_letters) <= 3
+                            else 0
+                        )
+                    except ValueError:
+                        column_number = 0
+                    row_number = _number_format_unsigned_int(raw_row_number)
+                    if row_number is None:
+                        note_issue(
+                            f"{context}:invalid-cell-row",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    if (
+                        column_number < 1
+                        or column_number > MAX_EXCEL_COLUMN
+                        or row_number > MAX_EXCEL_ROW
+                    ):
+                        note_issue(
+                            f"{context}:out-of-bounds-cell",
+                            (coordinate, cell.get("s")),
+                        )
+                        continue
+                    canonical_coordinate = coordinate.upper()
+                    if canonical_coordinate in seen_cells:
+                        note_issue(
+                            f"{context}:duplicate-cell",
+                            (canonical_coordinate, cell.get("s")),
+                        )
+                    seen_cells.add(canonical_coordinate)
+                    if (
+                        style == default_style
+                        and row_number not in relevant_rows
+                        and column_states[column_number] == default_style
+                    ):
+                        continue
+                    entries.append(
+                        (
+                            f"cell-fill:{sheet.casefold()}:{canonical_coordinate}",
+                            repr(style),
+                        )
+                    )
+                    cell_fill_assignment_count += 1
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _FillMetadata(
+            default_snapshot,
+            (
+                "FormulaFence could not inspect cell-fill OOXML "
+                f"({type(error).__name__}); affected display controls were not compared.",
+            ),
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported cell-fill metadata; "
+            "affected display controls have a coverage gap."
+        )
+        entries.extend(
+            (f"fill-issue:{context}", detail)
+            for context, detail in sorted(issues.items())
+        )
+    snapshot = FillSnapshot(
+        default_fill_definition_count=default_fill_definition_count,
+        cell_fill_assignment_count=cell_fill_assignment_count,
+        row_fill_assignment_count=row_fill_assignment_count,
+        column_fill_assignment_count=column_fill_assignment_count,
+        unrecognized_fill_count=len(issues),
+        definition_signature=(
+            _private_external_data_signature(tuple(sorted(entries))) if entries else None
+        ),
+    )
+    return _FillMetadata(snapshot, tuple(sorted(warnings)))
+
+
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
     """Inspect raw markers that openpyxl intentionally does not expose."""
     dynamic_cells: set[CellKey] = set()
@@ -17377,6 +18209,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     named_sheet_view_metadata = _named_sheet_view_metadata(source)
     number_format_metadata = _number_format_metadata(source)
     font_metadata = _font_metadata(source)
+    fill_metadata = _fill_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
@@ -17416,6 +18249,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(named_sheet_view_metadata.warnings)
     parser_warnings.update(number_format_metadata.warnings)
     parser_warnings.update(font_metadata.warnings)
+    parser_warnings.update(fill_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     has_array_formulas = any(
@@ -17639,6 +18473,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         named_sheet_views=named_sheet_view_metadata.views,
         number_format_controls=number_format_metadata.controls,
         font_controls=font_metadata.controls,
+        fill_controls=fill_metadata.controls,
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
@@ -17715,6 +18550,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "named_sheet_views": snapshot.named_sheet_views.profile_dict(),
         "number_format_controls": snapshot.number_format_controls.profile_dict(),
         "font_controls": snapshot.font_controls.profile_dict(),
+        "fill_controls": snapshot.fill_controls.profile_dict(),
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
@@ -17743,6 +18579,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_named_sheet_views": snapshot.named_sheet_views.present,
             "has_number_format_controls": snapshot.number_format_controls.present,
             "has_font_controls": snapshot.font_controls.present,
+            "has_fill_controls": snapshot.fill_controls.present,
             "has_chart_definitions": snapshot.chart_definitions.present,
             "has_worksheet_embedded_controls": snapshot.worksheet_embedded_controls.present,
             "parser_warnings": list(snapshot.parser_warnings),

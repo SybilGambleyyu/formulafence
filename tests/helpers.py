@@ -18,7 +18,7 @@ from openpyxl.formatting.rule import (
     FormulaRule,
     IconSetRule,
 )
-from openpyxl.styles import Font, PatternFill, Protection
+from openpyxl.styles import Font, GradientFill, PatternFill, Protection
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
@@ -6734,6 +6734,362 @@ def corrupt_font_definition(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".font-missing-definition.tmp.xlsx")
+
+
+def make_fill_model(path: Path) -> Path:
+    """Create display-only fill controls with private colours and gradients."""
+    workbook = Workbook()
+    report = workbook.active
+    report.title = "Fill Report"
+    report["A1"] = "Default display"
+    report["A2"] = 1234.5
+    report["B1"] = "Private direct fill"
+    report["B2"] = 1234567.89
+    report["B2"].fill = PatternFill(
+        fill_type="solid",
+        fgColor="FF112233",
+        bgColor="FF445566",
+    )
+    report["C1"] = "Hidden-looking display"
+    report["C2"] = 0.125
+    report["C2"].fill = PatternFill(fill_type="solid", fgColor="FFFFFFFF")
+    report["D1"] = "Gradient display"
+    report["D2"] = "=B2*C2"
+    report["D2"].fill = GradientFill(
+        type="linear",
+        degree=45,
+        stop=("FF102030", "FF405060"),
+    )
+    report.row_dimensions[4].fill = PatternFill(
+        fill_type="solid",
+        fgColor="FF667788",
+    )
+    report.column_dimensions["D"].fill = PatternFill(
+        fill_type="darkGrid",
+        fgColor="FF99AABB",
+        bgColor="FFCCDDEE",
+    )
+    workbook.save(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        column = next(
+            current
+            for current in worksheet.iter(col_tag)
+            if current.get("min") == "4" and current.get("max") == "4"
+        )
+        # Column fills are OOXML defaults for unallocated/new cells. Keep the
+        # fixture span short so range canonicalization is testable without
+        # claiming that an allocated formula cell adopts the default.
+        column.set("max", "5")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".fill.tmp.xlsx")
+
+
+def change_fill_definition(path: Path) -> Path:
+    """Change a private direct-cell fill without touching its value."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        fill_tag = f"{{{_SPREADSHEETML_NS}}}fill"
+        pattern_fill_tag = f"{{{_SPREADSHEETML_NS}}}patternFill"
+        fg_color_tag = f"{{{_SPREADSHEETML_NS}}}fgColor"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        fill = next(
+            current
+            for current in styles.iter(fill_tag)
+            if (pattern_fill := current.find(pattern_fill_tag)) is not None
+            and (colour := pattern_fill.find(fg_color_tag)) is not None
+            and colour.get("rgb") == "FF112233"
+        )
+        pattern_fill = fill.find(pattern_fill_tag)
+        if pattern_fill is None:
+            raise ValueError("Could not find private fill pattern fixture")
+        colour = pattern_fill.find(fg_color_tag)
+        if colour is None:
+            raise ValueError("Could not find private fill colour fixture")
+        colour.attrib.clear()
+        colour.set("rgb", "FFABCDEF")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".fill-change.tmp.xlsx")
+
+
+def change_gradient_fill_definition(path: Path) -> Path:
+    """Change a gradient direction without touching any cell value or formula."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        gradient_fill_tag = f"{{{_SPREADSHEETML_NS}}}gradientFill"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        gradient = next(
+            current
+            for current in styles.iter(gradient_fill_tag)
+            if current.get("degree") == "45"
+        )
+        gradient.set("degree", "90")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".gradient-fill-change.tmp.xlsx")
+
+
+def change_default_fill_definition(path: Path) -> Path:
+    """Change the default fill record without touching any cell record."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        fills_tag = f"{{{_SPREADSHEETML_NS}}}fills"
+        pattern_fill_tag = f"{{{_SPREADSHEETML_NS}}}patternFill"
+        fg_color_tag = f"{{{_SPREADSHEETML_NS}}}fgColor"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        fills = styles.find(fills_tag)
+        if fills is None or not list(fills):
+            raise ValueError("Could not find default fill fixture")
+        default_fill = list(fills)[0]
+        pattern_fill = default_fill.find(pattern_fill_tag)
+        if pattern_fill is None:
+            pattern_fill = ElementTree.SubElement(default_fill, pattern_fill_tag)
+        pattern_fill.set("patternType", "solid")
+        colour = pattern_fill.find(fg_color_tag)
+        if colour is None:
+            colour = ElementTree.SubElement(pattern_fill, fg_color_tag)
+        colour.attrib.clear()
+        colour.set("rgb", "FFFAFAFA")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".fill-default-change.tmp.xlsx")
+
+
+def normalize_fill_control_spelling(path: Path) -> Path:
+    """Renumber fills, reorder pattern colours, and split one column span."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        fills_tag = f"{{{_SPREADSHEETML_NS}}}fills"
+        pattern_fill_tag = f"{{{_SPREADSHEETML_NS}}}patternFill"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        cols_tag = f"{{{_SPREADSHEETML_NS}}}cols"
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        fills = styles.find(fills_tag)
+        if fills is None:
+            raise ValueError("Could not find fill fixture")
+        original_fills = list(fills)
+        remapping = {
+            str(index): str(len(original_fills) - index - 1)
+            for index in range(len(original_fills))
+        }
+        for fill in original_fills:
+            fills.remove(fill)
+        for fill in reversed(original_fills):
+            # The schema orders foreground/background colours, but their order
+            # carries no rendering meaning once their names are known.
+            pattern_fill = fill.find(pattern_fill_tag)
+            if pattern_fill is not None:
+                children = list(pattern_fill)
+                for child in children:
+                    pattern_fill.remove(child)
+                for child in reversed(children):
+                    pattern_fill.append(child)
+            fills.append(fill)
+        for xf in styles.iter(xf_tag):
+            identifier = xf.get("fillId")
+            if identifier in remapping:
+                xf.set("fillId", remapping[identifier])
+                xf.set("applyFill", "1")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        columns = worksheet.find(cols_tag)
+        if columns is None:
+            raise ValueError("Could not find fill column fixture")
+        column = next(
+            current
+            for current in columns.findall(col_tag)
+            if current.get("min") == "4" and current.get("max") == "5"
+        )
+        attributes = dict(column.attrib)
+        columns.remove(column)
+        for minimum, maximum in (("4", "4"), ("5", "5")):
+            split_attributes = {**attributes, "min": minimum, "max": maximum}
+            ElementTree.SubElement(columns, col_tag, split_attributes)
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".fill-noise.tmp.xlsx")
+
+
+def normalize_fill_inert_pattern_declarations(path: Path) -> Path:
+    """Change valid colour declarations that do not affect the rendered fill."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        fills_tag = f"{{{_SPREADSHEETML_NS}}}fills"
+        fill_tag = f"{{{_SPREADSHEETML_NS}}}fill"
+        pattern_fill_tag = f"{{{_SPREADSHEETML_NS}}}patternFill"
+        fg_color_tag = f"{{{_SPREADSHEETML_NS}}}fgColor"
+        bg_color_tag = f"{{{_SPREADSHEETML_NS}}}bgColor"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        fills = styles.find(fills_tag)
+        if fills is None or not list(fills):
+            raise ValueError("Could not find fill inert-declaration fixture")
+        default_fill = list(fills)[0]
+        default_pattern = default_fill.find(pattern_fill_tag)
+        if default_pattern is None:
+            raise ValueError("Could not find default no-fill pattern fixture")
+        ElementTree.SubElement(default_pattern, fg_color_tag, {"rgb": "FF010203"})
+        private_fill = next(
+            current
+            for current in fills.findall(fill_tag)
+            if (pattern_fill := current.find(pattern_fill_tag)) is not None
+            and (colour := pattern_fill.find(fg_color_tag)) is not None
+            and colour.get("rgb") == "FF112233"
+        )
+        private_pattern = private_fill.find(pattern_fill_tag)
+        if private_pattern is None:
+            raise ValueError("Could not find private solid fill fixture")
+        background = private_pattern.find(bg_color_tag)
+        if background is None:
+            background = ElementTree.SubElement(private_pattern, bg_color_tag)
+        background.attrib.clear()
+        background.set("rgb", "FFABCDEF")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".fill-inert-noise.tmp.xlsx")
+
+
+def normalize_fill_inheritance(path: Path) -> Path:
+    """Move one direct fill into its base XF without changing its effect."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        fills_tag = f"{{{_SPREADSHEETML_NS}}}fills"
+        fill_tag = f"{{{_SPREADSHEETML_NS}}}fill"
+        pattern_fill_tag = f"{{{_SPREADSHEETML_NS}}}patternFill"
+        fg_color_tag = f"{{{_SPREADSHEETML_NS}}}fgColor"
+        cell_style_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellStyleXfs"
+        cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        fills = styles.find(fills_tag)
+        cell_style_xfs = styles.find(cell_style_xfs_tag)
+        cell_xfs = styles.find(cell_xfs_tag)
+        if fills is None or cell_style_xfs is None or cell_xfs is None:
+            raise ValueError("Could not find fill XF fixture")
+        fill_index = next(
+            index
+            for index, current in enumerate(fills.findall(fill_tag))
+            if (pattern_fill := current.find(pattern_fill_tag)) is not None
+            and (colour := pattern_fill.find(fg_color_tag)) is not None
+            and colour.get("rgb") == "FF112233"
+        )
+        ElementTree.SubElement(
+            cell_style_xfs,
+            xf_tag,
+            {
+                "numFmtId": "0",
+                "fontId": "0",
+                "fillId": str(fill_index),
+                "borderId": "0",
+                "applyFill": "true",
+            },
+        )
+        direct_xf = next(
+            current
+            for current in cell_xfs.findall(xf_tag)
+            if current.get("fillId") == str(fill_index)
+        )
+        direct_xf.attrib.pop("fillId", None)
+        direct_xf.set("xfId", "1")
+        direct_xf.set("applyFill", "false")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".fill-inheritance.tmp.xlsx")
+
+
+def corrupt_fill_column_control(path: Path) -> Path:
+    """Inject an out-of-bounds fill-style span to exercise fail-closed parsing."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        col_tag = f"{{{_SPREADSHEETML_NS}}}col"
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        column = next(
+            current
+            for current in worksheet.iter(col_tag)
+            if current.get("min") == "4" and current.get("max") == "5"
+        )
+        column.set("max", "16385")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".fill-corrupt.tmp.xlsx")
+
+
+def corrupt_fill_definition(path: Path) -> Path:
+    """Leave a direct fill assignment pointing at a missing fill definition."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        fills_tag = f"{{{_SPREADSHEETML_NS}}}fills"
+        fill_tag = f"{{{_SPREADSHEETML_NS}}}fill"
+        pattern_fill_tag = f"{{{_SPREADSHEETML_NS}}}patternFill"
+        fg_color_tag = f"{{{_SPREADSHEETML_NS}}}fgColor"
+        cell_xfs_tag = f"{{{_SPREADSHEETML_NS}}}cellXfs"
+        xf_tag = f"{{{_SPREADSHEETML_NS}}}xf"
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        fills = styles.find(fills_tag)
+        cell_xfs = styles.find(cell_xfs_tag)
+        if fills is None or cell_xfs is None:
+            raise ValueError("Could not find fill definition fixture")
+        fill_index = next(
+            index
+            for index, current in enumerate(fills.findall(fill_tag))
+            if (pattern_fill := current.find(pattern_fill_tag)) is not None
+            and (colour := pattern_fill.find(fg_color_tag)) is not None
+            and colour.get("rgb") == "FF112233"
+        )
+        direct_xf = next(
+            current
+            for current in cell_xfs.findall(xf_tag)
+            if current.get("fillId") == str(fill_index)
+        )
+        direct_xf.set("fillId", "999")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".fill-missing-definition.tmp.xlsx")
 
 
 def make_named_sheet_view_model(path: Path, *, table_owned: bool = False) -> Path:

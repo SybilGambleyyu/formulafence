@@ -26,6 +26,7 @@ rules:
   no_named_sheet_view_changes: true
   no_number_format_changes: true
   no_cell_font_changes: true
+  no_cell_fill_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true
@@ -93,6 +94,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_named_sheet_view_changes` | boolean | A relationship-backed Excel Named Sheet View, alternate AutoFilter criterion, sort rule, or reconciled base-filter binding changes. View names, IDs, criteria, ranges, table bindings, and sort keys are compared privately. |
 | `no_number_format_changes` | boolean | An effective default, direct-cell, row, or column number-format control changes. Format codes, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_font_changes` | boolean | An effective default, direct-cell, row, or column font control changes. Font names, colours, effects, style IDs, and cell/row/column targets are compared privately. |
+| `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
 | `no_worksheet_embedded_control_changes` | boolean | A modern worksheet or legacy VML control/OLE binding, definition, direct relationship, or bounded direct payload changes. |
 | `no_new_parser_warnings` | boolean | The candidate introduces an unsupported-workbook coverage warning. |
 | `no_new_unresolved_references` | boolean | A formula adds a name, named-LAMBDA call, table reference, or other token that cannot be resolved statically. |
@@ -490,7 +492,7 @@ Missing custom codes, invalid IDs/indexes/targets, conflicting definitions, and
 bounded parser failures are explicit coverage warnings. FormulaFence does not
 render or locale-resolve a number format, validate its syntax, calculate values,
 model widths/overflow, or track visual-style properties other than separately
-inventoried cell fonts. A raw column `style` is compared as a declaration/default
+inventoried cell fonts and fills. A raw column `style` is compared as a declaration/default
 for unallocated/new cells; it is not treated as a renderer that restyles
 allocated cells.
 
@@ -511,10 +513,34 @@ spelling, base-XF inheritance, and effective column-range splitting are
 normalized. Missing or malformed definitions, invalid IDs/indexes/targets, and
 bounded parser failures are explicit coverage warnings. FormulaFence does not
 render or resolve theme colours, decide whether a font is visible against a
-fill, calculate values, track fills/borders/alignment/rich-text runs/table
-styles, or claim arbitrary visual-style coverage. A raw column `style` is
+fill, calculate text/background contrast or values, track
+borders/alignment/rich-text runs/table styles, or claim arbitrary visual-style
+coverage. A raw column `style` is
 compared as a declaration/default for unallocated/new cells; it is not treated
 as a renderer that restyles allocated cells.
+
+Cell-fill controls can change the review surface without changing a stored
+value or formula: a matching solid fill can make text or an indicator less
+visible, while patterns and gradients can change a reviewer's visual cues.
+FormulaFence reads raw `<fills>` definitions, including `patternFill` and
+`gradientFill` stops, base `<cellStyleXfs>`, effective `<cellXfs>` with `xfId`
+and `applyFill`, direct cell `s`, row `s` where `customFormat=1`, and raw
+`<cols>/<col style>` declarations. A material change emits `FF041`; enable
+`no_cell_fill_changes` to make it `FFP041` in CI.
+
+Profiles and `FF041` details expose only counts for default definitions, direct
+cell, row, and effective column assignments, and unrecognized controls. Fill
+colours, pattern types, gradient geometry/stops, style indexes, and targets
+remain private. Equivalent fill-ID remapping, valid pattern-colour child
+ordering, `applyFill` Boolean spelling, base-XF inheritance, semantically inert
+no-fill/solid-background declarations, and effective column-range splitting are
+normalized. Missing or malformed definitions, invalid IDs/indexes/targets, and
+bounded parser failures are explicit coverage warnings. FormulaFence does not
+resolve theme colours, render patterns or gradients, calculate text/background
+contrast, evaluate conditional-format differential styles, apply table styles,
+calculate values, or claim arbitrary visual-style coverage. A raw column `style`
+is compared as a declaration/default for unallocated/new cells; it is not
+treated as a renderer that restyles allocated cells.
 
 Worksheet controls and OLE objects can bind a sheet to persisted ActiveX state,
 modern or legacy form-control formulas, macro assignments, linked cells, raw

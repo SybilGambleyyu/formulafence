@@ -11,6 +11,7 @@ from .helpers import (
     change_chart_definition_material,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
+    change_fill_definition,
     change_filter_visibility_criterion,
     change_filter_visibility_hidden_column,
     change_font_definition,
@@ -33,6 +34,7 @@ from .helpers import (
     make_data_validation_model,
     make_external_data_refresh_model,
     make_external_link_package_model,
+    make_fill_model,
     make_filter_visibility_model,
     make_font_model,
     make_ignored_error_model,
@@ -477,6 +479,19 @@ def test_policy_can_block_cell_font_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP040"}
+
+
+def test_policy_can_block_cell_fill_changes(tmp_path) -> None:
+    baseline = make_fill_model(tmp_path / "baseline.xlsx")
+    candidate = make_fill_model(tmp_path / "candidate.xlsx")
+    change_fill_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_cell_fill_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP041"}
 
 
 def test_policy_can_block_worksheet_embedded_control_changes(tmp_path) -> None:

@@ -19,13 +19,16 @@ from .helpers import (
     break_slicer_timeline_pivot_cache_binding,
     change_chart_cached_data,
     change_chart_definition_material,
+    change_default_fill_definition,
     change_default_font_definition,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
+    change_fill_definition,
     change_filter_visibility_criterion,
     change_filter_visibility_hidden_column,
     change_filter_visibility_hidden_row,
     change_font_definition,
+    change_gradient_fill_definition,
     change_ignored_error_extension_target,
     change_ignored_error_target,
     change_legacy_vml_control_controls,
@@ -53,6 +56,8 @@ from .helpers import (
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
     corrupt_chart_definition_root,
+    corrupt_fill_column_control,
+    corrupt_fill_definition,
     corrupt_filter_visibility_column_control,
     corrupt_filter_visibility_control,
     corrupt_font_column_control,
@@ -84,6 +89,7 @@ from .helpers import (
     make_data_validation_model,
     make_external_data_refresh_model,
     make_external_link_package_model,
+    make_fill_model,
     make_filter_visibility_model,
     make_font_model,
     make_ignored_error_model,
@@ -114,6 +120,9 @@ from .helpers import (
     make_xlm_macro_sheet_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
+    normalize_fill_control_spelling,
+    normalize_fill_inert_pattern_declarations,
+    normalize_fill_inheritance,
     normalize_filter_visibility_control_spelling,
     normalize_font_control_spelling,
     normalize_font_inheritance,
@@ -4508,6 +4517,173 @@ def test_ordinary_workbook_has_only_a_default_font_definition(tmp_path) -> None:
     assert snapshot.font_controls.default_font_definition_count == 1
     assert snapshot.font_controls.cell_font_assignment_count == 0
     assert not any("cell-font" in warning for warning in snapshot.parser_warnings)
+
+
+def test_fill_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_fill_model(tmp_path / "baseline.xlsx")
+    candidate = make_fill_model(tmp_path / "candidate.xlsx")
+    change_fill_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(change for change in report.changes if change.kind == "fill_controls_changed")
+
+    assert baseline_snapshot.summary()["fill_assignment_count"] == 6
+    assert baseline_snapshot.summary()["has_fill_controls"] is True
+    assert profile["fill_controls"] == {
+        "present": True,
+        "default_fill_definition_count": 0,
+        "cell_fill_assignment_count": 3,
+        "row_fill_assignment_count": 1,
+        "column_fill_assignment_count": 2,
+        "unrecognized_fill_count": 0,
+    }
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Cell fill controls" in markdown
+    assert change.details["fill_definition_material_changed"] is True
+    assert "FF041" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "FF112233",
+        "FF445566",
+        "FF99AABB",
+        "FFCCDDEE",
+        "FF102030",
+        "B2",
+        "D:E",
+        "fillId",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_fill_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_fill_model(tmp_path / "baseline.xlsx")
+    equivalent = make_fill_model(tmp_path / "equivalent.xlsx")
+    normalize_fill_control_spelling(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+    assert "fill_controls_changed" not in {change.kind for change in report.changes}
+    assert "FF041" not in {finding.rule_id for finding in report.findings}
+
+
+def test_inert_fill_pattern_declarations_are_normalized(tmp_path) -> None:
+    baseline = make_fill_model(tmp_path / "baseline.xlsx")
+    equivalent = make_fill_model(tmp_path / "equivalent.xlsx")
+    normalize_fill_inert_pattern_declarations(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+    assert "fill_controls_changed" not in {change.kind for change in report.changes}
+    assert "FF041" not in {finding.rule_id for finding in report.findings}
+
+
+def test_gradient_fill_change_is_guarded(tmp_path) -> None:
+    baseline = make_fill_model(tmp_path / "baseline.xlsx")
+    candidate = make_fill_model(tmp_path / "candidate.xlsx")
+    change_gradient_fill_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert "FF041" in {finding.rule_id for finding in report.findings}
+
+
+def test_fill_xf_inheritance_and_apply_flag_are_normalized(tmp_path) -> None:
+    baseline = make_fill_model(tmp_path / "baseline.xlsx")
+    equivalent = make_fill_model(tmp_path / "equivalent.xlsx")
+    normalize_fill_inheritance(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+    assert "fill_controls_changed" not in {change.kind for change in report.changes}
+    assert "FF041" not in {finding.rule_id for finding in report.findings}
+
+
+def test_default_fill_definition_change_is_guarded(tmp_path) -> None:
+    baseline = make_fill_model(tmp_path / "baseline.xlsx")
+    candidate = make_fill_model(tmp_path / "candidate.xlsx")
+    change_default_fill_definition(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.fill_controls.default_fill_definition_count == 1
+    assert "FF041" in {finding.rule_id for finding in report.findings}
+
+
+def test_fill_malformed_column_control_fails_closed(tmp_path) -> None:
+    baseline = make_fill_model(tmp_path / "baseline.xlsx")
+    malformed = make_fill_model(tmp_path / "malformed.xlsx")
+    corrupt_fill_column_control(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.fill_controls.unrecognized_fill_count == 1
+    assert any(
+        "malformed or unsupported cell-fill" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF041"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("16385" not in artifact for artifact in rendered_artifacts)
+
+
+def test_fill_missing_definition_fails_closed(tmp_path) -> None:
+    baseline = make_fill_model(tmp_path / "baseline.xlsx")
+    malformed = make_fill_model(tmp_path / "malformed.xlsx")
+    corrupt_fill_definition(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.fill_controls.unrecognized_fill_count == 1
+    assert any(
+        "malformed or unsupported cell-fill" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF041"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("999" not in artifact for artifact in rendered_artifacts)
+
+
+def test_ordinary_workbook_has_no_fill_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.fill_controls.present is False
+    assert snapshot.fill_controls.cell_fill_assignment_count == 0
+    assert not any("cell-fill" in warning for warning in snapshot.parser_warnings)
 
 
 def test_ignored_error_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:

@@ -31,6 +31,7 @@ rules:
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
   no_worksheet_sparkline_changes: true
+  no_xml_mapping_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -106,6 +107,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
 | `no_cell_hyperlink_changes` | boolean | A standard or Office 2016 revision worksheet-cell hyperlink binding, location, display override, ScreenTip, or selected relationship target/type/mode changes. Targets, cell references, locations, display strings, ScreenTips, relationship IDs, and revision UIDs are compared privately. |
 | `no_worksheet_sparkline_changes` | boolean | An Office 2010 worksheet sparkline source or date-axis formula, destination cell, group membership, type/axis/display/marker control, line weight, or colour definition changes. Source formulas, destination cells, control values, and colours are compared privately. |
+| `no_xml_mapping_changes` | boolean | An XML Map schema, mapping/refresh behavior, table-column or single-cell binding, or map-related workbook/worksheet relationship changes. Schemas, map names, XPath expressions, table identities, target cells, connection identities, and relationship targets are compared privately. |
 | `no_legacy_comment_changes` | boolean | A legacy Excel Note/comments binding, author association, Note text/rich-text/property declaration, threaded-comment placeholder reconciliation declaration, Note VML visibility/layout, or related relationship changes. Note text, authors, locations, VML, targets, IDs, and GUIDs are compared privately. |
 | `no_threaded_comment_changes` | boolean | A modern Excel threaded-comment/person package binding, comment/reply graph, text, stored cell/timestamp/resolution declaration, mention range/person association, extension material, or person definition changes. Comment bodies, locations, timestamps, parent links, names, user IDs, provider IDs, relationship IDs, and GUIDs are compared privately. |
 | `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp` or nested `xdr:grpSp` anchor/layout, text/presentation declaration, macro/text link, or referenced click/hover relationship changes. Shape text, formatting, formulas, anchors, IDs, and targets are compared privately. |
@@ -651,6 +653,36 @@ sources, render a sparkline, assess visual accessibility, or guarantee
 cross-version Excel rendering equivalence. This scope follows the Open XML
 [SparklineGroup](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2010.excel.sparklinegroup?view=openxml-3.0.1)
 and [CT_Sparkline](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/6b28a993-e0fd-451d-860e-35097c6baa77)
+definitions.
+
+SpreadsheetML XML Maps attach a schema and map-level refresh/export behavior to
+XML table columns or individual worksheet cells. A changed map can redirect
+which XML field is imported or exported, switch a file or connection binding,
+or alter append, format, sort/filter, and validation behavior without changing
+ordinary cell values or formulas.
+
+FormulaFence reads raw XML Maps, table XML-column-property, and single-cell
+table declarations before ordinary workbook readers discard or normalize them.
+It privately compares schemas, map and data-binding material, table and
+single-cell bindings, and related workbook/worksheet relationship targets.
+Such a change emits FF049. Enable `no_xml_mapping_changes` to block it as
+FFP049.
+
+Profiles and FF049 details expose only aggregate map/schema/binding,
+file/connection, table, single-cell, and malformed-metadata counts. Schemas,
+map names, XPath expressions, table identities, target cells, connection
+identities, and relationship targets remain private. Equivalent Boolean and
+unsigned-integer spelling, relationship IDs/order, and equivalent internal
+target spelling stay quiet. Missing, duplicate, malformed, unsafe, unbound,
+unreadable, oversized, or over-budget metadata becomes a coverage warning; raw
+reads are bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts.
+
+FormulaFence compares only stored declarations. It does not import or export
+XML, validate XML instances or schemas, open files or connections, fetch remote
+data, calculate a refresh, or infer client behavior. The scope follows the
+Open XML [Map](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.map?view=openxml-3.0.1),
+[XmlProperties](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.xmlproperties.xpath?view=openxml-3.0.1),
+and [SingleXmlCells](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.singlexmlcells?view=openxml-3.0.1)
 definitions.
 
 Traditional Excel Notes are stored in worksheet-associated SpreadsheetML

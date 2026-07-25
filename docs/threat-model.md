@@ -337,6 +337,30 @@ review prompt, not proof of an error.
   XML [SparklineGroup](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2010.excel.sparklinegroup?view=openxml-3.0.1)
   and [CT_Sparkline](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/6b28a993-e0fd-451d-860e-35097c6baa77)
   definitions.
+- SpreadsheetML XML Maps can attach an embedded schema and refresh/export
+  behavior to XML table columns or individual worksheet cells. A changed map
+  can redirect an XPath, switch a file/connection binding, change a target
+  cell, or alter append, format, sort/filter, and validation behavior without
+  changing ordinary cells. FormulaFence reads raw XML Maps, table
+  XML-column-property, and single-cell table declarations before ordinary
+  workbook readers discard them. It privately compares schemas, map/data-
+  binding controls, table/single-cell bindings, and related
+  workbook/worksheet relationship targets. A material change emits FF049 and
+  `no_xml_mapping_changes` blocks it as FFP049. Profiles and reports expose
+  only aggregate map/schema/binding, file/connection, table, single-cell, and
+  malformed-metadata counts; schemas, names, XPath expressions, identities,
+  cells, connection identities, and relationship targets remain private.
+  Equivalent Boolean/unsigned-integer spellings, relationship IDs/order, and
+  equivalent internal target spelling stay quiet. Missing, duplicate,
+  malformed, unsafe, unbound, unreadable, oversized, or over-budget metadata
+  becomes a coverage warning; reads are bounded to 16 MiB per part, 64 MiB per
+  workbook, and 512 parts. FormulaFence does **not** import/export XML,
+  validate XML data or schemas, open a file/connection, fetch data, calculate
+  a refresh, or infer Excel client behavior. This boundary follows the Open XML
+  [Map](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.map?view=openxml-3.0.1),
+  [XmlProperties](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.xmlproperties.xpath?view=openxml-3.0.1),
+  and [SingleXmlCells](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.singlexmlcells?view=openxml-3.0.1)
+  definitions.
 - Traditional Excel Notes are stored in worksheet-associated SpreadsheetML
   comments parts and their display declarations live in worksheet
   `legacyDrawing` VML parts. FormulaFence follows the worksheet bindings and
@@ -639,7 +663,8 @@ review prompt, not proof of an error.
   Scenario Manager declarations, worksheet/Table AutoFilter and row/column-
   visibility controls, ignored-error warning suppressions, relationship-backed Named Sheet
   View controls, ordinary worksheet-cell hyperlink declarations/relationships,
-  Office 2010 worksheet sparkline declarations,
+  Office 2010 worksheet sparkline declarations, SpreadsheetML XML Map schema,
+  refresh/export, table-column, single-cell, and relationship declarations,
   legacy Excel Note/comments/VML and threaded-placeholder package chains,
   modern threaded-comment/person package chains, non-chart Worksheet DrawingML
   regular/group shape controls, DrawingML chart

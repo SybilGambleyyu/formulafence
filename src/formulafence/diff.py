@@ -50,6 +50,7 @@ from formulafence.models import (
     WorksheetEmbeddedControlSnapshot,
     WorksheetSparklineSnapshot,
     XlmMacroSheetSnapshot,
+    XmlMappingSnapshot,
 )
 
 _IMPACT_SAMPLE_SIZE = 20
@@ -2055,6 +2056,63 @@ def _worksheet_sparkline_controls_changed(
     return [change], [finding]
 
 
+def _xml_mapping_controls_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag XML-map changes that can redirect import/export data outside cells."""
+    old_mappings: XmlMappingSnapshot = before.xml_mapping_controls
+    new_mappings: XmlMappingSnapshot = after.xml_mapping_controls
+    if old_mappings == new_mappings:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_mappings.to_dict(),
+        "after": new_mappings.to_dict(),
+    }
+    if old_mappings.declaration_signature != new_mappings.declaration_signature:
+        details["xml_mapping_declarations_changed"] = True
+    if old_mappings.binding_signature != new_mappings.binding_signature:
+        details["xml_mapping_bindings_changed"] = True
+    if old_mappings.relationship_signature != new_mappings.relationship_signature:
+        details["xml_mapping_relationships_changed"] = True
+    if (
+        old_mappings.unrecognized_xml_mapping_count
+        != new_mappings.unrecognized_xml_mapping_count
+        or (
+            (
+                old_mappings.unrecognized_xml_mapping_count
+                or new_mappings.unrecognized_xml_mapping_count
+            )
+            and (
+                old_mappings.declaration_signature
+                != new_mappings.declaration_signature
+                or old_mappings.binding_signature
+                != new_mappings.binding_signature
+                or old_mappings.relationship_signature
+                != new_mappings.relationship_signature
+            )
+        )
+    ):
+        details["unrecognized_xml_mapping_metadata_changed"] = True
+    change = Change(
+        "xml_mapping_controls_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF049",
+        "high",
+        (
+            "XML-mapped workbook controls changed; a refresh or export may now "
+            "route operational data through a different schema, binding, or target."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _threaded_comment_controls_changed(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
@@ -2249,6 +2307,13 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(worksheet_sparkline_changes)
     findings.extend(worksheet_sparkline_findings)
+
+    xml_mapping_changes, xml_mapping_findings = _xml_mapping_controls_changed(
+        before,
+        after,
+    )
+    changes.extend(xml_mapping_changes)
+    findings.extend(xml_mapping_findings)
 
     legacy_comment_changes, legacy_comment_findings = _legacy_comment_controls_changed(
         before,

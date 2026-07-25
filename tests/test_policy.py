@@ -36,6 +36,7 @@ from .helpers import (
     change_worksheet_embedded_control_controls,
     change_worksheet_sparkline_source,
     change_xlm_macro_sheet_controls,
+    change_xml_mapping_xpath,
     change_zero_dimension_visibility_controls,
     make_cell_hyperlink_model,
     make_chart_definition_model,
@@ -71,6 +72,7 @@ from .helpers import (
     make_worksheet_embedded_control_model,
     make_worksheet_sparkline_model,
     make_xlm_macro_sheet_model,
+    make_xml_mapping_model,
     make_zero_dimension_visibility_model,
     mark_array_formula_dynamic,
     rewrite,
@@ -578,6 +580,21 @@ def test_policy_can_block_worksheet_sparkline_changes(tmp_path) -> None:
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
         "FFP048"
+    }
+
+
+def test_policy_can_block_xml_mapping_changes(tmp_path) -> None:
+    baseline = make_xml_mapping_model(tmp_path / "baseline.xlsx")
+    candidate = make_xml_mapping_model(tmp_path / "candidate.xlsx")
+    change_xml_mapping_xpath(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_xml_mapping_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP049"
     }
 
 

@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## SpreadsheetML XML Maps — 2026-07-24
+
+FormulaFence 0.47.0 is validated with a controlled XML Maps pair built outside
+this repository by a standalone OpenPyXL 3.1.5 and raw-ZIP script, independent
+of the test helpers. The baseline SHA-256 was
+`7bd3e109b69f67bf4e3defed8fc8ca6b8ccaf2b37506fe68c8ddfb161214dcde`;
+the candidate SHA-256 was
+`966b12e85cdb1b11de0b407d8373951761cb9aede8f6685762ecbd6efeb4f9a7`.
+The package carries a real XML Maps part, an XML table-column property, a
+single-cell XML table part, and the required workbook/worksheet relationships.
+OpenPyXL could load the baseline normally. All ordinary cells, formulas, and
+every uncompressed package member except `xl/tables/table1.xml` stayed fixed;
+that member changed only the mapped field path.
+
+A clean virtual environment installed from the staged 0.47.0 wheel (SHA-256
+`26479d35f233b1c9f911e9e8c6033c3faf550997dfbaea41e4ec0a0d0a0806d1`).
+It emitted exactly one `xml_mapping_controls_changed` change and FF049.
+The XML-mapping profile reported one map part/schema/map/data binding, one
+mapped table binding, and one mapped single-cell binding. A policy enabling
+`no_xml_mapping_changes` exited 1 with FF049 and FFP049. JSON diff,
+policy, and profile artifacts were checked to ensure schemas, map names,
+XPath expressions, target cells, connection identities, and relationship
+targets were absent.
+
+The suite separately validates mapped-field and refresh behavior changes,
+private relationship rebinding, unsafe relationships, equivalent Boolean and
+unsigned-integer spelling, malformed single-cell references, bounded reads,
+redaction, policy enforcement, and isolation from ordinary table-definition
+changes. FormulaFence compares declarations only; it does not import/export or
+validate XML data, open bindings, fetch data, calculate a refresh, or verify
+Excel rendering.
+
 ## Worksheet sparklines — 2026-07-24
 
 FormulaFence 0.46.0 is validated with a controlled `.xlsx` pair built outside

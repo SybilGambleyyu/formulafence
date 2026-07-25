@@ -1979,6 +1979,74 @@ class WorksheetSparklineSnapshot:
 
 
 @dataclass(frozen=True)
+class XmlMappingSnapshot:
+    """Safe aggregate of XML-mapped workbook import/export controls.
+
+    SpreadsheetML XML Maps can bind a schema and refresh behavior to table
+    columns or individual cells. Private signatures retain schemas, map names,
+    XPath expressions, target cells, and connection identities for comparison
+    without serialising that operational data into a profile or change report.
+    """
+
+    xml_map_part_count: int = 0
+    xml_schema_count: int = 0
+    xml_map_count: int = 0
+    xml_map_data_binding_count: int = 0
+    xml_map_file_binding_count: int = 0
+    xml_map_connection_binding_count: int = 0
+    table_xml_binding_part_count: int = 0
+    table_xml_binding_count: int = 0
+    single_cell_xml_binding_sheet_count: int = 0
+    single_cell_xml_binding_part_count: int = 0
+    single_cell_xml_binding_count: int = 0
+    single_cell_xml_connection_binding_count: int = 0
+    unrecognized_xml_mapping_count: int = 0
+    declaration_signature: str | None = field(default=None, repr=False)
+    binding_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.xml_map_part_count
+            or self.xml_map_count
+            or self.table_xml_binding_part_count
+            or self.table_xml_binding_count
+            or self.single_cell_xml_binding_part_count
+            or self.single_cell_xml_binding_count
+            or self.unrecognized_xml_mapping_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural XML-map evidence without schema or binding material."""
+        return {
+            "present": self.present,
+            "xml_map_part_count": self.xml_map_part_count,
+            "xml_schema_count": self.xml_schema_count,
+            "xml_map_count": self.xml_map_count,
+            "xml_map_data_binding_count": self.xml_map_data_binding_count,
+            "xml_map_file_binding_count": self.xml_map_file_binding_count,
+            "xml_map_connection_binding_count": self.xml_map_connection_binding_count,
+            "table_xml_binding_part_count": self.table_xml_binding_part_count,
+            "table_xml_binding_count": self.table_xml_binding_count,
+            "single_cell_xml_binding_sheet_count": (
+                self.single_cell_xml_binding_sheet_count
+            ),
+            "single_cell_xml_binding_part_count": (
+                self.single_cell_xml_binding_part_count
+            ),
+            "single_cell_xml_binding_count": self.single_cell_xml_binding_count,
+            "single_cell_xml_connection_binding_count": (
+                self.single_cell_xml_connection_binding_count
+            ),
+            "unrecognized_xml_mapping_count": self.unrecognized_xml_mapping_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class LegacyCommentSnapshot:
     """Safe aggregate of legacy Excel note and placeholder controls.
 
@@ -2599,6 +2667,9 @@ class WorkbookSnapshot:
     worksheet_sparklines: WorksheetSparklineSnapshot = field(
         default_factory=WorksheetSparklineSnapshot
     )
+    xml_mapping_controls: XmlMappingSnapshot = field(
+        default_factory=XmlMappingSnapshot
+    )
     legacy_comments: LegacyCommentSnapshot = field(
         default_factory=LegacyCommentSnapshot
     )
@@ -2670,6 +2741,14 @@ class WorkbookSnapshot:
             ),
             "worksheet_sparkline_count": self.worksheet_sparklines.sparkline_count,
             "has_worksheet_sparklines": self.worksheet_sparklines.present,
+            "xml_map_count": self.xml_mapping_controls.xml_map_count,
+            "xml_map_table_binding_count": (
+                self.xml_mapping_controls.table_xml_binding_count
+            ),
+            "xml_map_single_cell_binding_count": (
+                self.xml_mapping_controls.single_cell_xml_binding_count
+            ),
+            "has_xml_mapping_controls": self.xml_mapping_controls.present,
             "legacy_comment_count": self.legacy_comments.comment_count,
             "legacy_comment_author_count": self.legacy_comments.comment_author_count,
             "legacy_comment_note_shape_count": self.legacy_comments.note_shape_count,

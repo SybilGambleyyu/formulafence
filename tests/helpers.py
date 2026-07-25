@@ -31,12 +31,16 @@ _DOCUMENT_RELATIONSHIPS_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 )
 _SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+_XML_SCHEMA_NS = "http://www.w3.org/2001/XMLSchema"
 _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
 _OFFICE_2013_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"
 _OFFICE_2014_REVISION_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
 _OFFICE_2016_REVISION10_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision10"
 _EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
 _NAMED_SHEET_VIEW_NS = "http://schemas.microsoft.com/office/spreadsheetml/2019/namedsheetviews"
+_XML_MAP_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIPS_NS}/xmlMaps"
+_TABLE_SINGLE_CELLS_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIPS_NS}/tableSingleCells"
 
 
 def make_model(path: Path) -> Path:
@@ -970,6 +974,404 @@ def make_table_model(path: Path) -> Path:
     report["B5"] = "=COUNTA(Sales[[#Headers],[#Data],[Rate]])"
     workbook.save(path)
     return path
+
+
+def _xml_mapping_table_member(contents: dict[str, bytes]) -> str:
+    """Return the one ordinary table part used by the XML-map fixture."""
+    members = sorted(
+        member
+        for member in contents
+        if member.startswith("xl/tables/") and member.endswith(".xml")
+    )
+    if len(members) != 1:
+        raise ValueError("Fixture needs exactly one table package part")
+    return members[0]
+
+
+def _xml_mapping_map_root(contents: dict[str, bytes]) -> ElementTree.Element:
+    """Return the custom XML Maps root in a raw XML-mapping fixture."""
+    try:
+        payload = contents["xl/xmlMaps.xml"]
+    except KeyError as error:
+        raise ValueError("Fixture does not contain an XML Maps package part") from error
+    return ElementTree.fromstring(payload)
+
+
+def _xml_mapping_table_binding(
+    table: ElementTree.Element,
+) -> ElementTree.Element:
+    """Return the fixture's mapped table-column declaration."""
+    binding = table.find(f".//{{{_SPREADSHEETML_NS}}}xmlColumnPr")
+    if binding is None:
+        raise ValueError("Fixture does not contain an XML-mapped table column")
+    return binding
+
+
+def _xml_mapping_single_cell_root(contents: dict[str, bytes]) -> ElementTree.Element:
+    """Return the fixture's raw single-cell XML mapping table."""
+    try:
+        payload = contents["xl/singleCellTables/singleCellTable1.xml"]
+    except KeyError as error:
+        raise ValueError("Fixture does not contain a single-cell XML mapping part") from error
+    return ElementTree.fromstring(payload)
+
+
+def make_xml_mapping_model(path: Path) -> Path:
+    """Create a valid XML-map package with table and single-cell bindings.
+
+    The declarations use intentionally private schema, map, XPath, and binding
+    names so tests can verify that raw OOXML comparison never emits them.
+    """
+    make_table_model(path)
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        spreadsheet = _SPREADSHEETML_NS
+
+        table_member = _xml_mapping_table_member(contents)
+        table = ElementTree.fromstring(contents[table_member])
+        table.set("tableType", "xml")
+        table.set("connectionId", "7")
+        columns = table.find(f"{{{spreadsheet}}}tableColumns")
+        if columns is None:
+            raise ValueError("Fixture table does not contain table columns")
+        first_column = columns.find(f"{{{spreadsheet}}}tableColumn")
+        if first_column is None:
+            raise ValueError("Fixture table does not contain a table column")
+        ElementTree.SubElement(
+            first_column,
+            f"{{{spreadsheet}}}xmlColumnPr",
+            {
+                "mapId": "1",
+                "xpath": "/private:PrivateRoot/private:Record/private:Amount",
+                "denormalized": "false",
+                "xmlDataType": "string",
+            },
+        )
+        contents[table_member] = serialize(table)
+
+        map_info = ElementTree.Element(
+            f"{{{spreadsheet}}}MapInfo",
+            {"SelectionNamespaces": "xmlns:private='urn:formulafence:test:private'"},
+        )
+        schema = ElementTree.SubElement(
+            map_info,
+            f"{{{spreadsheet}}}Schema",
+            {"ID": "PRIVATE-XML-SCHEMA"},
+        )
+        schema_definition = ElementTree.SubElement(
+            schema,
+            f"{{{_XML_SCHEMA_NS}}}schema",
+            {"targetNamespace": "urn:formulafence:test:private"},
+        )
+        ElementTree.SubElement(
+            schema_definition,
+            f"{{{_XML_SCHEMA_NS}}}element",
+            {"name": "PrivateRoot"},
+        )
+        xml_map = ElementTree.SubElement(
+            map_info,
+            f"{{{spreadsheet}}}Map",
+            {
+                "ID": "1",
+                "Name": "PRIVATE-XML-MAP",
+                "RootElement": "PrivateRoot",
+                "SchemaID": "PRIVATE-XML-SCHEMA",
+                "ShowImportExportValidationErrors": "false",
+                "AutoFit": "true",
+                "Append": "false",
+                "PreserveSortAFLayout": "true",
+                "PreserveFormat": "true",
+            },
+        )
+        ElementTree.SubElement(
+            xml_map,
+            f"{{{spreadsheet}}}DataBinding",
+            {
+                "DataBindingName": "PRIVATE-XML-DATA-BINDING",
+                "FileBinding": "true",
+                "ConnectionID": "7",
+                "FileBindingName": "PRIVATE-XML-BINDING-FILE",
+                "DataBindingLoadMode": "1",
+            },
+        )
+        contents["xl/xmlMaps.xml"] = serialize(map_info)
+
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceXmlMaps",
+                "Type": _XML_MAP_RELATIONSHIP,
+                "Target": "xmlMaps.xml",
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
+
+        single_cells = ElementTree.Element(f"{{{spreadsheet}}}singleXmlCells")
+        single_cell = ElementTree.SubElement(
+            single_cells,
+            f"{{{spreadsheet}}}singleXmlCell",
+            {
+                "id": "1",
+                "r": "B2",
+                "connectionId": "7",
+            },
+        )
+        cell_properties = ElementTree.SubElement(
+            single_cell,
+            f"{{{spreadsheet}}}xmlCellPr",
+            {
+                "id": "1",
+                "uniqueName": "PRIVATE-XML-SINGLE-CELL",
+            },
+        )
+        ElementTree.SubElement(
+            cell_properties,
+            f"{{{spreadsheet}}}xmlPr",
+            {
+                "mapId": "1",
+                "xpath": "/private:PrivateRoot/private:Header/private:AsOf",
+                "xmlDataType": "date",
+            },
+        )
+        single_cell_member = "xl/singleCellTables/singleCellTable1.xml"
+        contents[single_cell_member] = serialize(single_cells)
+
+        worksheet_relationships_member = _relationship_member(
+            "xl/worksheets/sheet1.xml"
+        )
+        worksheet_relationships = ElementTree.fromstring(
+            contents[worksheet_relationships_member]
+        )
+        ElementTree.SubElement(
+            worksheet_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceXmlMappingSingleCells",
+                "Type": _TABLE_SINGLE_CELLS_RELATIONSHIP,
+                "Target": "../singleCellTables/singleCellTable1.xml",
+            },
+        )
+        contents[worksheet_relationships_member] = serialize(worksheet_relationships)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
+        if not any(
+            override.get("PartName") == f"/{single_cell_member}"
+            for override in content_types.findall(override_tag)
+        ):
+            ElementTree.SubElement(
+                content_types,
+                override_tag,
+                {
+                    "PartName": f"/{single_cell_member}",
+                    "ContentType": "application/vnd.ms-excel.tableSingleCells",
+                },
+            )
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+    return _rewrite_archive(path, mutate, ".xml-mapping-model.tmp.xlsx")
+
+
+def change_xml_mapping_xpath(path: Path) -> Path:
+    """Retarget a mapped table field without changing table cells or formulas."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        table_member = _xml_mapping_table_member(contents)
+        table = ElementTree.fromstring(contents[table_member])
+        _xml_mapping_table_binding(table).set(
+            "xpath",
+            "/private:PrivateRoot/private:Record/private:CandidateAmount",
+        )
+        contents[table_member] = ElementTree.tostring(
+            table,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".xml-mapping-xpath.tmp.xlsx")
+
+
+def change_xml_mapping_refresh_behavior(path: Path) -> Path:
+    """Change map refresh behavior without changing mapping targets or cells."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        map_info = _xml_mapping_map_root(contents)
+        xml_map = map_info.find(f"{{{_SPREADSHEETML_NS}}}Map")
+        if xml_map is None:
+            raise ValueError("Fixture does not contain an XML map declaration")
+        xml_map.set("Append", "true")
+        data_binding = xml_map.find(f"{{{_SPREADSHEETML_NS}}}DataBinding")
+        if data_binding is None:
+            raise ValueError("Fixture XML map does not contain a data binding")
+        data_binding.set("DataBindingLoadMode", "2")
+        contents["xl/xmlMaps.xml"] = ElementTree.tostring(
+            map_info,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".xml-mapping-refresh.tmp.xlsx")
+
+
+def rebind_xml_mapping_relationship(path: Path) -> Path:
+    """Move an XML Maps part and retarget its workbook relationship."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        source_member = "xl/xmlMaps.xml"
+        replacement_member = "xl/xmlMaps2.xml"
+        try:
+            contents[replacement_member] = contents.pop(source_member)
+        except KeyError as error:
+            raise ValueError("Fixture does not contain an XML Maps package part") from error
+        relationships_member = "xl/_rels/workbook.xml.rels"
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            (
+                item
+                for item in relationships.findall(
+                    f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+                )
+                if item.get("Type") == _XML_MAP_RELATIONSHIP
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not declare an XML Maps relationship")
+        relationship.set("Target", "xmlMaps2.xml")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".xml-mapping-rebind.tmp.xlsx")
+
+
+def externalize_xml_mapping_relationship(path: Path) -> Path:
+    """Make an XML Maps relationship unsafe without following its private target."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships_member = "xl/_rels/workbook.xml.rels"
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            (
+                item
+                for item in relationships.findall(
+                    f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+                )
+                if item.get("Type") == _XML_MAP_RELATIONSHIP
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not declare an XML Maps relationship")
+        relationship.set(
+            "Target",
+            "https://private.example.test/PRIVATE-XML-MAP-RELATIONSHIP",
+        )
+        relationship.set("TargetMode", "External")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".xml-mapping-external.tmp.xlsx")
+
+
+def normalize_xml_mapping_control_spelling(path: Path) -> Path:
+    """Rewrite equivalent XML-map Booleans and unsigned integers."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        map_info = _xml_mapping_map_root(contents)
+        xml_map = map_info.find(f"{{{_SPREADSHEETML_NS}}}Map")
+        if xml_map is None:
+            raise ValueError("Fixture does not contain an XML map declaration")
+        xml_map.attrib.update(
+            {
+                "ID": "0001",
+                "ShowImportExportValidationErrors": "0",
+                "AutoFit": "1",
+                "Append": "0",
+                "PreserveSortAFLayout": "1",
+                "PreserveFormat": "1",
+            }
+        )
+        data_binding = xml_map.find(f"{{{_SPREADSHEETML_NS}}}DataBinding")
+        if data_binding is None:
+            raise ValueError("Fixture XML map does not contain a data binding")
+        data_binding.attrib.update(
+            {
+                "FileBinding": "1",
+                "ConnectionID": "0007",
+                "DataBindingLoadMode": "01",
+            }
+        )
+        contents["xl/xmlMaps.xml"] = ElementTree.tostring(
+            map_info,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        table_member = _xml_mapping_table_member(contents)
+        table = ElementTree.fromstring(contents[table_member])
+        table.set("connectionId", "0007")
+        _xml_mapping_table_binding(table).attrib.update(
+            {
+                "mapId": "0001",
+                "denormalized": "0",
+            }
+        )
+        contents[table_member] = ElementTree.tostring(
+            table,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        single_cells = _xml_mapping_single_cell_root(contents)
+        single_cell = single_cells.find(f"{{{_SPREADSHEETML_NS}}}singleXmlCell")
+        if single_cell is None:
+            raise ValueError("Fixture does not contain an XML-mapped single cell")
+        single_cell.set("connectionId", "0007")
+        xml_properties = single_cell.find(
+            f"{{{_SPREADSHEETML_NS}}}xmlCellPr/{{{_SPREADSHEETML_NS}}}xmlPr"
+        )
+        if xml_properties is None:
+            raise ValueError("Fixture single cell does not contain XML properties")
+        xml_properties.set("mapId", "0001")
+        contents["xl/singleCellTables/singleCellTable1.xml"] = ElementTree.tostring(
+            single_cells,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".xml-mapping-normalize.tmp.xlsx")
+
+
+def corrupt_xml_mapping_single_cell_reference(path: Path) -> Path:
+    """Inject an invalid raw XML-map cell target to exercise fail-closed handling."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        single_cells = _xml_mapping_single_cell_root(contents)
+        single_cell = single_cells.find(f"{{{_SPREADSHEETML_NS}}}singleXmlCell")
+        if single_cell is None:
+            raise ValueError("Fixture does not contain an XML-mapped single cell")
+        single_cell.set("r", "PRIVATE-NOT-AN-XML-MAP-CELL")
+        contents["xl/singleCellTables/singleCellTable1.xml"] = ElementTree.tostring(
+            single_cells,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".xml-mapping-corrupt.tmp.xlsx")
 
 
 def make_data_validation_model(path: Path, *, reverse_status_targets: bool = False) -> Path:

@@ -1562,6 +1562,51 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Sparkline source formulas, destination cells, group properties, and "
             "colour definitions are compared privately and intentionally omitted."
         )
+    xml_mapping_controls = profile["xml_mapping_controls"]
+    if xml_mapping_controls["present"]:
+        lines.extend(
+            [
+                "",
+                "## XML-mapped workbook controls",
+                "",
+                (
+                    "- **Map parts / schemas / maps:** "
+                    f"{xml_mapping_controls['xml_map_part_count']} / "
+                    f"{xml_mapping_controls['xml_schema_count']} / "
+                    f"{xml_mapping_controls['xml_map_count']}"
+                ),
+                (
+                    "- **Map data bindings (file / connection):** "
+                    f"{xml_mapping_controls['xml_map_data_binding_count']} "
+                    f"({xml_mapping_controls['xml_map_file_binding_count']} / "
+                    f"{xml_mapping_controls['xml_map_connection_binding_count']})"
+                ),
+                (
+                    "- **Table mapping parts / bindings:** "
+                    f"{xml_mapping_controls['table_xml_binding_part_count']} / "
+                    f"{xml_mapping_controls['table_xml_binding_count']}"
+                ),
+                (
+                    "- **Worksheets / single-cell mapping parts / bindings:** "
+                    f"{xml_mapping_controls['single_cell_xml_binding_sheet_count']} / "
+                    f"{xml_mapping_controls['single_cell_xml_binding_part_count']} / "
+                    f"{xml_mapping_controls['single_cell_xml_binding_count']}"
+                ),
+                (
+                    "- **Single-cell connection bindings:** "
+                    f"{xml_mapping_controls['single_cell_xml_connection_binding_count']}"
+                ),
+            ]
+        )
+        if xml_mapping_controls["unrecognized_xml_mapping_count"]:
+            lines.append(
+                "- **Unrecognized or malformed XML-mapping metadata:** "
+                f"{xml_mapping_controls['unrecognized_xml_mapping_count']}"
+            )
+        lines.append(
+            "Schemas, map names, XPath expressions, table identities, target cells, "
+            "and connection identities are compared privately and intentionally omitted."
+        )
     legacy_comments = profile["legacy_comments"]
     if legacy_comments["present"]:
         lines.extend(

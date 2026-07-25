@@ -79,6 +79,8 @@ from .helpers import (
     change_worksheet_sparkline_source,
     change_xlm_macro_sheet_controls,
     change_xlm_macro_sheet_related_part_payload,
+    change_xml_mapping_refresh_behavior,
+    change_xml_mapping_xpath,
     change_zero_dimension_visibility_controls,
     corrupt_cell_hyperlink_reference,
     corrupt_chart_definition_root,
@@ -108,6 +110,7 @@ from .helpers import (
     corrupt_worksheet_embedded_control_activex_root,
     corrupt_worksheet_sparkline_destination,
     corrupt_xlm_macro_sheet_root,
+    corrupt_xml_mapping_single_cell_reference,
     corrupt_zero_dimension_visibility_controls,
     delete_what_if_data_table_input,
     duplicate_external_link_definition,
@@ -120,6 +123,7 @@ from .helpers import (
     externalize_power_pivot_data_model,
     externalize_slicer_timeline_cache_relationship,
     externalize_threaded_comment_relationship,
+    externalize_xml_mapping_relationship,
     lowercase_legacy_threaded_placeholder_identifiers,
     make_cell_hyperlink_model,
     make_cell_hyperlink_sparkline_model,
@@ -165,6 +169,7 @@ from .helpers import (
     make_worksheet_embedded_control_model,
     make_worksheet_sparkline_model,
     make_xlm_macro_sheet_model,
+    make_xml_mapping_model,
     make_zero_dimension_visibility_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
@@ -183,6 +188,7 @@ from .helpers import (
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
     normalize_worksheet_sparkline_control_spelling,
+    normalize_xml_mapping_control_spelling,
     normalize_zero_dimension_visibility_control_spelling,
     overlap_what_if_data_table_outputs,
     rebind_external_link_declaration,
@@ -190,6 +196,7 @@ from .helpers import (
     rebind_pivot_table_cache_records,
     rebind_power_pivot_data_model,
     rebind_slicer_timeline_cache,
+    rebind_xml_mapping_relationship,
     remove_power_pivot_data_model_workbook_binding,
     remove_xlm_macro_sheet_related_part_payload,
     renumber_cell_hyperlink_identifiers,
@@ -1008,10 +1015,14 @@ def test_table_definition_change_is_a_semantic_control_change(tmp_path) -> None:
     candidate = make_table_model(tmp_path / "candidate.xlsx")
     rewrite(candidate, lambda workbook: setattr(workbook["Data"].tables["Sales"], "ref", "A1:C3"))
 
-    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
 
     assert any(change.kind == "table_definition_changed" for change in report.changes)
     assert any(finding.rule_id == "FF013" for finding in report.findings)
+    assert baseline_snapshot.xml_mapping_controls == candidate_snapshot.xml_mapping_controls
+    assert not any(finding.rule_id == "FF049" for finding in report.findings)
 
 
 def test_data_validation_controls_are_profiled_without_exposing_criteria(tmp_path) -> None:
@@ -5575,6 +5586,206 @@ def test_sparkline_reader_overlay_preserves_hyperlink_isolation(tmp_path) -> Non
         "Sparkline Group extension is not supported and will be removed"
         not in snapshot.parser_warnings
     )
+
+
+def test_xml_mappings_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_xml_mapping_model(tmp_path / "baseline.xlsx")
+    xpath_candidate = make_xml_mapping_model(tmp_path / "xpath-candidate.xlsx")
+    refresh_candidate = make_xml_mapping_model(tmp_path / "refresh-candidate.xlsx")
+    relationship_candidate = make_xml_mapping_model(
+        tmp_path / "relationship-candidate.xlsx"
+    )
+    normalised = make_xml_mapping_model(tmp_path / "normalised.xlsx")
+    change_xml_mapping_xpath(xpath_candidate)
+    change_xml_mapping_refresh_behavior(refresh_candidate)
+    rebind_xml_mapping_relationship(relationship_candidate)
+    normalize_xml_mapping_control_spelling(normalised)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    xpath_snapshot = load_snapshot(xpath_candidate)
+    refresh_snapshot = load_snapshot(refresh_candidate)
+    relationship_snapshot = load_snapshot(relationship_candidate)
+    xpath_report = compare_snapshots(baseline_snapshot, xpath_snapshot)
+    refresh_report = compare_snapshots(baseline_snapshot, refresh_snapshot)
+    relationship_report = compare_snapshots(
+        baseline_snapshot,
+        relationship_snapshot,
+    )
+    normalised_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(normalised),
+    )
+    xpath_change = next(
+        change
+        for change in xpath_report.changes
+        if change.kind == "xml_mapping_controls_changed"
+    )
+    refresh_change = next(
+        change
+        for change in refresh_report.changes
+        if change.kind == "xml_mapping_controls_changed"
+    )
+    relationship_change = next(
+        change
+        for change in relationship_report.changes
+        if change.kind == "xml_mapping_controls_changed"
+    )
+
+    assert baseline_snapshot.cells == xpath_snapshot.cells
+    assert baseline_snapshot.cells == refresh_snapshot.cells
+    assert baseline_snapshot.cells == relationship_snapshot.cells
+    assert baseline_snapshot.tables == xpath_snapshot.tables
+    assert baseline_snapshot.tables == refresh_snapshot.tables
+    assert baseline_snapshot.tables == relationship_snapshot.tables
+    assert baseline_snapshot.summary()["xml_map_count"] == 1
+    assert baseline_snapshot.summary()["xml_map_table_binding_count"] == 1
+    assert baseline_snapshot.summary()["xml_map_single_cell_binding_count"] == 1
+    assert baseline_snapshot.summary()["has_xml_mapping_controls"] is True
+    assert profile["xml_mapping_controls"] == {
+        "present": True,
+        "xml_map_part_count": 1,
+        "xml_schema_count": 1,
+        "xml_map_count": 1,
+        "xml_map_data_binding_count": 1,
+        "xml_map_file_binding_count": 1,
+        "xml_map_connection_binding_count": 1,
+        "table_xml_binding_part_count": 1,
+        "table_xml_binding_count": 1,
+        "single_cell_xml_binding_sheet_count": 1,
+        "single_cell_xml_binding_part_count": 1,
+        "single_cell_xml_binding_count": 1,
+        "single_cell_xml_connection_binding_count": 1,
+        "unrecognized_xml_mapping_count": 0,
+    }
+    assert "## XML-mapped workbook controls" in markdown
+    assert xpath_change.details["xml_mapping_bindings_changed"] is True
+    assert refresh_change.details["xml_mapping_declarations_changed"] is True
+    assert relationship_change.details["xml_mapping_relationships_changed"] is True
+    assert "FF049" in {finding.rule_id for finding in xpath_report.findings}
+    assert "FF049" in {finding.rule_id for finding in refresh_report.findings}
+    assert "FF049" in {finding.rule_id for finding in relationship_report.findings}
+    assert "xml_mapping_controls_changed" not in {
+        change.kind for change in normalised_report.changes
+    }
+    assert "FF049" not in {finding.rule_id for finding in normalised_report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(xpath_report.to_dict()),
+        report_to_markdown(xpath_report),
+        json.dumps(report_to_sarif(xpath_report)),
+        json.dumps(refresh_report.to_dict()),
+        report_to_markdown(refresh_report),
+        json.dumps(report_to_sarif(refresh_report)),
+        json.dumps(relationship_report.to_dict()),
+        report_to_markdown(relationship_report),
+        json.dumps(report_to_sarif(relationship_report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-XML-SCHEMA",
+        "urn:formulafence:test:private",
+        "PRIVATE-XML-MAP",
+        "PRIVATE-XML-DATA-BINDING",
+        "PRIVATE-XML-BINDING-FILE",
+        "PRIVATE-XML-SINGLE-CELL",
+        "/private:PrivateRoot/private:Record/private:Amount",
+        "/private:PrivateRoot/private:Record/private:CandidateAmount",
+        "/private:PrivateRoot/private:Header/private:AsOf",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_unsafe_xml_mapping_relationship_fails_closed_and_is_redacted(tmp_path) -> None:
+    baseline = make_xml_mapping_model(tmp_path / "baseline.xlsx")
+    candidate = make_xml_mapping_model(tmp_path / "candidate.xlsx")
+    externalize_xml_mapping_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "xml_mapping_controls_changed"
+    )
+
+    assert candidate_snapshot.xml_mapping_controls.unrecognized_xml_mapping_count >= 1
+    assert any(
+        "malformed or unsupported XML-mapping metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert change.details["xml_mapping_relationships_changed"] is True
+    assert change.details["unrecognized_xml_mapping_metadata_changed"] is True
+    assert {"FF010", "FF049"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "https://private.example.test/PRIVATE-XML-MAP-RELATIONSHIP",
+        "PRIVATE-XML-MAP",
+        "/private:PrivateRoot/private:Record/private:Amount",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_malformed_xml_mapping_metadata_fails_closed_and_is_redacted(tmp_path) -> None:
+    baseline = make_xml_mapping_model(tmp_path / "baseline.xlsx")
+    candidate = make_xml_mapping_model(tmp_path / "candidate.xlsx")
+    corrupt_xml_mapping_single_cell_reference(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "xml_mapping_controls_changed"
+    )
+
+    assert candidate_snapshot.xml_mapping_controls.unrecognized_xml_mapping_count >= 1
+    assert any(
+        "malformed or unsupported XML-mapping metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert change.details["unrecognized_xml_mapping_metadata_changed"] is True
+    assert {"FF010", "FF049"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-NOT-AN-XML-MAP-CELL",
+        "PRIVATE-XML-SINGLE-CELL",
+        "/private:PrivateRoot/private:Header/private:AsOf",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_xml_mapping_xml_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    baseline = make_xml_mapping_model(tmp_path / "baseline.xlsx")
+    candidate = make_xml_mapping_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    monkeypatch.setattr(workbook_module, "_XML_MAPPING_MAX_XML_PART_BYTES", 1)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.xml_mapping_controls.unrecognized_xml_mapping_count >= 1
+    assert any(
+        "oversized XML-mapping XML part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF049"} <= {finding.rule_id for finding in report.findings}
 
 
 def test_legacy_excel_notes_are_profiled_diffed_and_redacted(tmp_path) -> None:

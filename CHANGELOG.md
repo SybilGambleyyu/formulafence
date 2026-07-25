@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.47.0 — 2026-07-24
+
+- Inspect raw SpreadsheetML XML Maps, XML-table column properties, and
+  single-cell XML table parts before ordinary workbook readers can discard or
+  normalize the mapping surface. FormulaFence privately compares embedded
+  schemas, map and data-binding refresh/export behavior, mapped XPath/table/
+  cell declarations, and related workbook/worksheet relationship targets while
+  profiles, Markdown, JSON, and SARIF expose aggregate counts only—never
+  schemas, map names, XPath expressions, table identities, target cells,
+  connection identities, or relationship targets.
+- Emit FF049 for a material XML-mapped workbook control change and add the
+  fail-closed `no_xml_mapping_changes` policy rule (FFP049). This closes the
+  review gap where a data import/export template can be redirected or have its
+  refresh behavior changed without an ordinary worksheet-cell diff.
+- Normalize equivalent Boolean and unsigned-integer spelling,
+  writer-selected relationship IDs/order, and equivalent internal target
+  spelling. Missing, duplicate, malformed, unsafe, unbound, unreadable,
+  oversized, or over-budget metadata produces a visible coverage warning;
+  bounded raw reads use 16 MiB per part, 64 MiB per workbook, and 512 parts.
+  FormulaFence does not import/export XML, validate data against schemas, open
+  map bindings, fetch data, calculate refresh results, or infer client
+  behavior.
+
 ## 0.46.0 — 2026-07-24
 
 - Inspect raw Office 2010 `x14:sparklineGroups` worksheet extensions before

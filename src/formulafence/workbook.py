@@ -91,6 +91,7 @@ from formulafence.models import (
     WorksheetSparklineSnapshot,
     XlmMacroSheetSnapshot,
     XmlFragmentSnapshot,
+    XmlMappingSnapshot,
     display_location,
     json_safe_value,
 )
@@ -138,6 +139,19 @@ _GUID_PATTERN = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}"
 )
 _CUSTOM_XML_ITEM_PATTERN = re.compile(r"^customXml/item(?:\d+)?\.xml$", re.IGNORECASE)
+_XML_MAPPING_MAP_PART_PATTERN = re.compile(
+    r"^xl/xmlMaps(?:\d+)?\.xml$", re.IGNORECASE
+)
+_XML_MAPPING_TABLE_PART_PATTERN = re.compile(
+    r"^xl/tables/[^/]+\.xml$", re.IGNORECASE
+)
+_XML_MAPPING_SINGLE_CELL_PART_PATTERN = re.compile(
+    r"^xl/singleCellTables/[^/]+\.xml$", re.IGNORECASE
+)
+_XML_MAPPING_UNSIGNED_PATTERN = re.compile(r"^\+?[0-9]+$")
+_XML_MAPPING_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_XML_MAPPING_TOTAL_XML_BYTES = 64 * 1024 * 1024
+_XML_MAPPING_TOTAL_XML_PARTS = 512
 _EXTERNAL_LINK_PART_PATTERN = re.compile(
     r"^xl/externalLinks/externalLink(?:\d+)?\.xml$", re.IGNORECASE
 )
@@ -621,6 +635,14 @@ class _WorksheetSparklineMetadata:
     """Raw worksheet-sparkline evidence retained before reader loss."""
 
     sparklines: WorksheetSparklineSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _XmlMappingMetadata:
+    """Raw XML-map evidence retained before the workbook reader drops it."""
+
+    controls: XmlMappingSnapshot
     warnings: tuple[str, ...]
 
 
@@ -1446,6 +1468,7 @@ class _PackageRelationship:
     relationship_type: str
     target: str | None
     target_mode: str
+    raw_target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1643,6 +1666,7 @@ def _package_relationships(
                     else None
                 ),
                 target_mode=target_mode,
+                raw_target=target,
             )
         )
     return tuple(parsed)
@@ -20487,6 +20511,1436 @@ def _worksheet_sparkline_metadata(path: Path) -> _WorksheetSparklineMetadata:
     return _WorksheetSparklineMetadata(snapshot, tuple(sorted(warnings)))
 
 
+@dataclass
+class _XmlMappingBudget:
+    """Bound raw XML reads across XML-map declarations and bindings."""
+
+    remaining_parts: int = _XML_MAPPING_TOTAL_XML_PARTS
+    remaining_bytes: int = _XML_MAPPING_TOTAL_XML_BYTES
+
+
+@dataclass(frozen=True)
+class _XmlMappingMapPartInspection:
+    """Private result of inspecting one SpreadsheetML XML Maps part."""
+
+    member: str
+    schema_count: int = 0
+    map_count: int = 0
+    data_binding_count: int = 0
+    file_binding_count: int = 0
+    connection_binding_count: int = 0
+    map_ids: tuple[int, ...] = ()
+    definition_signature: str | None = None
+    issues: tuple[tuple[str, str], ...] = ()
+
+
+def _xml_mapping_issue(
+    issues: list[tuple[str, str]],
+    context: str,
+    detail: object,
+) -> None:
+    """Record private malformed XML-map evidence without serialising it."""
+    issues.append((context, repr(detail)))
+
+
+def _xml_mapping_bounded_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _XmlMappingBudget,
+    *,
+    context: str,
+) -> tuple[bytes | None, str | None]:
+    """Read one XML-map package part within fixed scan budgets."""
+    if budget.remaining_parts <= 0:
+        warnings.add(
+            "FormulaFence reached its bounded XML-mapping XML part count budget; "
+            "affected XML mappings have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("xml-mapping-part-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate an XML-mapping package part; "
+            "affected XML mappings were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("missing-xml-mapping-member", member),)
+        )
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _XML_MAPPING_MAX_XML_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized XML-mapping XML part; "
+            "affected XML mappings have a coverage gap."
+        )
+        return None, _private_external_data_signature((("oversized-part", metadata),))
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded XML-mapping XML read budget; "
+            "affected XML mappings have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("xml-mapping-read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read an XML-mapping XML package part "
+            f"({type(error).__name__}); affected XML mappings were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("unreadable-xml-mapping-part", metadata),)
+        )
+
+
+def _xml_mapping_bounded_root(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _XmlMappingBudget,
+    *,
+    context: str,
+) -> tuple[ElementTree.Element | None, str | None]:
+    """Return one bounded XML-map root or a private failure signature."""
+    payload, fallback_signature = _xml_mapping_bounded_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        context=context,
+    )
+    if payload is None:
+        return None, fallback_signature
+    try:
+        return _xml_root_from_payload(payload), None
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not parse an XML-mapping XML package part "
+            f"({type(error).__name__}); affected XML mappings were not compared."
+        )
+        return None, _private_payload_signature(payload)
+
+
+def _xml_mapping_unsigned(
+    value: str | None,
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+    required: bool = True,
+) -> int | None:
+    """Read one unsigned XML-map identifier without accepting malformed input."""
+    if value is None:
+        if required:
+            _xml_mapping_issue(issues, f"missing-{context}", None)
+        return None
+    candidate = value.strip()
+    if not _XML_MAPPING_UNSIGNED_PATTERN.fullmatch(candidate):
+        _xml_mapping_issue(issues, f"invalid-{context}", value)
+        return None
+    try:
+        parsed = int(candidate)
+    except ValueError:
+        _xml_mapping_issue(issues, f"invalid-{context}", value)
+        return None
+    if not 0 <= parsed <= 4_294_967_295:
+        _xml_mapping_issue(issues, f"out-of-range-{context}", value)
+        return None
+    return parsed
+
+
+def _xml_mapping_boolean(
+    value: str | None,
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+    default: bool | None = None,
+) -> bool | None:
+    """Normalize XML boolean spellings while preserving invalid evidence privately."""
+    if value is None:
+        if default is None:
+            _xml_mapping_issue(issues, f"missing-{context}", None)
+        return default
+    candidate = value.strip()
+    if candidate in {"1", "true"}:
+        return True
+    if candidate in {"0", "false"}:
+        return False
+    _xml_mapping_issue(issues, f"invalid-{context}", value)
+    return None
+
+
+def _xml_mapping_required_text(
+    value: str | None,
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+) -> str:
+    """Retain required private text while marking absent or empty values unsafe."""
+    candidate = value or ""
+    if not candidate.strip():
+        _xml_mapping_issue(issues, f"missing-{context}", value)
+    return candidate
+
+
+def _xml_mapping_unknown_material(
+    element: ElementTree.Element,
+    *,
+    known_attributes: frozenset[str],
+    known_children: frozenset[str],
+    issues: list[tuple[str, str]],
+    context: str,
+) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[object, ...], ...]]:
+    """Retain unexpected XML-map material only inside a private signature."""
+    attributes = tuple(
+        sorted(
+            (
+                _xml_display_name(attribute),
+                value,
+            )
+            for attribute, value in element.attrib.items()
+            if (
+                attribute != f"{{{_MARKUP_COMPATIBILITY_NS}}}Ignorable"
+                and _xml_local_name(attribute) not in known_attributes
+            )
+        )
+    )
+    children = tuple(
+        _xml_fragment(child).sort_key()
+        for child in element
+        if (
+            _xml_namespace(child.tag) != _SPREADSHEETML_NS
+            or _xml_local_name(child.tag) not in known_children
+        )
+    )
+    if attributes:
+        _xml_mapping_issue(issues, f"unknown-{context}-attributes", attributes)
+    if children:
+        _xml_mapping_issue(issues, f"unknown-{context}-children", children)
+    return attributes, children
+
+
+def _xml_mapping_binding_material(
+    element: ElementTree.Element,
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+    table_column: bool,
+) -> tuple[int | None, tuple[object, ...]]:
+    """Canonicalize one private XML table or single-cell binding declaration."""
+    map_id = _xml_mapping_unsigned(
+        element.get("mapId"),
+        issues,
+        context=f"{context}-map-id",
+    )
+    xpath = _xml_mapping_required_text(
+        element.get("xpath"),
+        issues,
+        context=f"{context}-xpath",
+    )
+    xml_data_type = _xml_mapping_required_text(
+        element.get("xmlDataType"),
+        issues,
+        context=f"{context}-xml-data-type",
+    )
+    denormalized: bool | None = None
+    known_attributes = {"mapId", "xpath", "xmlDataType"}
+    if table_column:
+        known_attributes.add("denormalized")
+        denormalized = _xml_mapping_boolean(
+            element.get("denormalized"),
+            issues,
+            context=f"{context}-denormalized",
+            default=False,
+        )
+    unknown_attributes, unknown_children = _xml_mapping_unknown_material(
+        element,
+        known_attributes=frozenset(known_attributes),
+        known_children=frozenset({"extLst"}),
+        issues=issues,
+        context=context,
+    )
+    extension_fragments = tuple(
+        _xml_fragment(child).sort_key()
+        for child in element
+        if (
+            _xml_namespace(child.tag) == _SPREADSHEETML_NS
+            and _xml_local_name(child.tag) == "extLst"
+        )
+    )
+    if extension_fragments:
+        _xml_mapping_issue(
+            issues,
+            f"unrecognized-{context}-extensions",
+            extension_fragments,
+        )
+    return (
+        map_id,
+        (
+            map_id,
+            xpath,
+            xml_data_type,
+            denormalized,
+            unknown_attributes,
+            extension_fragments,
+            unknown_children,
+        ),
+    )
+
+
+def _xml_mapping_map_part_inspection(
+    root: ElementTree.Element,
+    member: str,
+) -> _XmlMappingMapPartInspection:
+    """Inspect a SpreadsheetML XML Maps part without exposing its definitions."""
+    issues: list[tuple[str, str]] = []
+    if (
+        _xml_namespace(root.tag) != _SPREADSHEETML_NS
+        or _xml_local_name(root.tag) != "MapInfo"
+    ):
+        _xml_mapping_issue(
+            issues,
+            "unexpected-xml-map-root",
+            _xml_fragment(root).sort_key(),
+        )
+        return _XmlMappingMapPartInspection(
+            member=member,
+            definition_signature=_private_payload_signature(
+                ElementTree.tostring(root, encoding="utf-8")
+            ),
+            issues=tuple(issues),
+        )
+
+    raw_selection_namespaces = root.get("SelectionNamespaces")
+    if raw_selection_namespaces is None:
+        _xml_mapping_issue(
+            issues,
+            "missing-xml-map-selection-namespaces",
+            None,
+        )
+        selection_namespaces = ""
+    else:
+        # Excel permits an empty namespace declaration when the map's XPath
+        # expressions only use unqualified element names.
+        selection_namespaces = raw_selection_namespaces
+    root_unknown_attributes, root_unknown_children = _xml_mapping_unknown_material(
+        root,
+        known_attributes=frozenset({"SelectionNamespaces"}),
+        known_children=frozenset({"Schema", "Map"}),
+        issues=issues,
+        context="xml-map-root",
+    )
+    schemas = [
+        child
+        for child in root
+        if (
+            _xml_namespace(child.tag) == _SPREADSHEETML_NS
+            and _xml_local_name(child.tag) == "Schema"
+        )
+    ]
+    maps = [
+        child
+        for child in root
+        if (
+            _xml_namespace(child.tag) == _SPREADSHEETML_NS
+            and _xml_local_name(child.tag) == "Map"
+        )
+    ]
+    if not schemas:
+        _xml_mapping_issue(issues, "missing-xml-map-schemas", None)
+    if not maps:
+        _xml_mapping_issue(issues, "missing-xml-maps", None)
+    seen_map = False
+    for child_index, child in enumerate(root):
+        if _xml_namespace(child.tag) != _SPREADSHEETML_NS:
+            continue
+        child_name = _xml_local_name(child.tag)
+        if child_name == "Map":
+            seen_map = True
+        elif child_name == "Schema" and seen_map:
+            _xml_mapping_issue(
+                issues,
+                "xml-map-schema-after-map",
+                child_index,
+            )
+
+    schema_entries: list[tuple[str, str]] = []
+    schema_ids: list[str] = []
+    for schema_index, schema in enumerate(schemas):
+        schema_id = _xml_mapping_required_text(
+            schema.get("ID"),
+            issues,
+            context=f"xml-map-schema-{schema_index}-id",
+        )
+        schema_ids.append(schema_id)
+        schema_unknown_attributes = tuple(
+            sorted(
+                (
+                    _xml_display_name(attribute),
+                    value,
+                )
+                for attribute, value in schema.attrib.items()
+                if (
+                    attribute != f"{{{_MARKUP_COMPATIBILITY_NS}}}Ignorable"
+                    and _xml_local_name(attribute)
+                    not in {"ID", "SchemaRef", "Namespace", "SchemaLanguage"}
+                )
+            )
+        )
+        if schema_unknown_attributes:
+            _xml_mapping_issue(
+                issues,
+                f"unknown-xml-map-schema-{schema_index}-attributes",
+                schema_unknown_attributes,
+            )
+        if len(schema) != 1:
+            _xml_mapping_issue(
+                issues,
+                "invalid-xml-map-schema-content-count",
+                (schema_index, len(schema)),
+            )
+        schema_entries.append(
+            (
+                "xml-map-schema",
+                repr((schema_id, _xml_fragment(schema).sort_key())),
+            )
+        )
+    for schema_id in sorted(
+        {value for value in schema_ids if value},
+        key=str.casefold,
+    ):
+        if schema_ids.count(schema_id) > 1:
+            _xml_mapping_issue(
+                issues,
+                "duplicate-xml-map-schema-id",
+                schema_id,
+            )
+
+    map_entries: list[tuple[str, str]] = []
+    map_ids: list[int] = []
+    data_binding_count = 0
+    file_binding_count = 0
+    connection_binding_count = 0
+    for map_index, xml_map in enumerate(maps):
+        map_id = _xml_mapping_unsigned(
+            xml_map.get("ID"),
+            issues,
+            context=f"xml-map-{map_index}-id",
+        )
+        if map_id is not None:
+            map_ids.append(map_id)
+        name = _xml_mapping_required_text(
+            xml_map.get("Name"),
+            issues,
+            context=f"xml-map-{map_index}-name",
+        )
+        root_element = _xml_mapping_required_text(
+            xml_map.get("RootElement"),
+            issues,
+            context=f"xml-map-{map_index}-root-element",
+        )
+        schema_id = _xml_mapping_required_text(
+            xml_map.get("SchemaID"),
+            issues,
+            context=f"xml-map-{map_index}-schema-id",
+        )
+        if schema_id and schema_id not in schema_ids:
+            _xml_mapping_issue(
+                issues,
+                "xml-map-reference-to-unknown-schema",
+                (map_id, schema_id),
+            )
+        behavior = tuple(
+            _xml_mapping_boolean(
+                xml_map.get(attribute),
+                issues,
+                context=f"xml-map-{map_index}-{attribute}",
+            )
+            for attribute in (
+                "ShowImportExportValidationErrors",
+                "AutoFit",
+                "Append",
+                "PreserveSortAFLayout",
+                "PreserveFormat",
+            )
+        )
+        data_bindings = [
+            child
+            for child in xml_map
+            if (
+                _xml_namespace(child.tag) == _SPREADSHEETML_NS
+                and _xml_local_name(child.tag) == "DataBinding"
+            )
+        ]
+        if len(data_bindings) > 1:
+            _xml_mapping_issue(
+                issues,
+                "multiple-xml-map-data-bindings",
+                (map_id, len(data_bindings)),
+            )
+        data_binding_entries: list[tuple[object, ...]] = []
+        for binding_index, data_binding in enumerate(data_bindings):
+            data_binding_count += 1
+            file_binding = _xml_mapping_boolean(
+                data_binding.get("FileBinding"),
+                issues,
+                context=f"xml-map-{map_index}-data-binding-{binding_index}-file-binding",
+                default=False,
+            )
+            connection_id = _xml_mapping_unsigned(
+                data_binding.get("ConnectionID"),
+                issues,
+                context=(
+                    f"xml-map-{map_index}-data-binding-{binding_index}-connection-id"
+                ),
+                required=False,
+            )
+            load_mode = _xml_mapping_unsigned(
+                data_binding.get("DataBindingLoadMode"),
+                issues,
+                context=(
+                    f"xml-map-{map_index}-data-binding-{binding_index}-load-mode"
+                ),
+            )
+            file_binding_count += int(file_binding is True)
+            connection_binding_count += int(connection_id is not None)
+            unknown_attributes, unknown_children = _xml_mapping_unknown_material(
+                data_binding,
+                known_attributes=frozenset(
+                    {
+                        "DataBindingName",
+                        "FileBinding",
+                        "ConnectionID",
+                        "FileBindingName",
+                        "DataBindingLoadMode",
+                    }
+                ),
+                known_children=frozenset(),
+                issues=issues,
+                context=f"xml-map-data-binding-{map_index}-{binding_index}",
+            )
+            data_binding_entries.append(
+                (
+                    _xml_mapping_required_text(
+                        data_binding.get("DataBindingName"),
+                        issues,
+                        context=(
+                            f"xml-map-{map_index}-data-binding-{binding_index}-name"
+                        ),
+                    )
+                    if data_binding.get("DataBindingName") is not None
+                    else "",
+                    file_binding,
+                    connection_id,
+                    _xml_mapping_required_text(
+                        data_binding.get("FileBindingName"),
+                        issues,
+                        context=(
+                            f"xml-map-{map_index}-data-binding-{binding_index}-file-name"
+                        ),
+                    )
+                    if data_binding.get("FileBindingName") is not None
+                    else "",
+                    load_mode,
+                    unknown_attributes,
+                    unknown_children,
+                )
+            )
+        unknown_attributes, unknown_children = _xml_mapping_unknown_material(
+            xml_map,
+            known_attributes=frozenset(
+                {
+                    "ID",
+                    "Name",
+                    "RootElement",
+                    "SchemaID",
+                    "ShowImportExportValidationErrors",
+                    "AutoFit",
+                    "Append",
+                    "PreserveSortAFLayout",
+                    "PreserveFormat",
+                }
+            ),
+            known_children=frozenset({"DataBinding"}),
+            issues=issues,
+            context=f"xml-map-{map_index}",
+        )
+        map_entries.append(
+            (
+                "xml-map",
+                repr(
+                    (
+                        map_id,
+                        name,
+                        root_element,
+                        schema_id,
+                        behavior,
+                        tuple(sorted(data_binding_entries, key=repr)),
+                        unknown_attributes,
+                        unknown_children,
+                    )
+                ),
+            )
+        )
+    for map_id in sorted(set(map_ids)):
+        if map_ids.count(map_id) > 1:
+            _xml_mapping_issue(issues, "duplicate-xml-map-id", map_id)
+
+    entries = [
+        (
+            "xml-map-root",
+            repr(
+                (
+                    selection_namespaces,
+                    root_unknown_attributes,
+                    root_unknown_children,
+                )
+            ),
+        ),
+        *schema_entries,
+        *map_entries,
+        *issues,
+    ]
+    return _XmlMappingMapPartInspection(
+        member=member,
+        schema_count=len(schemas),
+        map_count=len(maps),
+        data_binding_count=data_binding_count,
+        file_binding_count=file_binding_count,
+        connection_binding_count=connection_binding_count,
+        map_ids=tuple(sorted(map_ids)),
+        definition_signature=_private_external_data_signature(
+            tuple(sorted(entries))
+        ),
+        issues=tuple(issues),
+    )
+
+
+@dataclass(frozen=True)
+class _XmlMappingTableInspection:
+    """Private XML-map binding evidence from one SpreadsheetML table part."""
+
+    member: str
+    present: bool = False
+    binding_count: int = 0
+    map_ids: tuple[int, ...] = ()
+    binding_signature: str | None = None
+    issues: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class _XmlMappingSingleCellInspection:
+    """Private XML-map binding evidence from one single-cell-table part."""
+
+    member: str
+    present: bool = False
+    binding_count: int = 0
+    connection_binding_count: int = 0
+    map_ids: tuple[int, ...] = ()
+    binding_signature: str | None = None
+    issues: tuple[tuple[str, str], ...] = ()
+
+
+def _xml_mapping_cell_reference(
+    value: str | None,
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+) -> str | None:
+    """Normalize one single-cell XML mapping target without exposing it."""
+    candidate = _xml_mapping_required_text(value, issues, context=context)
+    if not candidate:
+        return None
+    try:
+        min_column, min_row, max_column, max_row = range_boundaries(candidate)
+    except ValueError:
+        _xml_mapping_issue(issues, f"invalid-{context}", candidate)
+        return None
+    if (
+        min_column is None
+        or min_row is None
+        or max_column is None
+        or max_row is None
+        or min_column != max_column
+        or min_row != max_row
+        or min_column < 1
+        or min_row < 1
+        or min_column > MAX_EXCEL_COLUMN
+        or min_row > MAX_EXCEL_ROW
+    ):
+        _xml_mapping_issue(issues, f"invalid-{context}", candidate)
+        return None
+    return f"{get_column_letter(min_column)}{min_row}"
+
+
+def _xml_mapping_table_inspection(
+    root: ElementTree.Element,
+    member: str,
+    sources: tuple[str, ...],
+) -> _XmlMappingTableInspection:
+    """Inspect table XML map bindings without serialising table identifiers."""
+    issues: list[tuple[str, str]] = []
+    if (
+        _xml_namespace(root.tag) != _SPREADSHEETML_NS
+        or _xml_local_name(root.tag) != "table"
+    ):
+        _xml_mapping_issue(
+            issues,
+            "unexpected-xml-mapping-table-root",
+            _xml_fragment(root).sort_key(),
+        )
+        return _XmlMappingTableInspection(
+            member=member,
+            binding_signature=_private_payload_signature(
+                ElementTree.tostring(root, encoding="utf-8")
+            ),
+            issues=tuple(issues),
+        )
+
+    table_type = (root.get("tableType") or "").strip().casefold()
+    table_id = _xml_mapping_unsigned(
+        root.get("id"),
+        issues,
+        context="xml-mapping-table-id",
+    )
+    connection_id = _xml_mapping_unsigned(
+        root.get("connectionId"),
+        issues,
+        context="xml-mapping-table-connection-id",
+        required=False,
+    )
+    table_columns_tag = f"{{{_SPREADSHEETML_NS}}}tableColumns"
+    table_column_tag = f"{{{_SPREADSHEETML_NS}}}tableColumn"
+    xml_column_tag = f"{{{_SPREADSHEETML_NS}}}xmlColumnPr"
+    column_containers = root.findall(table_columns_tag)
+    if len(column_containers) > 1:
+        _xml_mapping_issue(
+            issues,
+            "multiple-xml-mapping-table-column-containers",
+            len(column_containers),
+        )
+
+    map_ids: list[int] = []
+    binding_entries: list[tuple[object, ...]] = []
+    binding_count = 0
+    for container_index, container in enumerate(column_containers):
+        for column_index, column in enumerate(container.findall(table_column_tag)):
+            bindings = column.findall(xml_column_tag)
+            if len(bindings) > 1:
+                _xml_mapping_issue(
+                    issues,
+                    "multiple-xml-mapping-table-column-bindings",
+                    (container_index, column_index, len(bindings)),
+                )
+            for binding_index, binding in enumerate(bindings):
+                binding_count += 1
+                map_id, material = _xml_mapping_binding_material(
+                    binding,
+                    issues,
+                    context=(
+                        "xml-mapping-table-binding-"
+                        f"{container_index}-{column_index}-{binding_index}"
+                    ),
+                    table_column=True,
+                )
+                if map_id is not None:
+                    map_ids.append(map_id)
+                binding_entries.append(
+                    (
+                        column.get("id", ""),
+                        column.get("uniqueName", ""),
+                        container_index,
+                        column_index,
+                        material,
+                    )
+                )
+
+    present = table_type == "xml" or bool(binding_entries)
+    if not present:
+        return _XmlMappingTableInspection(member=member)
+    if not sources:
+        _xml_mapping_issue(
+            issues,
+            "unbound-xml-mapping-table-part",
+            _private_payload_signature(ElementTree.tostring(root, encoding="utf-8")),
+        )
+    material = (
+        tuple(sorted(sources, key=str.casefold)),
+        table_id,
+        table_type,
+        connection_id,
+        root.get("ref", ""),
+        tuple(binding_entries),
+    )
+    entries = [("xml-mapping-table", repr(material)), *issues]
+    return _XmlMappingTableInspection(
+        member=member,
+        present=True,
+        binding_count=binding_count,
+        map_ids=tuple(sorted(map_ids)),
+        binding_signature=_private_external_data_signature(tuple(sorted(entries))),
+        issues=tuple(issues),
+    )
+
+
+def _xml_mapping_single_cell_inspection(
+    root: ElementTree.Element,
+    member: str,
+    sources: tuple[str, ...],
+) -> _XmlMappingSingleCellInspection:
+    """Inspect single-cell XML map bindings without exposing cells or XPaths."""
+    issues: list[tuple[str, str]] = []
+    if (
+        _xml_namespace(root.tag) != _SPREADSHEETML_NS
+        or _xml_local_name(root.tag) != "singleXmlCells"
+    ):
+        _xml_mapping_issue(
+            issues,
+            "unexpected-xml-mapping-single-cell-root",
+            _xml_fragment(root).sort_key(),
+        )
+        return _XmlMappingSingleCellInspection(
+            member=member,
+            binding_signature=_private_payload_signature(
+                ElementTree.tostring(root, encoding="utf-8")
+            ),
+            issues=tuple(issues),
+        )
+
+    cell_tag = f"{{{_SPREADSHEETML_NS}}}singleXmlCell"
+    cell_property_tag = f"{{{_SPREADSHEETML_NS}}}xmlCellPr"
+    properties_tag = f"{{{_SPREADSHEETML_NS}}}xmlPr"
+    root_unknown_attributes, root_unknown_children = _xml_mapping_unknown_material(
+        root,
+        known_attributes=frozenset(),
+        known_children=frozenset({"singleXmlCell"}),
+        issues=issues,
+        context="xml-mapping-single-cell-root",
+    )
+    cells = root.findall(cell_tag)
+    if not cells:
+        _xml_mapping_issue(issues, "empty-xml-mapping-single-cell-part", None)
+
+    map_ids: list[int] = []
+    entries: list[tuple[object, ...]] = []
+    connection_binding_count = 0
+    for cell_index, cell in enumerate(cells):
+        cell_id = _xml_mapping_unsigned(
+            cell.get("id"),
+            issues,
+            context=f"xml-mapping-single-cell-{cell_index}-id",
+        )
+        reference = _xml_mapping_cell_reference(
+            cell.get("r"),
+            issues,
+            context=f"xml-mapping-single-cell-{cell_index}-reference",
+        )
+        connection_id = _xml_mapping_unsigned(
+            cell.get("connectionId"),
+            issues,
+            context=f"xml-mapping-single-cell-{cell_index}-connection-id",
+        )
+        connection_binding_count += int(connection_id is not None)
+        cell_properties = cell.findall(cell_property_tag)
+        if len(cell_properties) != 1:
+            _xml_mapping_issue(
+                issues,
+                "invalid-xml-mapping-single-cell-properties",
+                (cell_index, len(cell_properties)),
+            )
+        property_entries: list[tuple[object, ...]] = []
+        for property_index, cell_property in enumerate(cell_properties):
+            property_id = _xml_mapping_unsigned(
+                cell_property.get("id"),
+                issues,
+                context=(
+                    f"xml-mapping-single-cell-{cell_index}-property-{property_index}-id"
+                ),
+            )
+            xml_properties = cell_property.findall(properties_tag)
+            if len(xml_properties) != 1:
+                _xml_mapping_issue(
+                    issues,
+                    "invalid-xml-mapping-single-cell-xml-properties",
+                    (cell_index, property_index, len(xml_properties)),
+                )
+            property_materials: list[tuple[object, ...]] = []
+            for xml_property_index, xml_property in enumerate(xml_properties):
+                map_id, material = _xml_mapping_binding_material(
+                    xml_property,
+                    issues,
+                    context=(
+                        "xml-mapping-single-cell-binding-"
+                        f"{cell_index}-{property_index}-{xml_property_index}"
+                    ),
+                    table_column=False,
+                )
+                if map_id is not None:
+                    map_ids.append(map_id)
+                property_materials.append(material)
+            unknown_attributes, unknown_children = _xml_mapping_unknown_material(
+                cell_property,
+                known_attributes=frozenset({"id", "uniqueName"}),
+                known_children=frozenset({"xmlPr", "extLst"}),
+                issues=issues,
+                context=f"xml-mapping-single-cell-property-{cell_index}-{property_index}",
+            )
+            extension_fragments = tuple(
+                _xml_fragment(child).sort_key()
+                for child in cell_property
+                if (
+                    _xml_namespace(child.tag) == _SPREADSHEETML_NS
+                    and _xml_local_name(child.tag) == "extLst"
+                )
+            )
+            if extension_fragments:
+                _xml_mapping_issue(
+                    issues,
+                    "unrecognized-xml-mapping-single-cell-property-extensions",
+                    extension_fragments,
+                )
+            property_entries.append(
+                (
+                    property_id,
+                    cell_property.get("uniqueName", ""),
+                    tuple(property_materials),
+                    unknown_attributes,
+                    extension_fragments,
+                    unknown_children,
+                )
+            )
+        unknown_attributes, unknown_children = _xml_mapping_unknown_material(
+            cell,
+            known_attributes=frozenset({"id", "r", "connectionId"}),
+            known_children=frozenset({"xmlCellPr", "extLst"}),
+            issues=issues,
+            context=f"xml-mapping-single-cell-{cell_index}",
+        )
+        extension_fragments = tuple(
+            _xml_fragment(child).sort_key()
+            for child in cell
+            if (
+                _xml_namespace(child.tag) == _SPREADSHEETML_NS
+                and _xml_local_name(child.tag) == "extLst"
+            )
+        )
+        if extension_fragments:
+            _xml_mapping_issue(
+                issues,
+                "unrecognized-xml-mapping-single-cell-extensions",
+                extension_fragments,
+            )
+        entries.append(
+            (
+                cell_id,
+                reference,
+                connection_id,
+                tuple(property_entries),
+                unknown_attributes,
+                extension_fragments,
+                unknown_children,
+            )
+        )
+
+    present = bool(cells or issues)
+    if present and not sources:
+        _xml_mapping_issue(
+            issues,
+            "unbound-xml-mapping-single-cell-part",
+            _private_payload_signature(ElementTree.tostring(root, encoding="utf-8")),
+        )
+    if not present:
+        return _XmlMappingSingleCellInspection(member=member)
+    material = (
+        tuple(sorted(sources, key=str.casefold)),
+        root_unknown_attributes,
+        root_unknown_children,
+        tuple(entries),
+    )
+    signature_entries = [("xml-mapping-single-cells", repr(material)), *issues]
+    return _XmlMappingSingleCellInspection(
+        member=member,
+        present=True,
+        binding_count=len(cells),
+        connection_binding_count=connection_binding_count,
+        map_ids=tuple(sorted(map_ids)),
+        binding_signature=_private_external_data_signature(
+            tuple(sorted(signature_entries))
+        ),
+        issues=tuple(issues),
+    )
+
+
+def _xml_mapping_relationship_suffix(relationship: _PackageRelationship) -> str:
+    """Return a case-insensitive package relationship suffix for dispatch."""
+    return relationship.relationship_type.rsplit("/", maxsplit=1)[-1].casefold()
+
+
+def _xml_mapping_relationship_target(relationship: _PackageRelationship) -> str | None:
+    """Return private target material, retaining unsafe targets only for hashing."""
+    return relationship.target if relationship.target is not None else relationship.raw_target
+
+
+def _xml_mapping_metadata(path: Path) -> _XmlMappingMetadata:
+    """Inspect XML map declarations and bindings before reader-library loss.
+
+    XML Maps direct import/export and refresh data into XML table columns or
+    specific cells. The scanner compares private canonical declarations and
+    bindings only; it does not import, export, validate, fetch, or execute
+    mappings.
+    """
+    warnings: set[str] = set()
+    issues: list[tuple[str, str]] = []
+    declaration_entries: list[tuple[str, str]] = []
+    binding_entries: list[tuple[str, str]] = []
+    relationship_entries: list[tuple[str, str]] = []
+    try:
+        with ZipFile(path) as archive:
+            member_counts: dict[str, int] = defaultdict(int)
+            for member in archive.namelist():
+                if (
+                    _XML_MAPPING_MAP_PART_PATTERN.fullmatch(member)
+                    or _XML_MAPPING_TABLE_PART_PATTERN.fullmatch(member)
+                    or _XML_MAPPING_SINGLE_CELL_PART_PATTERN.fullmatch(member)
+                ):
+                    member_counts[member] += 1
+            for member, count in member_counts.items():
+                if count > 1:
+                    _xml_mapping_issue(
+                        issues,
+                        "duplicate-xml-mapping-package-member",
+                        (member, count),
+                    )
+
+            discovered_map_members = {
+                member
+                for member in archive.namelist()
+                if _XML_MAPPING_MAP_PART_PATTERN.fullmatch(member)
+            }
+            table_members = {
+                member
+                for member in archive.namelist()
+                if _XML_MAPPING_TABLE_PART_PATTERN.fullmatch(member)
+            }
+            single_cell_members = {
+                member
+                for member in archive.namelist()
+                if _XML_MAPPING_SINGLE_CELL_PART_PATTERN.fullmatch(member)
+            }
+
+            try:
+                workbook_relationships = _package_relationships(archive, "xl/workbook.xml")
+            except (
+                ElementTree.ParseError,
+                KeyError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                _xml_mapping_issue(
+                    issues,
+                    "xml-mapping-workbook-relationship-scan-failure",
+                    type(error).__name__,
+                )
+                workbook_relationships = ()
+
+            declared_map_members: set[str] = set()
+            for relationship in workbook_relationships:
+                if _xml_mapping_relationship_suffix(relationship) != "xmlmaps":
+                    continue
+                relationship_target = _xml_mapping_relationship_target(relationship)
+                relationship_entries.append(
+                    (
+                        "workbook-xml-map-relationship",
+                        repr(
+                            (
+                                relationship.relationship_type,
+                                relationship.target_mode.casefold(),
+                                relationship_target,
+                            )
+                        ),
+                    )
+                )
+                if (
+                    relationship.target_mode.casefold() != "internal"
+                    or relationship.target is None
+                ):
+                    _xml_mapping_issue(
+                        issues,
+                        "unsafe-xml-map-workbook-relationship",
+                        (
+                            relationship.relationship_type,
+                            relationship.target_mode,
+                            relationship_target,
+                        ),
+                    )
+                    continue
+                declared_map_members.add(relationship.target)
+                if not _XML_MAPPING_MAP_PART_PATTERN.fullmatch(relationship.target):
+                    _xml_mapping_issue(
+                        issues,
+                        "unexpected-xml-map-workbook-target",
+                        relationship.target,
+                    )
+            if len(declared_map_members) != sum(
+                _xml_mapping_relationship_suffix(relationship) == "xmlmaps"
+                and relationship.target_mode.casefold() == "internal"
+                and relationship.target is not None
+                for relationship in workbook_relationships
+            ):
+                _xml_mapping_issue(
+                    issues,
+                    "duplicate-xml-map-workbook-target",
+                    tuple(sorted(declared_map_members)),
+                )
+            for member in discovered_map_members - declared_map_members:
+                _xml_mapping_issue(
+                    issues,
+                    "unbound-xml-map-package-part",
+                    member,
+                )
+            map_members = discovered_map_members | declared_map_members
+
+            try:
+                sheet_parts = _sheet_xml_parts(archive)
+            except (
+                ElementTree.ParseError,
+                KeyError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                _xml_mapping_issue(
+                    issues,
+                    "xml-mapping-sheet-part-scan-failure",
+                    type(error).__name__,
+                )
+                sheet_parts = {}
+
+            table_sources: dict[str, set[str]] = defaultdict(set)
+            single_cell_sources: dict[str, set[str]] = defaultdict(set)
+            table_relationship_entries: dict[str, list[tuple[str, str]]] = defaultdict(
+                list
+            )
+            single_cell_relationship_entries: dict[
+                str, list[tuple[str, str]]
+            ] = defaultdict(list)
+            for sheet, (member, sheet_kind) in sheet_parts.items():
+                if sheet_kind != "worksheet":
+                    continue
+                relationship_member = _relationship_part_path(member)
+                if relationship_member not in archive.namelist():
+                    continue
+                try:
+                    relationships = _package_relationships(archive, member)
+                except (
+                    ElementTree.ParseError,
+                    KeyError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    _xml_mapping_issue(
+                        issues,
+                        "xml-mapping-worksheet-relationship-scan-failure",
+                        (sheet, type(error).__name__),
+                    )
+                    continue
+                for relationship in relationships:
+                    suffix = _xml_mapping_relationship_suffix(relationship)
+                    if suffix not in {"table", "tablesinglecells"}:
+                        continue
+                    relationship_target = _xml_mapping_relationship_target(relationship)
+                    relationship_entry = (
+                        f"worksheet-{suffix}-relationship",
+                        repr(
+                            (
+                                sheet,
+                                relationship.relationship_type,
+                                relationship.target_mode.casefold(),
+                                relationship_target,
+                            )
+                        )
+                    )
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.target is None
+                    ):
+                        if suffix == "tablesinglecells" or map_members:
+                            relationship_entries.append(relationship_entry)
+                            _xml_mapping_issue(
+                                issues,
+                                f"unsafe-xml-mapping-worksheet-{suffix}-relationship",
+                                (
+                                    sheet,
+                                    relationship.relationship_type,
+                                    relationship.target_mode,
+                                    relationship_target,
+                                ),
+                            )
+                        continue
+                    if suffix == "table":
+                        table_members.add(relationship.target)
+                        table_sources[relationship.target].add(sheet)
+                        table_relationship_entries[relationship.target].append(
+                            relationship_entry
+                        )
+                    else:
+                        single_cell_members.add(relationship.target)
+                        single_cell_sources[relationship.target].add(sheet)
+                        single_cell_relationship_entries[relationship.target].append(
+                            relationship_entry
+                        )
+
+            budget = _XmlMappingBudget()
+            map_inspections: list[_XmlMappingMapPartInspection] = []
+            for member in sorted(map_members, key=str.casefold):
+                root, fallback_signature = _xml_mapping_bounded_root(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                    context="XML Maps",
+                )
+                if root is None:
+                    _xml_mapping_issue(
+                        issues,
+                        "unreadable-xml-map-part",
+                        (member, fallback_signature),
+                    )
+                    declaration_entries.append(
+                        (
+                            "unreadable-xml-map-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                inspection = _xml_mapping_map_part_inspection(root, member)
+                map_inspections.append(inspection)
+                if inspection.definition_signature is not None:
+                    declaration_entries.append(
+                        ("xml-map-part", inspection.definition_signature)
+                    )
+                issues.extend(inspection.issues)
+
+            table_inspections: list[_XmlMappingTableInspection] = []
+            unreadable_table_members: set[str] = set()
+            table_members_to_inspect = (
+                table_members if map_members or single_cell_members else set()
+            )
+            for member in sorted(table_members_to_inspect, key=str.casefold):
+                root, fallback_signature = _xml_mapping_bounded_root(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                    context="XML-mapped table",
+                )
+                if root is None:
+                    if map_members:
+                        unreadable_table_members.add(member)
+                        _xml_mapping_issue(
+                            issues,
+                            "unreadable-xml-mapping-table-part",
+                            (member, fallback_signature),
+                        )
+                        binding_entries.append(
+                            (
+                                "unreadable-xml-mapping-table-part",
+                                fallback_signature or "",
+                            )
+                        )
+                    continue
+                inspection = _xml_mapping_table_inspection(
+                    root,
+                    member,
+                    tuple(sorted(table_sources.get(member, set()), key=str.casefold)),
+                )
+                table_inspections.append(inspection)
+                if inspection.present and inspection.binding_signature is not None:
+                    binding_entries.append(
+                        ("xml-mapping-table-binding", inspection.binding_signature)
+                    )
+                if inspection.present or map_members:
+                    issues.extend(inspection.issues)
+            for member in (
+                {
+                    inspection.member
+                    for inspection in table_inspections
+                    if inspection.present
+                }
+                | unreadable_table_members
+            ):
+                relationship_entries.extend(table_relationship_entries.get(member, ()))
+
+            single_cell_inspections: list[_XmlMappingSingleCellInspection] = []
+            unreadable_single_cell_members: set[str] = set()
+            for member in sorted(single_cell_members, key=str.casefold):
+                root, fallback_signature = _xml_mapping_bounded_root(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                    context="XML-mapped single-cell table",
+                )
+                if root is None:
+                    unreadable_single_cell_members.add(member)
+                    _xml_mapping_issue(
+                        issues,
+                        "unreadable-xml-mapping-single-cell-part",
+                        (member, fallback_signature),
+                    )
+                    binding_entries.append(
+                        (
+                            "unreadable-xml-mapping-single-cell-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                inspection = _xml_mapping_single_cell_inspection(
+                    root,
+                    member,
+                    tuple(
+                        sorted(
+                            single_cell_sources.get(member, set()),
+                            key=str.casefold,
+                        )
+                    ),
+                )
+                single_cell_inspections.append(inspection)
+                if inspection.binding_signature is not None:
+                    binding_entries.append(
+                        (
+                            "xml-mapping-single-cell-binding",
+                            inspection.binding_signature,
+                        )
+                    )
+                issues.extend(inspection.issues)
+            for member in (
+                {
+                    inspection.member
+                    for inspection in single_cell_inspections
+                    if inspection.present
+                }
+                | unreadable_single_cell_members
+            ):
+                relationship_entries.extend(
+                    single_cell_relationship_entries.get(member, ())
+                )
+
+            declared_map_id_values = tuple(
+                map_id
+                for inspection in map_inspections
+                for map_id in inspection.map_ids
+            )
+            declared_map_ids = set(declared_map_id_values)
+            for map_id in sorted(declared_map_ids):
+                if declared_map_id_values.count(map_id) > 1:
+                    _xml_mapping_issue(
+                        issues,
+                        "duplicate-xml-map-id-across-parts",
+                        map_id,
+                    )
+            referenced_map_ids = {
+                map_id
+                for inspection in table_inspections
+                for map_id in inspection.map_ids
+            } | {
+                map_id
+                for inspection in single_cell_inspections
+                for map_id in inspection.map_ids
+            }
+            for map_id in sorted(referenced_map_ids - declared_map_ids):
+                _xml_mapping_issue(
+                    issues,
+                    "xml-mapping-binding-references-unknown-map",
+                    map_id,
+                )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _XmlMappingMetadata(
+            XmlMappingSnapshot(
+                unrecognized_xml_mapping_count=1,
+                declaration_signature=_private_external_data_signature(
+                    (("xml-mapping-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect XML-mapping OOXML "
+                f"({type(error).__name__}); affected XML mappings were not compared.",
+            ),
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported XML-mapping metadata; "
+            "affected XML mappings have a coverage gap."
+        )
+    declaration_entries.extend(
+        ("xml-mapping-issue", repr(issue))
+        for issue in issues
+    )
+    snapshot = XmlMappingSnapshot(
+        xml_map_part_count=len(map_members),
+        xml_schema_count=sum(inspection.schema_count for inspection in map_inspections),
+        xml_map_count=sum(inspection.map_count for inspection in map_inspections),
+        xml_map_data_binding_count=sum(
+            inspection.data_binding_count for inspection in map_inspections
+        ),
+        xml_map_file_binding_count=sum(
+            inspection.file_binding_count for inspection in map_inspections
+        ),
+        xml_map_connection_binding_count=sum(
+            inspection.connection_binding_count for inspection in map_inspections
+        ),
+        table_xml_binding_part_count=sum(
+            inspection.present for inspection in table_inspections
+        ),
+        table_xml_binding_count=sum(
+            inspection.binding_count for inspection in table_inspections
+        ),
+        single_cell_xml_binding_sheet_count=len(
+            {
+                sheet
+                for inspection in single_cell_inspections
+                if inspection.present
+                for sheet in single_cell_sources.get(inspection.member, set())
+            }
+        ),
+        single_cell_xml_binding_part_count=sum(
+            inspection.present for inspection in single_cell_inspections
+        ),
+        single_cell_xml_binding_count=sum(
+            inspection.binding_count for inspection in single_cell_inspections
+        ),
+        single_cell_xml_connection_binding_count=sum(
+            inspection.connection_binding_count
+            for inspection in single_cell_inspections
+        ),
+        unrecognized_xml_mapping_count=len(issues),
+        declaration_signature=(
+            _private_external_data_signature(tuple(sorted(declaration_entries)))
+            if declaration_entries
+            else None
+        ),
+        binding_signature=(
+            _private_external_data_signature(tuple(sorted(binding_entries)))
+            if binding_entries
+            else None
+        ),
+        relationship_signature=(
+            _private_external_data_signature(tuple(sorted(relationship_entries)))
+            if relationship_entries
+            else None
+        ),
+    )
+    return _XmlMappingMetadata(snapshot, tuple(sorted(warnings)))
+
+
 @dataclass(frozen=True)
 class _LegacyCommentRawRelationship:
     """One private package relationship used to locate legacy notes."""
@@ -24616,6 +26070,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     rich_text_run_metadata = _rich_text_run_metadata(source)
     cell_hyperlink_metadata = _cell_hyperlink_metadata(source)
     worksheet_sparkline_metadata = _worksheet_sparkline_metadata(source)
+    xml_mapping_metadata = _xml_mapping_metadata(source)
     legacy_comment_metadata = _legacy_comment_metadata(source)
     threaded_comment_metadata = _threaded_comment_metadata(source)
     worksheet_drawing_shape_metadata = _worksheet_drawing_shape_metadata(source)
@@ -24663,6 +26118,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(rich_text_run_metadata.warnings)
     parser_warnings.update(cell_hyperlink_metadata.warnings)
     parser_warnings.update(worksheet_sparkline_metadata.warnings)
+    parser_warnings.update(xml_mapping_metadata.warnings)
     parser_warnings.update(legacy_comment_metadata.warnings)
     parser_warnings.update(threaded_comment_metadata.warnings)
     parser_warnings.update(worksheet_drawing_shape_metadata.warnings)
@@ -24894,6 +26350,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         rich_text_runs=rich_text_run_metadata.controls,
         cell_hyperlinks=cell_hyperlink_metadata.hyperlinks,
         worksheet_sparklines=worksheet_sparkline_metadata.sparklines,
+        xml_mapping_controls=xml_mapping_metadata.controls,
         legacy_comments=legacy_comment_metadata.comments,
         threaded_comments=threaded_comment_metadata.comments,
         worksheet_drawing_shapes=worksheet_drawing_shape_metadata.shapes,
@@ -24978,6 +26435,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "rich_text_runs": snapshot.rich_text_runs.profile_dict(),
         "cell_hyperlinks": snapshot.cell_hyperlinks.profile_dict(),
         "worksheet_sparklines": snapshot.worksheet_sparklines.profile_dict(),
+        "xml_mapping_controls": snapshot.xml_mapping_controls.profile_dict(),
         "legacy_comments": snapshot.legacy_comments.profile_dict(),
         "threaded_comments": snapshot.threaded_comments.profile_dict(),
         "worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.profile_dict(),
@@ -25014,6 +26472,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_rich_text_runs": snapshot.rich_text_runs.present,
             "has_cell_hyperlinks": snapshot.cell_hyperlinks.present,
             "has_worksheet_sparklines": snapshot.worksheet_sparklines.present,
+            "has_xml_mapping_controls": snapshot.xml_mapping_controls.present,
             "has_legacy_comments": snapshot.legacy_comments.present,
             "has_threaded_comments": snapshot.threaded_comments.present,
             "has_worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.present,

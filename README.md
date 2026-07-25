@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.50.0/formulafence-0.50.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.51.0/formulafence-0.51.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -77,6 +77,7 @@ rules:
   no_number_format_changes: true
   no_cell_font_changes: true
   no_cell_fill_changes: true
+  no_workbook_theme_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
@@ -125,7 +126,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, ignored-error, Named Sheet View, cell-number-format, cell-font, cell-fill, workbook DrawingML Theme parts/direct image relationships, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -691,6 +692,33 @@ retroactively to existing allocated cells. The boundary follows OOXML's
 and [`gradientFill`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_gradientFill_topic_ID0ENWD6.html)
 forms, alongside the ICAEW's [spreadsheet-review guidance](https://www.icaew.com/-/media/corporate/files/technical/technology/excel/how-to-review-a-spreadsheet-report.ashx)
 to reveal text hidden by formatting.
+
+FormulaFence also inventories the workbook-level **DrawingML Theme**. A Theme
+can change the colour, font, or effect schemes used by themed cells, charts,
+and drawing objects without changing their local style references. FormulaFence
+reads the raw workbook Theme binding, Theme XML, and direct Theme-image
+relationships/payloads in both transitional and strict OOXML namespaces. A
+material stored control change emits `FF053`; enable
+`no_workbook_theme_changes` to make that boundary `FFP053` in CI.
+
+Profiles and `FF053` details expose only aggregate Theme-part, colour-scheme,
+font-scheme, format-scheme, relationship, external-relationship, image, and
+malformed-metadata counts. Theme XML, scheme names, colour values, font names,
+image payloads, relationship IDs, and targets never enter profiles, Markdown,
+JSON, or SARIF. Writer-selected relationship IDs/order and equivalent internal
+target spelling stay quiet. Missing, duplicate, malformed, unsafe, unbound,
+unreadable, oversized, or over-budget metadata becomes a visible coverage
+warning; raw reads are bounded to 16 MiB per part, 64 MiB per workbook, and
+512 parts.
+
+This is a stored-declaration boundary, not a rendering engine. FormulaFence
+does not resolve effective cell/chart/drawing styles, render a workbook,
+calculate contrast, decode an image, fetch a relationship target, calculate
+formulas, or infer Excel client behavior. The scope follows the Open XML SDK
+[WorkbookPart](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.packaging.workbookpart?view=openxml-2.20.0)
+Theme-part surface and Microsoft's
+[conditional-formatting guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-conditional-formatting),
+which illustrates Theme-indexed colours in spreadsheet formatting.
 
 FormulaFence also compares **stored formula results**. SpreadsheetML can retain
 the last calculated result beside formula text in the same `<c>` cell. Most

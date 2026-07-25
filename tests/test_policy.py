@@ -35,6 +35,7 @@ from .helpers import (
     change_slicer_timeline_filter_material,
     change_threaded_comment_reply,
     change_what_if_data_table_input,
+    change_workbook_theme_colour,
     change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
     change_worksheet_sparkline_source,
@@ -74,6 +75,7 @@ from .helpers import (
     make_threaded_comment_model,
     make_three_d_model,
     make_what_if_data_table_model,
+    make_workbook_theme_image_model,
     make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
     make_worksheet_sparkline_model,
@@ -646,6 +648,21 @@ def test_policy_can_block_custom_data_store_changes(tmp_path) -> None:
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
         "FFP052"
+    }
+
+
+def test_policy_can_block_workbook_theme_changes(tmp_path) -> None:
+    baseline = make_workbook_theme_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_workbook_theme_image_model(tmp_path / "candidate.xlsx")
+    change_workbook_theme_colour(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_workbook_theme_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP053"
     }
 
 

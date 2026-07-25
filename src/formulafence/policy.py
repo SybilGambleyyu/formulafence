@@ -32,6 +32,7 @@ _RULE_FIELDS = {
     "no_number_format_changes",
     "no_cell_font_changes",
     "no_cell_fill_changes",
+    "no_workbook_theme_changes",
     "no_formula_cached_result_changes",
     "no_rich_text_run_changes",
     "no_cell_hyperlink_changes",
@@ -108,6 +109,7 @@ class Policy:
     no_number_format_changes: bool = False
     no_cell_font_changes: bool = False
     no_cell_fill_changes: bool = False
+    no_workbook_theme_changes: bool = False
     no_formula_cached_result_changes: bool = False
     no_rich_text_run_changes: bool = False
     no_cell_hyperlink_changes: bool = False
@@ -166,6 +168,7 @@ rules:
   no_number_format_changes: true
   no_cell_font_changes: true
   no_cell_fill_changes: true
+  no_workbook_theme_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
@@ -308,6 +311,9 @@ def parse_policy(data: object) -> Policy:
         no_number_format_changes=_boolean_rule(rules, "no_number_format_changes"),
         no_cell_font_changes=_boolean_rule(rules, "no_cell_font_changes"),
         no_cell_fill_changes=_boolean_rule(rules, "no_cell_fill_changes"),
+        no_workbook_theme_changes=_boolean_rule(
+            rules, "no_workbook_theme_changes"
+        ),
         no_formula_cached_result_changes=_boolean_rule(
             rules, "no_formula_cached_result_changes"
         ),
@@ -745,6 +751,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP041",
                     "high",
                     "Policy forbids cell-fill control changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_workbook_theme_changes:
+        for finding in _rule_triggered(report, "FF053"):
+            violations.append(
+                Finding(
+                    "FFP053",
+                    "high",
+                    "Policy forbids workbook theme-control changes.",
                     details=finding.details,
                 )
             )

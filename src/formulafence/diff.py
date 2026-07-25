@@ -49,6 +49,7 @@ from formulafence.models import (
     ThreadedCommentSnapshot,
     WhatIfDataTableSnapshot,
     WorkbookSnapshot,
+    WorkbookThemeSnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
     WorksheetSparklineSnapshot,
@@ -1522,6 +1523,59 @@ def _workbook_control_changes(
                 "high",
                 "Cell fill controls changed; values, warnings, or visual classifications "
                 "may be made less visible or misleading.",
+                details=details,
+            )
+        )
+    if before.workbook_theme != after.workbook_theme:
+        old_theme: WorkbookThemeSnapshot = before.workbook_theme
+        new_theme: WorkbookThemeSnapshot = after.workbook_theme
+        details = {
+            "before": old_theme.to_dict(),
+            "after": new_theme.to_dict(),
+        }
+        if old_theme.definition_signature != new_theme.definition_signature:
+            details["theme_definition_material_changed"] = True
+        if old_theme.image_payload_signature != new_theme.image_payload_signature:
+            details["theme_image_payload_changed"] = True
+        if old_theme.relationship_signature != new_theme.relationship_signature:
+            details["theme_relationships_changed"] = True
+        if (
+            old_theme.unrecognized_theme_count != new_theme.unrecognized_theme_count
+            or (
+                (
+                    old_theme.unrecognized_theme_count
+                    or new_theme.unrecognized_theme_count
+                )
+                and (
+                    old_theme.definition_signature != new_theme.definition_signature
+                    or (
+                        old_theme.image_payload_signature
+                        != new_theme.image_payload_signature
+                    )
+                    or (
+                        old_theme.relationship_signature
+                        != new_theme.relationship_signature
+                    )
+                )
+            )
+        ):
+            details["unrecognized_theme_metadata_changed"] = True
+        changes.append(
+            Change(
+                "workbook_theme_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF053",
+                "high",
+                (
+                    "Workbook theme controls changed; themed cell, chart, or drawing "
+                    "appearance may have been altered outside ordinary cells."
+                ),
                 details=details,
             )
         )

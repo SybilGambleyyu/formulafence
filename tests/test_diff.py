@@ -81,6 +81,8 @@ from .helpers import (
     change_threaded_comment_reply,
     change_vba_project_signature_payload,
     change_what_if_data_table_input,
+    change_workbook_theme_colour,
+    change_workbook_theme_image_payload,
     change_worksheet_drawing_shape_hyperlink,
     change_worksheet_drawing_shape_presentation,
     change_worksheet_embedded_control_controls,
@@ -119,6 +121,7 @@ from .helpers import (
     corrupt_slicer_timeline_cache_root,
     corrupt_threaded_comment_root,
     corrupt_what_if_data_table_input,
+    corrupt_workbook_theme_root,
     corrupt_worksheet_drawing_shape_root,
     corrupt_worksheet_embedded_control_activex_root,
     corrupt_worksheet_sparkline_destination,
@@ -178,10 +181,12 @@ from .helpers import (
     make_scoped_named_lambda_model,
     make_slicer_timeline_cache_model,
     make_spill_model,
+    make_strict_workbook_theme_image_model,
     make_table_model,
     make_threaded_comment_model,
     make_three_d_model,
     make_what_if_data_table_model,
+    make_workbook_theme_image_model,
     make_worksheet_drawing_shape_model,
     make_worksheet_embedded_control_model,
     make_worksheet_sparkline_model,
@@ -207,6 +212,7 @@ from .helpers import (
     normalize_rich_text_run_property_spelling,
     normalize_scenario_manager_reference_spelling,
     normalize_what_if_data_table_reference_spelling,
+    normalize_workbook_theme_relationship_identifiers,
     normalize_worksheet_sparkline_control_spelling,
     normalize_xml_mapping_control_spelling,
     normalize_zero_dimension_visibility_control_spelling,
@@ -4952,6 +4958,181 @@ def test_ordinary_workbook_has_no_fill_inventory(tmp_path) -> None:
     assert snapshot.fill_controls.present is False
     assert snapshot.fill_controls.cell_fill_assignment_count == 0
     assert not any("cell-fill" in warning for warning in snapshot.parser_warnings)
+
+
+def test_workbook_themes_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_workbook_theme_image_model(tmp_path / "baseline.xlsx")
+    definition_candidate = make_workbook_theme_image_model(
+        tmp_path / "definition-candidate.xlsx"
+    )
+    image_candidate = make_workbook_theme_image_model(
+        tmp_path / "image-candidate.xlsx"
+    )
+    normalised = make_workbook_theme_image_model(tmp_path / "normalised.xlsx")
+    change_workbook_theme_colour(definition_candidate)
+    change_workbook_theme_image_payload(image_candidate)
+    normalize_workbook_theme_relationship_identifiers(normalised)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    definition_snapshot = load_snapshot(definition_candidate)
+    image_snapshot = load_snapshot(image_candidate)
+    definition_report = compare_snapshots(baseline_snapshot, definition_snapshot)
+    image_report = compare_snapshots(baseline_snapshot, image_snapshot)
+    normalised_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(normalised),
+    )
+    definition_change = next(
+        change
+        for change in definition_report.changes
+        if change.kind == "workbook_theme_changed"
+    )
+    image_change = next(
+        change
+        for change in image_report.changes
+        if change.kind == "workbook_theme_changed"
+    )
+
+    assert baseline_snapshot.cells == definition_snapshot.cells
+    assert baseline_snapshot.cells == image_snapshot.cells
+    assert baseline_snapshot.summary()["workbook_theme_part_count"] == 1
+    assert baseline_snapshot.summary()["workbook_theme_image_part_count"] == 1
+    assert baseline_snapshot.summary()["has_workbook_theme"] is True
+    assert profile["workbook_theme"] == {
+        "present": True,
+        "theme_part_count": 1,
+        "colour_scheme_count": 1,
+        "font_scheme_count": 1,
+        "format_scheme_count": 1,
+        "theme_relationship_count": 1,
+        "external_theme_relationship_count": 0,
+        "theme_image_part_count": 1,
+        "theme_image_relationship_count": 1,
+        "external_theme_image_relationship_count": 0,
+        "unrecognized_theme_count": 0,
+    }
+    assert "## Workbook theme controls" in markdown
+    assert definition_change.details["theme_definition_material_changed"] is True
+    assert image_change.details["theme_definition_material_changed"] is True
+    assert image_change.details["theme_image_payload_changed"] is True
+    assert "FF053" in {finding.rule_id for finding in definition_report.findings}
+    assert "FF053" in {finding.rule_id for finding in image_report.findings}
+    assert "workbook_theme_changed" not in {
+        change.kind for change in normalised_report.changes
+    }
+    assert "FF053" not in {
+        finding.rule_id for finding in normalised_report.findings
+    }
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(definition_report.to_dict()),
+        report_to_markdown(definition_report),
+        json.dumps(report_to_sarif(definition_report)),
+        json.dumps(image_report.to_dict()),
+        report_to_markdown(image_report),
+        json.dumps(report_to_sarif(image_report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-THEME-SCHEME-BASELINE",
+        "PRIVATE-THEME-IMAGE-BASELINE",
+        "PRIVATE-THEME-IMAGE-CANDIDATE",
+        "rIdFenceThemeImage",
+        "C00000",
+        "fence-theme-image.bin",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_strict_workbook_theme_image_controls_are_supported(tmp_path) -> None:
+    baseline = make_strict_workbook_theme_image_model(tmp_path / "baseline.xlsx")
+    image_candidate = make_strict_workbook_theme_image_model(
+        tmp_path / "image-candidate.xlsx"
+    )
+    normalised = make_strict_workbook_theme_image_model(tmp_path / "normalised.xlsx")
+    change_workbook_theme_image_payload(image_candidate)
+    normalize_workbook_theme_relationship_identifiers(normalised)
+
+    baseline_snapshot = load_snapshot(baseline)
+    image_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(image_candidate),
+    )
+    normalised_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(normalised),
+    )
+    image_change = next(
+        change
+        for change in image_report.changes
+        if change.kind == "workbook_theme_changed"
+    )
+
+    assert baseline_snapshot.workbook_theme.theme_image_part_count == 1
+    assert baseline_snapshot.workbook_theme.theme_image_relationship_count == 1
+    assert baseline_snapshot.workbook_theme.unrecognized_theme_count == 0
+    assert image_change.details["theme_image_payload_changed"] is True
+    assert "FF053" in {finding.rule_id for finding in image_report.findings}
+    assert "workbook_theme_changed" not in {
+        change.kind for change in normalised_report.changes
+    }
+
+
+def test_workbook_theme_metadata_fails_closed_and_is_redacted(tmp_path) -> None:
+    baseline = make_workbook_theme_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_workbook_theme_image_model(tmp_path / "candidate.xlsx")
+    corrupt_workbook_theme_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "workbook_theme_changed"
+    )
+
+    assert candidate_snapshot.workbook_theme.unrecognized_theme_count >= 1
+    assert any(
+        "malformed, unsupported, or incomplete workbook-theme metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert change.details["theme_definition_material_changed"] is True
+    assert change.details["unrecognized_theme_metadata_changed"] is True
+    assert {"FF010", "FF053"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "privateUnexpectedWorkbookTheme",
+        "PRIVATE-THEME-SCHEME-BASELINE",
+        "PRIVATE-THEME-IMAGE-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_workbook_theme_read_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    baseline = make_workbook_theme_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_workbook_theme_image_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    monkeypatch.setattr(workbook_module, "_WORKBOOK_THEME_MAX_PART_BYTES", 1)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.workbook_theme.unrecognized_theme_count >= 1
+    assert any(
+        "oversized workbook-theme part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF053"} <= {finding.rule_id for finding in report.findings}
 
 
 def test_formula_cached_results_are_profiled_diffed_and_redacted(tmp_path) -> None:

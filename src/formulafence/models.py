@@ -1757,6 +1757,70 @@ class FillSnapshot:
 
 
 @dataclass(frozen=True)
+class WorkbookThemeSnapshot:
+    """Safe aggregate of workbook-wide DrawingML theme controls.
+
+    A Theme part can alter the colours, fonts, and effects used by themed
+    cells, charts, and drawing objects without changing their local style
+    references. Private signatures retain the package state for comparison
+    without serialising theme XML, scheme names, colour values, font names,
+    image payloads, relationship IDs, or targets into review artifacts.
+    """
+
+    theme_part_count: int = 0
+    colour_scheme_count: int = 0
+    font_scheme_count: int = 0
+    format_scheme_count: int = 0
+    theme_relationship_count: int = 0
+    external_theme_relationship_count: int = 0
+    theme_image_part_count: int = 0
+    theme_image_relationship_count: int = 0
+    external_theme_image_relationship_count: int = 0
+    unrecognized_theme_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+    image_payload_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.theme_part_count
+            or self.colour_scheme_count
+            or self.font_scheme_count
+            or self.format_scheme_count
+            or self.theme_relationship_count
+            or self.external_theme_relationship_count
+            or self.theme_image_part_count
+            or self.theme_image_relationship_count
+            or self.external_theme_image_relationship_count
+            or self.unrecognized_theme_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate theme evidence without visual-control material."""
+        return {
+            "present": self.present,
+            "theme_part_count": self.theme_part_count,
+            "colour_scheme_count": self.colour_scheme_count,
+            "font_scheme_count": self.font_scheme_count,
+            "format_scheme_count": self.format_scheme_count,
+            "theme_relationship_count": self.theme_relationship_count,
+            "external_theme_relationship_count": (
+                self.external_theme_relationship_count
+            ),
+            "theme_image_part_count": self.theme_image_part_count,
+            "theme_image_relationship_count": self.theme_image_relationship_count,
+            "external_theme_image_relationship_count": (
+                self.external_theme_image_relationship_count
+            ),
+            "unrecognized_theme_count": self.unrecognized_theme_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class FormulaCachedResultEntry:
     """One private formula-result cache record keyed to its worksheet cell."""
 
@@ -2911,6 +2975,9 @@ class WorkbookSnapshot:
     )
     font_controls: FontSnapshot = field(default_factory=FontSnapshot)
     fill_controls: FillSnapshot = field(default_factory=FillSnapshot)
+    workbook_theme: WorkbookThemeSnapshot = field(
+        default_factory=WorkbookThemeSnapshot
+    )
     formula_cached_results: FormulaCachedResultSnapshot = field(
         default_factory=FormulaCachedResultSnapshot
     )
@@ -3109,6 +3176,9 @@ class WorkbookSnapshot:
                 + self.fill_controls.column_fill_assignment_count
             ),
             "has_fill_controls": self.fill_controls.present,
+            "workbook_theme_part_count": self.workbook_theme.theme_part_count,
+            "workbook_theme_image_part_count": self.workbook_theme.theme_image_part_count,
+            "has_workbook_theme": self.workbook_theme.present,
             "defined_names": len(self.defined_names),
             "table_count": len(self.tables),
             "data_validation_rules": len(self.data_validations),

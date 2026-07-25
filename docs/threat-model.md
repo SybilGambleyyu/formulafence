@@ -252,6 +252,25 @@ review prompt, not proof of an error.
   styles, apply table styles, or claim arbitrary visual-style coverage. Column
   styles are compared only as OOXML defaults for unallocated/new cells, not as a
   claim to restyle allocated cells.
+- A workbook-level DrawingML Theme can alter colour, font, and effect schemes
+  used by themed cells, charts, and drawing objects without a local style
+  change. FormulaFence inspects the raw workbook Theme binding, Theme XML, and
+  direct Theme-image relationships/payloads in transitional and strict OOXML
+  namespaces. A material stored control change emits `FF053`;
+  `no_workbook_theme_changes` blocks it as `FFP053`. Profiles and reports
+  expose only aggregate Theme-part/scheme/relationship/image and
+  malformed-metadata counts; Theme XML, scheme names, colours, font names,
+  image payloads, relationship IDs, and targets remain private. Writer-selected
+  relationship IDs/order and equivalent internal target spelling normalize
+  away. Missing, duplicate, malformed, unsafe, unbound, unreadable, oversized,
+  or over-budget metadata produces a visible coverage warning; reads are
+  bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts. FormulaFence
+  does **not** resolve effective styles, render a workbook, calculate contrast,
+  decode an image, fetch a target, calculate formulas, or infer client
+  behavior. This boundary follows the Open XML SDK
+  [WorkbookPart](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.packaging.workbookpart?view=openxml-2.20.0)
+  Theme-part surface and Microsoft's
+  [conditional-formatting guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-conditional-formatting).
 - SpreadsheetML can retain a formula's last calculated result beside its
   formula text in the same `<c>` cell. That lets a workbook save a different
   displayed result without changing the ordinary formula text. FormulaFence

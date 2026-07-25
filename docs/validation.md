@@ -5,6 +5,45 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Workbook DrawingML Theme controls — 2026-07-26
+
+FormulaFence 0.51.0 was validated against the independently maintained
+[`Blank.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/v2FxTestFiles/spreadsheet/Blank.xlsx)
+fixture from the Open XML SDK at commit
+`cd2b359ef824737edb93f1c6157c19551aae1e52`. The baseline SHA-256 was
+`7a9a2f9721f763d919eadbe30b7ecc1794bfdcc56e20dc12ba589a4ee8c70886`.
+It contains one workbook-bound transitional DrawingML Theme with one colour,
+font, and format scheme, and no direct Theme images or coverage warnings.
+
+A standalone raw-ZIP script outside this repository created a candidate with
+identical ordinary cells, formulas, and logical package members except
+`xl/theme/theme1.xml`: it changed one stored Theme colour control. The
+candidate SHA-256 was
+`eb8387c473b5f15bc864ad887647a21802432392c25d4b6cd42b38322db485c0`.
+
+A clean Python virtual environment installed the staged 0.51.0 wheel
+(SHA-256 `6864555a5c113c7579bb6ef4302eb05920d84e13fe22887bdc7e73b90e051ee1`).
+It emitted exactly one `workbook_theme_changed` change and `FF053`. The
+starter policy exited 1 with `FF053` and `FFP053`. JSON profile/diff/policy,
+Markdown profile/diff, and SARIF diff artifacts were checked to ensure the
+before/after colour values, Theme member name, and relationship ID were absent.
+
+The same staged wheel also profiled the independently maintained strict-OOXML
+[`2D Rotation-O12-XL-OartEffects.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/O14ISOStrict/Excel/2D%20Rotation-O12-XL-OartEffects.xlsx)
+fixture at that commit with no Theme coverage warning. A raw-ZIP candidate
+whose only logical member change was `xl/theme/theme1.xml` emitted exactly
+`FF053`; its baseline and candidate SHA-256 values were
+`0e0017c70a5362ef3c49be3fb82c3e80210cfda0e813413c2b28a5ee141c0ad3` and
+`5f31ae0a08869f89329c46c6d00181feab455468dd8424e75a535a55208817ea`.
+
+The suite separately validates transitional and strict Theme namespaces,
+stored scheme changes, direct image-payload changes, relationship-ID
+normalization, malformed metadata, bounded reads, redaction, policy
+enforcement, and isolation from ordinary workbook cells. FormulaFence compares
+stored package controls only: it does not resolve effective styles, render
+cells/charts/drawings, calculate contrast, decode images, fetch targets, or
+infer Excel client behavior.
+
 ## Custom workbook data stores — 2026-07-26
 
 FormulaFence 0.50.0 was validated against the independently maintained

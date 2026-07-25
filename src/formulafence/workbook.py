@@ -89,6 +89,7 @@ from formulafence.models import (
     WorkbookLoadError,
     WorkbookProtectionSnapshot,
     WorkbookSnapshot,
+    WorkbookThemeSnapshot,
     WorksheetDrawingShapeSnapshot,
     WorksheetEmbeddedControlSnapshot,
     WorksheetSparklineSnapshot,
@@ -118,6 +119,9 @@ _SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _PACKAGE_RELATIONSHIP_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _DOCUMENT_RELATIONSHIP_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+)
+_STRICT_DOCUMENT_RELATIONSHIP_NS = (
+    "http://purl.oclc.org/ooxml/officeDocument/relationships"
 )
 _DYNAMIC_ARRAY_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"
 _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
@@ -462,6 +466,7 @@ _DRAWINGML_SPREADSHEET_NS = (
     "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 )
 _DRAWINGML_MAIN_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_DRAWINGML_STRICT_MAIN_NS = "http://purl.oclc.org/ooxml/drawingml/main"
 _DRAWINGML_CHART_NS = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 _DRAWINGML_CHART_DRAWING_NS = (
     "http://schemas.openxmlformats.org/drawingml/2006/chartDrawing"
@@ -492,6 +497,40 @@ _THREADED_COMMENT_CONTENT_TYPE = "application/vnd.ms-excel.threadedcomments+xml"
 _THREADED_COMMENT_PERSON_CONTENT_TYPE = "application/vnd.ms-excel.person+xml"
 _CHART_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/chart"
 _CHART_USER_SHAPES_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/chartUserShapes"
+_WORKBOOK_THEME_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/theme"
+_WORKBOOK_THEME_STRICT_RELATIONSHIP = (
+    f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/theme"
+)
+_WORKBOOK_THEME_IMAGE_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/image"
+_WORKBOOK_THEME_STRICT_IMAGE_RELATIONSHIP = (
+    f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/image"
+)
+_WORKBOOK_THEME_RELATIONSHIPS = frozenset(
+    relation.casefold()
+    for relation in {
+        _WORKBOOK_THEME_RELATIONSHIP,
+        _WORKBOOK_THEME_STRICT_RELATIONSHIP,
+    }
+)
+_WORKBOOK_THEME_IMAGE_RELATIONSHIPS = frozenset(
+    relation.casefold()
+    for relation in {
+        _WORKBOOK_THEME_IMAGE_RELATIONSHIP,
+        _WORKBOOK_THEME_STRICT_IMAGE_RELATIONSHIP,
+    }
+)
+_WORKBOOK_THEME_PART_PATTERN = re.compile(r"^xl/theme/[^/]+\.xml$", re.IGNORECASE)
+_WORKBOOK_THEME_MAX_PART_BYTES = 16 * 1024 * 1024
+_WORKBOOK_THEME_TOTAL_BYTES = 64 * 1024 * 1024
+_WORKBOOK_THEME_TOTAL_PARTS = 512
+_WORKBOOK_THEME_RELATIONSHIP_ATTRIBUTES = frozenset(
+    f"{{{namespace}}}{local_name}"
+    for namespace in {
+        _DOCUMENT_RELATIONSHIP_NS,
+        _STRICT_DOCUMENT_RELATIONSHIP_NS,
+    }
+    for local_name in {"id", "embed", "link"}
+)
 _PIVOT_TABLE_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/pivotTable"
 _PIVOT_CACHE_DEFINITION_RELATIONSHIP = (
     f"{_DOCUMENT_RELATIONSHIP_NS}/pivotCacheDefinition"
@@ -762,6 +801,14 @@ class _FillMetadata:
     """Raw cell-fill evidence retained before reader normalization."""
 
     controls: FillSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _WorkbookThemeMetadata:
+    """Raw workbook-theme evidence retained before reader normalization."""
+
+    theme: WorkbookThemeSnapshot
     warnings: tuple[str, ...]
 
 
@@ -18208,6 +18255,694 @@ def _fill_metadata(path: Path) -> _FillMetadata:
     return _FillMetadata(snapshot, tuple(sorted(warnings)))
 
 
+@dataclass
+class _WorkbookThemeBudget:
+    """Bound raw workbook-theme reads across XML and direct image parts."""
+
+    remaining_parts: int = _WORKBOOK_THEME_TOTAL_PARTS
+    remaining_bytes: int = _WORKBOOK_THEME_TOTAL_BYTES
+
+
+def _workbook_theme_issue(
+    issues: list[tuple[str, str]],
+    context: str,
+    detail: object,
+) -> None:
+    """Record private theme coverage evidence without exposing visual material."""
+    issues.append((context, repr(detail)))
+
+
+def _workbook_theme_bounded_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _WorkbookThemeBudget,
+    *,
+    kind: str,
+    report_failure: bool = True,
+) -> tuple[bytes | None, str | None]:
+    """Read one theme-related package member inside fixed scan budgets."""
+    if budget.remaining_parts <= 0:
+        if report_failure:
+            warnings.add(
+                "FormulaFence reached its bounded workbook-theme part count budget; "
+                "affected theme controls were not compared."
+            )
+        return None, _private_external_data_signature(
+            (("workbook-theme-part-budget-exhausted", repr((kind, member))),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not locate a workbook-theme package part; "
+                "affected theme controls were not compared."
+            )
+        return None, _private_external_data_signature(
+            (("missing-workbook-theme-member", repr((kind, member))),)
+        )
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _WORKBOOK_THEME_MAX_PART_BYTES:
+        if report_failure:
+            warnings.add(
+                "FormulaFence did not fully read an oversized workbook-theme part; "
+                "affected theme controls have a coverage gap."
+            )
+        return None, _private_external_data_signature(
+            (("oversized-workbook-theme-member", repr((kind, metadata))),)
+        )
+    if info.file_size > budget.remaining_bytes:
+        if report_failure:
+            warnings.add(
+                "FormulaFence reached its bounded workbook-theme read budget; "
+                "affected theme controls were not compared."
+            )
+        return None, _private_external_data_signature(
+            (("workbook-theme-read-budget-exhausted", repr((kind, metadata))),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not read a workbook-theme package part "
+                f"({type(error).__name__}); affected theme controls were not compared."
+            )
+        return None, _private_external_data_signature(
+            (("unreadable-workbook-theme-member", repr((kind, metadata))),)
+        )
+
+
+def _workbook_theme_bounded_root(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _WorkbookThemeBudget,
+    *,
+    kind: str,
+    report_failure: bool = True,
+) -> tuple[ElementTree.Element | None, str | None]:
+    """Return one bounded theme XML root or a private failure signature."""
+    payload, fallback_signature = _workbook_theme_bounded_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        kind=kind,
+        report_failure=report_failure,
+    )
+    if payload is None:
+        return None, fallback_signature
+    try:
+        return _xml_root_from_payload(payload), None
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not parse a workbook-theme XML package part "
+                f"({type(error).__name__}); affected theme controls were not compared."
+            )
+        return None, _private_payload_signature(payload)
+
+
+def _workbook_theme_part_relationships(
+    archive: ZipFile,
+    source_member: str,
+    members: set[str],
+    warnings: set[str],
+    budget: _WorkbookThemeBudget,
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+    required: bool,
+    report_failure: bool = True,
+) -> tuple[_PackageRelationship, ...]:
+    """Read a theme-related relationship part without opening any target."""
+    relationship_member = _relationship_part_path(source_member)
+    if relationship_member not in members:
+        if required:
+            _workbook_theme_issue(
+                issues,
+                f"missing-{context}-relationship-part",
+                relationship_member,
+            )
+        return ()
+    root, fallback_signature = _workbook_theme_bounded_root(
+        archive,
+        relationship_member,
+        warnings,
+        budget,
+        kind=f"{context}-relationships",
+        report_failure=report_failure,
+    )
+    if root is None:
+        _workbook_theme_issue(
+            issues,
+            f"unreadable-{context}-relationship-part",
+            (relationship_member, fallback_signature),
+        )
+        return ()
+    if (
+        _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+        or _xml_local_name(root.tag) != "Relationships"
+    ):
+        _workbook_theme_issue(
+            issues,
+            f"unexpected-{context}-relationship-root",
+            _xml_display_name(root.tag),
+        )
+        return ()
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    relationships: list[_PackageRelationship] = []
+    identifiers: list[str] = []
+    for child in root:
+        if child.tag != relationship_tag:
+            _workbook_theme_issue(
+                issues,
+                f"unexpected-{context}-relationship-child",
+                _xml_fragment(child).sort_key(),
+            )
+            continue
+        relationship_id = child.get("Id")
+        relationship_type = child.get("Type")
+        raw_target = child.get("Target")
+        target_mode = child.get("TargetMode", "Internal")
+        if relationship_id is None:
+            _workbook_theme_issue(
+                issues,
+                f"missing-{context}-relationship-id",
+                _xml_fragment(child).sort_key(),
+            )
+        else:
+            identifiers.append(relationship_id)
+        if relationship_type is None or raw_target is None:
+            _workbook_theme_issue(
+                issues,
+                f"malformed-{context}-relationship",
+                _xml_fragment(child).sort_key(),
+            )
+        relationships.append(
+            _PackageRelationship(
+                relationship_id=relationship_id,
+                relationship_type=relationship_type or "",
+                target=(
+                    _normalise_part_target(source_member, raw_target)
+                    if raw_target is not None
+                    and target_mode.casefold() == "internal"
+                    else None
+                ),
+                target_mode=target_mode,
+                raw_target=raw_target,
+            )
+        )
+    if len(identifiers) != len(set(identifiers)):
+        _workbook_theme_issue(
+            issues,
+            f"duplicate-{context}-relationship-id",
+            tuple(sorted(identifiers)),
+        )
+    return tuple(relationships)
+
+
+def _workbook_theme_relationship_semantic(
+    relationship: _PackageRelationship,
+    image_payload_signatures: Mapping[str, str],
+) -> tuple[object, ...]:
+    """Return private relationship semantics while ignoring writer-selected IDs."""
+    relationship_type = relationship.relationship_type.casefold()
+    target_mode = relationship.target_mode.casefold()
+    if relationship_type in _WORKBOOK_THEME_IMAGE_RELATIONSHIPS:
+        if target_mode == "internal" and relationship.target is not None:
+            target: object = (
+                "theme-image",
+                image_payload_signatures.get(
+                    relationship.target,
+                    ("unreadable-theme-image", relationship.target),
+                ),
+            )
+        else:
+            target = ("external-theme-image", relationship.raw_target or "")
+    else:
+        target = (
+            relationship.target
+            if target_mode == "internal" and relationship.target is not None
+            else relationship.raw_target or ""
+        )
+    return (relationship_type, target_mode, target)
+
+
+def _workbook_theme_relationship_semantics(
+    relationships: tuple[_PackageRelationship, ...],
+    image_payload_signatures: Mapping[str, str],
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+) -> dict[str, tuple[object, ...]]:
+    """Resolve theme relationship identifiers to stable private semantics."""
+    by_identifier: dict[str, list[_PackageRelationship]] = defaultdict(list)
+    for relationship in relationships:
+        if relationship.relationship_id is None:
+            continue
+        by_identifier[relationship.relationship_id].append(relationship)
+    result: dict[str, tuple[object, ...]] = {}
+    for identifier, matches in by_identifier.items():
+        semantics = sorted(
+            (
+                _workbook_theme_relationship_semantic(
+                    relationship,
+                    image_payload_signatures,
+                )
+                for relationship in matches
+            ),
+            key=repr,
+        )
+        if len(semantics) > 1:
+            _workbook_theme_issue(
+                issues,
+                f"duplicate-{context}-relationship-id",
+                tuple(semantics),
+            )
+        result[identifier] = semantics[0]
+    return result
+
+
+def _workbook_theme_xml_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[object, ...]],
+) -> tuple[object, ...]:
+    """Canonicalize private Theme XML while resolving relationship identifiers."""
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if attribute in _WORKBOOK_THEME_RELATIONSHIP_ATTRIBUTES:
+            relationship = relationship_semantics.get(value)
+            resolved = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+        else:
+            attributes.append((_xml_display_name(attribute), value))
+    children = tuple(
+        _workbook_theme_xml_fragment(child, relationship_semantics)
+        for child in element
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+    )
+
+
+def _workbook_theme_scheme_counts(
+    root: ElementTree.Element,
+    issues: list[tuple[str, str]],
+) -> tuple[int, int, int]:
+    """Count Theme schemes without retaining their names or visual controls."""
+    namespace = _xml_namespace(root.tag)
+    if (
+        _xml_local_name(root.tag) != "theme"
+        or namespace not in {_DRAWINGML_MAIN_NS, _DRAWINGML_STRICT_MAIN_NS}
+    ):
+        _workbook_theme_issue(
+            issues,
+            "unexpected-workbook-theme-root",
+            _xml_display_name(root.tag),
+        )
+        return 0, 0, 0
+    theme_elements = [
+        child
+        for child in root
+        if _xml_namespace(child.tag) == namespace
+        and _xml_local_name(child.tag) == "themeElements"
+    ]
+    if len(theme_elements) != 1:
+        _workbook_theme_issue(
+            issues,
+            "invalid-workbook-theme-elements-count",
+            len(theme_elements),
+        )
+    colour_scheme_count = 0
+    font_scheme_count = 0
+    format_scheme_count = 0
+    for element in theme_elements:
+        for child in element:
+            if _xml_namespace(child.tag) != namespace:
+                continue
+            if _xml_local_name(child.tag) == "clrScheme":
+                colour_scheme_count += 1
+            elif _xml_local_name(child.tag) == "fontScheme":
+                font_scheme_count += 1
+            elif _xml_local_name(child.tag) == "fmtScheme":
+                format_scheme_count += 1
+    return colour_scheme_count, font_scheme_count, format_scheme_count
+
+
+def _workbook_theme_metadata(path: Path) -> _WorkbookThemeMetadata:
+    """Inventory the workbook Theme part without rendering workbook appearance.
+
+    The Theme part is a workbook-level source of DrawingML colour, font, and
+    format/effect schemes. It can also bind direct image payloads. This scanner
+    performs bounded raw package inspection and private comparison only; it
+    does not resolve effective styles, render a workbook, decode an image,
+    fetch a target, or infer Excel client behavior.
+    """
+    default_snapshot = WorkbookThemeSnapshot()
+    warnings: set[str] = set()
+    issues: list[tuple[str, str]] = []
+    definition_entries: list[tuple[str, str]] = []
+    image_entries: list[tuple[str, str]] = []
+    relationship_entries: list[tuple[str, str]] = []
+    try:
+        with ZipFile(path) as archive:
+            raw_members = archive.namelist()
+            members = set(raw_members)
+            member_counts = Counter(raw_members)
+            conventional_theme_members = {
+                member
+                for member in members
+                if _WORKBOOK_THEME_PART_PATTERN.fullmatch(member)
+            }
+            workbook_relationship_member = _relationship_part_path("xl/workbook.xml")
+            if not conventional_theme_members and workbook_relationship_member not in members:
+                return _WorkbookThemeMetadata(default_snapshot, ())
+
+            budget = _WorkbookThemeBudget()
+            probe_warnings: set[str] = set()
+            probe_issues: list[tuple[str, str]] = []
+            workbook_relationships = _workbook_theme_part_relationships(
+                archive,
+                "xl/workbook.xml",
+                members,
+                probe_warnings,
+                budget,
+                probe_issues,
+                context="workbook-theme",
+                required=bool(conventional_theme_members),
+                report_failure=bool(conventional_theme_members),
+            )
+            theme_relationships = tuple(
+                relationship
+                for relationship in workbook_relationships
+                if relationship.relationship_type.casefold()
+                in _WORKBOOK_THEME_RELATIONSHIPS
+            )
+            if not conventional_theme_members and not theme_relationships:
+                return _WorkbookThemeMetadata(default_snapshot, ())
+
+            warnings.update(probe_warnings)
+            issues.extend(probe_issues)
+            declared_theme_members: set[str] = set()
+            external_theme_relationship_count = 0
+            for relationship in theme_relationships:
+                if relationship.target_mode.casefold() == "external":
+                    external_theme_relationship_count += 1
+                if (
+                    relationship.target_mode.casefold() != "internal"
+                    or relationship.target is None
+                ):
+                    _workbook_theme_issue(
+                        issues,
+                        "unsafe-workbook-theme-relationship",
+                        (
+                            relationship.relationship_type,
+                            relationship.target_mode,
+                            relationship.raw_target,
+                        ),
+                    )
+                    continue
+                declared_theme_members.add(relationship.target)
+                if relationship.target not in members:
+                    _workbook_theme_issue(
+                        issues,
+                        "missing-workbook-theme-part",
+                        relationship.target,
+                    )
+
+            theme_members = conventional_theme_members | declared_theme_members
+            actual_theme_members = {
+                member for member in theme_members if member in members
+            }
+            for member in sorted(conventional_theme_members - declared_theme_members):
+                _workbook_theme_issue(
+                    issues,
+                    "unbound-workbook-theme-part",
+                    member,
+                )
+            if len(actual_theme_members) > 1:
+                _workbook_theme_issue(
+                    issues,
+                    "multiple-workbook-theme-parts",
+                    tuple(sorted(actual_theme_members, key=str.casefold)),
+                )
+
+            relevant_members = set(actual_theme_members)
+            if workbook_relationship_member in members:
+                relevant_members.add(workbook_relationship_member)
+            for member in sorted(relevant_members, key=str.casefold):
+                if member_counts[member] > 1:
+                    _workbook_theme_issue(
+                        issues,
+                        "duplicate-workbook-theme-package-member",
+                        (member, member_counts[member]),
+                    )
+
+            roots: dict[str, ElementTree.Element] = {}
+            relationships_by_member: dict[str, tuple[_PackageRelationship, ...]] = {}
+            colour_scheme_count = 0
+            font_scheme_count = 0
+            format_scheme_count = 0
+            image_members: set[str] = set()
+            theme_image_relationship_count = 0
+            external_theme_image_relationship_count = 0
+            for member in sorted(actual_theme_members, key=str.casefold):
+                root, fallback_signature = _workbook_theme_bounded_root(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                    kind="theme",
+                )
+                if root is None:
+                    _workbook_theme_issue(
+                        issues,
+                        "unreadable-workbook-theme-part",
+                        (member, fallback_signature),
+                    )
+                    definition_entries.append(
+                        (
+                            "unreadable-workbook-theme-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                roots[member] = root
+                counts = _workbook_theme_scheme_counts(root, issues)
+                colour_scheme_count += counts[0]
+                font_scheme_count += counts[1]
+                format_scheme_count += counts[2]
+
+                relationships = _workbook_theme_part_relationships(
+                    archive,
+                    member,
+                    members,
+                    warnings,
+                    budget,
+                    issues,
+                    context="theme",
+                    required=False,
+                )
+                relationships_by_member[member] = relationships
+                for relationship in relationships:
+                    if (
+                        relationship.relationship_type.casefold()
+                        not in _WORKBOOK_THEME_IMAGE_RELATIONSHIPS
+                    ):
+                        _workbook_theme_issue(
+                            issues,
+                            "unsupported-workbook-theme-relationship",
+                            (
+                                relationship.relationship_type,
+                                relationship.target_mode,
+                                relationship.raw_target,
+                            ),
+                        )
+                        continue
+                    theme_image_relationship_count += 1
+                    if relationship.target_mode.casefold() == "external":
+                        external_theme_image_relationship_count += 1
+                        continue
+                    if relationship.target is None:
+                        _workbook_theme_issue(
+                            issues,
+                            "unsafe-workbook-theme-image-relationship",
+                            (
+                                relationship.relationship_type,
+                                relationship.target_mode,
+                                relationship.raw_target,
+                            ),
+                        )
+                        continue
+                    if relationship.target not in members:
+                        _workbook_theme_issue(
+                            issues,
+                            "missing-workbook-theme-image-part",
+                            relationship.target,
+                        )
+                        continue
+                    image_members.add(relationship.target)
+
+            image_payload_signatures: dict[str, str] = {}
+            for member in sorted(image_members, key=str.casefold):
+                if member_counts[member] > 1:
+                    _workbook_theme_issue(
+                        issues,
+                        "duplicate-workbook-theme-image-package-member",
+                        (member, member_counts[member]),
+                    )
+                payload, fallback_signature = _workbook_theme_bounded_payload(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                    kind="theme-image",
+                )
+                if payload is None:
+                    _workbook_theme_issue(
+                        issues,
+                        "unreadable-workbook-theme-image-part",
+                        (member, fallback_signature),
+                    )
+                    image_entries.append(
+                        (
+                            "unreadable-workbook-theme-image-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                signature = _private_payload_signature(payload)
+                image_payload_signatures[member] = signature
+                image_entries.append(("workbook-theme-image", signature))
+
+            for member, root in sorted(roots.items(), key=lambda item: item[0].casefold()):
+                relationships = relationships_by_member.get(member, ())
+                semantics = _workbook_theme_relationship_semantics(
+                    relationships,
+                    image_payload_signatures,
+                    issues,
+                    context="theme",
+                )
+                for element in root.iter():
+                    for attribute, value in element.attrib.items():
+                        if (
+                            attribute in _WORKBOOK_THEME_RELATIONSHIP_ATTRIBUTES
+                            and value not in semantics
+                        ):
+                            _workbook_theme_issue(
+                                issues,
+                                "missing-workbook-theme-xml-relationship",
+                                value,
+                            )
+                fragment = _workbook_theme_xml_fragment(root, semantics)
+                signature = _private_external_data_signature(
+                    (("workbook-theme-definition", repr(fragment)),)
+                )
+                definition_entries.append(("workbook-theme-definition", signature))
+                relationship_entries.append(
+                    (
+                        "workbook-theme-direct-relationships",
+                        repr(
+                            tuple(
+                                sorted(
+                                    (
+                                        _workbook_theme_relationship_semantic(
+                                            relationship,
+                                            image_payload_signatures,
+                                        )
+                                        for relationship in relationships
+                                    ),
+                                    key=repr,
+                                )
+                            )
+                        ),
+                    )
+                )
+
+            for relationship in theme_relationships:
+                relationship_type = relationship.relationship_type.casefold()
+                target_mode = relationship.target_mode.casefold()
+                if target_mode == "internal" and relationship.target is not None:
+                    target: object = ("workbook-theme", "internal-target")
+                else:
+                    target = ("external-workbook-theme", relationship.raw_target or "")
+                relationship_entries.append(
+                    (
+                        "workbook-theme-relationship",
+                        repr((relationship_type, target_mode, target)),
+                    )
+                )
+
+            if issues:
+                warnings.add(
+                    "FormulaFence found malformed, unsupported, or incomplete "
+                    "workbook-theme metadata; affected theme controls have a coverage gap."
+                )
+            relationship_entries.extend(
+                ("workbook-theme-issue", repr(issue))
+                for issue in sorted(issues)
+            )
+            snapshot = WorkbookThemeSnapshot(
+                theme_part_count=len(actual_theme_members),
+                colour_scheme_count=colour_scheme_count,
+                font_scheme_count=font_scheme_count,
+                format_scheme_count=format_scheme_count,
+                theme_relationship_count=len(theme_relationships),
+                external_theme_relationship_count=external_theme_relationship_count,
+                theme_image_part_count=len(image_members),
+                theme_image_relationship_count=theme_image_relationship_count,
+                external_theme_image_relationship_count=(
+                    external_theme_image_relationship_count
+                ),
+                unrecognized_theme_count=len(issues),
+                definition_signature=(
+                    _private_external_data_signature(tuple(sorted(definition_entries)))
+                    if definition_entries
+                    else None
+                ),
+                image_payload_signature=(
+                    _private_external_data_signature(tuple(sorted(image_entries)))
+                    if image_entries
+                    else None
+                ),
+                relationship_signature=(
+                    _private_external_data_signature(tuple(sorted(relationship_entries)))
+                    if relationship_entries
+                    else None
+                ),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _WorkbookThemeMetadata(
+            WorkbookThemeSnapshot(
+                unrecognized_theme_count=1,
+                relationship_signature=_private_external_data_signature(
+                    (("workbook-theme-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect workbook-theme OOXML "
+                f"({type(error).__name__}); affected theme controls were not compared.",
+            ),
+        )
+    return _WorkbookThemeMetadata(snapshot, tuple(sorted(warnings)))
+
+
 _FORMULA_CACHED_RESULT_DECIMAL_PATTERN = re.compile(
     r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[Ee][+-]?[0-9]+)?"
 )
@@ -29663,6 +30398,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     number_format_metadata = _number_format_metadata(source)
     font_metadata = _font_metadata(source)
     fill_metadata = _fill_metadata(source)
+    workbook_theme_metadata = _workbook_theme_metadata(source)
     formula_cached_result_metadata = _formula_cached_result_metadata(source)
     rich_text_run_metadata = _rich_text_run_metadata(source)
     cell_hyperlink_metadata = _cell_hyperlink_metadata(source)
@@ -29714,6 +30450,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(number_format_metadata.warnings)
     parser_warnings.update(font_metadata.warnings)
     parser_warnings.update(fill_metadata.warnings)
+    parser_warnings.update(workbook_theme_metadata.warnings)
     parser_warnings.update(formula_cached_result_metadata.warnings)
     parser_warnings.update(rich_text_run_metadata.warnings)
     parser_warnings.update(cell_hyperlink_metadata.warnings)
@@ -29949,6 +30686,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         number_format_controls=number_format_metadata.controls,
         font_controls=font_metadata.controls,
         fill_controls=fill_metadata.controls,
+        workbook_theme=workbook_theme_metadata.theme,
         formula_cached_results=formula_cached_result_metadata.results,
         rich_text_runs=rich_text_run_metadata.controls,
         cell_hyperlinks=cell_hyperlink_metadata.hyperlinks,
@@ -30037,6 +30775,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "number_format_controls": snapshot.number_format_controls.profile_dict(),
         "font_controls": snapshot.font_controls.profile_dict(),
         "fill_controls": snapshot.fill_controls.profile_dict(),
+        "workbook_theme": snapshot.workbook_theme.profile_dict(),
         "formula_cached_results": snapshot.formula_cached_results.profile_dict(),
         "rich_text_runs": snapshot.rich_text_runs.profile_dict(),
         "cell_hyperlinks": snapshot.cell_hyperlinks.profile_dict(),
@@ -30077,6 +30816,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_number_format_controls": snapshot.number_format_controls.present,
             "has_font_controls": snapshot.font_controls.present,
             "has_fill_controls": snapshot.fill_controls.present,
+            "has_workbook_theme": snapshot.workbook_theme.present,
             "has_formula_cached_results": snapshot.formula_cached_results.present,
             "has_rich_text_runs": snapshot.rich_text_runs.present,
             "has_cell_hyperlinks": snapshot.cell_hyperlinks.present,

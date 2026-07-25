@@ -27,6 +27,7 @@ rules:
   no_number_format_changes: true
   no_cell_font_changes: true
   no_cell_fill_changes: true
+  no_workbook_theme_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
@@ -106,6 +107,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_number_format_changes` | boolean | An effective default, direct-cell, row, or column number-format control changes. Format codes, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_font_changes` | boolean | An effective default, direct-cell, row, or column font control changes. Font names, colours, effects, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
+| `no_workbook_theme_changes` | boolean | A workbook Theme binding, stored colour/font/format scheme, direct Theme-image relationship, or direct Theme-image payload changes. Theme XML, scheme names, colours, font names, image bytes, relationship IDs, and targets are compared privately. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
 | `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
 | `no_cell_hyperlink_changes` | boolean | A standard or Office 2016 revision worksheet-cell hyperlink binding, location, display override, ScreenTip, or selected relationship target/type/mode changes. Targets, cell references, locations, display strings, ScreenTips, relationship IDs, and revision UIDs are compared privately. |
@@ -566,6 +568,31 @@ contrast, evaluate conditional-format differential styles, apply table styles,
 calculate values, or claim arbitrary visual-style coverage. A raw column `style`
 is compared as a declaration/default for unallocated/new cells; it is not
 treated as a renderer that restyles allocated cells.
+
+Workbook-level DrawingML Theme controls can change the colour, font, and effect
+schemes used by themed cells, charts, and drawing objects without changing a
+local cell-style reference. FormulaFence reads the raw workbook Theme binding,
+Theme XML, and direct Theme-image relationships/payloads in transitional and
+strict OOXML namespaces. A material stored control change emits `FF053`.
+Enable `no_workbook_theme_changes` to make it `FFP053` in CI.
+
+Profiles and `FF053` details expose only Theme-part, colour-scheme,
+font-scheme, format-scheme, relationship, external-relationship, image, and
+malformed-metadata counts. Theme XML, scheme names, colour values, font names,
+image payloads, relationship IDs, and targets remain private. Writer-selected
+relationship IDs/order and equivalent internal target spelling normalize away.
+Missing, duplicate, malformed, unsafe, unbound, unreadable, oversized, or
+over-budget metadata becomes a visible coverage warning; reads are bounded to
+16 MiB per part, 64 MiB per workbook, and 512 parts.
+
+This policy guards stored declarations, not rendered appearance. FormulaFence
+does not resolve an effective cell/chart/drawing style, render a workbook,
+calculate contrast, decode an image, fetch a target, calculate formulas, or
+infer Excel client behavior. The boundary follows the Open XML SDK
+[WorkbookPart](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.packaging.workbookpart?view=openxml-2.20.0)
+Theme-part surface and Microsoft's
+[conditional-formatting guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-conditional-formatting),
+which illustrates Theme-indexed colours in spreadsheet formatting.
 
 SpreadsheetML can retain the last calculated result beside a formula in the
 same `<c>` cell. FormulaFence reads raw `<f>` and `<v>` elements together,

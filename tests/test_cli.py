@@ -84,6 +84,7 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
     assert "no_number_format_changes: true" in content
     assert "no_cell_font_changes: true" in content
     assert "no_cell_fill_changes: true" in content
+    assert "no_workbook_theme_changes: true" in content
     assert "no_formula_cached_result_changes: true" in content
     assert "no_rich_text_run_changes: true" in content
     assert "no_cell_hyperlink_changes: true" in content

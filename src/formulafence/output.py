@@ -102,6 +102,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         ),
         f"- **Cell font controls:** {workbook['font_assignment_count']}",
         f"- **Cell fill controls:** {workbook['fill_assignment_count']}",
+        (
+            "- **Workbook theme parts / image parts:** "
+            f"{workbook['workbook_theme_part_count']} / "
+            f"{workbook['workbook_theme_image_part_count']}"
+        ),
         f"- **XLM macro-sheet parts:** {workbook['xlm_macro_sheet_count']}",
         (
             "- **XLM macro-sheet formula cells:** "
@@ -1443,6 +1448,44 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Fill definitions, style indexes, and cell/row/column targets are compared "
             "privately and intentionally omitted."
+        )
+    workbook_theme = profile["workbook_theme"]
+    if workbook_theme["present"]:
+        lines.extend(
+            [
+                "",
+                "## Workbook theme controls",
+                "",
+                (
+                    "- **Theme parts / colour schemes / font schemes / format schemes:** "
+                    f"{workbook_theme['theme_part_count']} / "
+                    f"{workbook_theme['colour_scheme_count']} / "
+                    f"{workbook_theme['font_scheme_count']} / "
+                    f"{workbook_theme['format_scheme_count']}"
+                ),
+                (
+                    "- **Workbook theme relationships / external relationships:** "
+                    f"{workbook_theme['theme_relationship_count']} / "
+                    f"{workbook_theme['external_theme_relationship_count']}"
+                ),
+                (
+                    "- **Theme image parts / relationships / external relationships:** "
+                    f"{workbook_theme['theme_image_part_count']} / "
+                    f"{workbook_theme['theme_image_relationship_count']} / "
+                    f"{workbook_theme['external_theme_image_relationship_count']}"
+                ),
+            ]
+        )
+        if workbook_theme["unrecognized_theme_count"]:
+            lines.append(
+                "- **Unrecognized or malformed workbook-theme metadata:** "
+                f"{workbook_theme['unrecognized_theme_count']}"
+            )
+        lines.append(
+            "Theme XML, scheme names, colour values, font names, image payloads, "
+            "relationship IDs, and targets are compared privately and intentionally "
+            "omitted. FormulaFence does not render a workbook, resolve effective "
+            "styles, decode an image, fetch a target, or infer Excel client behavior."
         )
     formula_cached_results = profile["formula_cached_results"]
     if formula_cached_results["present"]:

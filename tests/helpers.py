@@ -30,6 +30,9 @@ _PACKAGE_RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/rela
 _DOCUMENT_RELATIONSHIPS_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 )
+_STRICT_DOCUMENT_RELATIONSHIPS_NS = (
+    "http://purl.oclc.org/ooxml/officeDocument/relationships"
+)
 _CUSTOM_XML_DATA_PROPERTIES_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/customXmlDataProps"
 )
@@ -78,6 +81,8 @@ _RICH_VALUE_REL_NS = (
     "http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel"
 )
 _RICH_DATA_METADATA_EXTENSION_URI = "{3E2802C4-A4D2-4D8B-9148-E3BE6C30E623}"
+_DRAWINGML_MAIN_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_DRAWINGML_STRICT_MAIN_NS = "http://purl.oclc.org/ooxml/drawingml/main"
 _RICH_DATA_RELATIONSHIPS = {
     "rich-value-data": (
         "http://schemas.microsoft.com/office/2017/06/relationships/rdRichValue"
@@ -2194,6 +2199,287 @@ def corrupt_custom_data_properties_root(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".custom-data-store-corrupt.tmp.xlsx")
+
+
+def _workbook_theme_member(contents: dict[str, bytes]) -> str:
+    """Return the workbook-bound Theme part used by the fixture."""
+    relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+    relationship = next(
+        (
+            current
+            for current in relationships.findall(relationship_tag)
+            if (current.get("Type") or "").casefold().endswith("/theme")
+        ),
+        None,
+    )
+    if relationship is None or not relationship.get("Target"):
+        raise ValueError("Fixture does not contain a workbook Theme relationship")
+    target = relationship.get("Target") or ""
+    member = target.lstrip("/") if target.startswith("/") else f"xl/{target}"
+    if member not in contents:
+        raise ValueError("Fixture Theme relationship target is missing")
+    return member
+
+
+def make_workbook_theme_image_model(path: Path) -> Path:
+    """Create a real Theme-part image relationship without changing cells."""
+    make_model(path)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        theme_member = _workbook_theme_member(contents)
+        theme = ElementTree.fromstring(contents[theme_member])
+        theme.set("name", "PRIVATE-THEME-SCHEME-BASELINE")
+        format_scheme = theme.find(
+            f".//{{{_DRAWINGML_MAIN_NS}}}fmtScheme/"
+            f"{{{_DRAWINGML_MAIN_NS}}}fillStyleLst"
+        )
+        if format_scheme is None:
+            raise ValueError("Fixture Theme does not contain a fill style list")
+        blip_fill = ElementTree.SubElement(
+            format_scheme,
+            f"{{{_DRAWINGML_MAIN_NS}}}blipFill",
+            {"rotateWithShape": "1"},
+        )
+        ElementTree.SubElement(
+            blip_fill,
+            f"{{{_DRAWINGML_MAIN_NS}}}blip",
+            {
+                f"{{{_DOCUMENT_RELATIONSHIPS_NS}}}embed": (
+                    "rIdFenceThemeImage"
+                )
+            },
+        )
+        stretch = ElementTree.SubElement(
+            blip_fill,
+            f"{{{_DRAWINGML_MAIN_NS}}}stretch",
+        )
+        ElementTree.SubElement(stretch, f"{{{_DRAWINGML_MAIN_NS}}}fillRect")
+        contents[theme_member] = ElementTree.tostring(
+            theme,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationship_member = _relationship_member(theme_member)
+        relationships = ElementTree.Element(
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships"
+        )
+        ElementTree.SubElement(
+            relationships,
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship",
+            {
+                "Id": "rIdFenceThemeImage",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/image",
+                "Target": "media/fence-theme-image.bin",
+            },
+        )
+        contents[relationship_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["xl/theme/media/fence-theme-image.bin"] = (
+            b"PRIVATE-THEME-IMAGE-BASELINE"
+        )
+
+    return _rewrite_archive(path, mutate, ".workbook-theme-image-model.tmp.xlsx")
+
+
+def make_strict_workbook_theme_image_model(path: Path) -> Path:
+    """Create a strict-namespace Theme with a direct image relationship."""
+    make_workbook_theme_image_model(path)
+
+    def strict_name(name: str, source_namespace: str, target_namespace: str) -> str:
+        prefix = f"{{{source_namespace}}}"
+        if name.startswith(prefix):
+            return f"{{{target_namespace}}}{name[len(prefix):]}"
+        return name
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        theme_member = _workbook_theme_member(contents)
+        theme = ElementTree.fromstring(contents[theme_member])
+        for element in theme.iter():
+            element.tag = strict_name(
+                element.tag,
+                _DRAWINGML_MAIN_NS,
+                _DRAWINGML_STRICT_MAIN_NS,
+            )
+            attributes = {
+                strict_name(
+                    name,
+                    _DOCUMENT_RELATIONSHIPS_NS,
+                    _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                ): value
+                for name, value in element.attrib.items()
+            }
+            element.attrib.clear()
+            element.attrib.update(attributes)
+        contents[theme_member] = ElementTree.tostring(
+            theme,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        for relationship in workbook_relationships.findall(relationship_tag):
+            if (relationship.get("Type") or "").casefold().endswith("/theme"):
+                relationship.set(
+                    "Type",
+                    f"{_STRICT_DOCUMENT_RELATIONSHIPS_NS}/theme",
+                )
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            workbook_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationship_member = _relationship_member(theme_member)
+        theme_relationships = ElementTree.fromstring(contents[relationship_member])
+        for relationship in theme_relationships.findall(relationship_tag):
+            if (relationship.get("Type") or "").casefold().endswith("/image"):
+                relationship.set(
+                    "Type",
+                    f"{_STRICT_DOCUMENT_RELATIONSHIPS_NS}/image",
+                )
+        contents[relationship_member] = ElementTree.tostring(
+            theme_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".strict-workbook-theme-image-model.tmp.xlsx")
+
+
+def change_workbook_theme_colour(path: Path) -> Path:
+    """Change a Theme colour without changing a stored local cell style."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        theme_member = _workbook_theme_member(contents)
+        theme = ElementTree.fromstring(contents[theme_member])
+        accent = theme.find(f".//{{{_DRAWINGML_MAIN_NS}}}accent1")
+        if accent is None or len(accent) != 1:
+            raise ValueError("Fixture Theme does not contain accent1")
+        colour = accent[0]
+        if "val" in colour.attrib:
+            colour.set("val", "C00000")
+        elif "lastClr" in colour.attrib:
+            colour.set("lastClr", "C00000")
+        else:
+            raise ValueError("Fixture Theme accent1 does not contain a colour value")
+        contents[theme_member] = ElementTree.tostring(
+            theme,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".workbook-theme-colour-change.tmp.xlsx")
+
+
+def change_workbook_theme_image_payload(path: Path) -> Path:
+    """Change a direct Theme image payload without changing a worksheet cell."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["xl/theme/media/fence-theme-image.bin"] = (
+            b"PRIVATE-THEME-IMAGE-CANDIDATE"
+        )
+
+    return _rewrite_archive(path, mutate, ".workbook-theme-image-change.tmp.xlsx")
+
+
+def normalize_workbook_theme_relationship_identifiers(path: Path) -> Path:
+    """Rewrite only writer-selected Theme relationship identifiers."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        theme_relationship = next(
+            (
+                current
+                for current in workbook_relationships.findall(relationship_tag)
+                if (current.get("Type") or "").casefold().endswith("/theme")
+            ),
+            None,
+        )
+        if theme_relationship is None:
+            raise ValueError("Fixture does not contain a workbook Theme relationship")
+        theme_relationship.set("Id", "rIdFenceRenumberedTheme")
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            workbook_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        theme_member = _workbook_theme_member(contents)
+        relationship_member = _relationship_member(theme_member)
+        theme_relationships = ElementTree.fromstring(contents[relationship_member])
+        image_relationship = next(
+            (
+                current
+                for current in theme_relationships.findall(relationship_tag)
+                if (current.get("Type") or "").casefold().endswith("/image")
+            ),
+            None,
+        )
+        if image_relationship is None:
+            raise ValueError("Fixture Theme does not contain an image relationship")
+        old_identifier = image_relationship.get("Id")
+        if not old_identifier:
+            raise ValueError("Fixture Theme image relationship does not have an Id")
+        new_identifier = "rIdFenceRenumberedThemeImage"
+        image_relationship.set("Id", new_identifier)
+        contents[relationship_member] = ElementTree.tostring(
+            theme_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        theme = ElementTree.fromstring(contents[theme_member])
+        embed_attributes = (
+            f"{{{_DOCUMENT_RELATIONSHIPS_NS}}}embed",
+            f"{{{_STRICT_DOCUMENT_RELATIONSHIPS_NS}}}embed",
+        )
+        blip_and_attribute = next(
+            (
+                (current, attribute)
+                for current in theme.iter()
+                for attribute in embed_attributes
+                if current.get(attribute) == old_identifier
+            ),
+            None,
+        )
+        if blip_and_attribute is None:
+            raise ValueError("Fixture Theme does not contain an image binding")
+        blip, embed_attribute = blip_and_attribute
+        blip.set(embed_attribute, new_identifier)
+        contents[theme_member] = ElementTree.tostring(
+            theme,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".workbook-theme-ids.tmp.xlsx")
+
+
+def corrupt_workbook_theme_root(path: Path) -> Path:
+    """Corrupt Theme XML to exercise fail-closed coverage behavior."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        theme_member = _workbook_theme_member(contents)
+        theme = ElementTree.fromstring(contents[theme_member])
+        theme.tag = "privateUnexpectedWorkbookTheme"
+        contents[theme_member] = ElementTree.tostring(
+            theme,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".workbook-theme-corrupt.tmp.xlsx")
 
 
 def make_table_model(path: Path) -> Path:

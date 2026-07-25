@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.51.0 — 2026-07-26
+
+- Inspect the raw workbook-level DrawingML Theme before ordinary workbook
+  readers can reduce it to local style references: workbook-to-Theme bindings,
+  transitional and strict Theme XML colour/font/format schemes, direct
+  Theme-image relationships, and bounded direct image payloads. Profiles,
+  Markdown, JSON, and SARIF expose aggregate counts only; Theme XML, scheme
+  names, colour values, font names, image bytes, relationship IDs, and targets
+  remain private.
+- Emit `FF053` for a material stored workbook-Theme control change and
+  add the fail-closed `no_workbook_theme_changes` policy rule
+  (`FFP053`). This closes the review gap where a colour, font,
+  effect, or direct Theme-image control can change a themed cell, chart, or
+  drawing appearance while ordinary cells and local style references stay
+  fixed.
+- Normalize writer-selected Theme relationship IDs/order and equivalent
+  internal target spelling. Missing, duplicate, malformed, unsafe, unbound,
+  unreadable, oversized, or over-budget metadata emits a visible coverage
+  warning; reads are bounded to 16 MiB per part, 64 MiB per workbook, and 512
+  parts. FormulaFence does not resolve effective styles, render a workbook,
+  calculate contrast, decode an image, fetch a target, calculate formulas, or
+  infer Excel client behavior.
+
 ## 0.50.0 — 2026-07-26
 
 - Inspect raw custom workbook data stores before ordinary workbook readers can

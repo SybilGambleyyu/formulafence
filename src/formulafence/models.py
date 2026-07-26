@@ -1044,17 +1044,23 @@ class OfficeWebAddinSnapshot:
 class ChartDefinitionSnapshot:
     """Safe aggregate of DrawingML chart definitions and presentation material.
 
-    Excel chart parts sit behind worksheet or chartsheet drawing relationships,
-    outside the ordinary cell grid. Private signatures retain chart formulas,
-    formatting, cached points, overlay-shape definitions, relationships, and
-    bounded direct payload evidence for comparison; ``to_dict`` deliberately
-    exposes only structural counts.
+    Legacy and Office 2016+ ChartEx parts sit behind worksheet or chartsheet
+    drawing relationships, outside the ordinary cell grid. Private signatures
+    retain chart formulas, formatting, cached points, ChartEx declarations,
+    overlay-shape definitions, relationships, and bounded direct payload
+    evidence for comparison; ``to_dict`` deliberately exposes only structural
+    counts.
     """
 
     chart_host_sheet_count: int = 0
     chart_drawing_part_count: int = 0
     chart_reference_count: int = 0
     chart_part_count: int = 0
+    chart_ex_reference_count: int = 0
+    chart_ex_part_count: int = 0
+    chart_ex_series_count: int = 0
+    chart_ex_title_count: int = 0
+    chart_ex_data_reference_count: int = 0
     chart_user_shape_part_count: int = 0
     chart_user_shape_count: int = 0
     chart_type_count: int = 0
@@ -1088,6 +1094,8 @@ class ChartDefinitionSnapshot:
             or self.chart_drawing_part_count
             or self.chart_reference_count
             or self.chart_part_count
+            or self.chart_ex_reference_count
+            or self.chart_ex_part_count
             or self.chart_user_shape_part_count
             or self.unrecognized_part_count
         )
@@ -1100,6 +1108,11 @@ class ChartDefinitionSnapshot:
             "chart_drawing_part_count": self.chart_drawing_part_count,
             "chart_reference_count": self.chart_reference_count,
             "chart_part_count": self.chart_part_count,
+            "chart_ex_reference_count": self.chart_ex_reference_count,
+            "chart_ex_part_count": self.chart_ex_part_count,
+            "chart_ex_series_count": self.chart_ex_series_count,
+            "chart_ex_title_count": self.chart_ex_title_count,
+            "chart_ex_data_reference_count": self.chart_ex_data_reference_count,
             "chart_user_shape_part_count": self.chart_user_shape_part_count,
             "chart_user_shape_count": self.chart_user_shape_count,
             "chart_type_count": self.chart_type_count,
@@ -3980,6 +3993,8 @@ class WorkbookSnapshot:
             "chart_cached_data_point_count": (
                 self.chart_definitions.cached_data_point_count
             ),
+            "chart_ex_part_count": self.chart_definitions.chart_ex_part_count,
+            "chart_ex_series_count": self.chart_definitions.chart_ex_series_count,
             "has_chart_definitions": self.chart_definitions.present,
             "worksheet_embedded_control_sheet_count": (
                 self.worksheet_embedded_controls.control_sheet_count

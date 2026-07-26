@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.63.0 — 2026-07-26
+
+- Inspect Office 2016+ DrawingML ChartEx (`cx:chart`) workbook controls under
+  the existing high-severity `FF030` / `FFP030` chart boundary. FormulaFence
+  recognizes ChartEx graphic frames inside Excel's `mc:AlternateContent`
+  fallback form, follows the Office 2014 `chartEx` relationship to bounded
+  `chartEx*.xml` parts, and compares their private XML and normalized binding
+  semantics without exposing formulas, labels, titles, target paths, XML, or
+  payload bytes.
+- Fingerprint bounded direct ChartEx style, colour-style, drawing, image,
+  theme-override, and embedded-package targets. Profiles and Markdown now
+  expose safe ChartEx references, parts, series, titles, data-reference, and
+  direct-payload counts alongside legacy chart counts. Relationship-ID rewrites
+  and equivalent internal target spellings remain quiet.
+- Treat malformed, missing, duplicate, orphaned, external, unsafe, unsupported,
+  oversized, and over-budget ChartEx material as visible coverage evidence.
+  FormulaFence still does not calculate formulas, render or assess ChartEx
+  visuals, infer chart-to-cell impact, parse media/package formats, resolve
+  second-hop relationships, or interpret ChartEx-specific visualization or
+  nested-chart semantics.
+
 ## 0.62.0 — 2026-07-26
 
 - Extend the existing `FF044` Worksheet DrawingML control boundary to inspect

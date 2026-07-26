@@ -104,7 +104,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_xlm_macro_sheet_changes` | boolean | An Excel 4.0 / XLM macro-sheet declaration, program XML, related-part relationship, or direct internal related-part payload changes. |
 | `no_ribbon_customization_changes` | boolean | An Office RibbonX custom-UI package declaration, control/callback XML, or direct relationship changes. |
 | `no_office_web_addin_changes` | boolean | An Office Web Add-in task-pane workbook binding, task-pane configuration, web-extension definition, or direct relationship changes. |
-| `no_chart_definition_changes` | boolean | A DrawingML chart binding, chart definition, cached series data, chart-overlay shape, direct relationship, or bounded direct related payload changes. |
+| `no_chart_definition_changes` | boolean | A legacy DrawingML or Office 2016+ ChartEx chart binding, chart definition, cached series data, chart-overlay shape, direct relationship, or bounded direct related payload changes. |
 | `no_pivot_table_definition_changes` | boolean | A PivotTable binding/layout, cache schema, shared item, cache-record relationship, or bounded cached-record payload changes. Source and refresh controls remain under `no_external_data_connection_changes`. |
 | `no_slicer_timeline_cache_changes` | boolean | A Slicer or Timeline workbook binding, cached filter state, source binding, filtered-PivotTable binding, or direct cache-part relationship changes. |
 | `no_power_pivot_data_model_changes` | boolean | An embedded Power Pivot/Data Model workbook binding, `x15:dataModel` declaration, direct model-part relationship, or bounded raw model payload changes. |
@@ -353,22 +353,28 @@ modeled.
 DrawingML charts can change a report's series, axis, title, formatting, cached
 values, or overlay annotations without changing an ordinary worksheet cell.
 FormulaFence follows standard worksheet/chartsheet drawing relationships through
-`c:chart` parts and direct `c:userShapes` overlays. It privately compares chart
-definition material separately from `numCache`, `strCache`, and
-`multiLvlStrCache` material; it also compares overlay XML, relationship
-semantics, and bounded direct related payload hashes. Profiles expose safe
-structural counts only. Formulas, labels, cached values, formatting, overlay
-text, target paths, XML, and payload bytes never enter a profile or diff.
-Writer-chosen relationship IDs and equivalent internal target spellings are
-normalized. A material change emits `FF030`; enable
+legacy `c:chart` parts and Office 2016+ `cx:chart` ChartEx parts, including
+ChartEx frames stored inside `mc:AlternateContent` with an older-client
+fallback. It privately compares legacy chart definition material separately
+from `numCache`, `strCache`, and `multiLvlStrCache` material; it fingerprints
+ChartEx XML and bounded direct ChartEx style, colour-style, drawing, image,
+theme-override, and embedded-package payloads. It also compares legacy overlay
+XML, relationship semantics, and bounded direct related payload hashes.
+Profiles expose safe structural counts only. Formulas, labels, cached values,
+formatting, overlay text, target paths, XML, and payload bytes never enter a
+profile or diff. Writer-chosen relationship IDs and equivalent internal target
+spellings are normalized. A material change emits `FF030`; enable
 `no_chart_definition_changes` to make it `FFP030` in CI. FormulaFence does not
 calculate a series, map chart references into downstream cell impact, render a
 chart, assess visual output, follow external targets, parse media/package
-formats, or interpret `chartEx`. XML reads are bounded to 16 MiB per part, 64
-MiB per workbook, and 512 parts; direct payload hashes are bounded to 32 MiB
-per part, 64 MiB per workbook, and 512 parts. Missing, malformed, orphaned,
-unbound, oversized, or over-budget chart material remains a visible coverage
-warning.
+formats, resolve ChartEx second-hop relationships, or interpret ChartEx-specific
+visualization semantics. XML reads are bounded to 16 MiB per part, 64 MiB per
+workbook, and 512 parts; direct payload hashes are bounded to 32 MiB per part,
+64 MiB per workbook, and 512 parts. Missing, malformed, orphaned, unbound,
+unsupported, oversized, or over-budget chart material remains a visible
+coverage warning. The boundary follows Microsoft's [ChartEx part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-odrawxml/5d0d453e-adac-43be-a797-59b9916593dd)
+and [ChartEx relationship-ID](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-odrawxml/d8ede39e-a36c-48ad-8a17-0086a2d0889b)
+definitions.
 
 PivotTable packages can regroup, filter, aggregate, or present report material
 without changing an ordinary formula cell. FormulaFence follows the bounded

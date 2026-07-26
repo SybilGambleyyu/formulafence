@@ -20,6 +20,7 @@ from .helpers import (
     add_ordinary_dimension_resize,
     add_power_pivot_data_model_direct_relationship,
     add_protected_range,
+    add_unsupported_extended_chart_relationship,
     add_worksheet_dimension_baseline_adjustments,
     add_worksheet_smartart_component_relationship,
     break_slicer_timeline_pivot_cache_binding,
@@ -43,6 +44,8 @@ from .helpers import (
     change_default_fill_definition,
     change_default_font_definition,
     change_default_zero_dimension_visibility_controls,
+    change_extended_chart_definition_material,
+    change_extended_chart_style_payload,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
     change_fill_definition,
@@ -129,6 +132,7 @@ from .helpers import (
     corrupt_custom_data_properties_root,
     corrupt_custom_workbook_view_control,
     corrupt_default_zero_dimension_visibility_controls,
+    corrupt_extended_chart_definition_root,
     corrupt_fill_column_control,
     corrupt_fill_definition,
     corrupt_filter_visibility_column_control,
@@ -173,6 +177,7 @@ from .helpers import (
     duplicate_external_link_sheet_names,
     duplicate_ignored_error_container,
     externalize_chart_overlay_relationship,
+    externalize_extended_chart_relationship,
     externalize_legacy_comment_relationship,
     externalize_legacy_note_vml_relationship,
     externalize_package_signature_relationship,
@@ -196,6 +201,7 @@ from .helpers import (
     make_data_validation_model,
     make_digital_signature_model,
     make_empty_chart_sheet_custom_view_container_model,
+    make_extended_chart_definition_model,
     make_external_data_refresh_model,
     make_external_link_package_model,
     make_fill_model,
@@ -302,10 +308,12 @@ from .helpers import (
     rebind_slicer_timeline_cache,
     rebind_worksheet_image_source_relationship,
     rebind_xml_mapping_relationship,
+    remove_extended_chart_direct_relationship_id,
     remove_power_pivot_data_model_workbook_binding,
     remove_xlm_macro_sheet_related_part_payload,
     renumber_cell_hyperlink_identifiers,
     renumber_chart_relationships,
+    renumber_extended_chart_relationships,
     renumber_external_link_declaration_relationships,
     renumber_legacy_comment_identifiers,
     renumber_legacy_threaded_placeholder_identifiers,
@@ -3147,6 +3155,11 @@ def test_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
         "chart_drawing_part_count": 1,
         "chart_reference_count": 1,
         "chart_part_count": 1,
+        "chart_ex_reference_count": 0,
+        "chart_ex_part_count": 0,
+        "chart_ex_series_count": 0,
+        "chart_ex_title_count": 0,
+        "chart_ex_data_reference_count": 0,
         "chart_user_shape_part_count": 1,
         "chart_user_shape_count": 1,
         "chart_type_count": 1,
@@ -3169,6 +3182,7 @@ def test_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
     }
     assert baseline_snapshot.parser_warnings == ()
     assert "## Chart definitions and cached presentation data" in markdown
+    assert "Office 2016+ ChartEx parts" in markdown
     assert chart_change.details["chart_definition_material_changed"] is True
     assert chart_change.details["overlay_shape_material_changed"] is True
     assert chart_change.details["related_part_relationships_changed"] is True
@@ -3209,6 +3223,148 @@ def test_chart_cached_data_is_compared_separately_from_chart_definition(tmp_path
     assert "chart_definition_material_changed" not in chart_change.details
     assert "overlay_shape_material_changed" not in chart_change.details
     assert {finding.rule_id for finding in report.findings} >= {"FF030"}
+
+
+def test_extended_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
+    baseline = make_extended_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_extended_chart_definition_model(tmp_path / "candidate.xlsx")
+    change_extended_chart_definition_material(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    chart_change = next(
+        change for change in report.changes if change.kind == "chart_definitions_changed"
+    )
+
+    charts = profile["chart_definitions"]
+    assert baseline_snapshot.summary()["chart_ex_part_count"] == 1
+    assert baseline_snapshot.summary()["chart_ex_series_count"] == 1
+    assert charts["chart_host_sheet_count"] == 1
+    assert charts["chart_drawing_part_count"] == 1
+    assert charts["chart_reference_count"] == 0
+    assert charts["chart_part_count"] == 0
+    assert charts["chart_ex_reference_count"] == 1
+    assert charts["chart_ex_part_count"] == 1
+    assert charts["chart_ex_series_count"] == 1
+    assert charts["chart_ex_title_count"] == 1
+    assert charts["chart_ex_data_reference_count"] == 2
+    assert charts["related_relationship_count"] == 3
+    assert charts["internal_related_part_count"] == 2
+    assert charts["fingerprinted_related_part_count"] == 2
+    assert charts["unrecognized_part_count"] == 0
+    assert baseline_snapshot.worksheet_drawing_shapes.present is False
+    assert baseline_snapshot.parser_warnings == ()
+    assert "Office 2016+ ChartEx parts:** 1" in markdown
+    assert chart_change.details["chart_definition_material_changed"] is True
+    assert {finding.rule_id for finding in report.findings} >= {"FF030"}
+
+    sensitive_values = (
+        "PRIVATE-CHARTEX-NAME",
+        "PRIVATE-CHARTEX-TITLE",
+        "PRIVATE-CANDIDATE-CHARTEX-TITLE",
+        "PRIVATE-CHARTEX-VALUES",
+        "PRIVATE-CANDIDATE-CHARTEX-VALUES",
+        "PRIVATE-CHARTEX-FALLBACK-TEXT",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_extended_chart_style_payload_is_compared_separately(tmp_path) -> None:
+    baseline = make_extended_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_extended_chart_definition_model(tmp_path / "candidate.xlsx")
+    change_extended_chart_style_payload(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    chart_change = next(
+        change for change in report.changes if change.kind == "chart_definitions_changed"
+    )
+
+    assert chart_change.details["related_part_payload_material_changed"] is True
+    assert "chart_definition_material_changed" not in chart_change.details
+    assert {finding.rule_id for finding in report.findings} >= {"FF030"}
+
+
+def test_extended_chart_relationship_identifier_noise_is_ignored(tmp_path) -> None:
+    baseline = make_extended_chart_definition_model(tmp_path / "baseline.xlsx")
+    renumbered = make_extended_chart_definition_model(tmp_path / "renumbered.xlsx")
+    renumber_extended_chart_relationships(renumbered)
+
+    renumbered_snapshot = load_snapshot(renumbered)
+    report = compare_snapshots(load_snapshot(baseline), renumbered_snapshot)
+
+    assert renumbered_snapshot.parser_warnings == ()
+    assert "chart_definitions_changed" not in {change.kind for change in report.changes}
+    assert "FF030" not in {finding.rule_id for finding in report.findings}
+
+
+def test_malformed_extended_chart_parts_fail_closed(tmp_path) -> None:
+    baseline = make_extended_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_extended_chart_definition_model(tmp_path / "candidate.xlsx")
+    corrupt_extended_chart_definition_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.chart_definitions.unrecognized_part_count >= 1
+    assert any(
+        "extended-chart part with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "chart_definitions_changed" in {change.kind for change in report.changes}
+    assert "FF030" in {finding.rule_id for finding in report.findings}
+
+
+def test_unsupported_extended_chart_relationships_fail_closed(tmp_path) -> None:
+    workbook = make_extended_chart_definition_model(tmp_path / "candidate.xlsx")
+    add_unsupported_extended_chart_relationship(workbook)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.chart_definitions.unrecognized_part_count >= 1
+    assert any(
+        "unsupported direct extended-chart relationship" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_extended_chart_direct_relationships_without_ids_fail_closed(tmp_path) -> None:
+    workbook = make_extended_chart_definition_model(tmp_path / "candidate.xlsx")
+    remove_extended_chart_direct_relationship_id(workbook)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.chart_definitions.unrecognized_part_count >= 1
+    assert any(
+        "extended-chart direct relationship without an id" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_external_extended_chart_bindings_fail_closed(tmp_path) -> None:
+    baseline = make_extended_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_extended_chart_definition_model(tmp_path / "candidate.xlsx")
+    externalize_extended_chart_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.chart_definitions.external_relationship_count >= 1
+    assert candidate_snapshot.chart_definitions.unrecognized_part_count >= 1
+    assert any(
+        "extended DrawingML chart reference without a safe internal target" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "chart_definitions_changed" in {change.kind for change in report.changes}
 
 
 def test_chartsheet_chart_parts_are_discovered_from_drawing_relationships(tmp_path) -> None:

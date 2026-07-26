@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.62.0/formulafence-0.62.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.63.0/formulafence-0.63.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -367,29 +367,37 @@ specifications.
 
 FormulaFence also inventories **DrawingML chart definitions and cached
 presentation data**. A worksheet or chartsheet can point to a drawing part,
-which binds a `c:chart` part holding the chart type, series, titles, axes,
-formatting, formulas, and last cached values outside ordinary cells. A chart can
-also point to a `c:userShapes` overlay part whose text or image relationship
-changes what a reader sees. FormulaFence follows the bounded
-worksheet/chartsheet → drawing → chart → overlay chain, compares private chart
-definition and cache material separately, and hashes bounded direct related
-payloads without parsing them. It emits `FF030` for a material change; enable
-`no_chart_definition_changes` for `FFP030`.
+which binds a legacy `c:chart` part holding the chart type, series, titles,
+axes, formatting, formulas, and last cached values outside ordinary cells. It
+also recognizes Office 2016+ `cx:chart` ChartEx bindings, including the
+`mc:AlternateContent` graphic-frame form Excel writes with an older-client
+fallback. A legacy chart can point to a `c:userShapes` overlay part whose text
+or image relationship changes what a reader sees; a ChartEx part can carry
+fixed direct style, colour-style, drawing, image, theme-override, and embedded
+package targets.
 
-Profiles expose only safe counts for host sheets, parts, references, series,
-titles, chart-type elements, cached/literal point counts, pivot/external/overlay
-references, relationships, and inspected versus uninspected direct targets.
-Series formulas, labels, cached values, formatting, overlay text, relationship
-targets, XML, and payload bytes never enter profiles or reports. Writer-chosen
-relationship IDs and equivalent internal target spellings are normalized away.
-Malformed, missing, orphaned, unbound, oversized, or over-budget chart material
-becomes a visible coverage warning. XML reads are bounded to 16 MiB per part,
-64 MiB per workbook, and 512 parts; direct related payload hashes are bounded
-to 32 MiB per part, 64 MiB per workbook, and 512 parts. FormulaFence does not
-calculate a series formula, map chart inputs into the cell-impact graph, render
-a chart, assess its visual truthfulness, follow external targets, parse direct
-media or embedded-package formats, or interpret modern `chartEx` semantics.
-The boundary follows the OOXML [Chart Part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Chart_topic_ID0ELZLM.html), the documented
+FormulaFence follows the bounded worksheet/chartsheet → drawing →
+legacy-chart/ChartEx chain, compares private legacy chart definition and cache
+material separately, fingerprints private ChartEx XML, and hashes bounded
+direct related payloads without parsing their formats. It emits `FF030` for a
+material change; enable `no_chart_definition_changes` for `FFP030`.
+
+Profiles expose only safe counts for host sheets, legacy and ChartEx parts and
+references, series, titles, chart-type elements, cached/literal point counts,
+pivot/external/overlay references, relationships, and inspected versus
+uninspected direct targets. Series formulas, labels, cached values, formatting,
+overlay text, relationship targets, XML, and payload bytes never enter profiles
+or reports. Writer-chosen relationship IDs and equivalent internal target
+spellings are normalized away. Malformed, missing, orphaned, unbound,
+unsupported, oversized, or over-budget chart material becomes a visible
+coverage warning. XML reads are bounded to 16 MiB per part, 64 MiB per
+workbook, and 512 parts; direct related payload hashes are bounded to 32 MiB
+per part, 64 MiB per workbook, and 512 parts. FormulaFence does not calculate
+a series formula, map chart inputs into the cell-impact graph, render a chart,
+assess its visual truthfulness, follow external targets, parse direct media or
+embedded-package formats, resolve ChartEx second-hop relationships, or
+interpret ChartEx-specific visualization semantics. The boundary follows the
+OOXML [Chart Part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Chart_topic_ID0ELZLM.html), Microsoft's [ChartEx part definition](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-odrawxml/5d0d453e-adac-43be-a797-59b9916593dd), its [ChartEx relationship-ID type](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-odrawxml/d8ede39e-a36c-48ad-8a17-0086a2d0889b), the documented
 [number-reference cache](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.numberreference?view=openxml-3.0.1),
 and the [chart-overlay relationship](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.usershapesreference?view=openxml-2.20.0).
 

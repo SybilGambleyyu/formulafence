@@ -5,6 +5,63 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Office 2016+ ChartEx worksheet charts — 2026-07-26
+
+FormulaFence 0.63.0 was checked against Microsoft's [ChartEx part
+definition](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-odrawxml/5d0d453e-adac-43be-a797-59b9916593dd)
+and [ChartEx relationship-ID
+type](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-odrawxml/d8ede39e-a36c-48ad-8a17-0086a2d0889b),
+then against the independently maintained LibreOffice core fixture at commit
+[`a85bae573eeb9e1548176760c0bdb01509ec7c42`](https://github.com/LibreOffice/core/tree/a85bae573eeb9e1548176760c0bdb01509ec7c42):
+[`sunburst.xlsx`](https://github.com/LibreOffice/core/blob/a85bae573eeb9e1548176760c0bdb01509ec7c42/chart2/qa/extras/data/xlsx/sunburst.xlsx)
+(SHA-256
+`8baf66751b6afa7b28f7e9fbc35ea5d9f7ce39d33c8840d9a67cf21a92dadfa4`).
+Its worksheet drawing contains Excel's `mc:AlternateContent` form: a
+`cx:chart` ChartEx graphic-frame choice and an older-client fallback shape. The
+choice resolves through the Office 2014 `chartEx` relationship to
+`xl/charts/chartEx1.xml`, which in turn has direct style and colour-style
+parts. FormulaFence reported one host sheet, one drawing part, one ChartEx
+reference/part, one series, one title, two data references, two fingerprinted
+direct parts, and no parser warning; the fallback was not counted as a second
+worksheet shape.
+
+The same public commit's `waterfall.xlsx`, `treemap.xlsx`, `boxWhisker.xlsx`,
+and `regionMap.xlsx` were also profiled. Each produced one clean ChartEx part;
+their series/data-reference counts respectively demonstrated Waterfall (1/1),
+Treemap (1/2), Box & Whisker (3/3), and Region Map (1/2) structures with the
+same two direct style/colour payloads. This independently checks that the
+scanner does not assume one visual ChartEx kind.
+
+A controlled copy of `sunburst.xlsx` changed only private title text in
+`xl/charts/chartEx1.xml`. Both archives passed `unzip -t`, retained the same
+member set, and differed in uncompressed bytes only for that member. The source
+and candidate SHA-256 values were respectively
+`8baf66751b6afa7b28f7e9fbc35ea5d9f7ce39d33c8840d9a67cf21a92dadfa4` and
+`2cf6fc0701388fb2e3ad460186e80ba7f1c7e4d22b05a68fb4af8e32e0c4dcca`.
+The CLI emitted exactly one high-severity `chart_definitions_changed` change
+with `FF030` and the safe `chart_definition_material_changed` detail. The
+starter policy's `no_chart_definition_changes: true` rule exited `1` and added
+`FFP030`. The
+controlled suite separately changes a direct ChartEx style payload, rekeys the
+drawing relationship without a finding, and fails closed for a malformed
+ChartEx root, external chart binding, and unsupported direct relationship.
+Private formulas, titles, fallback text, relationship targets, XML, and payload
+bytes were checked absent from JSON, Markdown, SARIF, and policy output.
+
+A clean Python virtual environment installed the staged 0.63.0 wheel
+(SHA-256 `b27be099787164a1f7e28258a04453fc54687a9aaf18f695cfa3fbbbcd941d3b`)
+after both distribution archives passed their archive-integrity checks. The
+installed CLI returned `FormulaFence 0.63.0`, profiled one ChartEx part, one
+series, two data references, two fingerprinted direct parts, and zero
+unrecognized parts on the public Sunburst fixture. It emitted `FF030` for the
+controlled ChartEx change, and its starter-policy check exited `1` with
+`FFP030`.
+
+This validates bounded stored-package comparison, relationship normalization,
+and data minimisation. It does not calculate formulas, render a chart, assess
+ChartEx visual semantics, follow external targets or second-hop relationships,
+or parse direct media and embedded-package formats.
+
 ## Worksheet DrawingML SmartArt graphic frames — 2026-07-26
 
 FormulaFence 0.62.0 was checked against Microsoft's documented
@@ -1784,8 +1841,10 @@ and overlay XML reads are bounded to 16 MiB per part, 64 MiB per workbook, and
 per workbook, and 512 parts. This validates static, relationship-aware
 comparison and data minimisation—not series-formula calculation, chart
 rendering, chart-to-cell impact analysis, external-target retrieval, media or
-embedded-package parsing, source trust, or modern `chartEx`/nested-chart
-semantics. The fixture follows the OOXML [chart-part model](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Chart_topic_ID0ELZLM.html),
+embedded-package parsing, source trust, or nested-chart semantics. ChartEx
+coverage is validated separately above; FormulaFence fingerprints its stored
+package graph without interpreting its visualization semantics. The fixture
+follows the OOXML [chart-part model](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Chart_topic_ID0ELZLM.html),
 the documented [number-reference cache](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.numberreference?view=openxml-3.0.1),
 and the [chart user-shapes relationship](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.usershapesreference?view=openxml-2.20.0).
 

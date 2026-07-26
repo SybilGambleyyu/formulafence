@@ -900,22 +900,31 @@ review prompt, not proof of an error.
   visible parser-coverage warning. Raw payload reads are bounded to 512 MiB per
   part, 512 MiB per workbook, and 16 parts.
 - DrawingML chart definitions and cached presentation data are followed from
-  standard worksheet or chartsheet `drawing` relationships through chart parts
-  and direct `userShapes` overlays. FormulaFence privately fingerprints
-  non-cache chart definition material separately from `numCache`, `strCache`,
-  and `multiLvlStrCache` material, plus overlay XML, normalized relationship
-  semantics, and bounded direct internal related-part payloads. Profiles expose
-  only structural counts; chart formulas, cached values, titles, shape text,
-  relationship targets, XML, and payload bytes remain private. A material
-  change emits `FF030` and can be blocked with
+  standard worksheet or chartsheet `drawing` relationships through legacy
+  `c:chart` parts, direct `c:userShapes` overlays, and Office 2016+ `cx:chart`
+  ChartEx parts. ChartEx `mc:AlternateContent` graphic-frame bindings are
+  recognized without treating their older-client fallback shape as a second
+  worksheet control. FormulaFence privately fingerprints non-cache legacy
+  chart material separately from `numCache`, `strCache`, and `multiLvlStrCache`
+  material, plus overlay XML, normalized relationship semantics, ChartEx XML,
+  and bounded direct internal related-part payloads. Supported ChartEx direct
+  relationships are style, colour-style, drawing, image, theme-override, and
+  embedded package; unsupported, external, or unsafe edges remain explicit
+  coverage evidence. Profiles expose only structural counts; chart formulas,
+  cached values, titles, shape text, relationship targets, XML, and payload
+  bytes remain private. A material change emits `FF030` and can be blocked with
   `no_chart_definition_changes`. FormulaFence does **not** calculate a series
   formula, render a chart, infer chart-to-cell impact, follow an external
-  target, parse media or embedded-package formats, or interpret modern
-  `chartEx`/nested-chart semantics. Missing, malformed, orphaned, unbound,
-  oversized, over-budget, or unrecognized material remains a visible
-  parser-coverage warning. Chart and overlay XML reads are bounded to 16 MiB
-  per part, 64 MiB per workbook, and 512 parts; direct related payload hashes
-  are bounded to 32 MiB per part, 64 MiB per workbook, and 512 parts.
+  target, parse media or embedded-package formats, resolve ChartEx second-hop
+  relationships, or interpret ChartEx-specific or nested-chart visualization
+  semantics. Missing, malformed, orphaned, unbound, unsupported, oversized,
+  over-budget, or unrecognized material remains a visible parser-coverage
+  warning. Chart and overlay XML reads are bounded to 16 MiB per part, 64 MiB
+  per workbook, and 512 parts; direct related payload hashes are bounded to 32
+  MiB per part, 64 MiB per workbook, and 512 parts. The relationship boundary
+  follows Microsoft's [ChartEx part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-odrawxml/5d0d453e-adac-43be-a797-59b9916593dd)
+  and [ChartEx relationship-ID](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-odrawxml/d8ede39e-a36c-48ad-8a17-0086a2d0889b)
+  definitions.
 - Relationship-backed worksheet controls and OLE objects are read from raw
   worksheet control/OLE markup and direct control relationships before the
   workbook reader can omit them. FormulaFence also follows `vmlDrawing`
@@ -993,15 +1002,15 @@ review prompt, not proof of an error.
   legacy Excel Note/comments/VML and threaded-placeholder package chains,
   modern threaded-comment/person package chains, non-chart Worksheet DrawingML
   regular/group/connector/recognized-SmartArt graphic-frame controls, native
-  worksheet picture/background/header-footer image controls, DrawingML chart
-  definition/cached-presentation/overlay chains,
+  worksheet picture/background/header-footer image controls, legacy and ChartEx
+  DrawingML chart definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link
   packages, and private Power Query definition material. It does not yet
   interpret PivotTable OLAP or other extension-list semantics; deserialize or execute
   Power Pivot/Data Model content; apply Slicer/Timeline filters or model their
-  worksheet/drawing view geometry/styles; modern
-  `chartEx` or nested-chart semantics; future Named Sheet View extension/rich-
+  worksheet/drawing view geometry/styles; ChartEx-specific visualization,
+  second-hop relationship, or nested-chart semantics; future Named Sheet View extension/rich-
   sort or full differential-format semantics; unknown non-chart
   graphic-frame URI types, SmartArt rendering/final-layout behavior, or
   SmartArt component-side relationship targets; chart-to-cell impact; Ribbon

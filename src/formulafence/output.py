@@ -146,6 +146,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         f"- **Declared PivotTable cache records:** {workbook['pivot_cache_record_count']}",
         f"- **Chart host sheets:** {workbook['chart_host_sheet_count']}",
         f"- **Chart parts:** {workbook['chart_part_count']}",
+        f"- **Office 2016+ ChartEx parts:** {workbook['chart_ex_part_count']}",
         f"- **Cached chart data points:** {workbook['chart_cached_data_point_count']}",
         (
             "- **Worksheet DrawingML shapes / text-bearing shapes / graphic frames / SmartArt:** "
@@ -2302,12 +2303,20 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 "## Chart definitions and cached presentation data",
                 "",
                 (
-                    "- **Chart host sheets / drawing parts / references:** "
+                    "- **Chart host sheets / drawing parts / legacy refs / ChartEx refs:** "
                     f"{chart_definitions['chart_host_sheet_count']} / "
                     f"{chart_definitions['chart_drawing_part_count']} / "
-                    f"{chart_definitions['chart_reference_count']}"
+                    f"{chart_definitions['chart_reference_count']} / "
+                    f"{chart_definitions['chart_ex_reference_count']}"
                 ),
                 f"- **Chart parts:** {chart_definitions['chart_part_count']}",
+                f"- **Office 2016+ ChartEx parts:** {chart_definitions['chart_ex_part_count']}",
+                (
+                    "- **ChartEx series / titles / data references:** "
+                    f"{chart_definitions['chart_ex_series_count']} / "
+                    f"{chart_definitions['chart_ex_title_count']} / "
+                    f"{chart_definitions['chart_ex_data_reference_count']}"
+                ),
                 (
                     "- **Overlay parts / shapes:** "
                     f"{chart_definitions['chart_user_shape_part_count']} / "

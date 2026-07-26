@@ -100,6 +100,8 @@ _RICH_VALUE_REL_NS = (
 _RICH_DATA_METADATA_EXTENSION_URI = "{3E2802C4-A4D2-4D8B-9148-E3BE6C30E623}"
 _DRAWINGML_MAIN_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _DRAWINGML_STRICT_MAIN_NS = "http://purl.oclc.org/ooxml/drawingml/main"
+_DRAWINGML_CHART_EX_NS = "http://schemas.microsoft.com/office/drawing/2014/chartex"
+_MARKUP_COMPATIBILITY_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 _RICH_DATA_RELATIONSHIPS = {
     "rich-value-data": (
         "http://schemas.microsoft.com/office/2017/06/relationships/rdRichValue"
@@ -8722,6 +8724,422 @@ def corrupt_chart_definition_root(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".chart-definition-corrupt.tmp.xlsx")
+
+
+def _extended_chart_fixture_part_names(contents: dict[str, bytes]) -> tuple[str, str]:
+    """Return the drawing and ChartEx members from the controlled fixture."""
+    drawing_member = "xl/drawings/drawing1.xml"
+    chart_member = "xl/charts/chartEx1.xml"
+    required = {
+        drawing_member,
+        chart_member,
+        _relationship_member(drawing_member),
+        _relationship_member(chart_member),
+    }
+    if not required <= set(contents):
+        raise ValueError("Fixture does not contain an extended-chart package")
+    return drawing_member, chart_member
+
+
+def make_extended_chart_definition_model(path: Path) -> Path:
+    """Create an Office 2016+ ChartEx chain behind an Excel-style fallback.
+
+    The fixture mirrors real Excel packages: a ``cx:chart`` binding is nested
+    in ``mc:AlternateContent`` and points to a ChartEx part with fixed chart
+    style and colour relationships.  All values are deliberate redaction
+    sentinels and the package is only used for static inspection tests.
+    """
+    make_model(path)
+    content_types = _CONTENT_TYPES_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    chart_ex = _DRAWINGML_CHART_EX_NS
+    chart_style = "http://schemas.microsoft.com/office/drawing/2012/chartStyle"
+    chart_colour_style = "http://schemas.microsoft.com/office/drawing/2012/chartColorStyle"
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def marker(
+        parent: ElementTree.Element,
+        name: str,
+        *,
+        column: int,
+        row: int,
+    ) -> None:
+        point = ElementTree.SubElement(parent, f"{{{drawing}}}{name}")
+        ElementTree.SubElement(point, f"{{{drawing}}}col").text = str(column)
+        ElementTree.SubElement(point, f"{{{drawing}}}colOff").text = "0"
+        ElementTree.SubElement(point, f"{{{drawing}}}row").text = str(row)
+        ElementTree.SubElement(point, f"{{{drawing}}}rowOff").text = "0"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        drawing_member = "xl/drawings/drawing1.xml"
+        chart_member = "xl/charts/chartEx1.xml"
+
+        worksheet = ElementTree.fromstring(contents[worksheet_member])
+        ElementTree.SubElement(
+            worksheet,
+            f"{{{spreadsheet}}}drawing",
+            {f"{{{document_relationships}}}id": "rIdFenceChartExDrawing"},
+        )
+        contents[worksheet_member] = serialize(worksheet)
+
+        worksheet_relationships_member = _relationship_member(worksheet_member)
+        worksheet_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            worksheet_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceChartExDrawing",
+                "Type": f"{document_relationships}/drawing",
+                "Target": "../drawings/drawing1.xml",
+            },
+        )
+        contents[worksheet_relationships_member] = serialize(worksheet_relationships)
+
+        drawing_root = ElementTree.Element(f"{{{drawing}}}wsDr")
+        anchor = ElementTree.SubElement(drawing_root, f"{{{drawing}}}twoCellAnchor")
+        marker(anchor, "from", column=4, row=1)
+        marker(anchor, "to", column=11, row=16)
+        alternate_content = ElementTree.SubElement(
+            anchor,
+            f"{{{_MARKUP_COMPATIBILITY_NS}}}AlternateContent",
+        )
+        choice = ElementTree.SubElement(
+            alternate_content,
+            f"{{{_MARKUP_COMPATIBILITY_NS}}}Choice",
+            {"Requires": "cx1"},
+        )
+        graphic_frame = ElementTree.SubElement(choice, f"{{{drawing}}}graphicFrame")
+        nonvisual = ElementTree.SubElement(
+            graphic_frame,
+            f"{{{drawing}}}nvGraphicFramePr",
+        )
+        ElementTree.SubElement(
+            nonvisual,
+            f"{{{drawing}}}cNvPr",
+            {
+                "id": "9101",
+                "name": "PRIVATE-CHARTEX-NAME",
+                "descr": "PRIVATE-CHARTEX-DESCRIPTION",
+            },
+        )
+        ElementTree.SubElement(nonvisual, f"{{{drawing}}}cNvGraphicFramePr")
+        transform = ElementTree.SubElement(graphic_frame, f"{{{drawing}}}xfrm")
+        ElementTree.SubElement(
+            transform,
+            f"{{{_DRAWINGML_MAIN_NS}}}off",
+            {"x": "0", "y": "0"},
+        )
+        ElementTree.SubElement(
+            transform,
+            f"{{{_DRAWINGML_MAIN_NS}}}ext",
+            {"cx": "4572000", "cy": "2743200"},
+        )
+        graphic = ElementTree.SubElement(graphic_frame, f"{{{_DRAWINGML_MAIN_NS}}}graphic")
+        graphic_data = ElementTree.SubElement(
+            graphic,
+            f"{{{_DRAWINGML_MAIN_NS}}}graphicData",
+            {"uri": chart_ex},
+        )
+        ElementTree.SubElement(
+            graphic_data,
+            f"{{{chart_ex}}}chart",
+            {f"{{{document_relationships}}}id": "rIdFenceChartEx"},
+        )
+        fallback = ElementTree.SubElement(
+            alternate_content,
+            f"{{{_MARKUP_COMPATIBILITY_NS}}}Fallback",
+        )
+        fallback_shape = ElementTree.SubElement(fallback, f"{{{drawing}}}sp")
+        fallback_nonvisual = ElementTree.SubElement(
+            fallback_shape,
+            f"{{{drawing}}}nvSpPr",
+        )
+        ElementTree.SubElement(
+            fallback_nonvisual,
+            f"{{{drawing}}}cNvPr",
+            {"id": "9102", "name": "PRIVATE-CHARTEX-FALLBACK"},
+        )
+        ElementTree.SubElement(fallback_nonvisual, f"{{{drawing}}}cNvSpPr")
+        fallback_text = ElementTree.SubElement(
+            fallback_shape,
+            f"{{{drawing}}}txBody",
+        )
+        paragraph = ElementTree.SubElement(fallback_text, f"{{{_DRAWINGML_MAIN_NS}}}p")
+        run = ElementTree.SubElement(paragraph, f"{{{_DRAWINGML_MAIN_NS}}}r")
+        ElementTree.SubElement(run, f"{{{_DRAWINGML_MAIN_NS}}}t").text = (
+            "PRIVATE-CHARTEX-FALLBACK-TEXT"
+        )
+        ElementTree.SubElement(anchor, f"{{{drawing}}}clientData")
+        contents[drawing_member] = serialize(drawing_root)
+
+        drawing_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            drawing_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceChartEx",
+                "Type": "http://schemas.microsoft.com/office/2014/relationships/chartEx",
+                "Target": "../charts/chartEx1.xml",
+            },
+        )
+        contents[_relationship_member(drawing_member)] = serialize(drawing_relationships)
+
+        chart_space = ElementTree.Element(f"{{{chart_ex}}}chartSpace")
+        chart_data = ElementTree.SubElement(chart_space, f"{{{chart_ex}}}chartData")
+        data = ElementTree.SubElement(chart_data, f"{{{chart_ex}}}data", {"id": "0"})
+        category = ElementTree.SubElement(data, f"{{{chart_ex}}}strDim", {"type": "cat"})
+        ElementTree.SubElement(category, f"{{{chart_ex}}}f").text = (
+            "PRIVATE-CHARTEX-CATEGORIES"
+        )
+        values = ElementTree.SubElement(data, f"{{{chart_ex}}}numDim", {"type": "val"})
+        ElementTree.SubElement(values, f"{{{chart_ex}}}f").text = "PRIVATE-CHARTEX-VALUES"
+        chart = ElementTree.SubElement(chart_space, f"{{{chart_ex}}}chart")
+        title = ElementTree.SubElement(chart, f"{{{chart_ex}}}title")
+        title_properties = ElementTree.SubElement(title, f"{{{chart_ex}}}txPr")
+        title_paragraph = ElementTree.SubElement(
+            title_properties,
+            f"{{{_DRAWINGML_MAIN_NS}}}p",
+        )
+        title_run = ElementTree.SubElement(title_paragraph, f"{{{_DRAWINGML_MAIN_NS}}}r")
+        ElementTree.SubElement(title_run, f"{{{_DRAWINGML_MAIN_NS}}}t").text = (
+            "PRIVATE-CHARTEX-TITLE"
+        )
+        plot_area = ElementTree.SubElement(chart, f"{{{chart_ex}}}plotArea")
+        region = ElementTree.SubElement(plot_area, f"{{{chart_ex}}}plotAreaRegion")
+        ElementTree.SubElement(
+            region,
+            f"{{{chart_ex}}}series",
+            {"layoutId": "sunburst", "uniqueId": "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"},
+        )
+        contents[chart_member] = serialize(chart_space)
+
+        style_member = "xl/charts/style1.xml"
+        style = ElementTree.Element(f"{{{chart_style}}}chartStyle", {"id": "201"})
+        ElementTree.SubElement(style, f"{{{chart_style}}}title")
+        contents[style_member] = serialize(style)
+        colour_member = "xl/charts/colors1.xml"
+        colours = ElementTree.Element(
+            f"{{{chart_colour_style}}}colorStyle",
+            {"meth": "cycle", "id": "10"},
+        )
+        contents[colour_member] = serialize(colours)
+
+        chart_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            chart_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceChartExStyle",
+                "Type": "http://schemas.microsoft.com/office/2011/relationships/chartStyle",
+                "Target": "style1.xml",
+            },
+        )
+        ElementTree.SubElement(
+            chart_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceChartExColours",
+                "Type": "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle",
+                "Target": "colors1.xml",
+            },
+        )
+        contents[_relationship_member(chart_member)] = serialize(chart_relationships)
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        override_tag = f"{{{content_types}}}Override"
+        for part_name, content_type in (
+            (
+                "/xl/drawings/drawing1.xml",
+                "application/vnd.openxmlformats-officedocument.drawing+xml",
+            ),
+            ("/xl/charts/chartEx1.xml", "application/vnd.ms-office.chartex+xml"),
+            ("/xl/charts/style1.xml", "application/vnd.ms-office.chartstyle+xml"),
+            (
+                "/xl/charts/colors1.xml",
+                "application/vnd.ms-office.chartcolorstyle+xml",
+            ),
+        ):
+            ElementTree.SubElement(
+                types,
+                override_tag,
+                {"PartName": part_name, "ContentType": content_type},
+            )
+        contents["[Content_Types].xml"] = serialize(types)
+
+    return _rewrite_archive(path, mutate, ".extended-chart-definition.tmp.xlsx")
+
+
+def change_extended_chart_definition_material(path: Path) -> Path:
+    """Change private ChartEx XML without editing ordinary worksheet cells."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        _drawing_member, chart_member = _extended_chart_fixture_part_names(contents)
+        chart = ElementTree.fromstring(contents[chart_member])
+        formula = next(chart.iter(f"{{{_DRAWINGML_CHART_EX_NS}}}f"))
+        formula.text = "PRIVATE-CANDIDATE-CHARTEX-VALUES"
+        title = next(chart.iter(f"{{{_DRAWINGML_MAIN_NS}}}t"))
+        title.text = "PRIVATE-CANDIDATE-CHARTEX-TITLE"
+        contents[chart_member] = ElementTree.tostring(
+            chart,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".extended-chart-definition-change.tmp.xlsx")
+
+
+def change_extended_chart_style_payload(path: Path) -> Path:
+    """Change only a direct ChartEx style payload."""
+    chart_style = "http://schemas.microsoft.com/office/drawing/2012/chartStyle"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        style_member = "xl/charts/style1.xml"
+        style = ElementTree.fromstring(contents[style_member])
+        if style.tag != f"{{{chart_style}}}chartStyle":
+            raise ValueError("Fixture does not contain a ChartEx style part")
+        style.set("id", "202")
+        contents[style_member] = ElementTree.tostring(
+            style,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".extended-chart-style-change.tmp.xlsx")
+
+
+def renumber_extended_chart_relationships(path: Path) -> Path:
+    """Rewrite the ChartEx drawing relationship ID without changing its graph."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, _chart_member = _extended_chart_fixture_part_names(contents)
+        relationships_member = _relationship_member(drawing_member)
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            item
+            for item in relationships.findall(f"{{{package_relationships}}}Relationship")
+            if item.get("Id") == "rIdFenceChartEx"
+        )
+        relationship.set("Id", "rIdFenceRenumberedChartEx")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        drawing = ElementTree.fromstring(contents[drawing_member])
+        chart_reference = next(drawing.iter(f"{{{_DRAWINGML_CHART_EX_NS}}}chart"))
+        chart_reference.set(
+            f"{{{document_relationships}}}id",
+            "rIdFenceRenumberedChartEx",
+        )
+        contents[drawing_member] = ElementTree.tostring(
+            drawing,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".extended-chart-id-renumber.tmp.xlsx")
+
+
+def corrupt_extended_chart_definition_root(path: Path) -> Path:
+    """Replace the ChartEx root to exercise fail-closed inspection."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        _drawing_member, chart_member = _extended_chart_fixture_part_names(contents)
+        chart = ElementTree.fromstring(contents[chart_member])
+        chart.tag = "notChartExSpace"
+        contents[chart_member] = ElementTree.tostring(
+            chart,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".extended-chart-corrupt.tmp.xlsx")
+
+
+def externalize_extended_chart_relationship(path: Path) -> Path:
+    """Turn the ChartEx drawing binding into a harmless external target."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, _chart_member = _extended_chart_fixture_part_names(contents)
+        relationships_member = _relationship_member(drawing_member)
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            item
+            for item in relationships.findall(f"{{{package_relationships}}}Relationship")
+            if item.get("Id") == "rIdFenceChartEx"
+        )
+        relationship.set("Target", "https://example.invalid/private-chartex")
+        relationship.set("TargetMode", "External")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".extended-chart-external.tmp.xlsx")
+
+
+def remove_extended_chart_direct_relationship_id(path: Path) -> Path:
+    """Remove a required ChartEx direct-relationship identifier for coverage tests."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _drawing_member, chart_member = _extended_chart_fixture_part_names(contents)
+        relationships_member = _relationship_member(chart_member)
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            item
+            for item in relationships.findall(f"{{{package_relationships}}}Relationship")
+            if item.get("Id") == "rIdFenceChartExStyle"
+        )
+        relationship.attrib.pop("Id")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".extended-chart-missing-id.tmp.xlsx")
+
+
+def add_unsupported_extended_chart_relationship(path: Path) -> Path:
+    """Add a direct ChartEx edge outside FormulaFence's bounded relationship set."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _drawing_member, chart_member = _extended_chart_fixture_part_names(contents)
+        relationships_member = _relationship_member(chart_member)
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        ElementTree.SubElement(
+            relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceUnsupportedChartEx",
+                "Type": "https://example.invalid/relationships/private-chartex",
+                "Target": "private-chart-ex.xml",
+            },
+        )
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["xl/charts/private-chart-ex.xml"] = b"private chart ex payload"
+
+    return _rewrite_archive(path, mutate, ".extended-chart-unsupported.tmp.xlsx")
 
 
 def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Path:

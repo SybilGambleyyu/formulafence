@@ -23,6 +23,7 @@ from .helpers import (
     change_filter_visibility_hidden_column,
     change_font_definition,
     change_formula_cached_result,
+    change_formula_defined_xlm_registration_definition,
     change_formula_external_action_input,
     change_formula_external_action_target,
     change_ignored_error_target,
@@ -83,6 +84,7 @@ from .helpers import (
     make_filter_visibility_model,
     make_font_model,
     make_formula_cached_result_model,
+    make_formula_defined_xlm_registration_model,
     make_formula_external_action_model,
     make_ignored_error_model,
     make_legacy_array_model,
@@ -516,6 +518,26 @@ def test_policy_blocks_named_worksheet_code_resource_registration_changes(tmp_pa
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP067"}
+
+
+def test_policy_blocks_formula_defined_xlm_registration_changes(tmp_path) -> None:
+    baseline = make_formula_defined_xlm_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_defined_xlm_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_formula_defined_xlm_registration_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_formula_defined_xlm_registration_changes": True},
+        }
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP068"}
 
 
 def test_policy_can_block_xlm_macro_sheet_changes(tmp_path) -> None:

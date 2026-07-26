@@ -620,6 +620,23 @@ review prompt, not proof of an error.
   sheet program scanning: Microsoft's [`CALL` reference](https://support.microsoft.com/en-us/office/call-function-32d58445-e646-4ffd-8d5e-b45077a5e995)
   states that `CALL` is macro-sheet only. The worksheet boundary follows
   Microsoft's [`REGISTER.ID` reference](https://support.microsoft.com/en-us/office/register-id-function-f8f0af0f-fd66-4704-a0f2-87b27b175b50).
+- Legacy XLM `REGISTER` can be stored in a formula-defined name or named
+  `LAMBDA`, a surface not represented by ordinary macro-sheet XML. FormulaFence
+  separately inventories only that stored-definition form and propagates it
+  through nested/sheet-local names to invoking formula cells. Microsoft's
+  [`xlfRegister` Form 1 reference](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-1)
+  documents DLL-function/command registration and macro types callable from a
+  defined-name definition; [`Form 2`](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-2)
+  documents XLL loading and activation. A material stored definition,
+  invocation, or ordinary static input change emits `FF068`; enable
+  `no_formula_defined_xlm_registration_changes` for `FFP068`. Public output
+  exposes only invoking-cell, call, and relevant definition counts; module
+  paths, procedure names, type strings, arguments, formulas, locations, and
+  name identities remain private. FormulaFence does not evaluate a formula,
+  execute an XLM macro, resolve a path, load a DLL/XLL, or inspect trust
+  settings. Direct worksheet `REGISTER` formulas and raw XLM macro-sheet parts
+  are intentionally outside this narrow boundary; dynamic/unresolved inputs
+  remain static-coverage limits.
 - Office 2010 worksheet sparklines live in `x14:sparklineGroups` worksheet
   extensions, outside ordinary cell values. A group can be retargeted, moved,
   or have its type, axes, display, marker, line-weight, or colour controls

@@ -57,6 +57,8 @@ from .helpers import (
     change_font_definition,
     change_formula_cached_result,
     change_formula_cached_result_with_visible_precedent,
+    change_formula_defined_xlm_registration_definition,
+    change_formula_defined_xlm_registration_input,
     change_formula_external_action_input,
     change_formula_external_action_target,
     change_gradient_fill_definition,
@@ -235,6 +237,7 @@ from .helpers import (
     make_filter_visibility_model,
     make_font_model,
     make_formula_cached_result_model,
+    make_formula_defined_xlm_registration_model,
     make_formula_external_action_model,
     make_ignored_error_model,
     make_implicit_intersection_model,
@@ -2838,6 +2841,225 @@ def test_scoped_named_worksheet_code_resource_registrations_follow_local_precede
         {("Model", "D2"), ("Report", "D2")}
     )
     assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_formula_defined_xlm_registrations_are_propagated_diffed_and_private(
+    tmp_path,
+) -> None:
+    baseline = make_formula_defined_xlm_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_defined_xlm_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_formula_defined_xlm_registration_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_registrations = {
+        "present": True,
+        "registration_formula_cell_count": 3,
+        "register_function_count": 3,
+        "registration_defined_name_count": 3,
+    }
+    assert baseline_snapshot.formula_defined_xlm_registrations.to_dict() == (
+        expected_registrations
+    )
+    assert baseline_snapshot.formula_defined_xlm_registrations.registration_cells == (
+        frozenset({("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")})
+    )
+    assert baseline_snapshot.worksheet_code_resource_registrations.present is False
+    assert baseline_snapshot.xlm_macro_sheets.present is False
+    assert profile["formula_defined_xlm_registrations"] == expected_registrations
+    assert "## Formula-defined XLM registrations" in profile_to_markdown(profile)
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    registration_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_defined_xlm_registrations_changed"
+    )
+    registration_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF068"
+    )
+    assert registration_change.details["before"] == expected_registrations
+    assert registration_change.details["after"] == expected_registrations
+    assert (
+        registration_change.details[
+            "formula_defined_xlm_registration_definition_material_changed"
+        ]
+        is True
+    )
+    assert registration_finding.details == registration_change.details
+
+    ff068_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF068"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["formula_defined_xlm_registrations"]),
+        profile_to_markdown(profile),
+        json.dumps(registration_change.details),
+        json.dumps(registration_finding.to_dict()),
+        json.dumps(ff068_sarif_result),
+    )
+    for sensitive_value in (
+        "FENCE.XLM",
+        "PRIVATE-XLM-REGISTRATION-MODULE-BASELINE",
+        "PRIVATE-XLM-REGISTRATION-PROCEDURE-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_formula_defined_xlm_registration_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_formula_defined_xlm_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_defined_xlm_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_formula_defined_xlm_registration_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.formula_defined_xlm_registrations
+        == candidate_snapshot.formula_defined_xlm_registrations
+    )
+    assert {("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")} <= set(
+        baseline_snapshot.reverse_dependencies[("Inputs", "A9")]
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    registration_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_defined_xlm_registrations_changed"
+    )
+    assert (
+        registration_change.details[
+            "formula_defined_xlm_registration_static_input_changed"
+        ]
+        is True
+    )
+    assert (
+        registration_change.details[
+            "formula_defined_xlm_registration_static_input_change_count"
+        ]
+        == 1
+    )
+    assert "FF068" in {finding.rule_id for finding in report.findings}
+
+
+def test_uninvoked_formula_defined_xlm_registration_is_profiled(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "stored-name.xlsx")
+
+    def add_stored_registration(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.STORED.REGISTRATION",
+                attr_text=(
+                    '=REGISTER("PRIVATE-STORED-XLM-MODULE",'
+                    '"PRIVATE-STORED-XLM-PROCEDURE","J!")'
+                ),
+            )
+        )
+
+    rewrite(workbook_path, add_stored_registration)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_registrations.to_dict() == {
+        "present": True,
+        "registration_formula_cell_count": 0,
+        "register_function_count": 0,
+        "registration_defined_name_count": 1,
+    }
+    assert snapshot.formula_defined_xlm_registrations.registration_cells == frozenset()
+
+
+def test_recursive_named_formula_defined_xlm_registrations_are_cycle_safe(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "recursive.xlsx")
+
+    def add_recursive_registration(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.LOOP",
+                attr_text=(
+                    '=LAMBDA(module,procedure,REGISTER(module,procedure,"J!")'
+                    "+FENCE.XLM.LOOP(module,procedure))"
+                ),
+            )
+        )
+        workbook["Model"]["D2"] = "=FENCE.XLM.LOOP(Inputs!B2,Inputs!B3)"
+
+    rewrite(workbook_path, add_recursive_registration)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_registrations.to_dict() == {
+        "present": True,
+        "registration_formula_cell_count": 1,
+        "register_function_count": 1,
+        "registration_defined_name_count": 1,
+    }
+    assert snapshot.formula_defined_xlm_registrations.registration_cells == frozenset(
+        {("Model", "D2")}
+    )
+    assert snapshot.unresolved_reference_tokens[("Model", "D2")] == ("FENCE.XLM.LOOP",)
+
+
+def test_scoped_formula_defined_xlm_registrations_follow_local_precedence(
+    tmp_path,
+) -> None:
+    workbook_path = make_scoped_named_lambda_model(tmp_path / "scoped.xlsx")
+    workbook = load_workbook(workbook_path)
+    model = workbook["Model"]
+    report = workbook["Report"]
+    model["D2"] = "=FENCE.XLM.REGISTER(A2,A3)"
+    report["D2"] = "=Model!FENCE.XLM.REGISTER(A2,A3)"
+    model.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.REGISTER",
+            attr_text='=LAMBDA(module,procedure,REGISTER(module,procedure,"J!"))',
+            localSheetId=1,
+        )
+    )
+    workbook.save(workbook_path)
+
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_registrations.to_dict() == {
+        "present": True,
+        "registration_formula_cell_count": 2,
+        "register_function_count": 2,
+        "registration_defined_name_count": 1,
+    }
+    assert snapshot.formula_defined_xlm_registrations.registration_cells == frozenset(
+        {("Model", "D2"), ("Report", "D2")}
+    )
+    assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_direct_worksheet_register_is_outside_formula_defined_xlm_boundary(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "direct-register.xlsx")
+
+    def add_direct_register(workbook) -> None:
+        workbook["Model"]["D2"] = '=REGISTER("PRIVATE-DIRECT-MODULE",A2,"J!")'
+
+    rewrite(workbook_path, add_direct_register)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_registrations.to_dict() == {
+        "present": False,
+        "registration_formula_cell_count": 0,
+        "register_function_count": 0,
+        "registration_defined_name_count": 0,
+    }
 
 
 def test_recursive_named_custom_function_candidates_are_cycle_safe(tmp_path) -> None:

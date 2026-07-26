@@ -577,6 +577,9 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     worksheet_code_resource_registrations = profile[
         "worksheet_code_resource_registrations"
     ]
+    formula_defined_xlm_registrations = profile[
+        "formula_defined_xlm_registrations"
+    ]
     formula_external_action_call_count = sum(
         (
             formula_external_actions["hyperlink_function_count"],
@@ -991,6 +994,33 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 (
                     "This is distinct from XLM macro-sheet CALL/REGISTER behavior, "
                     "which remains covered by the raw XLM macro-sheet boundary below."
+                ),
+            ]
+        )
+    if formula_defined_xlm_registrations["present"]:
+        lines.extend(
+            [
+                "",
+                "## Formula-defined XLM registrations",
+                "",
+                (
+                    "- **Invoking formula cells / REGISTER calls / formula-defined names:** "
+                    f"{formula_defined_xlm_registrations['registration_formula_cell_count']} / "
+                    f"{formula_defined_xlm_registrations['register_function_count']} / "
+                    f"{formula_defined_xlm_registrations['registration_defined_name_count']}"
+                ),
+                (
+                    "FormulaFence inventories XLM REGISTER calls stored in "
+                    "formula-defined names and named LAMBDAs, then records cells that "
+                    "statically invoke them. Module paths, procedure names, type strings, "
+                    "cells, formulas, and arguments are compared privately and intentionally "
+                    "omitted; no formula is evaluated, no macro is run, and no DLL or XLL is "
+                    "loaded."
+                ),
+                (
+                    "Direct worksheet REGISTER calls and raw XLM macro-sheet parts are "
+                    "outside this narrow boundary; macro-sheet content remains covered by "
+                    "the raw XLM macro-sheet boundary below."
                 ),
             ]
         )

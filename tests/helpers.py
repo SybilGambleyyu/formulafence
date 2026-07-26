@@ -480,6 +480,65 @@ def change_named_worksheet_code_resource_registration_input(path: Path) -> Path:
     return path
 
 
+def make_formula_defined_xlm_registration_model(path: Path) -> Path:
+    """Create inert XLM ``REGISTER`` calls stored only in defined formulas.
+
+    The workbook is never opened in Excel. Private module/procedure sentinels
+    exist solely to prove FormulaFence keeps formula-defined XLM registration
+    material out of public profiles, findings, and SARIF output.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Formula-defined XLM registration controls"
+    inputs["A9"] = "PRIVATE-XLM-REGISTRATION-MODULE-BASELINE"
+    inputs["A10"] = "PRIVATE-XLM-REGISTRATION-PROCEDURE-BASELINE"
+    inputs["B2"] = "=FENCE.XLM.REGISTER(A9,A10)"
+    inputs["B3"] = "=FENCE.XLM.DIRECT"
+    inputs["B4"] = "=FENCE.XLM.CHAIN(A9,A10)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.REGISTER",
+            attr_text='=LAMBDA(module,procedure,REGISTER(module,procedure,"J!"))',
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.CHAIN",
+            attr_text="=LAMBDA(module,procedure,FENCE.XLM.REGISTER(module,procedure))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.DIRECT",
+            attr_text='=REGISTER(Inputs!$A$9,Inputs!$A$10,"J!")',
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_registration_definition(path: Path) -> Path:
+    """Change a hidden XLM registration type string without changing counts."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.XLM.REGISTER"]
+    if definition.attr_text != (
+        '=LAMBDA(module,procedure,REGISTER(module,procedure,"J!"))'
+    ):
+        raise ValueError("Fixture does not contain the expected XLM registration")
+    definition.attr_text = '=LAMBDA(module,procedure,REGISTER(module,procedure,"K!"))'
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_registration_input(path: Path) -> Path:
+    """Change a static input used by a formula-defined XLM registration."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-XLM-REGISTRATION-MODULE-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_python_in_excel_model(path: Path) -> Path:
     """Create a workbook with stored Python-in-Excel package code.
 

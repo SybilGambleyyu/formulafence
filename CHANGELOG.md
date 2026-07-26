@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.72.0 — 2026-07-26
+
+- Add `FF068`, a private ledger for legacy XLM `REGISTER` calls stored in
+  formula-defined names and named `LAMBDA` bodies. Microsoft documents that
+  `REGISTER` can register DLL functions/commands or load an XLL, and that its
+  macro types can be called from a defined-name definition. This closes the
+  stored-definition gap without treating direct worksheet formulas or raw XLM
+  macro-sheet XML as the same surface.
+- Propagate registrations through nested and sheet-local formula names to
+  invoking cells. Same-count invocation or name-definition changes, uninvoked
+  stored names, and ordinary cell edits that statically reach an invocation
+  remain reviewable through private signatures while profiles expose only safe
+  formula-cell, call, and formula-defined-name counts.
+- Add the fail-closed `no_formula_defined_xlm_registration_changes` policy rule
+  (`FFP068`). FormulaFence does not evaluate a formula, execute a macro,
+  resolve a module path, load a DLL/XLL, or inspect host trust settings.
+
 ## 0.71.0 — 2026-07-26
 
 - Extend the existing `FF064` formula external-action boundary through

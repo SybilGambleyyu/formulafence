@@ -1097,6 +1097,47 @@ class WorksheetCodeResourceRegistrationSnapshot:
 
 
 @dataclass(frozen=True)
+class FormulaDefinedXlmRegistrationSnapshot:
+    """Private ledger for XLM ``REGISTER`` calls stored in defined formulas.
+
+    Excel's legacy ``REGISTER`` macro function can be stored in a defined-name
+    formula or named LAMBDA. This boundary deliberately inventories only that
+    documented stored-definition surface: direct worksheet formulas and raw
+    XLM macro-sheet parts remain outside it. Module names, procedure names,
+    type strings, arguments, formula-defined names, and locations are private.
+    Private signatures preserve stored expressions and the relevant
+    named-definition chain for comparison; cell identities let the diff layer
+    guard ordinary edits that statically reach a registration invocation.
+    """
+
+    registration_formula_cell_count: int = 0
+    register_function_count: int = 0
+    registration_defined_name_count: int = 0
+    invocation_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    registration_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.registration_formula_cell_count
+            or self.registration_defined_name_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate counts without DLL/XLL or formula material."""
+        return {
+            "present": self.present,
+            "registration_formula_cell_count": self.registration_formula_cell_count,
+            "register_function_count": self.register_function_count,
+            "registration_defined_name_count": self.registration_defined_name_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class XlmMacroSheetSnapshot:
     """Safe aggregate of raw Excel 4.0 / XLM macro-sheet package parts.
 
@@ -3784,6 +3825,9 @@ class WorkbookSnapshot:
     worksheet_code_resource_registrations: WorksheetCodeResourceRegistrationSnapshot = (
         field(default_factory=WorksheetCodeResourceRegistrationSnapshot)
     )
+    formula_defined_xlm_registrations: FormulaDefinedXlmRegistrationSnapshot = (
+        field(default_factory=FormulaDefinedXlmRegistrationSnapshot)
+    )
     xlm_macro_sheets: XlmMacroSheetSnapshot = field(
         default_factory=XlmMacroSheetSnapshot
     )
@@ -4285,6 +4329,18 @@ class WorkbookSnapshot:
             ),
             "has_worksheet_code_resource_registrations": (
                 self.worksheet_code_resource_registrations.present
+            ),
+            "formula_defined_xlm_registration_formula_cell_count": (
+                self.formula_defined_xlm_registrations.registration_formula_cell_count
+            ),
+            "formula_defined_xlm_register_function_count": (
+                self.formula_defined_xlm_registrations.register_function_count
+            ),
+            "formula_defined_xlm_registration_defined_name_count": (
+                self.formula_defined_xlm_registrations.registration_defined_name_count
+            ),
+            "has_formula_defined_xlm_registrations": (
+                self.formula_defined_xlm_registrations.present
             ),
             "xlm_macro_sheet_count": self.xlm_macro_sheets.macro_sheet_count,
             "xlm_macro_formula_cell_count": self.xlm_macro_sheets.formula_cell_count,

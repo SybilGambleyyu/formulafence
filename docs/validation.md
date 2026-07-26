@@ -5,6 +5,52 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Formula-defined XLM `REGISTER` boundary — 2026-07-26
+
+FormulaFence 0.72.0 was checked against Microsoft's current
+[`xlfRegister` Form 1 reference](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-1),
+which identifies `REGISTER` as the Excel XLM equivalent for registering DLL
+functions or commands and documents macro types callable from a defined-name
+definition, and its [`Form 2` reference](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-2),
+which documents XLL loading and activation. The scope is intentionally narrow:
+FormulaFence records `REGISTER` only when it is stored in a formula-defined
+name or named `LAMBDA`; direct worksheet formulas and raw XLM macro-sheet
+program parts remain separate boundaries.
+
+Three fresh, controlled `.xlsx` artifacts were generated without opening
+Excel. The baseline (SHA-256
+`b0d0805a8ff3b65337bc9dc4d080378d1ab941e42424012398c8fd8aaca41952`)
+uses a formula-defined value, a named `LAMBDA`, and a nested named `LAMBDA` to
+reach `REGISTER`. Its public ledger reports three invoking formula cells,
+three REGISTER calls, and three relevant formula-defined names; it reports no
+worksheet `REGISTER.ID` or raw XLM macro-sheet surface. Changing only the
+private type string in the inner definition (SHA-256
+`ca0130dbbcdb89db3aa9f4e98acf231d59ff2261f780f6ab09c21df2a1c1d78a`)
+kept every public count fixed while emitting `FF068` with the private
+definition-material flag. Changing only a shared static input (SHA-256
+`66d876650d76ae00aadca604f7a9739cf2605ff649393a8115498b51e0f58a01`)
+kept the registration snapshot equal and emitted `FF068` with a static-input
+count of one. The suite separately covers uninvoked stored names, recursive
+named `LAMBDA`s, sheet-local precedence, native-name shadowing, and direct
+worksheet `REGISTER` remaining outside this boundary.
+
+The new policy caused `formulafence check` to exit `1` and emit both `FF068`
+and `FFP068` for the definition-only candidate. The public profile and the
+dedicated `FF068`/`FFP068` SARIF results excluded controlled name identities,
+module values, and procedure values. Ordinary semantic diffs deliberately
+retain changed defined-name context for reviewers, so that redaction claim is
+limited to the dedicated ledger and policy-facing results. No formula was
+evaluated, no macro was run, and no DLL/XLL was resolved or loaded during
+validation.
+
+The staged `formulafence-0.72.0-py3-none-any.whl` (SHA-256
+`394a0b52b1914b3767fa8693b5998e56371e16cfcf6bf3f97c50bce46ceab8a4`)
+was installed into a fresh virtual environment with its declared dependencies.
+Its CLI returned `FormulaFence 0.72.0`; the generated starter policy retained
+`no_formula_defined_xlm_registration_changes: true`, and the packaged check
+emitted both `FF068` and `FFP068` for the controlled definition-only candidate.
+The packaged profile and dedicated SARIF results remained redacted.
+
 ## Formula-defined external-action propagation — 2026-07-26
 
 FormulaFence 0.71.0 extends the existing `FF064` boundary through

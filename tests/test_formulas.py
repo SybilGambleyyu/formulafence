@@ -205,6 +205,51 @@ def test_formula_inspection_propagates_worksheet_code_resource_registrations() -
     assert named_formula.unresolved_range_tokens == ()
 
 
+def test_formula_inspection_inventories_formula_defined_xlm_registrations() -> None:
+    ordinary = inspect_formula('=REGISTER(A1,A2,"J!")+@REGISTER(A3,A4,"J!")')
+    definition = inspect_formula(
+        '=REGISTER(A1,A2,"J!")+@REGISTER(A3,A4,"J!")',
+        inspect_formula_defined_xlm_registrations=True,
+    )
+    shadowed = inspect_formula(
+        '=REGISTER(A1,A2,"J!")',
+        named_function_references={"register": ()},
+        inspect_formula_defined_xlm_registrations=True,
+    )
+
+    assert ordinary.formula_defined_xlm_registration_functions == ()
+    assert definition.formula_defined_xlm_registration_functions == (
+        "REGISTER",
+        "REGISTER",
+    )
+    assert shadowed.formula_defined_xlm_registration_functions == ()
+
+
+def test_formula_inspection_propagates_formula_defined_xlm_registrations() -> None:
+    named_lambda = inspect_formula(
+        "=FENCE.REGISTER(A1,A2)",
+        named_function_references={"fence.register": ()},
+        named_function_formula_defined_xlm_registration_functions={
+            "fence.register": ("REGISTER",)
+        },
+    )
+    named_formula = inspect_formula(
+        "=FENCE.DIRECT",
+        named_references={"fence.direct": ()},
+        named_formula_defined_xlm_registration_functions={
+            "fence.direct": ("REGISTER",)
+        },
+    )
+
+    assert named_lambda.formula_defined_xlm_registration_functions == ("REGISTER",)
+    assert named_lambda.references == (
+        ParsedReference(None, 1, 1, 1, 1, raw="A1"),
+        ParsedReference(None, 1, 2, 1, 2, raw="A2"),
+    )
+    assert named_formula.formula_defined_xlm_registration_functions == ("REGISTER",)
+    assert named_formula.unresolved_range_tokens == ()
+
+
 def test_formula_inspection_recognises_a_known_named_constant() -> None:
     inspection = inspect_formula("=StaticRate", {"staticrate": ()})
 

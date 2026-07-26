@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.71.0/formulafence-0.71.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.72.0/formulafence-0.72.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -118,6 +118,7 @@ rules:
   no_python_in_excel_changes: true
   no_office_custom_function_changes: true
   no_worksheet_code_resource_registration_changes: true
+  no_formula_defined_xlm_registration_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -145,6 +146,7 @@ allowed_changes:
 | Formula external-action surfaces | Material stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, or `RTD` call changes in cells, formula-defined names, or named `LAMBDA`s, including same-count destination/provider swaps, without evaluating formulas or exposing their arguments in the action ledger |
 | Python in Excel boundary | Stored Python code/environment, `PY` formula bindings, and statically visible inputs, without loading Python code, executing it, or contacting its cloud runtime |
 | Namespaced Office custom-function boundary | Material namespaced formula-call candidates and statically visible inputs, without loading an add-in, executing a formula, or exposing names and arguments in the private ledger |
+| Formula-defined XLM registration boundary | Stored legacy XLM `REGISTER` calls in formula-defined names/named `LAMBDA`s and their statically visible inputs, without executing a macro, evaluating a formula, or loading a DLL/XLL |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
 | CI output | Deterministic JSON, reviewer-friendly Markdown, and SARIF |
@@ -449,6 +451,28 @@ This does not reinterpret raw XLM macro-sheet programs: Microsoft's
 [`CALL` reference](https://support.microsoft.com/en-us/office/call-function-32d58445-e646-4ffd-8d5e-b45077a5e995)
 places `CALL` on macro sheets, and FormulaFence continues to guard complete raw
 XLM macro-sheet material through its separate `FF026` boundary below.
+
+FormulaFence also keeps a distinct **formula-defined XLM registration ledger**
+for legacy `REGISTER` calls stored in formula-defined names and named `LAMBDA`
+bodies. Microsoft's [`xlfRegister` Form 1 reference](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-1)
+documents the XLM `REGISTER` equivalent for DLL functions or commands and
+documents macro types callable from a defined-name definition; its
+[`Form 2` reference](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-2)
+documents the XLL load-and-activate form. FormulaFence therefore does not
+broaden this into a guess about arbitrary formulas: direct worksheet
+`REGISTER` calls and raw XLM macro-sheet program XML remain outside this narrow
+stored-definition boundary.
+
+The ledger propagates stored registrations through nested and sheet-local
+formula names to their invoking cells. Profiles and `FF068`/`FFP068` details
+expose only invocation-cell, call, and relevant formula-defined-name counts.
+Module paths, procedure names, type strings, formulas, arguments, cells, and
+name identities remain private; same-count definition or invocation changes,
+uninvoked stored names, and ordinary static input edits remain reviewable using
+private signatures. FormulaFence does not evaluate a formula, execute an XLM
+macro, resolve a path, load a DLL/XLL, or inspect host trust settings. Dynamic
+or unresolved inputs remain explicit coverage limits. Enable
+`no_formula_defined_xlm_registration_changes` to block this boundary in CI.
 
 FormulaFence separately inventories **Excel 4.0 / XLM macro sheets**. Unlike
 VBA, this executable automation is stored in raw macro-sheet XML parts (usually

@@ -64,6 +64,7 @@ from formulafence.models import (
     FontSnapshot,
     FormulaCachedResultEntry,
     FormulaCachedResultSnapshot,
+    FormulaDefinedXlmRegistrationSnapshot,
     FormulaExternalActionSnapshot,
     IgnoredErrorSnapshot,
     LegacyCommentSnapshot,
@@ -41405,6 +41406,11 @@ def _named_reference_maps(
     dict[str, tuple[str, ...]],
     dict[str, dict[str, tuple[str, ...]]],
     tuple[tuple[str, str], ...],
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
+    tuple[tuple[str, str], ...],
 ]:
     """Build dependency and sensitive-call maps for formula-defined names.
 
@@ -41412,10 +41418,10 @@ def _named_reference_maps(
     visible and internal. Relative references, dynamic functions, unresolved
     tokens, recursive LAMBDAs, external links, and 3-D spans remain unresolved
     at a use site instead of producing a guessed graph edge. Formula external
-    actions, namespaced custom-function candidates, and worksheet
-    ``REGISTER.ID`` calls are propagated separately through those definitions
-    so a named LAMBDA cannot hide a stored boundary from the formula-cell
-    ledgers.
+    actions, namespaced custom-function candidates, worksheet ``REGISTER.ID``
+    calls, and XLM ``REGISTER`` calls stored in definitions are propagated
+    separately through those definitions so a named LAMBDA cannot hide a
+    stored boundary from the formula-cell ledgers.
     """
     workbook_names = getattr(workbook, "defined_names", {})
     global_references: dict[str, tuple[ParsedReference, ...]] = {}
@@ -41657,12 +41663,17 @@ def _named_reference_maps(
         identity: f"FORMULAFENCE_CODE_RESOURCE_REGISTRATION_MARKER_{index}"
         for index, identity in enumerate(definition_identities)
     }
+    formula_defined_xlm_registration_markers = {
+        identity: f"FORMULAFENCE_FORMULA_DEFINED_XLM_REGISTRATION_MARKER_{index}"
+        for index, identity in enumerate(definition_identities)
+    }
     identities_by_marker = {
         marker: identity
         for markers in (
             external_action_markers,
             custom_function_markers,
             code_resource_registration_markers,
+            formula_defined_xlm_registration_markers,
         )
         for identity, marker in markers.items()
     }
@@ -41710,6 +41721,9 @@ def _named_reference_maps(
     direct_code_resource_registration_functions: dict[
         tuple[str | None, str], tuple[str, ...]
     ] = {}
+    direct_formula_defined_xlm_registration_functions: dict[
+        tuple[str | None, str], tuple[str, ...]
+    ] = {}
     definition_dependencies: dict[
         tuple[str | None, str], tuple[tuple[str | None, str], ...]
     ] = {}
@@ -41744,6 +41758,17 @@ def _named_reference_maps(
                     definition.scope, code_resource_registration_markers
                 )
             ),
+            named_formula_defined_xlm_registration_functions=(
+                visible_named_markers(
+                    definition.scope, formula_defined_xlm_registration_markers
+                )
+            ),
+            named_function_formula_defined_xlm_registration_functions=(
+                visible_named_function_markers(
+                    definition.scope, formula_defined_xlm_registration_markers
+                )
+            ),
+            inspect_formula_defined_xlm_registrations=True,
         )
         identity = identity_for(definition)
         direct_external_action_functions[identity] = tuple(
@@ -41761,6 +41786,11 @@ def _named_reference_maps(
             for function in inspection.worksheet_code_resource_registration_functions
             if function not in identities_by_marker
         )
+        direct_formula_defined_xlm_registration_functions[identity] = tuple(
+            function
+            for function in inspection.formula_defined_xlm_registration_functions
+            if function not in identities_by_marker
+        )
         definition_dependencies[identity] = tuple(
             dict.fromkeys(
                 identities_by_marker[marker]
@@ -41768,6 +41798,7 @@ def _named_reference_maps(
                     inspection.external_action_functions
                     + inspection.office_custom_function_candidates
                     + inspection.worksheet_code_resource_registration_functions
+                    + inspection.formula_defined_xlm_registration_functions
                 )
                 if marker in identities_by_marker
             )
@@ -41827,6 +41858,9 @@ def _named_reference_maps(
     component_direct_code_resource_registration_functions: dict[
         int, tuple[str, ...]
     ] = {}
+    component_direct_formula_defined_xlm_registration_functions: dict[
+        int, tuple[str, ...]
+    ] = {}
     for component, members in enumerate(components):
         component_direct_external_action_functions[component] = tuple(
             function
@@ -41842,6 +41876,11 @@ def _named_reference_maps(
             function
             for identity in members
             for function in direct_code_resource_registration_functions[identity]
+        )
+        component_direct_formula_defined_xlm_registration_functions[component] = tuple(
+            function
+            for identity in members
+            for function in direct_formula_defined_xlm_registration_functions[identity]
         )
         component_dependencies[component] = tuple(
             dependency_component
@@ -41868,6 +41907,9 @@ def _named_reference_maps(
     component_external_action_functions: dict[int, tuple[str, ...]] = {}
     component_custom_function_candidates: dict[int, tuple[str, ...]] = {}
     component_code_resource_registration_functions: dict[int, tuple[str, ...]] = {}
+    component_formula_defined_xlm_registration_functions: dict[
+        int, tuple[str, ...]
+    ] = {}
     while ready_components:
         component = ready_components.pop(0)
         component_external_action_functions[component] = (
@@ -41894,6 +41936,16 @@ def _named_reference_maps(
                 for function in component_code_resource_registration_functions[dependency]
             )
         )
+        component_formula_defined_xlm_registration_functions[component] = (
+            component_direct_formula_defined_xlm_registration_functions[component]
+            + tuple(
+                function
+                for dependency in component_dependencies[component]
+                for function in component_formula_defined_xlm_registration_functions[
+                    dependency
+                ]
+            )
+        )
         for dependent in sorted(component_dependents[component]):
             remaining_component_dependencies[dependent].remove(component)
             if not remaining_component_dependencies[dependent]:
@@ -41910,6 +41962,10 @@ def _named_reference_maps(
     }
     code_resource_registration_functions_by_definition = {
         identity: component_code_resource_registration_functions[component]
+        for identity, component in component_by_definition.items()
+    }
+    formula_defined_xlm_registration_functions_by_definition = {
+        identity: component_formula_defined_xlm_registration_functions[component]
         for identity, component in component_by_definition.items()
     }
 
@@ -42126,6 +42182,82 @@ def _named_reference_maps(
         )
     )
 
+    global_formula_defined_xlm_registration_result: dict[str, tuple[str, ...]] = {
+        key: formula_defined_xlm_registration_functions_by_definition[
+            identity_for(definition)
+        ]
+        for key, definition in global_formulas.items()
+    }
+    for scope, definitions in local_formulas.items():
+        for key, definition in definitions.items():
+            global_formula_defined_xlm_registration_result[
+                _qualified_name_key(sheet_titles[scope], key)
+            ] = formula_defined_xlm_registration_functions_by_definition[
+                identity_for(definition)
+            ]
+
+    local_formula_defined_xlm_registration_result: dict[
+        str, dict[str, tuple[str, ...]]
+    ] = {}
+    for scope, definitions in local_formulas.items():
+        functions = {
+            key: formula_defined_xlm_registration_functions_by_definition[
+                identity_for(definition)
+            ]
+            for key, definition in definitions.items()
+        }
+        if functions:
+            local_formula_defined_xlm_registration_result[scope] = functions
+
+    global_function_formula_defined_xlm_registration_result: dict[
+        str, tuple[str, ...]
+    ] = {
+        key: formula_defined_xlm_registration_functions_by_definition[
+            identity_for(definition)
+        ]
+        for key, definition in global_lambdas.items()
+    }
+    for scope, definitions in local_lambdas.items():
+        for key, definition in definitions.items():
+            global_function_formula_defined_xlm_registration_result[
+                _qualified_name_key(sheet_titles[scope], key)
+            ] = formula_defined_xlm_registration_functions_by_definition[
+                identity_for(definition)
+            ]
+
+    local_function_formula_defined_xlm_registration_result: dict[
+        str, dict[str, tuple[str, ...]]
+    ] = {}
+    for scope, definitions in local_lambdas.items():
+        functions = {
+            key: formula_defined_xlm_registration_functions_by_definition[
+                identity_for(definition)
+            ]
+            for key, definition in definitions.items()
+        }
+        if functions:
+            local_function_formula_defined_xlm_registration_result[scope] = functions
+
+    formula_defined_xlm_registration_definition_entries = tuple(
+        sorted(
+            (
+                repr((definition.scope, definition.key)),
+                repr(
+                    (
+                        formula_defined_xlm_registration_functions_by_definition[
+                            identity_for(definition)
+                        ],
+                        definition.formula,
+                    )
+                ),
+            )
+            for definition in all_definitions
+            if formula_defined_xlm_registration_functions_by_definition[
+                identity_for(definition)
+            ]
+        )
+    )
+
     return (
         global_result,
         local_result,
@@ -42145,6 +42277,11 @@ def _named_reference_maps(
         global_function_code_resource_registration_result,
         local_function_code_resource_registration_result,
         code_resource_registration_definition_entries,
+        global_formula_defined_xlm_registration_result,
+        local_formula_defined_xlm_registration_result,
+        global_function_formula_defined_xlm_registration_result,
+        local_function_formula_defined_xlm_registration_result,
+        formula_defined_xlm_registration_definition_entries,
     )
 
 
@@ -42478,6 +42615,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     worksheet_code_resource_registration_cells: set[CellKey] = set()
     worksheet_code_resource_registration_function_count = 0
     worksheet_code_resource_registration_formula_entries: list[tuple[str, str]] = []
+    formula_defined_xlm_registration_cells: set[CellKey] = set()
+    formula_defined_xlm_registration_function_count = 0
+    formula_defined_xlm_registration_invocation_entries: list[tuple[str, str]] = []
     broken_references: set[CellKey] = set()
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = {}
@@ -42508,6 +42648,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         global_named_function_worksheet_code_resource_registration_functions,
         local_named_function_worksheet_code_resource_registration_functions,
         worksheet_code_resource_registration_definition_entries,
+        global_named_formula_defined_xlm_registration_functions,
+        local_named_formula_defined_xlm_registration_functions,
+        global_named_function_formula_defined_xlm_registration_functions,
+        local_named_function_formula_defined_xlm_registration_functions,
+        formula_defined_xlm_registration_definition_entries,
     ) = _named_reference_maps(workbook, structured_tables, sheet_order)
 
     for worksheet in workbook.worksheets:
@@ -42552,6 +42697,18 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         named_function_worksheet_code_resource_registration_functions = {
             **global_named_function_worksheet_code_resource_registration_functions,
             **local_named_function_worksheet_code_resource_registration_functions.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
+        named_formula_defined_xlm_registration_functions = {
+            **global_named_formula_defined_xlm_registration_functions,
+            **local_named_formula_defined_xlm_registration_functions.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
+        named_function_formula_defined_xlm_registration_functions = {
+            **global_named_function_formula_defined_xlm_registration_functions,
+            **local_named_function_formula_defined_xlm_registration_functions.get(
                 worksheet.title.casefold(), {}
             ),
         }
@@ -42606,6 +42763,12 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 ),
                 named_function_worksheet_code_resource_registration_functions=(
                     named_function_worksheet_code_resource_registration_functions
+                ),
+                named_formula_defined_xlm_registration_functions=(
+                    named_formula_defined_xlm_registration_functions
+                ),
+                named_function_formula_defined_xlm_registration_functions=(
+                    named_function_formula_defined_xlm_registration_functions
                 ),
             )
             if inspection.unresolved_range_tokens:
@@ -42665,6 +42828,22 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                         repr(
                             (
                                 inspection.worksheet_code_resource_registration_functions,
+                                snapshot.formula,
+                            )
+                        ),
+                    )
+                )
+            if inspection.formula_defined_xlm_registration_functions:
+                formula_defined_xlm_registration_cells.add(snapshot.location)
+                formula_defined_xlm_registration_function_count += len(
+                    inspection.formula_defined_xlm_registration_functions
+                )
+                formula_defined_xlm_registration_invocation_entries.append(
+                    (
+                        f"{snapshot.location[0]}!{snapshot.location[1]}",
+                        repr(
+                            (
+                                inspection.formula_defined_xlm_registration_functions,
                                 snapshot.formula,
                             )
                         ),
@@ -42798,6 +42977,20 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             registration_cells=frozenset(worksheet_code_resource_registration_cells),
         )
     )
+    formula_defined_xlm_registrations = FormulaDefinedXlmRegistrationSnapshot(
+        registration_formula_cell_count=len(formula_defined_xlm_registration_cells),
+        register_function_count=formula_defined_xlm_registration_function_count,
+        registration_defined_name_count=len(
+            formula_defined_xlm_registration_definition_entries
+        ),
+        invocation_signature=_private_external_data_signature(
+            tuple(sorted(formula_defined_xlm_registration_invocation_entries))
+        ),
+        definition_signature=_private_external_data_signature(
+            formula_defined_xlm_registration_definition_entries
+        ),
+        registration_cells=frozenset(formula_defined_xlm_registration_cells),
+    )
 
     return WorkbookSnapshot(
         path=source,
@@ -42854,6 +43047,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         python_in_excel=python_in_excel,
         office_custom_functions=office_custom_functions,
         worksheet_code_resource_registrations=worksheet_code_resource_registrations,
+        formula_defined_xlm_registrations=formula_defined_xlm_registrations,
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
@@ -42959,6 +43153,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "worksheet_code_resource_registrations": (
             snapshot.worksheet_code_resource_registrations.profile_dict()
         ),
+        "formula_defined_xlm_registrations": (
+            snapshot.formula_defined_xlm_registrations.profile_dict()
+        ),
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
@@ -43023,6 +43220,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_python_in_excel": snapshot.python_in_excel.present,
             "has_namespaced_custom_function_calls": (
                 snapshot.office_custom_functions.present
+            ),
+            "has_formula_defined_xlm_registrations": (
+                snapshot.formula_defined_xlm_registrations.present
             ),
             "has_ribbon_customization": snapshot.ribbon_customization.present,
             "has_office_web_addins": snapshot.office_web_addins.present,

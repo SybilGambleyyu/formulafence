@@ -59,6 +59,8 @@ from .helpers import (
     change_formula_cached_result_with_visible_precedent,
     change_formula_defined_xlm_evaluation_definition,
     change_formula_defined_xlm_evaluation_input,
+    change_formula_defined_xlm_get_cell_definition,
+    change_formula_defined_xlm_get_cell_input,
     change_formula_defined_xlm_registration_definition,
     change_formula_defined_xlm_registration_input,
     change_formula_external_action_input,
@@ -240,6 +242,7 @@ from .helpers import (
     make_font_model,
     make_formula_cached_result_model,
     make_formula_defined_xlm_evaluation_model,
+    make_formula_defined_xlm_get_cell_model,
     make_formula_defined_xlm_registration_model,
     make_formula_external_action_model,
     make_ignored_error_model,
@@ -3338,6 +3341,244 @@ def test_formula_defined_xlm_evaluation_text_is_not_retokenized(tmp_path) -> Non
     )
     report = compare_snapshots(baseline_snapshot, candidate_snapshot)
     assert "FF069" not in {finding.rule_id for finding in report.findings}
+
+
+def test_formula_defined_xlm_get_cell_calls_are_propagated_diffed_and_private(
+    tmp_path,
+) -> None:
+    baseline = make_formula_defined_xlm_get_cell_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_defined_xlm_get_cell_model(tmp_path / "candidate.xlsx")
+    change_formula_defined_xlm_get_cell_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_calls = {
+        "present": True,
+        "get_cell_formula_cell_count": 3,
+        "get_cell_function_count": 3,
+        "get_cell_defined_name_count": 3,
+    }
+    assert baseline_snapshot.formula_defined_xlm_get_cell_calls.to_dict() == (
+        expected_calls
+    )
+    assert baseline_snapshot.formula_defined_xlm_get_cell_calls.get_cell_cells == (
+        frozenset({("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")})
+    )
+    assert baseline_snapshot.office_custom_functions.present is False
+    assert baseline_snapshot.xlm_macro_sheets.present is False
+    assert profile["formula_defined_xlm_get_cell_calls"] == expected_calls
+    assert "## Formula-defined XLM GET.CELL information" in profile_to_markdown(
+        profile
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    get_cell_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_defined_xlm_get_cell_calls_changed"
+    )
+    get_cell_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF070"
+    )
+    assert get_cell_change.details["before"] == expected_calls
+    assert get_cell_change.details["after"] == expected_calls
+    assert (
+        get_cell_change.details[
+            "formula_defined_xlm_get_cell_definition_material_changed"
+        ]
+        is True
+    )
+    assert get_cell_finding.details == get_cell_change.details
+
+    ff070_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF070"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["formula_defined_xlm_get_cell_calls"]),
+        profile_to_markdown(profile),
+        json.dumps(get_cell_change.details),
+        json.dumps(get_cell_finding.to_dict()),
+        json.dumps(ff070_sarif_result),
+    )
+    for sensitive_value in (
+        "FENCE.XLM.GET.CELL",
+        "PRIVATE-XLM-GET-CELL-INPUT-BASELINE",
+        "GET.CELL(7,reference)",
+        "GET.CELL(8,reference)",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_formula_defined_xlm_get_cell_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_formula_defined_xlm_get_cell_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_defined_xlm_get_cell_model(tmp_path / "candidate.xlsx")
+    change_formula_defined_xlm_get_cell_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.formula_defined_xlm_get_cell_calls
+        == candidate_snapshot.formula_defined_xlm_get_cell_calls
+    )
+    assert {("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")} <= set(
+        baseline_snapshot.reverse_dependencies[("Inputs", "A9")]
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    get_cell_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_defined_xlm_get_cell_calls_changed"
+    )
+    assert (
+        get_cell_change.details[
+            "formula_defined_xlm_get_cell_static_input_changed"
+        ]
+        is True
+    )
+    assert (
+        get_cell_change.details[
+            "formula_defined_xlm_get_cell_static_input_change_count"
+        ]
+        == 1
+    )
+    assert "FF070" in {finding.rule_id for finding in report.findings}
+
+
+def test_uninvoked_formula_defined_xlm_get_cell_call_is_profiled(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "stored-name.xlsx")
+
+    def add_stored_get_cell_call(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.STORED.GET.CELL",
+                attr_text="=GET.CELL(7,Inputs!$A$1)",
+            )
+        )
+
+    rewrite(workbook_path, add_stored_get_cell_call)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_get_cell_calls.to_dict() == {
+        "present": True,
+        "get_cell_formula_cell_count": 0,
+        "get_cell_function_count": 0,
+        "get_cell_defined_name_count": 1,
+    }
+    assert snapshot.formula_defined_xlm_get_cell_calls.get_cell_cells == frozenset()
+
+
+def test_recursive_named_formula_defined_xlm_get_cell_calls_are_cycle_safe(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "recursive.xlsx")
+
+    def add_recursive_get_cell_call(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.GET.CELL.LOOP",
+                attr_text=(
+                    "=LAMBDA(reference,GET.CELL(7,reference)"
+                    "+FENCE.XLM.GET.CELL.LOOP(reference))"
+                ),
+            )
+        )
+        workbook["Model"]["D2"] = "=FENCE.XLM.GET.CELL.LOOP(Inputs!B2)"
+
+    rewrite(workbook_path, add_recursive_get_cell_call)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_get_cell_calls.to_dict() == {
+        "present": True,
+        "get_cell_formula_cell_count": 1,
+        "get_cell_function_count": 1,
+        "get_cell_defined_name_count": 1,
+    }
+    assert snapshot.formula_defined_xlm_get_cell_calls.get_cell_cells == frozenset(
+        {("Model", "D2")}
+    )
+    assert snapshot.unresolved_reference_tokens[("Model", "D2")] == (
+        "FENCE.XLM.GET.CELL.LOOP",
+    )
+
+
+def test_scoped_formula_defined_xlm_get_cell_calls_follow_local_precedence(
+    tmp_path,
+) -> None:
+    workbook_path = make_scoped_named_lambda_model(tmp_path / "scoped.xlsx")
+    workbook = load_workbook(workbook_path)
+    model = workbook["Model"]
+    report = workbook["Report"]
+    model["D2"] = "=FENCE.XLM.GET.CELL(A2)"
+    report["D2"] = "=Model!FENCE.XLM.GET.CELL(A2)"
+    model.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.GET.CELL",
+            attr_text="=LAMBDA(reference,GET.CELL(7,reference))",
+            localSheetId=1,
+        )
+    )
+    workbook.save(workbook_path)
+
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_get_cell_calls.to_dict() == {
+        "present": True,
+        "get_cell_formula_cell_count": 2,
+        "get_cell_function_count": 2,
+        "get_cell_defined_name_count": 1,
+    }
+    assert snapshot.formula_defined_xlm_get_cell_calls.get_cell_cells == frozenset(
+        {("Model", "D2"), ("Report", "D2")}
+    )
+    assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_direct_worksheet_get_cell_is_outside_formula_defined_xlm_boundary(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "direct-get-cell.xlsx")
+
+    def add_direct_get_cell(workbook) -> None:
+        workbook["Model"]["D2"] = "=GET.CELL(7,A2)"
+
+    rewrite(workbook_path, add_direct_get_cell)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_get_cell_calls.to_dict() == {
+        "present": False,
+        "get_cell_formula_cell_count": 0,
+        "get_cell_function_count": 0,
+        "get_cell_defined_name_count": 0,
+    }
+    assert snapshot.office_custom_functions.present is False
+
+
+def test_formula_defined_xlm_get_cell_respects_named_lambda_shadowing(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "shadowed-get-cell.xlsx")
+
+    def add_shadowing_lambda(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "GET.CELL",
+                attr_text="=LAMBDA(reference,reference)",
+            )
+        )
+        workbook["Model"]["D2"] = "=GET.CELL(A2)"
+
+    rewrite(workbook_path, add_shadowing_lambda)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_get_cell_calls.to_dict() == {
+        "present": False,
+        "get_cell_formula_cell_count": 0,
+        "get_cell_function_count": 0,
+        "get_cell_defined_name_count": 0,
+    }
+    assert snapshot.unresolved_reference_tokens == {}
 
 
 def test_recursive_named_custom_function_candidates_are_cycle_safe(tmp_path) -> None:

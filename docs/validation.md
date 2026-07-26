@@ -5,6 +5,53 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Formula-defined XLM GET.CELL boundary — 2026-07-26
+
+FormulaFence 0.74.0 was checked against Microsoft's [Excel C API
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel),
+which identifies GET.CELL as xlfGetCell and includes it among XLM information
+functions. The scope is deliberately narrow: FormulaFence records GET.CELL
+only when it is stored in a formula-defined name or named LAMBDA; direct
+worksheet formulas and raw XLM macro-sheet program parts remain separate
+boundaries.
+
+Three fresh, controlled .xlsx artifacts were generated without opening Excel.
+The baseline (SHA-256
+`51d8076ef6bc26670fff62df805611dbc4f072e30d1c85166f95cf32e90520d2`)
+uses a formula-defined value, a named LAMBDA, and a nested named LAMBDA to
+reach GET.CELL. Its public ledger reports three invoking formula cells, three
+GET.CELL calls, and three relevant formula-defined names; it reports no
+namespaced custom-function candidate or raw XLM macro-sheet surface. Changing
+only the private information-call definition (SHA-256
+`83b9146f2b6cb1e738cc9c333acb9608b36ccb39835e70eadef419020fa35655`)
+kept every public count fixed while emitting FF070 with the private
+definition-material flag. Changing only a shared statically visible input
+(SHA-256
+`95cded492d62256e86d3b1a84c9ba76b8d5ba59af25a606dbcd7055a4e29f262`)
+kept the GET.CELL snapshot equal and emitted FF070 with a static-input count
+of one.
+
+The suite separately covers uninvoked stored names, recursive named LAMBDAs,
+sheet-local precedence, native-name shadowing, and direct worksheet GET.CELL
+remaining outside the boundary. The full suite passed with 500 tests. The new
+policy caused formulafence check to exit 1 and emit both FF070 and FFP070 for
+both controlled candidates. The dedicated formula_defined_xlm_get_cell_calls
+profile object and dedicated FF070/FFP070 SARIF results excluded controlled
+name identities, arguments, and input values. Ordinary defined-name and
+semantic-diff output deliberately retains normal reviewer context, so that
+redaction claim is limited to the dedicated ledger and policy-facing results.
+No formula or information call was evaluated, no macro was run, and no Excel
+display, formatting, comment, or protection state was simulated during
+validation.
+
+The staged formulafence-0.74.0-py3-none-any.whl (SHA-256
+`7250bcfcb7a5c4c8d58ea383e0706489e04c932a5aa07e85b6b9d9c0fa1091aa`)
+was installed into a fresh virtual environment with its declared dependencies.
+Its CLI returned FormulaFence 0.74.0; the generated starter policy retained
+`no_formula_defined_xlm_get_cell_changes: true`, and the packaged check
+emitted both `FF070` and `FFP070` for both controlled candidates. The
+packaged profile and dedicated SARIF results remained redacted.
+
 ## Formula-defined XLM `EVALUATE` boundary — 2026-07-26
 
 FormulaFence 0.73.0 was checked against Microsoft's [Excel expression-evaluation

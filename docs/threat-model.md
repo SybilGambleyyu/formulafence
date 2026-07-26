@@ -655,6 +655,21 @@ review prompt, not proof of an error.
   Direct worksheet `EVALUATE` formulas and raw XLM macro-sheet parts are
   intentionally outside this narrow boundary; runtime-text dependencies remain
   explicit static-coverage limits.
+- Legacy XLM GET.CELL is an XLM information function. FormulaFence separately
+  inventories only calls stored in formula-defined names and named LAMBDA
+  bodies, then propagates them through nested and sheet-local names to invoking
+  formula cells. Microsoft's [C API
+  reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel)
+  identifies GET.CELL as xlfGetCell. A material stored definition, invocation,
+  or ordinary static argument-input change emits FF070; enable
+  no_formula_defined_xlm_get_cell_changes for FFP070. Public output exposes
+  only invoking-cell, call, and relevant definition counts; information types,
+  references, formulas, arguments, locations, and name identities remain
+  private. FormulaFence does not evaluate a call, determine its information
+  type, resolve a dynamic reference, render formatting or display text, inspect
+  comments/protection, or simulate other Excel state. Direct worksheet GET.CELL
+  formulas and raw XLM macro-sheet parts are intentionally outside this narrow
+  boundary; dynamic/unresolved inputs remain static-coverage limits.
 - Office 2010 worksheet sparklines live in `x14:sparklineGroups` worksheet
   extensions, outside ordinary cell values. A group can be retargeted, moved,
   or have its type, axes, display, marker, line-weight, or colour controls

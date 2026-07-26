@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.74.0 — 2026-07-26
+
+- Add `FF070`, a private ledger for legacy XLM `GET.CELL` information calls
+  stored in formula-defined names and named `LAMBDA` bodies. Microsoft
+  identifies `GET.CELL` / `xlfGetCell` as an XLM information function; this
+  captures the stored formula surface without claiming FormulaFence evaluates
+  a call, identifies its requested information type, or simulates Excel state.
+- Propagate stored calls through nested and sheet-local formula names to
+  invoking cells. Same-count invocation or definition changes, uninvoked stored
+  names, and ordinary cell edits that statically reach a stored argument edge
+  remain reviewable through private signatures while profiles expose only safe
+  formula-cell, call, and formula-defined-name counts.
+- Add the fail-closed `no_formula_defined_xlm_get_cell_changes` policy rule
+  (`FFP070`). FormulaFence does not evaluate a formula, resolve a dynamic
+  reference, render formatting or display text, inspect comments/protection,
+  or execute an XLM macro. Direct worksheet `GET.CELL` calls and raw XLM macro
+  sheets remain outside this narrow stored-definition boundary.
+
 ## 0.73.0 — 2026-07-26
 
 - Add `FF069`, a private ledger for legacy XLM `EVALUATE` calls stored in

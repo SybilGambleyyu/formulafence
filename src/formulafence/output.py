@@ -583,6 +583,9 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     formula_defined_xlm_evaluations = profile[
         "formula_defined_xlm_evaluations"
     ]
+    formula_defined_xlm_get_cell_calls = profile[
+        "formula_defined_xlm_get_cell_calls"
+    ]
     formula_external_action_call_count = sum(
         (
             formula_external_actions["hyperlink_function_count"],
@@ -1052,6 +1055,34 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     "inside that text remain an explicit coverage limit. Direct worksheet "
                     "EVALUATE calls and raw XLM macro-sheet parts are outside this narrow "
                     "boundary."
+                ),
+            ]
+        )
+    if formula_defined_xlm_get_cell_calls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Formula-defined XLM GET.CELL information",
+                "",
+                (
+                    "- **Invoking formula cells / GET.CELL calls / formula-defined names:** "
+                    f"{formula_defined_xlm_get_cell_calls['get_cell_formula_cell_count']} / "
+                    f"{formula_defined_xlm_get_cell_calls['get_cell_function_count']} / "
+                    f"{formula_defined_xlm_get_cell_calls['get_cell_defined_name_count']}"
+                ),
+                (
+                    "FormulaFence inventories XLM GET.CELL calls stored in "
+                    "formula-defined names and named LAMBDAs, then records cells that "
+                    "statically invoke them. Information types, references, cells, "
+                    "formulas, arguments, and name identities are compared privately and "
+                    "intentionally omitted; no formula is evaluated."
+                ),
+                (
+                    "Only ordinary static argument edges are traced. FormulaFence does "
+                    "not determine which information type is requested, resolve dynamic "
+                    "references, or simulate formatting, display, protection, comments, "
+                    "or other Excel state. Direct worksheet GET.CELL calls and raw XLM "
+                    "macro-sheet parts are outside this narrow boundary."
                 ),
             ]
         )

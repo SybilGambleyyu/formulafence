@@ -597,6 +597,62 @@ def change_formula_defined_xlm_evaluation_input(path: Path) -> Path:
     return path
 
 
+def make_formula_defined_xlm_get_cell_model(path: Path) -> Path:
+    """Create inert XLM `GET.CELL` calls stored only in defined formulas.
+
+    The workbook is never opened in Excel. The controlled formula-defined
+    expressions prove FormulaFence compares stored information-call material
+    privately without evaluating it or simulating the referenced cell state.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Formula-defined XLM GET.CELL controls"
+    inputs["A9"] = "PRIVATE-XLM-GET-CELL-INPUT-BASELINE"
+    inputs["B2"] = "=FENCE.XLM.GET.CELL(A9)"
+    inputs["B3"] = "=FENCE.XLM.GET.CELL.DIRECT"
+    inputs["B4"] = "=FENCE.XLM.GET.CELL.CHAIN(A9)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.GET.CELL",
+            attr_text="=LAMBDA(reference,GET.CELL(7,reference))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.GET.CELL.CHAIN",
+            attr_text="=LAMBDA(reference,FENCE.XLM.GET.CELL(reference))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.GET.CELL.DIRECT",
+            attr_text="=GET.CELL(53,Inputs!$A$9)",
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_get_cell_definition(path: Path) -> Path:
+    """Change hidden XLM information-call material without changing counts."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.XLM.GET.CELL"]
+    if definition.attr_text != "=LAMBDA(reference,GET.CELL(7,reference))":
+        raise ValueError("Fixture does not contain the expected XLM GET.CELL call")
+    definition.attr_text = "=LAMBDA(reference,GET.CELL(8,reference))"
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_get_cell_input(path: Path) -> Path:
+    """Change a static input used by a formula-defined XLM GET.CELL call."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-XLM-GET-CELL-INPUT-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_python_in_excel_model(path: Path) -> Path:
     """Create a workbook with stored Python-in-Excel package code.
 

@@ -75,6 +75,7 @@ _RULE_FIELDS = {
     "no_worksheet_code_resource_registration_changes",
     "no_formula_defined_xlm_registration_changes",
     "no_formula_defined_xlm_evaluation_changes",
+    "no_formula_defined_xlm_get_cell_changes",
     "no_power_query_changes",
     "no_3d_reference_scope_changes",
     "no_sheet_visibility_changes",
@@ -168,6 +169,7 @@ class Policy:
     no_worksheet_code_resource_registration_changes: bool = False
     no_formula_defined_xlm_registration_changes: bool = False
     no_formula_defined_xlm_evaluation_changes: bool = False
+    no_formula_defined_xlm_get_cell_changes: bool = False
     no_power_query_changes: bool = False
     no_3d_reference_scope_changes: bool = False
     no_sheet_visibility_changes: bool = False
@@ -243,6 +245,7 @@ rules:
   no_worksheet_code_resource_registration_changes: true
   no_formula_defined_xlm_registration_changes: true
   no_formula_defined_xlm_evaluation_changes: true
+  no_formula_defined_xlm_get_cell_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -461,6 +464,9 @@ def parse_policy(data: object) -> Policy:
         ),
         no_formula_defined_xlm_evaluation_changes=_boolean_rule(
             rules, "no_formula_defined_xlm_evaluation_changes"
+        ),
+        no_formula_defined_xlm_get_cell_changes=_boolean_rule(
+            rules, "no_formula_defined_xlm_get_cell_changes"
         ),
         no_power_query_changes=_boolean_rule(rules, "no_power_query_changes"),
         no_3d_reference_scope_changes=_boolean_rule(
@@ -797,6 +803,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                         "Policy forbids formula-defined XLM expression-evaluation "
                         "changes."
                     ),
+                    details=finding.details,
+                )
+            )
+    if policy.no_formula_defined_xlm_get_cell_changes:
+        for finding in _rule_triggered(report, "FF070"):
+            violations.append(
+                Finding(
+                    "FFP070",
+                    "high",
+                    "Policy forbids formula-defined XLM GET.CELL changes.",
                     details=finding.details,
                 )
             )

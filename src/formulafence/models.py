@@ -1178,6 +1178,46 @@ class FormulaDefinedXlmEvaluationSnapshot:
 
 
 @dataclass(frozen=True)
+class FormulaDefinedXlmGetCellSnapshot:
+    """Private ledger for XLM `GET.CELL` calls stored in defined formulas.
+
+    Excel's legacy `GET.CELL` information function can expose cell contents,
+    formulas, display text, formatting, dimensions, protection, comments, and
+    other workbook state. FormulaFence inventories only calls stored in a
+    formula-defined name or named LAMBDA, preserving their stored syntax and
+    definition chain privately. It records worksheet cells that statically
+    invoke a stored call, but does not evaluate it, determine its requested
+    information type, resolve a dynamic reference, or expose formulas,
+    arguments, locations, or defined-name identities in public output.
+    """
+
+    get_cell_formula_cell_count: int = 0
+    get_cell_function_count: int = 0
+    get_cell_defined_name_count: int = 0
+    invocation_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    get_cell_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.get_cell_formula_cell_count or self.get_cell_defined_name_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate counts without metadata or formula material."""
+        return {
+            "present": self.present,
+            "get_cell_formula_cell_count": self.get_cell_formula_cell_count,
+            "get_cell_function_count": self.get_cell_function_count,
+            "get_cell_defined_name_count": self.get_cell_defined_name_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class XlmMacroSheetSnapshot:
     """Safe aggregate of raw Excel 4.0 / XLM macro-sheet package parts.
 
@@ -3871,6 +3911,9 @@ class WorkbookSnapshot:
     formula_defined_xlm_evaluations: FormulaDefinedXlmEvaluationSnapshot = (
         field(default_factory=FormulaDefinedXlmEvaluationSnapshot)
     )
+    formula_defined_xlm_get_cell_calls: FormulaDefinedXlmGetCellSnapshot = field(
+        default_factory=FormulaDefinedXlmGetCellSnapshot
+    )
     xlm_macro_sheets: XlmMacroSheetSnapshot = field(
         default_factory=XlmMacroSheetSnapshot
     )
@@ -4396,6 +4439,18 @@ class WorkbookSnapshot:
             ),
             "has_formula_defined_xlm_evaluations": (
                 self.formula_defined_xlm_evaluations.present
+            ),
+            "formula_defined_xlm_get_cell_formula_cell_count": (
+                self.formula_defined_xlm_get_cell_calls.get_cell_formula_cell_count
+            ),
+            "formula_defined_xlm_get_cell_function_count": (
+                self.formula_defined_xlm_get_cell_calls.get_cell_function_count
+            ),
+            "formula_defined_xlm_get_cell_defined_name_count": (
+                self.formula_defined_xlm_get_cell_calls.get_cell_defined_name_count
+            ),
+            "has_formula_defined_xlm_get_cell_calls": (
+                self.formula_defined_xlm_get_cell_calls.present
             ),
             "xlm_macro_sheet_count": self.xlm_macro_sheets.macro_sheet_count,
             "xlm_macro_formula_cell_count": self.xlm_macro_sheets.formula_cell_count,

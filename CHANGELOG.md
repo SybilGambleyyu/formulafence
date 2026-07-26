@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.81.0 — 2026-07-26
+
+- Add a root composite GitHub Action for FormulaFence policy checks and
+  semantic diffs. It installs the selected action source, accepts baseline,
+  candidate, optional policy, report-format, output, and severity inputs, and
+  exposes deterministic report-path and exit-code outputs.
+- Keep report generation, Markdown job-summary evidence, and optional artifact
+  upload alive through a FormulaFence policy failure, then re-emit the original
+  exit code. The action confines reports and inputs to the workspace and
+  refuses to overwrite an input workbook or policy.
+- Add action metadata, isolated action-script contract tests, and a GitHub CI
+  workflow smoke check that runs the public Action itself.
+
 ## 0.80.0 — 2026-07-26
 
 - Add `FF074`, a private ledger for direct DDE-style formula syntax using the

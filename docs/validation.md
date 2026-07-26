@@ -5,6 +5,25 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## GitHub Action execution boundary — 2026-07-26
+
+FormulaFence 0.81.0 was exercised as the root composite GitHub Action, rather
+than only as a CLI invocation. The contract tests parse the public action
+metadata, generate a fresh baseline/candidate `.xlsx` pair, and run the Action
+shell entry point in an isolated workspace. A `no_formula_to_value` policy
+failure generated a Markdown report and job-summary evidence, wrote exit code
+`1` to `GITHUB_OUTPUT`, and deliberately left the entry point successful so
+the composite Action can upload the report before its final step re-emits the
+failure. A valid pair returned exit code `0`.
+
+The same contract rejects a report path or workbook/policy input that escapes
+`GITHUB_WORKSPACE`; it also refuses a report path that resolves to any supplied
+input. The workflow file passed `actionlint`, and a clean Python environment
+installed the Action source with `install: true`, returned `FormulaFence
+0.81.0`, and produced a report. This boundary does not execute formulas or
+macros, comment on a pull request, or send workbook contents to a FormulaFence
+service.
+
 ## Direct DDE-style formula-link boundary — 2026-07-26
 
 FormulaFence 0.80.0 was checked against the Windows [Dynamic Data Exchange

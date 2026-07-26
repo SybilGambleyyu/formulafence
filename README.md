@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.80.0/formulafence-0.80.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.81.0/formulafence-0.81.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -52,6 +52,31 @@ formulafence check baseline.xlsx candidate.xlsx --policy formulafence.yml --form
 FormulaFence is not yet published to PyPI; the direct release URL above avoids
 an ambiguous package-name install. See [GitHub Releases](https://github.com/SybilGambleyyu/formulafence/releases)
 for the current version.
+
+### GitHub Actions
+
+The public composite Action installs FormulaFence from the selected Action
+source, writes the report inside the workspace, adds a Markdown report to the job summary, and
+uploads the report before it re-emits a policy failure. It accepts a baseline,
+candidate, optional policy, report format, and output path; its `report-path`
+and `exit-code` outputs are available to later steps. Use a tagged release for
+readability and pin to an immutable commit in a production workflow.
+
+```yaml
+- uses: actions/setup-python@v6
+  with:
+    python-version: '3.12'
+- id: formulafence
+  uses: SybilGambleyyu/formulafence@v0.81.0
+  with:
+    baseline: models/approved/model.xlsx
+    candidate: build/model.xlsx
+    policy: models/formulafence.yml
+    output: reports/formulafence.md
+```
+
+See [the CI integration guide](docs/ci.md) for SARIF, artifact, and
+preinstalled-package options.
 
 Create `formulafence.yml`:
 
@@ -115,6 +140,7 @@ rules:
   no_external_link_package_changes: true
   no_external_relationship_changes: true
   no_formula_external_action_changes: true
+  no_formula_dde_link_changes: true
   no_python_in_excel_changes: true
   no_office_custom_function_changes: true
   no_worksheet_code_resource_registration_changes: true

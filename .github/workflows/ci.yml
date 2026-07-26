@@ -12,11 +12,75 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - run: python -m pip install -e '.[dev]'
       - run: python -m ruff check .
       - run: python -m pytest
       - run: python -m pip wheel --no-deps --wheel-dir dist .
+
+  action-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Create a static workbook pair
+        run: |
+          python -m pip install openpyxl
+          mkdir -p .action-fixture
+          python - <<'PY'
+          from pathlib import Path
+
+          from openpyxl import Workbook
+
+          for name, value in (
+              ("approved.xlsx", "=1+1"),
+              ("candidate.xlsx", "=1+1"),
+              ("policy-candidate.xlsx", 2),
+          ):
+              workbook = Workbook()
+              workbook.active.title = "Model"
+              workbook.active["A1"] = value
+              workbook.save(f".action-fixture/{name}")
+          Path(".action-fixture/formulafence.yml").write_text(
+              "version: 1\\nrules:\\n  no_formula_to_value: true\\n",
+              encoding="utf-8",
+          )
+          PY
+        shell: bash
+      - name: Run the local public action
+        id: formulafence
+        uses: ./
+        with:
+          baseline: .action-fixture/approved.xlsx
+          candidate: .action-fixture/candidate.xlsx
+          output: .action-fixture/formulafence-report.md
+          upload-artifact: 'false'
+      - name: Assert public outputs
+        env:
+          FORMULAFENCE_EXIT_CODE: ${{ steps.formulafence.outputs.exit-code }}
+          FORMULAFENCE_REPORT_PATH: ${{ steps.formulafence.outputs.report-path }}
+        run: |
+          test "$FORMULAFENCE_EXIT_CODE" = 0
+          test -f "$FORMULAFENCE_REPORT_PATH"
+      - name: Run the local public action through a policy failure
+        id: policy_failure
+        continue-on-error: true
+        uses: ./
+        with:
+          baseline: .action-fixture/approved.xlsx
+          candidate: .action-fixture/policy-candidate.xlsx
+          policy: .action-fixture/formulafence.yml
+          output: .action-fixture/formulafence-policy-report.md
+          upload-artifact: 'false'
+      - name: Assert policy-failure outputs
+        env:
+          FORMULAFENCE_EXIT_CODE: ${{ steps.policy_failure.outputs.exit-code }}
+          FORMULAFENCE_REPORT_PATH: ${{ steps.policy_failure.outputs.report-path }}
+        run: |
+          test "$FORMULAFENCE_EXIT_CODE" = 1
+          test -f "$FORMULAFENCE_REPORT_PATH"

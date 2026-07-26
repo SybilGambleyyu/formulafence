@@ -1,0 +1,87 @@
+name: FormulaFence
+description: Enforce local-first semantic spreadsheet policies in GitHub Actions.
+author: FormulaFence contributors
+
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  baseline:
+    description: Approved or baseline .xlsx/.xlsm workbook inside the workspace.
+    required: true
+  candidate:
+    description: Candidate .xlsx/.xlsm workbook inside the workspace.
+    required: true
+  policy:
+    description: Optional FormulaFence policy file inside the workspace. When omitted, the action runs a semantic diff.
+    required: false
+    default: ''
+  format:
+    description: "Report format: markdown, json, or sarif."
+    required: false
+    default: markdown
+  output:
+    description: Report path within the GitHub workspace.
+    required: false
+    default: formulafence-report.md
+  fail-on:
+    description: Also fail when a non-policy change or finding reaches this severity.
+    required: false
+    default: none
+  install:
+    description: Install FormulaFence from this pinned action before running it.
+    required: false
+    default: 'true'
+  upload-artifact:
+    description: Upload the report as a workflow artifact after comparison, including on a policy failure.
+    required: false
+    default: 'true'
+  artifact-name:
+    description: Name to use when upload-artifact is enabled.
+    required: false
+    default: formulafence-report
+
+outputs:
+  report-path:
+    description: Absolute path of the generated report in the GitHub workspace.
+    value: ${{ steps.run.outputs.report-path }}
+  exit-code:
+    description: FormulaFence's comparison exit code (0, 1, or 2).
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run FormulaFence
+      id: run
+      shell: bash
+      env:
+        INPUT_BASELINE: ${{ inputs.baseline }}
+        INPUT_CANDIDATE: ${{ inputs.candidate }}
+        INPUT_POLICY: ${{ inputs.policy }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_INSTALL: ${{ inputs.install }}
+        INPUT_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/run-github-action.sh"
+
+    - name: Upload FormulaFence report
+      if: ${{ inputs.upload-artifact == 'true' && steps.run.outputs.report-written == 'true' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.run.outputs.report-path }}
+        if-no-files-found: error
+
+    - name: Enforce FormulaFence result
+      if: ${{ steps.run.outputs.exit-code != '0' }}
+      shell: bash
+      env:
+        FORMULAFENCE_EXIT_CODE: ${{ steps.run.outputs.exit-code }}
+      run: |
+        case "$FORMULAFENCE_EXIT_CODE" in
+          ''|*[!0-9]*) exit 2 ;;
+          *) exit "$FORMULAFENCE_EXIT_CODE" ;;
+        esac

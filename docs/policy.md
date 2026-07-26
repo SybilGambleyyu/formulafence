@@ -63,6 +63,7 @@ rules:
   no_protection_changes: true
   no_external_data_connection_changes: true
   no_external_link_package_changes: true
+  no_external_relationship_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
@@ -152,6 +153,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_protection_changes` | boolean | A workbook, worksheet, dialog-sheet, chart-sheet, protected-range, or direct cell/row/column protection control changes. |
 | `no_external_data_connection_changes` | boolean | A workbook-wide external-data refresh flag, connection, linked query-table refresh control, or pivot-cache source/refresh control changes. |
 | `no_external_link_package_changes` | boolean | An external-workbook, DDE, or OLE `externalLink` package definition, source binding, cached material, item behavior, or retained extension fragment changes. |
+| `no_external_relationship_changes` | boolean | Any root or part-level OPC relationship with an external target changes, including an opaque relationship that no feature-specific scanner recognizes. Source parts, types, IDs, targets, unknown metadata, and raw XML are compared privately. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
@@ -296,6 +298,20 @@ cached values never enter a profile or diff. Any material package change emits
 `FF025`; enable `no_external_link_package_changes` to make it `FFP025` in CI.
 FormulaFence does not follow or execute these links, determine source trust, or
 infer returned data.
+
+FormulaFence also inspects every canonical OPC relationship part—not just
+relationships reached through a recognized workbook feature—for
+`TargetMode="External"`. This boundary catches remote hyperlink, image, and
+opaque endpoints introduced into arbitrary package parts. It exposes only
+aggregate relationship part/source/target and hyperlink/image/other counts;
+source part paths, relationship types and IDs, targets, unknown metadata, and
+raw XML remain private. A material endpoint, type, source, or coverage change
+emits `FF063`; `no_external_relationship_changes` makes it `FFP063` in CI.
+Relationship-ID-only rewrites normalize. Duplicate, orphaned, malformed,
+unsafe, unreadable, oversized, or over-budget relationship metadata stays
+visible as coverage evidence. FormulaFence does not resolve, open, fetch, or
+trust any target; it bounds relationship XML to 16 MiB per part, 64 MiB per
+workbook, and 512 parts.
 
 Excel 4.0 / XLM macro sheets are separate from the VBA binary: their executable
 commands live in Macro Sheet XML package parts, typically under

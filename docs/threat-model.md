@@ -808,6 +808,17 @@ review prompt, not proof of an error.
   and can be blocked with `no_external_link_package_changes`. FormulaFence does
   **not** follow or execute these links, establish source trust, or infer
   returned data.
+- Every canonical root or part-level OPC relationship part is also inspected
+  independently for `TargetMode="External"`, including opaque relationships
+  no feature-specific scanner can reach. FormulaFence retains source, type,
+  endpoint, and malformed-metadata evidence only in private signatures and
+  exposes aggregate relationship part/source/target plus hyperlink/image/other
+  counts. A material change emits `FF063` and can be blocked with
+  `no_external_relationship_changes`; relationship-ID-only rewrites normalize.
+  Duplicate, orphaned, malformed, unsafe, unreadable, oversized, or
+  over-budget metadata is coverage evidence. FormulaFence does **not** resolve,
+  fetch, open, execute, or establish trust for any relationship target. XML
+  reads are bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts.
 - Excel 4.0 / XLM macro sheets are read directly from their raw Macro Sheet XML
   package parts before a workbook library can omit their executable cells.
   FormulaFence binds the documented workbook relationships to those parts,
@@ -1017,7 +1028,8 @@ review prompt, not proof of an error.
   DrawingML chart definition/cached-presentation/overlay chains,
   relationship-backed worksheet ActiveX/form-control/legacy-VML/OLE chains, the
   protection controls above, external-data refresh controls, external-link
-  packages, and private Power Query definition material. It does not yet
+  packages, package-wide external OPC relationships, and private Power Query
+  definition material. It does not yet
   interpret PivotTable OLAP or other extension-list semantics; deserialize or execute
   Power Pivot/Data Model content; apply Slicer/Timeline filters or model their
   worksheet/drawing view geometry/styles; ChartEx-specific visualization,

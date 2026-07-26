@@ -5,6 +5,56 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Package-wide external relationship ledger — 2026-07-26
+
+FormulaFence 0.66.0 was checked against the Open Packaging Conventions
+[relationship model](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/open-packaging-conventions-overview)
+and [`TargetMode` semantics](https://learn.microsoft.com/en-us/dotnet/api/system.io.packaging.packagerelationship.targetmode),
+then against two independently maintained Open XML SDK assets at immutable
+commit
+[`cd2b359ef824737edb93f1c6157c19551aae1e52`](https://github.com/dotnet/Open-XML-SDK/tree/cd2b359ef824737edb93f1c6157c19551aae1e52).
+
+The SDK's strict Excel [Hyperlinks on OArt
+Objects](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/O14ISOStrict/Excel/Hyperlinks%20on%20OArt%20Objects-O12-XL-Hyperlinks.xlsx)
+fixture (SHA-256
+`4ddd4a4b3fbc58215be3e95723ce19d3bcd575a27ae26cb6f6f12ad166ffe4eb`)
+contains two external relationship targets across two relationship parts. The
+ledger reported two parts, two sources, two targets, two hyperlink targets,
+zero image/other targets, and zero ledger coverage gaps. The source file also
+has unrelated legacy-reader coverage warnings; the validation confirms that
+those do not turn its valid external relationships into an unrecognized ledger
+entry.
+
+The SDK's [ExternalLink.xlsx](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/v2FxTestFiles/spreadsheet/ExternalLink.xlsx)
+fixture (SHA-256
+`805c1f771ba788a99c51c4652675df8bbc28a816c2174735c98efff42476f7da`)
+contains one separately modeled `externalLink` package and one package-level
+external relationship. FormulaFence reported one relationship part, one source,
+one other target, zero hyperlink/image targets, zero ledger coverage gaps, and
+no parser warning. This confirms that the general ledger complements rather
+than replaces the focused `FF025` external-link boundary.
+
+For both public fixtures, every `TargetMode="External"` target extracted from
+the raw relationship XML was checked absent from the generated JSON profile.
+Controlled raw-OOXML fixtures then add an unbound opaque workbook relationship,
+an unbound worksheet hyperlink, and an unbound worksheet image relationship.
+Changing only the opaque target leaves all public counts fixed but emits exactly
+`external_relationships_changed` with high-severity `FF063`; the
+`no_external_relationship_changes` policy adds `FFP063`. Coordinated
+relationship-ID rewrites stay quiet. Unknown attributes and deliberately
+lowered byte limits remain fail-closed coverage evidence, and targets, source
+paths, relationship types, identifiers, unknown attribute values, and raw XML
+were checked absent from JSON, Markdown, SARIF, and policy output.
+
+A clean virtual environment installed the staged
+`formulafence-0.66.0-py3-none-any.whl` after archive-integrity checks (SHA-256
+`8eedb3986784aa4034a027c0bb99069840a636a8a4cc44a163134a66d1eb727c`).
+The installed CLI returned `FormulaFence 0.66.0`, reproduced both public
+relationship inventories, and redacted every public raw external target. On
+the controlled target-only pair it emitted only
+`external_relationships_changed` / `FF063`; its generated starter policy made
+the check exit `1` with `FFP063`.
+
 ## Office 2016+ ChartEx worksheet charts — 2026-07-26
 
 FormulaFence 0.63.0 was checked against Microsoft's [ChartEx part

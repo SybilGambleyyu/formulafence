@@ -81,6 +81,12 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         f"- **DDE links:** {workbook['dde_link_count']}",
         f"- **OLE links:** {workbook['ole_link_count']}",
         (
+            "- **Package external relationships (hyperlink / image):** "
+            f"{workbook['package_external_relationship_count']} "
+            f"({workbook['package_external_hyperlink_relationship_count']} / "
+            f"{workbook['package_external_image_relationship_count']})"
+        ),
+        (
             "- **Scenario Manager sheets / scenarios / stored inputs:** "
             f"{workbook['scenario_manager_sheet_count']} / "
             f"{workbook['scenario_manager_scenario_count']} / "
@@ -552,6 +558,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     query_tables = profile["query_table_refresh_controls"]
     pivot_caches = profile["pivot_cache_refresh_controls"]
     external_link_packages = profile["external_link_packages"]
+    external_relationships = profile["external_relationships"]
     has_nondefault_external_settings = external_settings != {
         "update_links": "user_set",
         "allow_refresh_query": False,
@@ -821,6 +828,35 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "External workbook targets, sheet and defined names, DDE services/topics/items, "
             "OLE program and item names, and cached values are intentionally omitted."
+        )
+    if external_relationships["present"]:
+        lines.extend(
+            [
+                "",
+                "## Package-wide external relationships",
+                "",
+                (
+                    "- **Relationship parts / sources / targets:** "
+                    f"{external_relationships['external_relationship_part_count']} / "
+                    f"{external_relationships['external_relationship_source_count']} / "
+                    f"{external_relationships['external_relationship_count']}"
+                ),
+                (
+                    "- **Hyperlink / image / other targets:** "
+                    f"{external_relationships['external_hyperlink_relationship_count']} / "
+                    f"{external_relationships['external_image_relationship_count']} / "
+                    f"{external_relationships['external_other_relationship_count']}"
+                ),
+            ]
+        )
+        if external_relationships["unrecognized_relationship_count"]:
+            lines.append(
+                "- **Unrecognized or uninspected relationship metadata:** "
+                f"{external_relationships['unrecognized_relationship_count']}"
+            )
+        lines.append(
+            "Relationship source parts, types, identifiers, targets, and raw XML are "
+            "compared privately and intentionally omitted."
         )
     xlm_macro_sheets = profile["xlm_macro_sheets"]
     if xlm_macro_sheets["present"]:

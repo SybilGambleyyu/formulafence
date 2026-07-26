@@ -17,6 +17,7 @@ from .helpers import (
     change_extended_chart_definition_material,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
+    change_external_relationship_target,
     change_fill_definition,
     change_filter_visibility_criterion,
     change_filter_visibility_hidden_column,
@@ -67,6 +68,7 @@ from .helpers import (
     make_extended_chart_definition_model,
     make_external_data_refresh_model,
     make_external_link_package_model,
+    make_external_relationship_model,
     make_fill_model,
     make_filter_visibility_model,
     make_font_model,
@@ -340,6 +342,19 @@ def test_policy_can_block_external_link_package_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP025"}
+
+
+def test_policy_can_block_package_wide_external_relationship_changes(tmp_path) -> None:
+    baseline = make_external_relationship_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_relationship_model(tmp_path / "candidate.xlsx")
+    change_external_relationship_target(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_external_relationship_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP063"}
 
 
 def test_policy_can_block_xlm_macro_sheet_changes(tmp_path) -> None:

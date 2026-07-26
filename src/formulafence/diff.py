@@ -26,6 +26,7 @@ from formulafence.models import (
     DigitalSignatureSnapshot,
     ExternalDataConnectionSnapshot,
     ExternalLinkPackageSnapshot,
+    ExternalRelationshipSnapshot,
     FillSnapshot,
     FilterVisibilitySnapshot,
     Finding,
@@ -925,6 +926,51 @@ def _workbook_control_changes(
                 "FF025",
                 "high",
                 "External-workbook, DDE, or OLE link package controls changed.",
+                details=details,
+            )
+        )
+
+    if before.external_relationships != after.external_relationships:
+        old_relationships: ExternalRelationshipSnapshot = before.external_relationships
+        new_relationships: ExternalRelationshipSnapshot = after.external_relationships
+        details: dict[str, object] = {
+            "before": old_relationships.to_dict(),
+            "after": new_relationships.to_dict(),
+        }
+        if (
+            old_relationships.relationship_signature
+            != new_relationships.relationship_signature
+        ):
+            details["external_relationship_material_changed"] = True
+        if (
+            old_relationships.unrecognized_relationship_count
+            != new_relationships.unrecognized_relationship_count
+            or (
+                old_relationships.unrecognized_relationship_count
+                or new_relationships.unrecognized_relationship_count
+            )
+            and (
+                old_relationships.relationship_signature
+                != new_relationships.relationship_signature
+            )
+        ):
+            details["unrecognized_external_relationship_metadata_changed"] = True
+        changes.append(
+            Change(
+                "external_relationships_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF063",
+                "high",
+                (
+                    "Package-wide external relationships changed; a workbook part may "
+                    "now reach a remote resource outside known feature boundaries."
+                ),
                 details=details,
             )
         )

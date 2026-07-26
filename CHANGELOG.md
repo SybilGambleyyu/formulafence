@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.66.0 — 2026-07-26
+
+- Add `FF063`, a bounded package-wide ledger for every canonical OPC root or
+  part-level relationship with `TargetMode="External"`. It catches hyperlink,
+  image, and opaque remote targets even when their source is outside a known
+  workbook-feature binding. Source parts, types, identifiers, targets, unknown
+  metadata, and raw XML remain in private signatures; public output exposes
+  only safe aggregate counts.
+- Add the fail-closed `no_external_relationship_changes` policy rule (`FFP063`)
+  and normalize writer-selected relationship-ID rewrites. Material target,
+  type, source, or coverage changes remain high-severity findings, while known
+  feature-specific boundaries retain their own focused findings.
+- Bound relationship XML inspection to 16 MiB per part, 64 MiB per workbook,
+  and 512 parts. Duplicate, orphaned, malformed, unsafe, unreadable,
+  oversized, or over-budget relationship metadata produces explicit coverage
+  evidence; FormulaFence does not resolve, open, fetch, execute, or establish
+  trust for any target.
+
 ## 0.65.0 — 2026-07-26
 
 - Extend the existing `FF028` Office Web Add-in boundary beyond document task

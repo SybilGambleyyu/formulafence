@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from xml.etree import ElementTree
-from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile
+from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile, ZipInfo
 
 from openpyxl import load_workbook
 from openpyxl.utils.cell import column_index_from_string, get_column_letter, range_boundaries
@@ -58,6 +58,7 @@ from formulafence.models import (
     ExternalDataOpaqueMetadataSnapshot,
     ExternalDataRefreshSettingsSnapshot,
     ExternalLinkPackageSnapshot,
+    ExternalRelationshipSnapshot,
     FillSnapshot,
     FilterVisibilitySnapshot,
     FontSnapshot,
@@ -462,6 +463,12 @@ _CELL_HYPERLINK_MAX_WORKSHEET_XML_BYTES = 16 * 1024 * 1024
 _CELL_HYPERLINK_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _CELL_HYPERLINK_TOTAL_XML_MAX_COUNT = 512
 _CELL_HYPERLINK_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIP_NS}/hyperlink"
+_EXTERNAL_RELATIONSHIP_MAX_XML_BYTES = 16 * 1024 * 1024
+_EXTERNAL_RELATIONSHIP_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_EXTERNAL_RELATIONSHIP_TOTAL_XML_MAX_COUNT = 512
+_EXTERNAL_RELATIONSHIP_KNOWN_ATTRIBUTES = frozenset(
+    {"Id", "Type", "Target", "TargetMode"}
+)
 _WORKSHEET_SPARKLINE_MAX_WORKSHEET_XML_BYTES = 16 * 1024 * 1024
 _WORKSHEET_SPARKLINE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _WORKSHEET_SPARKLINE_TOTAL_XML_MAX_COUNT = 512
@@ -799,6 +806,14 @@ class _ExternalDataMetadata:
     pivot_caches: tuple[PivotCacheRefreshSnapshot, ...]
     external_link_packages: ExternalLinkPackageSnapshot
     power_query: PowerQuerySnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _ExternalRelationshipMetadata:
+    """Raw package-wide external-relationship evidence before reader loss."""
+
+    relationships: ExternalRelationshipSnapshot
     warnings: tuple[str, ...]
 
 
@@ -1481,6 +1496,14 @@ class _WorksheetImageRelatedPartBudget:
 
     remaining_bytes: int = _WORKSHEET_IMAGE_RELATED_PART_TOTAL_MAX_BYTES
     remaining_parts: int = _WORKSHEET_IMAGE_RELATED_PART_TOTAL_MAX_COUNT
+
+
+@dataclass
+class _ExternalRelationshipBudget:
+    """Bound raw OPC relationship XML bytes in one package-wide scan."""
+
+    remaining_bytes: int = _EXTERNAL_RELATIONSHIP_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _EXTERNAL_RELATIONSHIP_TOTAL_XML_MAX_COUNT
 
 
 @dataclass
@@ -3917,6 +3940,429 @@ def _external_data_opaque_metadata(
 def _private_payload_signature(payload: bytes) -> str:
     """Hash opaque bytes without retaining them in any reviewable model."""
     return hashlib.sha256(payload).hexdigest()
+
+
+def _is_opc_relationship_member(member: str) -> bool:
+    """Return whether one ZIP member has an OPC relationship-part location."""
+    return member == "_rels/.rels" or (
+        member.endswith(".rels") and "/_rels/" in member
+    )
+
+
+def _opc_relationship_source_member(member: str) -> str | None:
+    """Return the private source part for one canonical OPC relationship part."""
+    if member == "_rels/.rels":
+        return "@package"
+    if member.startswith("/") or "\\" in member:
+        return None
+    directory, separator, filename = member.partition("/_rels/")
+    if (
+        not separator
+        or not directory
+        or "/" in filename
+        or not filename.endswith(".rels")
+    ):
+        return None
+    source_name = filename.removesuffix(".rels")
+    if not source_name:
+        return None
+    source_member = f"{directory}/{source_name}"
+    if any(
+        not segment or segment in {".", ".."}
+        for segment in source_member.split("/")
+    ):
+        return None
+    return source_member
+
+
+def _external_relationship_xml_payload(
+    archive: ZipFile,
+    info: ZipInfo,
+    warnings: set[str],
+    budget: _ExternalRelationshipBudget,
+) -> tuple[bytes | None, str | None]:
+    """Read one bounded raw OPC relationship XML part."""
+    metadata = repr((info.filename, info.file_size, info.compress_size, info.CRC))
+    if budget.remaining_parts == 0:
+        warnings.add(
+            "FormulaFence reached its bounded package-wide external-relationship XML "
+            "part count; affected external relationships were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("external-relationship-part-count-budget-exhausted", metadata),)
+        )
+    budget.remaining_parts -= 1
+    if info.file_size > _EXTERNAL_RELATIONSHIP_MAX_XML_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized package relationship XML "
+            "part; affected external relationships were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("oversized-external-relationship-part", metadata),)
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded package-wide external-relationship XML "
+            "read budget; affected external relationships were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("external-relationship-read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(info), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read a package relationship XML part while "
+            f"inspecting external relationships ({type(error).__name__}); affected "
+            "relationships were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("unreadable-external-relationship-part", metadata),)
+        )
+
+
+def _external_relationship_kind(relationship_type: str) -> str:
+    """Classify a relationship type without retaining its private URI publicly."""
+    normalized = relationship_type.casefold()
+    if normalized.endswith("/hyperlink"):
+        return "hyperlink"
+    if normalized.endswith("/image"):
+        return "image"
+    return "other"
+
+
+def _external_relationship_metadata(path: Path) -> _ExternalRelationshipMetadata:
+    """Inventory every bounded OPC relationship whose target is external.
+
+    This deliberately starts at relationship parts instead of feature-specific
+    workbook XML. OPC allows any package or part source to target an external
+    URI, including a source that FormulaFence does not otherwise model.
+    """
+    warnings: set[str] = set()
+    signature_entries: list[tuple[str, str]] = []
+    external_relationship_part_members: set[str] = set()
+    external_relationship_sources: set[str] = set()
+    external_relationship_count = 0
+    external_hyperlink_relationship_count = 0
+    external_image_relationship_count = 0
+    external_other_relationship_count = 0
+    unrecognized_relationship_count = 0
+    try:
+        with ZipFile(path) as archive:
+            relationship_infos = sorted(
+                (
+                    info
+                    for info in archive.infolist()
+                    if not info.is_dir() and _is_opc_relationship_member(info.filename)
+                ),
+                key=lambda info: (
+                    info.filename.casefold(),
+                    info.filename,
+                    info.CRC,
+                    info.file_size,
+                    info.compress_size,
+                    info.header_offset,
+                ),
+            )
+            archive_members = {info.filename for info in archive.infolist()}
+            relationship_part_counts = Counter(
+                info.filename for info in relationship_infos
+            )
+            budget = _ExternalRelationshipBudget()
+            relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+            relationships_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationships"
+
+            for info in relationship_infos:
+                source_member = _opc_relationship_source_member(info.filename)
+                if source_member is None:
+                    warnings.add(
+                        "FormulaFence found a relationship-like package member outside "
+                        "the OPC relationship-part layout; affected external "
+                        "relationships have a coverage gap."
+                    )
+                    unrecognized_relationship_count += 1
+                    signature_entries.append(
+                        (
+                            "invalid-external-relationship-member",
+                            repr(
+                                (
+                                    info.filename,
+                                    info.file_size,
+                                    info.compress_size,
+                                    info.CRC,
+                                )
+                            ),
+                        )
+                    )
+                    continue
+
+                part_is_unrecognized = False
+                if relationship_part_counts[info.filename] > 1:
+                    warnings.add(
+                        "FormulaFence found duplicate OPC relationship parts; affected "
+                        "external relationships have a coverage gap."
+                    )
+                    unrecognized_relationship_count += 1
+                    part_is_unrecognized = True
+                    signature_entries.append(
+                        (
+                            "duplicate-external-relationship-part",
+                            repr(
+                                (
+                                    source_member,
+                                    relationship_part_counts[info.filename],
+                                    info.file_size,
+                                    info.compress_size,
+                                    info.CRC,
+                                )
+                            ),
+                        )
+                    )
+                if (
+                    source_member != "@package"
+                    and (
+                        source_member not in archive_members
+                        or source_member.endswith(".rels")
+                    )
+                ):
+                    warnings.add(
+                        "FormulaFence found an orphaned or invalid OPC relationship "
+                        "source; affected external relationships have a coverage gap."
+                    )
+                    unrecognized_relationship_count += 1
+                    part_is_unrecognized = True
+                    signature_entries.append(
+                        (
+                            "orphaned-external-relationship-source",
+                            source_member,
+                        )
+                    )
+
+                payload, fallback_signature = _external_relationship_xml_payload(
+                    archive,
+                    info,
+                    warnings,
+                    budget,
+                )
+                if payload is None:
+                    unrecognized_relationship_count += 1
+                    signature_entries.append(
+                        (
+                            "uninspected-external-relationship-part",
+                            repr((source_member, fallback_signature or "")),
+                        )
+                    )
+                    continue
+                try:
+                    root = _xml_root_from_payload(payload)
+                except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+                    warnings.add(
+                        "FormulaFence could not parse a package relationship XML part "
+                        f"while inspecting external relationships ({type(error).__name__}); "
+                        "affected relationships were not compared."
+                    )
+                    unrecognized_relationship_count += 1
+                    signature_entries.append(
+                        (
+                            "malformed-external-relationship-part",
+                            repr((source_member, _private_payload_signature(payload))),
+                        )
+                    )
+                    continue
+                if root.tag != relationships_tag:
+                    warnings.add(
+                        "FormulaFence found an unexpected OPC relationship root; affected "
+                        "external relationships have a coverage gap."
+                    )
+                    unrecognized_relationship_count += 1
+                    signature_entries.append(
+                        (
+                            "unexpected-external-relationship-root",
+                            repr((source_member, _private_payload_signature(payload))),
+                        )
+                    )
+                    continue
+
+                if root.attrib or (root.text and root.text.strip()):
+                    warnings.add(
+                        "FormulaFence found unsupported OPC relationship-root metadata; "
+                        "affected external relationships have a coverage gap."
+                    )
+                    unrecognized_relationship_count += 1
+                    part_is_unrecognized = True
+                    signature_entries.append(
+                        (
+                            "unrecognized-external-relationship-root-metadata",
+                            repr(
+                                (
+                                    source_member,
+                                    tuple(sorted(root.attrib.items())),
+                                    root.text.strip() if root.text and root.text.strip() else "",
+                                )
+                            ),
+                        )
+                    )
+
+                relationship_ids: Counter[str] = Counter()
+                for child in root:
+                    if child.tag != relationship_tag:
+                        warnings.add(
+                            "FormulaFence found unsupported OPC relationship XML; "
+                            "affected external relationships have a coverage gap."
+                        )
+                        unrecognized_relationship_count += 1
+                        part_is_unrecognized = True
+                        signature_entries.append(
+                            (
+                                "unrecognized-external-relationship-child",
+                                repr(
+                                    (
+                                        source_member,
+                                        _private_payload_signature(
+                                            ElementTree.tostring(child, encoding="utf-8")
+                                        ),
+                                    )
+                                ),
+                            )
+                        )
+                        continue
+
+                    relationship_id = child.get("Id")
+                    if relationship_id:
+                        relationship_ids[relationship_id] += 1
+                    relationship_type = child.get("Type", "")
+                    target = child.get("Target")
+                    target_mode = child.get("TargetMode", "Internal")
+                    normalized_target_mode = target_mode.casefold()
+                    unknown_attributes = tuple(
+                        sorted(
+                            (attribute, value)
+                            for attribute, value in child.attrib.items()
+                            if attribute not in _EXTERNAL_RELATIONSHIP_KNOWN_ATTRIBUTES
+                        )
+                    )
+                    malformed_reasons: list[str] = []
+                    if not relationship_id:
+                        malformed_reasons.append("missing-id")
+                    if not relationship_type:
+                        malformed_reasons.append("missing-type")
+                    if not target:
+                        malformed_reasons.append("missing-target")
+                    if normalized_target_mode not in {"internal", "external"}:
+                        malformed_reasons.append("invalid-target-mode")
+                    if unknown_attributes:
+                        malformed_reasons.append("unknown-attributes")
+                    if child.text and child.text.strip():
+                        malformed_reasons.append("text-content")
+                    if list(child):
+                        malformed_reasons.append("child-content")
+
+                    if normalized_target_mode == "external":
+                        external_relationship_count += 1
+                        external_relationship_part_members.add(info.filename)
+                        external_relationship_sources.add(source_member)
+                        kind = _external_relationship_kind(relationship_type)
+                        if kind == "hyperlink":
+                            external_hyperlink_relationship_count += 1
+                        elif kind == "image":
+                            external_image_relationship_count += 1
+                        else:
+                            external_other_relationship_count += 1
+                        signature_entries.append(
+                            (
+                                "external-relationship",
+                                repr(
+                                    (
+                                        source_member,
+                                        relationship_type,
+                                        normalized_target_mode,
+                                        target or "",
+                                        unknown_attributes,
+                                    )
+                                ),
+                            )
+                        )
+
+                    if malformed_reasons:
+                        warnings.add(
+                            "FormulaFence found malformed or unsupported OPC relationship "
+                            "metadata; affected external relationships have a coverage gap."
+                        )
+                        unrecognized_relationship_count += 1
+                        part_is_unrecognized = True
+                        signature_entries.append(
+                            (
+                                "malformed-external-relationship",
+                                repr(
+                                    (
+                                        source_member,
+                                        relationship_type,
+                                        normalized_target_mode,
+                                        target or "",
+                                        unknown_attributes,
+                                        tuple(sorted(malformed_reasons)),
+                                    )
+                                ),
+                            )
+                        )
+
+                duplicate_id_count = sum(
+                    count
+                    for count in relationship_ids.values()
+                    if count > 1
+                )
+                if duplicate_id_count:
+                    warnings.add(
+                        "FormulaFence found duplicate OPC relationship IDs; affected "
+                        "external relationships have a coverage gap."
+                    )
+                    unrecognized_relationship_count += duplicate_id_count
+                    part_is_unrecognized = True
+                    signature_entries.append(
+                        (
+                            "duplicate-external-relationship-identifiers",
+                            repr((source_member, duplicate_id_count)),
+                        )
+                    )
+
+                if part_is_unrecognized and info.filename not in external_relationship_part_members:
+                    # Keep the part itself private but ensure that a malformed part
+                    # which contains no recognizable external edge remains diff-visible.
+                    signature_entries.append(
+                        ("unrecognized-external-relationship-part", source_member)
+                    )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _ExternalRelationshipMetadata(
+            ExternalRelationshipSnapshot(
+                unrecognized_relationship_count=1,
+                relationship_signature=_private_external_data_signature(
+                    (("external-relationship-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect package-wide external relationships "
+                f"({type(error).__name__}); affected relationships were not compared.",
+            ),
+        )
+
+    return _ExternalRelationshipMetadata(
+        ExternalRelationshipSnapshot(
+            external_relationship_part_count=len(external_relationship_part_members),
+            external_relationship_source_count=len(external_relationship_sources),
+            external_relationship_count=external_relationship_count,
+            external_hyperlink_relationship_count=(
+                external_hyperlink_relationship_count
+            ),
+            external_image_relationship_count=external_image_relationship_count,
+            external_other_relationship_count=external_other_relationship_count,
+            unrecognized_relationship_count=unrecognized_relationship_count,
+            relationship_signature=_private_external_data_signature(
+                tuple(sorted(signature_entries))
+            ),
+        ),
+        tuple(sorted(warnings)),
+    )
 
 
 def _power_query_opaque_metadata(
@@ -40870,6 +41316,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     worksheet_image_metadata = _worksheet_image_metadata(source)
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
+    external_relationship_metadata = _external_relationship_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
         source
     )
@@ -40931,6 +41378,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(worksheet_image_metadata.warnings)
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
+    parser_warnings.update(external_relationship_metadata.warnings)
     has_array_formulas = any(
         _is_array_formula(cell)
         for worksheet in workbook.worksheets
@@ -41139,6 +41587,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         query_table_refresh_controls=external_data_metadata.query_tables,
         pivot_cache_refresh_controls=external_data_metadata.pivot_caches,
         external_link_packages=external_data_metadata.external_link_packages,
+        external_relationships=external_relationship_metadata.relationships,
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
@@ -41237,6 +41686,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             control.profile_dict() for control in snapshot.pivot_cache_refresh_controls
         ],
         "external_link_packages": snapshot.external_link_packages.profile_dict(),
+        "external_relationships": snapshot.external_relationships.profile_dict(),
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
@@ -41296,6 +41746,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             ],
             "has_vba": snapshot.macro_hash is not None,
             "has_xlm_macro_sheets": snapshot.xlm_macro_sheets.present,
+            "has_external_relationships": snapshot.external_relationships.present,
             "has_ribbon_customization": snapshot.ribbon_customization.present,
             "has_office_web_addins": snapshot.office_web_addins.present,
             "has_pivot_table_definitions": snapshot.pivot_table_definitions.present,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import warnings
 from xml.etree import ElementTree
 from zipfile import ZipFile
@@ -48,6 +49,7 @@ from .helpers import (
     change_extended_chart_style_payload,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
+    change_external_relationship_target,
     change_fill_definition,
     change_filter_visibility_criterion,
     change_filter_visibility_hidden_column,
@@ -137,6 +139,7 @@ from .helpers import (
     corrupt_custom_workbook_view_control,
     corrupt_default_zero_dimension_visibility_controls,
     corrupt_extended_chart_definition_root,
+    corrupt_external_relationship_metadata,
     corrupt_fill_column_control,
     corrupt_fill_definition,
     corrupt_filter_visibility_column_control,
@@ -211,6 +214,7 @@ from .helpers import (
     make_extended_chart_definition_model,
     make_external_data_refresh_model,
     make_external_link_package_model,
+    make_external_relationship_model,
     make_fill_model,
     make_filter_visibility_model,
     make_font_model,
@@ -326,6 +330,7 @@ from .helpers import (
     renumber_chart_relationships,
     renumber_extended_chart_relationships,
     renumber_external_link_declaration_relationships,
+    renumber_external_relationship_identifiers,
     renumber_in_content_office_web_addin_identifiers,
     renumber_legacy_comment_identifiers,
     renumber_legacy_threaded_placeholder_identifiers,
@@ -1879,6 +1884,150 @@ def test_external_data_connection_defaults_are_canonical(tmp_path) -> None:
         if change.kind == "external_data_connections_changed"
     }
     assert "FF023" not in {finding.rule_id for finding in report.findings}
+
+
+def test_package_wide_external_relationships_are_profiled_and_diffed_privately(
+    tmp_path,
+) -> None:
+    baseline = make_external_relationship_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_relationship_model(tmp_path / "candidate.xlsx")
+    change_external_relationship_target(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    expected_relationships = {
+        "present": True,
+        "external_relationship_part_count": 2,
+        "external_relationship_source_count": 2,
+        "external_relationship_count": 3,
+        "external_hyperlink_relationship_count": 1,
+        "external_image_relationship_count": 1,
+        "external_other_relationship_count": 1,
+        "unrecognized_relationship_count": 0,
+    }
+    assert baseline_snapshot.external_relationships.to_dict() == expected_relationships
+    assert baseline_snapshot.summary()["package_external_relationship_count"] == 3
+    assert baseline_snapshot.summary()["package_external_relationship_source_count"] == 2
+    assert baseline_snapshot.summary()["package_external_hyperlink_relationship_count"] == 1
+    assert baseline_snapshot.summary()["package_external_image_relationship_count"] == 1
+    assert baseline_snapshot.summary()["has_external_relationships"] is True
+    assert profile["external_relationships"] == expected_relationships
+    assert "## Package-wide external relationships" in markdown
+    assert "**Relationship parts / sources / targets:** 2 / 2 / 3" in markdown
+    assert "**Hyperlink / image / other targets:** 1 / 1 / 1" in markdown
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    relationship_change = next(
+        change
+        for change in report.changes
+        if change.kind == "external_relationships_changed"
+    )
+    assert relationship_change.details["before"] == expected_relationships
+    assert relationship_change.details["after"] == expected_relationships
+    assert relationship_change.details["external_relationship_material_changed"] is True
+    assert "FF063" in {finding.rule_id for finding in report.findings}
+
+    sensitive_values = (
+        "PRIVATE-PACKAGE-EXTERNAL-BASELINE",
+        "PRIVATE-PACKAGE-EXTERNAL-CANDIDATE",
+        "PRIVATE-PACKAGE-HYPERLINK-BASELINE",
+        "PRIVATE-PACKAGE-IMAGE-BASELINE",
+        "https://private.example.test/relationships/opaque-external",
+        "rIdFenceOpaqueExternal",
+        "rIdFenceOpaqueHyperlink",
+        "rIdFenceOpaqueImage",
+        "xl/_rels/workbook.xml.rels",
+        "xl/worksheets/sheet1.xml",
+    )
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_package_wide_external_relationship_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_external_relationship_model(tmp_path / "baseline.xlsx")
+    candidate = tmp_path / "candidate.xlsx"
+    shutil.copyfile(baseline, candidate)
+    renumber_external_relationship_identifiers(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert baseline_snapshot.external_relationships == candidate_snapshot.external_relationships
+    assert "external_relationships_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF063" not in {finding.rule_id for finding in report.findings}
+
+
+def test_unrecognized_package_relationship_metadata_fails_closed_and_stays_private(
+    tmp_path,
+) -> None:
+    baseline = make_external_relationship_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_relationship_model(tmp_path / "candidate.xlsx")
+    corrupt_external_relationship_metadata(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    relationship_change = next(
+        change
+        for change in report.changes
+        if change.kind == "external_relationships_changed"
+    )
+
+    assert candidate_snapshot.external_relationships.unrecognized_relationship_count == 1
+    assert any(
+        "malformed or unsupported OPC relationship metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert relationship_change.details[
+        "unrecognized_external_relationship_metadata_changed"
+    ] is True
+    assert "FF063" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-OPAQUE-ATTRIBUTE",
+        "privateUnknownAttribute",
+        "PRIVATE-PACKAGE-HYPERLINK-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_package_wide_external_relationship_scan_budget_fails_closed(tmp_path, monkeypatch) -> None:
+    baseline = make_external_relationship_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_relationship_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    monkeypatch.setattr(workbook_module, "_EXTERNAL_RELATIONSHIP_MAX_XML_BYTES", 1)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.external_relationships.present is True
+    assert candidate_snapshot.external_relationships.unrecognized_relationship_count > 0
+    assert any(
+        "oversized package relationship XML part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "FF063" in {finding.rule_id for finding in report.findings}
 
 
 def test_external_link_packages_are_profiled_and_diffed_privately(tmp_path) -> None:
@@ -9269,7 +9418,7 @@ def test_external_worksheet_images_are_counted_without_exposing_targets(tmp_path
     assert candidate_snapshot.worksheet_images.image_part_count == 2
     assert candidate_snapshot.worksheet_images.external_relationship_count == 1
     assert candidate_snapshot.worksheet_images.unrecognized_image_count == 0
-    assert "FF059" in {finding.rule_id for finding in report.findings}
+    assert {finding.rule_id for finding in report.findings} >= {"FF059", "FF063"}
     rendered_artifacts = (
         json.dumps(candidate_profile),
         profile_to_markdown(candidate_profile),

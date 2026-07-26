@@ -32,6 +32,7 @@ rules:
   no_protection_changes: true
   no_external_data_connection_changes: true
   no_external_link_package_changes: true
+  no_external_relationship_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 5

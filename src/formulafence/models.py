@@ -871,6 +871,52 @@ class ExternalLinkPackageSnapshot:
 
 
 @dataclass(frozen=True)
+class ExternalRelationshipSnapshot:
+    """Safe aggregate of package-wide OPC relationships with external targets.
+
+    An OPC relationship can point outside the workbook from any package part,
+    including parts that a feature-specific reader does not understand. Private
+    signatures retain source, type, target, and malformed-metadata evidence for
+    comparison while public output exposes counts only.
+    """
+
+    external_relationship_part_count: int = 0
+    external_relationship_source_count: int = 0
+    external_relationship_count: int = 0
+    external_hyperlink_relationship_count: int = 0
+    external_image_relationship_count: int = 0
+    external_other_relationship_count: int = 0
+    unrecognized_relationship_count: int = 0
+    relationship_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.external_relationship_part_count
+            or self.external_relationship_count
+            or self.unrecognized_relationship_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural relationship evidence without endpoints or sources."""
+        return {
+            "present": self.present,
+            "external_relationship_part_count": self.external_relationship_part_count,
+            "external_relationship_source_count": self.external_relationship_source_count,
+            "external_relationship_count": self.external_relationship_count,
+            "external_hyperlink_relationship_count": (
+                self.external_hyperlink_relationship_count
+            ),
+            "external_image_relationship_count": self.external_image_relationship_count,
+            "external_other_relationship_count": self.external_other_relationship_count,
+            "unrecognized_relationship_count": self.unrecognized_relationship_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class XlmMacroSheetSnapshot:
     """Safe aggregate of raw Excel 4.0 / XLM macro-sheet package parts.
 
@@ -3543,6 +3589,9 @@ class WorkbookSnapshot:
     external_link_packages: ExternalLinkPackageSnapshot = field(
         default_factory=ExternalLinkPackageSnapshot
     )
+    external_relationships: ExternalRelationshipSnapshot = field(
+        default_factory=ExternalRelationshipSnapshot
+    )
     xlm_macro_sheets: XlmMacroSheetSnapshot = field(
         default_factory=XlmMacroSheetSnapshot
     )
@@ -3974,6 +4023,19 @@ class WorkbookSnapshot:
             "external_workbook_link_count": self.external_link_packages.external_workbook_count,
             "dde_link_count": self.external_link_packages.dde_link_count,
             "ole_link_count": self.external_link_packages.ole_link_count,
+            "package_external_relationship_count": (
+                self.external_relationships.external_relationship_count
+            ),
+            "package_external_relationship_source_count": (
+                self.external_relationships.external_relationship_source_count
+            ),
+            "package_external_hyperlink_relationship_count": (
+                self.external_relationships.external_hyperlink_relationship_count
+            ),
+            "package_external_image_relationship_count": (
+                self.external_relationships.external_image_relationship_count
+            ),
+            "has_external_relationships": self.external_relationships.present,
             "xlm_macro_sheet_count": self.xlm_macro_sheets.macro_sheet_count,
             "xlm_macro_formula_cell_count": self.xlm_macro_sheets.formula_cell_count,
             "xlm_related_part_payload_count": (

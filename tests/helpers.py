@@ -5071,6 +5071,160 @@ def renumber_external_link_declaration_relationships(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".external-link-renumber.tmp.xlsx")
 
 
+def make_external_relationship_model(path: Path) -> Path:
+    """Create opaque package-wide external relationships outside known bindings."""
+    make_model(path)
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    workbook_relationships_member = "xl/_rels/workbook.xml.rels"
+    worksheet_member = "xl/worksheets/sheet1.xml"
+    worksheet_relationships_member = _relationship_member(worksheet_member)
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        if workbook_relationships_member not in contents:
+            raise ValueError("Fixture does not contain workbook relationships")
+        relationships_tag = f"{{{package_relationships}}}Relationships"
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        workbook_relationships = ElementTree.fromstring(
+            contents[workbook_relationships_member]
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceOpaqueExternal",
+                "Type": "https://private.example.test/relationships/opaque-external",
+                "Target": "https://private.example.test/PRIVATE-PACKAGE-EXTERNAL-BASELINE",
+                "TargetMode": "External",
+            },
+        )
+        contents[workbook_relationships_member] = serialize(workbook_relationships)
+
+        if worksheet_member not in contents:
+            raise ValueError("Fixture does not contain the expected worksheet part")
+        worksheet_relationships = (
+            ElementTree.fromstring(contents[worksheet_relationships_member])
+            if worksheet_relationships_member in contents
+            else ElementTree.Element(relationships_tag)
+        )
+        ElementTree.SubElement(
+            worksheet_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceOpaqueHyperlink",
+                "Type": f"{document_relationships}/hyperlink",
+                "Target": "https://private.example.test/PRIVATE-PACKAGE-HYPERLINK-BASELINE",
+                "TargetMode": "External",
+            },
+        )
+        ElementTree.SubElement(
+            worksheet_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceOpaqueImage",
+                "Type": f"{document_relationships}/image",
+                "Target": "https://private.example.test/PRIVATE-PACKAGE-IMAGE-BASELINE",
+                "TargetMode": "External",
+            },
+        )
+        contents[worksheet_relationships_member] = serialize(worksheet_relationships)
+
+    return _rewrite_archive(path, mutate, ".external-relationship-model.tmp.xlsx")
+
+
+def change_external_relationship_target(path: Path) -> Path:
+    """Retarget an opaque external relationship without changing workbook cells."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        member = "xl/_rels/workbook.xml.rels"
+        relationships = ElementTree.fromstring(contents[member])
+        relationship = next(
+            (
+                current
+                for current in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if current.get("Id") == "rIdFenceOpaqueExternal"
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain the opaque external relationship")
+        relationship.set(
+            "Target",
+            "https://private.example.test/PRIVATE-PACKAGE-EXTERNAL-CANDIDATE",
+        )
+        contents[member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".external-relationship-target.tmp.xlsx")
+
+
+def renumber_external_relationship_identifiers(path: Path) -> Path:
+    """Rewrite arbitrary relationship identifiers without changing endpoints."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    replacements = {
+        "rIdFenceOpaqueExternal": "rIdFenceOpaqueExternalRenumbered",
+        "rIdFenceOpaqueHyperlink": "rIdFenceOpaqueHyperlinkRenumbered",
+        "rIdFenceOpaqueImage": "rIdFenceOpaqueImageRenumbered",
+    }
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        for member in (
+            "xl/_rels/workbook.xml.rels",
+            _relationship_member("xl/worksheets/sheet1.xml"),
+        ):
+            relationships = ElementTree.fromstring(contents[member])
+            for relationship in relationships.findall(
+                f"{{{package_relationships}}}Relationship"
+            ):
+                if replacement := replacements.get(relationship.get("Id")):
+                    relationship.set("Id", replacement)
+            contents[member] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".external-relationship-renumber.tmp.xlsx")
+
+
+def corrupt_external_relationship_metadata(path: Path) -> Path:
+    """Make one external relationship unrecognizable without exposing its target."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        member = _relationship_member("xl/worksheets/sheet1.xml")
+        relationships = ElementTree.fromstring(contents[member])
+        relationship = next(
+            (
+                current
+                for current in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if current.get("Id") == "rIdFenceOpaqueHyperlink"
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain the opaque hyperlink relationship")
+        relationship.set("privateUnknownAttribute", "PRIVATE-OPAQUE-ATTRIBUTE")
+        contents[member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".external-relationship-corrupt.tmp.xlsx")
+
+
 def duplicate_external_link_definition(path: Path) -> Path:
     """Add a second supported definition to exercise the fail-closed parser path."""
     spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"

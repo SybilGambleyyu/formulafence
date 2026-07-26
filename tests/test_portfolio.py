@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from openpyxl import Workbook, load_workbook
+from openpyxl.workbook.defined_name import DefinedName
 
 from formulafence.cli import main
 from formulafence.output import as_json, portfolio_to_markdown, portfolio_to_sarif
@@ -271,13 +272,86 @@ def test_portfolio_resolves_relative_ranges_case_insensitively_without_basename_
     assert finding.details["sample_impacts"][0]["location"] == "Summary!D2"
 
 
+def test_portfolio_resolves_relative_external_workbook_defined_names_privately(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    source_path = _write_workbook(
+        baseline / "inputs" / "source.xlsx",
+        "Data",
+        {"B2": 10, "B3": 20, "B4": 30},
+    )
+    source = load_workbook(source_path)
+    source.defined_names.add(
+        DefinedName("PrivateInputRange", attr_text="Data!$B$2:$B$4")
+    )
+    source.defined_names.add(
+        DefinedName("PrivateInputAlias", attr_text="=PrivateInputRange")
+    )
+    source.defined_names.add(
+        DefinedName(
+            "DynamicInputRange",
+            attr_text="=OFFSET(Data!$B$2,0,0,3,1)",
+        )
+    )
+    source.save(source_path)
+    _write_workbook(
+        baseline / "reports" / "summary.xlsx",
+        "Summary",
+        {
+            "D2": "=SUM('..\\inputs\\[SOURCE.XLSX]privateinputalias')",
+            "D3": "=SUM('..\\inputs\\[SOURCE.XLSX]dynamicinputrange')",
+        },
+    )
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs" / "source.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B3"], "value", 21),
+    )
+
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_cross_workbook_impacts": True}}
+    )
+    report = compare_portfolios(baseline, candidate, policy=policy)
+    source_entry = next(
+        entry for entry in report.workbooks if entry.path == "inputs/source.xlsx"
+    )
+    finding = next(
+        finding for finding in source_entry.findings if finding.rule_id == "FF079"
+    )
+    rendered = (
+        as_json(report.to_dict()),
+        portfolio_to_markdown(report),
+        as_json(portfolio_to_sarif(report)),
+    )
+
+    assert finding.details["impacted_workbook_count"] == 1
+    assert finding.details["impacted_formula_count"] == 1
+    assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
+    assert finding.details["sample_impacts"][0] == {
+        "workbook": "reports/summary.xlsx",
+        "location": "Summary!D2",
+        "path": [
+            {"workbook": "inputs/source.xlsx", "location": "Data!B3"},
+            {"workbook": "reports/summary.xlsx", "location": "Summary!D2"},
+        ],
+    }
+    assert all("PrivateInputRange" not in value for value in rendered)
+    assert all("PrivateInputAlias" not in value for value in rendered)
+    assert all("DynamicInputRange" not in value for value in rendered)
+
+
 def test_portfolio_never_guesses_or_discloses_unresolved_external_link_paths(
     tmp_path: Path,
 ) -> None:
     baseline = tmp_path / "baseline"
     candidate = tmp_path / "candidate"
     private_source = "PRIVATE-EXTERNAL-LINK-PATH"
-    _write_workbook(baseline / "inputs.xlsx", "Data", {"B2": 100})
+    source_path = _write_workbook(baseline / "inputs.xlsx", "Data", {"B2": 100})
+    source = load_workbook(source_path)
+    source.defined_names.add(DefinedName("ExternalName", attr_text="Data!$B$2"))
+    source.save(source_path)
     _write_workbook(
         baseline / "reports" / "summary.xlsx",
         "Summary",
@@ -287,6 +361,8 @@ def test_portfolio_never_guesses_or_discloses_unresolved_external_link_paths(
             "F2": "='..\\..\\[inputs.xlsx]Data'!B2",
             "G2": "='..\\[inputs.xlsx]Data'!B2",
             "H2": "=[inputs.xlsx]ExternalName",
+            "I2": f"='C:\\{private_source}\\[inputs.xlsx]ExternalName'",
+            "J2": "='..\\..\\[inputs.xlsx]ExternalName'",
         },
     )
     shutil.copytree(baseline, candidate)
@@ -307,6 +383,7 @@ def test_portfolio_never_guesses_or_discloses_unresolved_external_link_paths(
     assert finding.details["impacted_formula_count"] == 1
     assert finding.details["sample_impacts"][0]["location"] == "Summary!G2"
     assert all(private_source not in value for value in rendered)
+    assert all("ExternalName" not in value for value in rendered)
 
 
 def test_portfolio_fails_closed_when_cross_workbook_impact_bound_is_reached(

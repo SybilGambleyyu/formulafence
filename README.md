@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.86.0/formulafence-0.86.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.87.0/formulafence-0.87.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.86.0
+  uses: SybilGambleyyu/formulafence@v0.87.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -92,14 +92,22 @@ present on only one side emits high-severity `FF077`; enable
 guesses renames, so a move remains a visible removal plus addition.
 
 When a changed candidate cell is read through a direct static external A1
-reference by a formula in another candidate workbook, FormulaFence emits
-high-severity `FF079` with relative workbook/cell paths and deterministic
-shortest-path samples. Enable `no_cross_workbook_impacts` to make that evidence
-`FFP079`. This is deliberately a narrow local graph: it resolves only an exact
-relative link spelling against an already-inspected candidate path, never opens
-or fetches a link target, never guesses by filename, and does not evaluate a
-formula. Absolute, URI, escaping, non-A1, named, table, 3-D, and dynamic link
-forms remain ordinary external-link coverage rather than being approximated.
+reference—or the documented workbook-scoped name form such as
+`=[Inputs.xlsx]InputRange`—by a formula in another candidate workbook,
+FormulaFence emits high-severity `FF079` with relative workbook/cell paths and
+deterministic shortest-path samples. An external name is eligible only if the
+exact relative path identifies an already-inspected candidate workbook and its
+workbook-scoped source name can be fully expanded to static internal A1
+destinations without evaluating a formula. Enable `no_cross_workbook_impacts`
+to make that evidence `FFP079`.
+
+This is deliberately a narrow local graph: it never opens or fetches a link
+target, guesses by filename, or evaluates a formula. Raw external path and
+name spelling stay private. Absolute, URI, escaping, sheet-scoped, missing,
+direct structured, 3-D, dynamic, or otherwise non-statically-expanded name
+forms remain ordinary external-link coverage rather than being approximated. A
+defined-name declaration change remains its ordinary defined-name review event;
+`FF079` roots are changed candidate cells.
 
 The command applies an optional policy independently to every matched workbook,
 keeps paths relative in portfolio output, skips transient Office `~$` lock

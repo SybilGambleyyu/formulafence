@@ -60,6 +60,7 @@ from formulafence.models import (
     ExternalDataRefreshSettingsSnapshot,
     ExternalLinkPackageSnapshot,
     ExternalRelationshipSnapshot,
+    ExternalWorkbookDefinedNameReference,
     ExternalWorkbookReference,
     FillSnapshot,
     FilterVisibilitySnapshot,
@@ -43769,6 +43770,37 @@ def _named_reference_maps(
     )
 
 
+def _static_global_defined_name_references(
+    named_references: Mapping[str, tuple[ParsedReference, ...]],
+) -> dict[str, tuple[ParsedReference, ...]]:
+    """Keep only safely expanded workbook-scoped name destinations private.
+
+    The result is consumed solely by candidate portfolio analysis for direct
+    external workbook names. A local name, unresolved formula/name, external
+    target, relative reference, or malformed range is deliberately omitted;
+    FormulaFence must not turn an uncertain name into an invented cross-file
+    edge.
+    """
+    return {
+        name_key: references
+        for name_key, references in named_references.items()
+        if "!" not in name_key
+        and references
+        and all(
+            not reference.is_external
+            and reference.sheet is not None
+            and None
+            not in {
+                reference.min_column,
+                reference.min_row,
+                reference.max_column,
+                reference.max_row,
+            }
+            for reference in references
+        )
+    }
+
+
 def _table_columns(
     worksheet: object,
     table: object,
@@ -44095,6 +44127,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     external_workbook_references: dict[
         CellKey, tuple[ExternalWorkbookReference, ...]
     ] = {}
+    external_workbook_defined_name_references: dict[
+        CellKey, tuple[ExternalWorkbookDefinedNameReference, ...]
+    ] = {}
     formula_external_action_cells: set[CellKey] = set()
     formula_external_action_counts: Counter[str] = Counter()
     formula_external_action_entries: list[tuple[str, str]] = []
@@ -44209,6 +44244,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         local_named_function_formula_environment_information_functions,
         formula_environment_information_definition_entries,
     ) = _named_reference_maps(workbook, structured_tables, sheet_order)
+    static_global_defined_name_references = _static_global_defined_name_references(
+        global_named_references
+    )
 
     for worksheet in workbook.worksheets:
         named_references = {
@@ -44667,6 +44705,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 external_workbook_references[snapshot.location] = (
                     inspection.external_workbook_references
                 )
+            if inspection.external_workbook_defined_name_references:
+                external_workbook_defined_name_references[snapshot.location] = (
+                    inspection.external_workbook_defined_name_references
+                )
             for reference in inspection.references:
                 if reference.is_external:
                     external_references.add(snapshot.location)
@@ -44939,6 +44981,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         dynamic_array_formula_ranges=array_formula_classification.dynamic_ranges,
         dynamic_array_output_references=dynamic_array_output_references,
         external_workbook_references=external_workbook_references,
+        external_workbook_defined_name_references=(
+            external_workbook_defined_name_references
+        ),
+        static_global_defined_name_references=static_global_defined_name_references,
         unclassified_array_formula_cells=array_formula_classification.unclassified_cells,
         array_formula_output_dependents=array_formula_output_dependents,
         tokenization_failure_cells=tokenization_failure_cells,

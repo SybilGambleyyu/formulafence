@@ -95,13 +95,15 @@ financial correctness or replace model review.
   final incomplete exit status, while remaining paths are still reported.
 - Cross-workbook portfolio impact evidence is candidate-only and local to the
   supplied inventory. FormulaFence retains raw external formula spellings only
-  as private parser state, then resolves a link only when a direct static A1
-  source normalizes to one exact relative candidate path. It never opens a
-  target path, searches by basename, follows an absolute/UNC/URI/escaping path,
-  fetches anything, evaluates a formula, or emits the stored external spelling.
-  Static ranges stay lazy. A global 100,000-state default bound emits `FF080`
-  and exit status 2 rather than presenting incomplete `FF079` impact evidence
-  as exhaustive.
+  as private parser state, then resolves a direct static A1 source—or direct
+  workbook-scoped external name—only when its path normalizes to one exact
+  relative candidate. An external name must also expand completely to static
+  internal A1 destinations in that source candidate. It never opens a target
+  path, searches by basename, follows an absolute/UNC/URI/escaping path,
+  fetches anything, evaluates a formula, or emits the stored external path or
+  name spelling. Static ranges stay lazy. A global 100,000-state default bound
+  emits `FF080` and exit status 2 rather than presenting incomplete `FF079`
+  impact evidence as exhaustive.
 - CLI report output is refused when it resolves to an inspected workbook or
   policy, and portfolio output is refused inside either input directory. This
   keeps a reporting request from mutating evidence or changing a portfolio's

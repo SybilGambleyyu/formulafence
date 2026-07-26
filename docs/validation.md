@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Cross-workbook defined-name portfolio boundary — 2026-07-26
+
+Microsoft's [workbook-link guidance](https://support.microsoft.com/en-us/excel/create-workbook-links)
+documents that another workbook can be referenced by a cell/range or by a
+defined name. FormulaFence 0.87.0 adds only the direct workbook-scoped syntax
+such as `=[source.xlsx]InputRange`, and only when the exact relative path names
+an already-inspected candidate workbook whose source name fully expands to
+static internal A1 destinations. This is static reachability evidence, not an
+attempt to calculate Excel or resolve a link package.
+
+A controlled source/summary portfolio declared a private direct global range,
+a formula-defined global alias of that range, and an `OFFSET`-based name. A
+summary formula used the exact-relative external alias. Changing one source
+cell produced `FF079` and `FFP079` for the one reachable summary formula. The
+dynamic name, sheet-qualified name form, absolute-path form, and
+portfolio-escaping form produced no invented edge. JSON, Markdown, and SARIF
+contained only relative workbook identities and logical cells: the controlled
+source path and all defined-name identities remained absent.
+
+The independently maintained public
+[openpyexcel external-link fixtures](https://github.com/sciris/openpyexcel/tree/1fde667a1adc2f4988279fd73a2ac2660706b5ce/openpyexcel/workbook/external_link/tests/data)
+were rechecked at commit `1fde667a1adc2f4988279fd73a2ac2660706b5ce`. Their
+consumer formulas use workbook-local names backed by external-link-package
+metadata, not a direct external workbook-scoped formula token. FormulaFence
+continued to record no portfolio edge rather than infer a filename, package
+target, or name identity from that metadata. Neither public workbook was
+executed, refreshed, altered, copied into this repository, nor emitted in a
+report.
+
+The final source checkout passed **605 tests in 87.89 seconds**, a clean Ruff
+check, and `git diff --check`. A fresh isolated virtual environment then
+installed the built 0.87.0 wheel outside the checkout. Its source/summary pair
+produced `FF079` and `FFP079` only for the static alias destination; the dynamic
+and absolute forms did not add an impact. The resulting JSON omitted the
+temporary root, external path sentinel, and every controlled name identity.
+Both wheel and source distribution passed `twine check`.
+
 ## Cross-workbook portfolio impact boundary — 2026-07-26
 
 FormulaFence 0.86.0 implements the direct external-A1 forms documented in

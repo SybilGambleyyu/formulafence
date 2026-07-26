@@ -13,7 +13,10 @@ from openpyxl.utils.cell import (
     range_boundaries,
 )
 
-from formulafence.models import ExternalWorkbookReference
+from formulafence.models import (
+    ExternalWorkbookDefinedNameReference,
+    ExternalWorkbookReference,
+)
 
 MAX_EXCEL_ROW = 1_048_576
 MAX_EXCEL_COLUMN = 16_384
@@ -360,6 +363,9 @@ class FormulaInspection:
     unresolved_range_tokens: tuple[str, ...]
     dynamic_reference_functions: tuple[str, ...]
     external_workbook_references: tuple[ExternalWorkbookReference, ...] = ()
+    external_workbook_defined_name_references: tuple[
+        ExternalWorkbookDefinedNameReference, ...
+    ] = ()
     external_action_functions: tuple[str, ...] = ()
     formula_dde_link_markers: tuple[str, ...] = ()
     python_functions: tuple[str, ...] = ()
@@ -583,6 +589,44 @@ def parse_external_workbook_reference(value: str) -> ExternalWorkbookReference |
         min_row=min_row or 1,
         max_column=max_column or MAX_EXCEL_COLUMN,
         max_row=max_row or MAX_EXCEL_ROW,
+    )
+
+
+def parse_external_workbook_defined_name_reference(
+    value: str,
+) -> ExternalWorkbookDefinedNameReference | None:
+    """Parse one direct external workbook-scoped name without resolving it.
+
+    Excel permits ``=[Book.xlsx]InputRange`` alongside direct external A1
+    syntax. This accepts only that workbook-scoped form. Sheet-qualified,
+    structured, malformed, and otherwise ambiguous spellings remain outside
+    the static portfolio graph instead of being approximated.
+    """
+    token = value.strip()
+    if not token or _last_unquoted_bang(token) >= 0:
+        return None
+    if len(token) >= 2 and token[0] == "'" and token[-1] == "'":
+        token = token[1:-1].replace("''", "'")
+    elif "'" in token:
+        return None
+
+    opening = token.find("[")
+    closing = token.find("]", opening + 1)
+    if opening < 0 or closing < 0:
+        return None
+    workbook_name = token[opening + 1 : closing].strip()
+    name = token[closing + 1 :].strip()
+    if (
+        not workbook_name
+        or not name
+        or name != token[closing + 1 :]
+        or any(character in name for character in "[]!'")
+        or any(ord(character) < 32 or ord(character) == 127 for character in name)
+    ):
+        return None
+    return ExternalWorkbookDefinedNameReference(
+        source_path=f"{token[:opening]}{workbook_name}",
+        name_key=reference_lookup_key(name),
     )
 
 
@@ -2145,6 +2189,9 @@ def inspect_formula(
     unresolved_range_tokens: list[str] = []
     dynamic_reference_functions: list[str] = []
     external_workbook_references: list[ExternalWorkbookReference] = []
+    external_workbook_defined_name_references: list[
+        ExternalWorkbookDefinedNameReference
+    ] = []
     external_action_functions: list[str] = []
     formula_dde_link_markers: list[str] = list(direct_formula_dde_link_markers)
     python_functions: list[str] = []
@@ -2198,6 +2245,27 @@ def inspect_formula(
                     )
                 ) is not None:
                     external_workbook_references.append(external_workbook_reference)
+                continue
+            if external_workbook_defined_name_reference := (
+                parse_external_workbook_defined_name_reference(token.value)
+            ):
+                # Keep the ordinary external-reference accounting consistent
+                # with external A1 tokens while retaining the source name only
+                # as private portfolio-resolution data.
+                references.append(
+                    ParsedReference(
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        token.value,
+                        is_external=True,
+                    )
+                )
+                external_workbook_defined_name_references.append(
+                    external_workbook_defined_name_reference
+                )
                 continue
             three_d_reference = resolve_3d_reference(token.value, sheet_order)
             if three_d_reference is not None:
@@ -2547,6 +2615,9 @@ def inspect_formula(
         unresolved_range_tokens=tuple(dict.fromkeys(unresolved_range_tokens)),
         dynamic_reference_functions=tuple(dict.fromkeys(dynamic_reference_functions)),
         external_workbook_references=tuple(dict.fromkeys(external_workbook_references)),
+        external_workbook_defined_name_references=tuple(
+            dict.fromkeys(external_workbook_defined_name_references)
+        ),
         external_action_functions=tuple(external_action_functions),
         formula_dde_link_markers=tuple(formula_dde_link_markers),
         python_functions=tuple(python_functions),

@@ -8,6 +8,7 @@ from formulafence.formulas import (
     formula_fingerprint,
     inspect_formula,
     lambda_parameter_count,
+    parse_external_workbook_defined_name_reference,
     parse_external_workbook_reference,
 )
 
@@ -89,6 +90,46 @@ def test_external_workbook_a1_references_keep_private_source_spelling_for_portfo
     ] == [
         ("Inputs.xlsx", "Data"),
         ("..\\shared\\Other.xlsx", "Data"),
+    ]
+
+
+def test_external_workbook_defined_name_references_keep_private_lookup_data() -> None:
+    direct = parse_external_workbook_defined_name_reference("[Inputs.xlsx]InputRange")
+    relative = parse_external_workbook_defined_name_reference(
+        "'..\\shared\\[Inputs.xlsx]InputRange'"
+    )
+    absolute = parse_external_workbook_defined_name_reference(
+        "'C:\\Reports\\[Inputs.xlsx]InputRange'"
+    )
+
+    assert direct is not None
+    assert direct.source_path == "Inputs.xlsx"
+    assert direct.name_key == "inputrange"
+    assert relative is not None
+    assert relative.source_path == "..\\shared\\Inputs.xlsx"
+    assert relative.name_key == "inputrange"
+    assert absolute is not None
+    assert absolute.source_path == "C:\\Reports\\Inputs.xlsx"
+    assert absolute.name_key == "inputrange"
+    assert parse_external_workbook_defined_name_reference(
+        "[Inputs.xlsx]Data!InputRange"
+    ) is None
+    assert parse_external_workbook_defined_name_reference(
+        "[Inputs.xlsx]InputRange[Column]"
+    ) is None
+    assert parse_external_workbook_defined_name_reference("[Inputs.xlsx]Jan:Mar!A1") is None
+
+    inspection = inspect_formula(
+        "=SUM([Inputs.xlsx]InputRange)+'..\\shared\\[Other.xlsx]Margin'"
+    )
+    assert inspection.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in inspection.references)
+    assert [
+        (reference.source_path, reference.name_key)
+        for reference in inspection.external_workbook_defined_name_references
+    ] == [
+        ("Inputs.xlsx", "inputrange"),
+        ("..\\shared\\Other.xlsx", "margin"),
     ]
 
 

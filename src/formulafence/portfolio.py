@@ -322,6 +322,53 @@ def _build_candidate_impact_graph(
                     (source_workbook, source_sheet.casefold())
                 ].append(dependency)
 
+        for dependent_location in sorted(
+            snapshot.external_workbook_defined_name_references,
+            key=_location_sort_key,
+        ):
+            for reference in snapshot.external_workbook_defined_name_references[
+                dependent_location
+            ]:
+                source_workbook = _resolve_relative_external_workbook(
+                    dependent_workbook,
+                    reference.source_path,
+                    candidate_paths,
+                )
+                if source_workbook is None:
+                    continue
+                source_snapshot = snapshots[source_workbook]
+                for source_reference in source_snapshot.static_global_defined_name_references.get(
+                    reference.name_key, ()
+                ):
+                    if (
+                        source_reference.sheet is None
+                        or None
+                        in {
+                            source_reference.min_column,
+                            source_reference.min_row,
+                            source_reference.max_column,
+                            source_reference.max_row,
+                        }
+                    ):
+                        continue
+                    source_sheet = _canonical_sheet_name(
+                        source_snapshot, source_reference.sheet
+                    )
+                    if source_sheet is None:
+                        continue
+                    dependency = _ExternalPortfolioDependency(
+                        source_workbook=source_workbook,
+                        source_sheet=source_sheet,
+                        min_column=source_reference.min_column,
+                        min_row=source_reference.min_row,
+                        max_column=source_reference.max_column,
+                        max_row=source_reference.max_row,
+                        dependent=(dependent_workbook, dependent_location),
+                    )
+                    external_dependents[
+                        (source_workbook, source_sheet.casefold())
+                    ].append(dependency)
+
     return _PortfolioImpactGraph(
         snapshots=snapshots,
         external_dependents={

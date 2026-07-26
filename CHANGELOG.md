@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.87.0 — 2026-07-26
+
+- Extend the candidate-only `FF079` portfolio graph to the documented direct
+  external workbook-scoped name form such as `=[Inputs.xlsx]InputRange`. The
+  exact relative source path must still identify an already-inspected candidate
+  workbook, and its source name must expand completely to static internal A1
+  destinations. Safe global formula-defined aliases work through the existing
+  non-evaluating name resolver.
+- Keep external source paths and defined-name identities private. Sheet-scoped
+  names, direct external structured references, absolute/UNC/URI/escaping
+  paths, missing names, and names whose source definitions are dynamic,
+  relative, cyclic, external, 3-D, malformed, or otherwise not fully static
+  remain unresolved rather than creating a guessed edge. A defined-name
+  declaration change remains its ordinary `FF008` review event; `FF079` roots
+  are changed candidate cells.
+- Add parser, snapshot, graph, policy, JSON/Markdown/SARIF-redaction, static
+  formula-name alias, dynamic-name rejection, and unsafe-path coverage for the
+  expanded boundary.
+
 ## 0.86.0 — 2026-07-26
 
 - Add `FF079`, a high-severity candidate-only static cross-workbook impact

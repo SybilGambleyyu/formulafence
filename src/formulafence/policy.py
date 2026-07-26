@@ -18,6 +18,7 @@ _RULE_FIELDS = {
     "no_new_broken_references",
     "no_macro_changes",
     "no_xlm_macro_sheet_changes",
+    "no_xlm_automatic_macro_binding_changes",
     "no_ribbon_customization_changes",
     "no_office_web_addin_changes",
     "no_chart_definition_changes",
@@ -117,6 +118,7 @@ class Policy:
     no_new_broken_references: bool = False
     no_macro_changes: bool = False
     no_xlm_macro_sheet_changes: bool = False
+    no_xlm_automatic_macro_binding_changes: bool = False
     no_ribbon_customization_changes: bool = False
     no_office_web_addin_changes: bool = False
     no_chart_definition_changes: bool = False
@@ -198,6 +200,7 @@ rules:
   no_new_broken_references: true
   no_macro_changes: true
   no_xlm_macro_sheet_changes: true
+  no_xlm_automatic_macro_binding_changes: true
   no_ribbon_customization_changes: true
   no_office_web_addin_changes: true
   no_chart_definition_changes: true
@@ -347,6 +350,9 @@ def parse_policy(data: object) -> Policy:
         no_new_broken_references=_boolean_rule(rules, "no_new_broken_references"),
         no_macro_changes=_boolean_rule(rules, "no_macro_changes"),
         no_xlm_macro_sheet_changes=_boolean_rule(rules, "no_xlm_macro_sheet_changes"),
+        no_xlm_automatic_macro_binding_changes=_boolean_rule(
+            rules, "no_xlm_automatic_macro_binding_changes"
+        ),
         no_ribbon_customization_changes=_boolean_rule(
             rules, "no_ribbon_customization_changes"
         ),
@@ -569,6 +575,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP026",
                     "critical",
                     "Policy forbids changes to Excel 4.0 / XLM macro sheets.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_xlm_automatic_macro_binding_changes:
+        for finding in _rule_triggered(report, "FF076"):
+            violations.append(
+                Finding(
+                    "FFP076",
+                    "high",
+                    "Policy forbids changes to XLM automatic-macro bindings.",
                     details=finding.details,
                 )
             )

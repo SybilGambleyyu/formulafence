@@ -134,6 +134,10 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         ),
         f"- **XLM macro-sheet parts:** {workbook['xlm_macro_sheet_count']}",
         (
+            "- **XLM automatic-macro bindings:** "
+            f"{workbook['xlm_automatic_macro_binding_count']}"
+        ),
+        (
             "- **XLM macro-sheet formula cells:** "
             f"{workbook['xlm_macro_formula_cell_count']}"
         ),
@@ -1364,6 +1368,30 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "XLM commands, cell values, relationship targets, and direct internal "
             "related-part contents are compared privately and intentionally omitted."
+        )
+    xlm_automatic_macro_bindings = profile["xlm_automatic_macro_bindings"]
+    if xlm_automatic_macro_bindings["present"]:
+        lines.extend(
+            [
+                "",
+                "## XLM automatic-macro bindings",
+                "",
+                (
+                    "- **Workbook bindings:** "
+                    f"{xlm_automatic_macro_bindings['automatic_macro_binding_count']}"
+                ),
+                (
+                    "- **Auto_Open / Auto_Close / Auto_Activate / Auto_Deactivate:** "
+                    f"{xlm_automatic_macro_bindings['auto_open_binding_count']} / "
+                    f"{xlm_automatic_macro_bindings['auto_close_binding_count']} / "
+                    f"{xlm_automatic_macro_bindings['auto_activate_binding_count']} / "
+                    f"{xlm_automatic_macro_bindings['auto_deactivate_binding_count']}"
+                ),
+                (
+                    "Automatic-macro name spellings, target cells, and stored definitions "
+                    "are compared privately and intentionally omitted."
+                ),
+            ]
         )
     ribbon_customization = profile["ribbon_customization"]
     if ribbon_customization["present"]:

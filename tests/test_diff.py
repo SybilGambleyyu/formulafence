@@ -25,6 +25,7 @@ from .helpers import (
     add_unsupported_extended_chart_relationship,
     add_worksheet_dimension_baseline_adjustments,
     add_worksheet_smartart_component_relationship,
+    add_xlm_automatic_macro_binding,
     break_slicer_timeline_pivot_cache_binding,
     change_alignment_definition,
     change_border_definition,
@@ -225,6 +226,7 @@ from .helpers import (
     duplicate_external_link_definition,
     duplicate_external_link_sheet_names,
     duplicate_ignored_error_container,
+    duplicate_xlm_macro_sheet_workbook_relationship,
     externalize_chart_overlay_relationship,
     externalize_extended_chart_relationship,
     externalize_legacy_comment_relationship,
@@ -5734,6 +5736,149 @@ def test_xlm_macro_sheets_are_profiled_and_diffed_privately(tmp_path) -> None:
     )
     for sensitive_value in sensitive_values:
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_xlm_automatic_macro_bindings_are_profiled_and_diffed_privately(
+    tmp_path,
+) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    add_xlm_automatic_macro_binding(
+        baseline,
+        name="_xlnm.Auto_Open",
+        target="'Macro Automation'!$A$1",
+    )
+    add_xlm_automatic_macro_binding(
+        candidate,
+        name="_xlnm.Auto_Open",
+        target="'Macro Automation'!$A$2",
+    )
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    assert baseline_snapshot.summary()["has_xlm_automatic_macro_bindings"] is True
+    assert baseline_snapshot.summary()["xlm_automatic_macro_binding_count"] == 1
+    assert profile["features"]["has_xlm_automatic_macro_bindings"] is True
+    assert profile["xlm_automatic_macro_bindings"] == {
+        "present": True,
+        "automatic_macro_binding_count": 1,
+        "auto_open_binding_count": 1,
+        "auto_close_binding_count": 0,
+        "auto_activate_binding_count": 0,
+        "auto_deactivate_binding_count": 0,
+    }
+    assert "## XLM automatic-macro bindings" in markdown
+    assert "**Workbook bindings:** 1" in markdown
+
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    automatic_macro_change = next(
+        change
+        for change in report.changes
+        if change.kind == "xlm_automatic_macro_bindings_changed"
+    )
+    automatic_macro_sarif = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF076"
+    )
+
+    assert "xlm_macro_sheets_changed" not in {change.kind for change in report.changes}
+    assert {finding.rule_id for finding in report.findings} >= {"FF008", "FF076"}
+    assert automatic_macro_change.details == {
+        "before": profile["xlm_automatic_macro_bindings"],
+        "after": {
+            "present": True,
+            "automatic_macro_binding_count": 1,
+            "auto_open_binding_count": 1,
+            "auto_close_binding_count": 0,
+            "auto_activate_binding_count": 0,
+            "auto_deactivate_binding_count": 0,
+        },
+        "automatic_macro_binding_material_changed": True,
+    }
+
+    dedicated_artifacts = (
+        json.dumps(profile["xlm_automatic_macro_bindings"]),
+        markdown,
+        json.dumps(automatic_macro_change.to_dict()),
+        json.dumps(automatic_macro_sarif),
+    )
+    for sensitive_value in (
+        "_xlnm.Auto_Open",
+        "'Macro Automation'!$A$1",
+        "'Macro Automation'!$A$2",
+    ):
+        assert all(sensitive_value not in artifact for artifact in dedicated_artifacts)
+
+
+def test_xlm_automatic_macro_bindings_cover_all_documented_events(tmp_path) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "automatic-events.xlsm")
+    for name in (
+        "Auto_Open",
+        "Auto_Close",
+        "_xlnm.Auto_Activate",
+        "AUTO_DEACTIVATE",
+    ):
+        add_xlm_automatic_macro_binding(workbook, name=name)
+
+    bindings = load_snapshot(workbook).xlm_automatic_macro_bindings
+
+    assert bindings.automatic_macro_binding_count == 4
+    assert bindings.auto_open_binding_count == 1
+    assert bindings.auto_close_binding_count == 1
+    assert bindings.auto_activate_binding_count == 1
+    assert bindings.auto_deactivate_binding_count == 1
+
+
+def test_xlm_automatic_macro_bindings_require_workbook_scope_and_macro_target(
+    tmp_path,
+) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    add_xlm_automatic_macro_binding(
+        candidate,
+        name="Auto_Open",
+        target="Inputs!$A$1",
+    )
+    add_xlm_automatic_macro_binding(
+        candidate,
+        name="Auto_Close",
+        local_sheet_id=0,
+    )
+    add_xlm_automatic_macro_binding(
+        candidate,
+        name="Auto_Activate",
+        target="'Macro Automation'!$A$1:$A$2",
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.xlm_automatic_macro_bindings.present is False
+    assert "FF076" not in {finding.rule_id for finding in report.findings}
+
+
+def test_xlm_automatic_macro_bindings_fail_closed_for_ambiguous_sheet_binding(
+    tmp_path,
+) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    add_xlm_automatic_macro_binding(baseline)
+    add_xlm_automatic_macro_binding(candidate)
+    duplicate_xlm_macro_sheet_workbook_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.xlm_automatic_macro_bindings.present is False
+    assert any(
+        "duplicate XLM macro-sheet workbook relationship ids while inspecting "
+        "automatic macro bindings" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "FF076" in {finding.rule_id for finding in report.findings}
 
 
 def test_international_xlm_macro_sheet_parts_are_detected(tmp_path) -> None:

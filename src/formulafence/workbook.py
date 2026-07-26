@@ -116,6 +116,7 @@ from formulafence.models import (
     WorksheetImageSnapshot,
     WorksheetPrintLayoutSnapshot,
     WorksheetSparklineSnapshot,
+    XlmAutomaticMacroBindingSnapshot,
     XlmMacroSheetSnapshot,
     XmlFragmentSnapshot,
     XmlMappingSnapshot,
@@ -367,6 +368,12 @@ _XLM_MACRO_SHEET_RELATIONSHIPS = {
     "http://schemas.microsoft.com/office/2006/relationships/xlIntlMacrosheet": (
         "international"
     ),
+}
+_XLM_AUTOMATIC_MACRO_BINDING_NAMES = {
+    "auto_open": "auto_open",
+    "auto_close": "auto_close",
+    "auto_activate": "auto_activate",
+    "auto_deactivate": "auto_deactivate",
 }
 _XLM_MACRO_SHEET_CONTENT_TYPES = {
     "application/vnd.ms-excel.macrosheet+xml": "macro",
@@ -845,6 +852,14 @@ class _XlmMacroMetadata:
     """Raw XLM macro-sheet evidence retained before the workbook reader omits it."""
 
     macro_sheets: XlmMacroSheetSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _XlmAutomaticMacroBindingMetadata:
+    """Raw workbook-name XLM dispatch evidence before reader normalization."""
+
+    bindings: XlmAutomaticMacroBindingSnapshot
     warnings: tuple[str, ...]
 
 
@@ -7626,6 +7641,195 @@ def _xlm_macro_metadata(path: Path) -> _XlmMacroMetadata:
             ),
         )
     return _XlmMacroMetadata(snapshot, tuple(sorted(warnings)))
+
+
+def _xlm_automatic_macro_binding_kind(value: str | None) -> str | None:
+    """Return the documented automatic-macro event for one workbook name."""
+    if value is None:
+        return None
+    normalized = value.strip().casefold()
+    if normalized.startswith("_xlnm."):
+        normalized = normalized.removeprefix("_xlnm.")
+    return _XLM_AUTOMATIC_MACRO_BINDING_NAMES.get(normalized)
+
+
+def _xlm_automatic_macro_binding_metadata(
+    path: Path,
+) -> _XlmAutomaticMacroBindingMetadata:
+    """Inspect static workbook-name dispatch to declared XLM macro sheets.
+
+    Excel's legacy automatic macro names are workbook-scoped defined names. We
+    intentionally recognize only the four documented names and only when a
+    direct internal single-cell A1 reference names a workbook sheet declared
+    through a raw XLM macro-sheet relationship. This records a routing surface
+    without evaluating a name, parsing a macro command, or inferring whether
+    Excel will execute it under the current security configuration.
+    """
+    warnings: set[str] = set()
+    default = XlmAutomaticMacroBindingSnapshot()
+    try:
+        with ZipFile(path) as archive:
+            try:
+                workbook = _xml_root(archive, "xl/workbook.xml")
+            except (KeyError, ElementTree.ParseError, ValueError) as error:
+                warnings.add(
+                    "FormulaFence could not inspect workbook OOXML for XLM automatic "
+                    f"macro bindings ({type(error).__name__}); affected bindings were not "
+                    "compared."
+                )
+                return _XlmAutomaticMacroBindingMetadata(
+                    default, tuple(sorted(warnings))
+                )
+            if (
+                _xml_local_name(workbook.tag) != "workbook"
+                or _xml_namespace(workbook.tag) != _SPREADSHEETML_NS
+            ):
+                warnings.add(
+                    "FormulaFence found an unexpected workbook root while inspecting XLM "
+                    "automatic macro bindings; affected bindings were not compared."
+                )
+                return _XlmAutomaticMacroBindingMetadata(
+                    default, tuple(sorted(warnings))
+                )
+
+            workbook_relationships = _xlm_raw_relationships(
+                archive,
+                "xl/workbook.xml",
+                warnings,
+                context="workbook",
+                missing_is_warning=True,
+            )
+            workbook_relationships_by_id: dict[str, list[_XlmRawRelationship]] = (
+                defaultdict(list)
+            )
+            macro_relationships_by_id: dict[str, list[_XlmRawRelationship]] = (
+                defaultdict(list)
+            )
+            for relationship in workbook_relationships:
+                if relationship.relationship_id is not None:
+                    workbook_relationships_by_id[relationship.relationship_id].append(
+                        relationship
+                    )
+                if relationship.relationship_type not in _XLM_MACRO_SHEET_RELATIONSHIPS:
+                    continue
+                if (
+                    relationship.relationship_id is None
+                    or relationship.safe_target is None
+                ):
+                    warnings.add(
+                        "FormulaFence could not establish an XLM macro-sheet workbook "
+                        "binding while inspecting automatic macro names; affected bindings "
+                        "were not compared."
+                    )
+                    continue
+                macro_relationships_by_id[relationship.relationship_id].append(
+                    relationship
+                )
+
+            duplicate_relationship_ids = {
+                relationship_id
+                for relationship_id, relationships in workbook_relationships_by_id.items()
+                if len(relationships) != 1
+                and any(
+                    relationship.relationship_type in _XLM_MACRO_SHEET_RELATIONSHIPS
+                    for relationship in relationships
+                )
+            }
+            if duplicate_relationship_ids:
+                warnings.add(
+                    "FormulaFence found duplicate XLM macro-sheet workbook relationship ids "
+                    "while inspecting automatic macro bindings; affected bindings were not "
+                    "compared."
+                )
+
+            macro_sheet_names: set[str] = set()
+            sheets = workbook.find(f"{{{_SPREADSHEETML_NS}}}sheets")
+            relationship_id_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
+            if sheets is None:
+                if macro_relationships_by_id:
+                    warnings.add(
+                        "FormulaFence could not locate workbook sheet declarations while "
+                        "inspecting XLM automatic macro bindings; affected bindings were not "
+                        "compared."
+                    )
+            else:
+                for sheet in sheets.findall(f"{{{_SPREADSHEETML_NS}}}sheet"):
+                    relationship_id = sheet.get(relationship_id_attribute)
+                    matches = workbook_relationships_by_id.get(relationship_id or "", ())
+                    if not matches:
+                        continue
+                    if len(matches) != 1:
+                        continue
+                    relationship = matches[0]
+                    if (
+                        relationship.relationship_type
+                        not in _XLM_MACRO_SHEET_RELATIONSHIPS
+                        or relationship.safe_target is None
+                    ):
+                        continue
+                    name = sheet.get("name")
+                    if name is None:
+                        warnings.add(
+                            "FormulaFence found an unnamed XLM macro-sheet workbook "
+                            "declaration while inspecting automatic macro bindings; affected "
+                            "bindings were not compared."
+                        )
+                        continue
+                    macro_sheet_names.add(name.casefold())
+
+            binding_entries: list[tuple[str, str]] = []
+            defined_names = workbook.find(f"{{{_SPREADSHEETML_NS}}}definedNames")
+            if defined_names is not None:
+                definition_tag = f"{{{_SPREADSHEETML_NS}}}definedName"
+                for definition in defined_names.findall(definition_tag):
+                    # Excel attaches automatic macros to the workbook. A local
+                    # defined name with the same spelling is not such a binding.
+                    if definition.get("localSheetId") is not None:
+                        continue
+                    event = _xlm_automatic_macro_binding_kind(definition.get("name"))
+                    if event is None:
+                        continue
+                    formula = (definition.text or "").strip()
+                    candidate = formula[1:].strip() if formula.startswith("=") else formula
+                    reference = parse_reference_token(candidate)
+                    if (
+                        reference is None
+                        or reference.is_external
+                        or reference.sheet is None
+                        or reference.min_column is None
+                        or reference.min_row is None
+                        or reference.max_column is None
+                        or reference.max_row is None
+                        or reference.min_column != reference.max_column
+                        or reference.min_row != reference.max_row
+                        or reference.sheet.casefold() not in macro_sheet_names
+                    ):
+                        continue
+                    binding_entries.append((event, candidate))
+
+            counts: Counter[str] = Counter(event for event, _ in binding_entries)
+            snapshot = XlmAutomaticMacroBindingSnapshot(
+                automatic_macro_binding_count=len(binding_entries),
+                auto_open_binding_count=counts["auto_open"],
+                auto_close_binding_count=counts["auto_close"],
+                auto_activate_binding_count=counts["auto_activate"],
+                auto_deactivate_binding_count=counts["auto_deactivate"],
+                binding_signature=_private_external_data_signature(
+                    tuple(
+                        (f"binding:{index}", repr(entry))
+                        for index, entry in enumerate(sorted(binding_entries))
+                    )
+                ),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _XlmAutomaticMacroBindingMetadata(
+            default,
+            (
+                "FormulaFence could not inspect XLM automatic macro binding OOXML "
+                f"({type(error).__name__}); affected bindings were not compared.",
+            ),
+        )
+    return _XlmAutomaticMacroBindingMetadata(snapshot, tuple(sorted(warnings)))
 
 
 def _ribbon_raw_relationships(
@@ -43516,6 +43720,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
 
     workbook_tab_order_metadata = _workbook_tab_order_metadata(source)
     xlm_macro_metadata = _xlm_macro_metadata(source)
+    xlm_automatic_macro_binding_metadata = _xlm_automatic_macro_binding_metadata(
+        source
+    )
     ribbon_customization_metadata = _ribbon_customization_metadata(source)
     office_web_addin_metadata = _office_web_addin_metadata(source)
     pivot_table_metadata = _pivot_table_metadata(source)
@@ -43582,6 +43789,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings = {str(warning.message) for warning in caught_warnings}
     parser_warnings.update(reader_source_warnings)
     parser_warnings.update(xlm_macro_metadata.warnings)
+    parser_warnings.update(xlm_automatic_macro_binding_metadata.warnings)
     parser_warnings.update(ribbon_customization_metadata.warnings)
     parser_warnings.update(office_web_addin_metadata.warnings)
     parser_warnings.update(pivot_table_metadata.warnings)
@@ -44555,6 +44763,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         ),
         formula_environment_information_calls=formula_environment_information_calls,
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
+        xlm_automatic_macro_bindings=xlm_automatic_macro_binding_metadata.bindings,
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
         pivot_table_definitions=pivot_table_metadata.pivot_tables,
@@ -44684,6 +44893,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             snapshot.formula_environment_information_calls.profile_dict()
         ),
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
+        "xlm_automatic_macro_bindings": (
+            snapshot.xlm_automatic_macro_bindings.profile_dict()
+        ),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
         "pivot_table_definitions": snapshot.pivot_table_definitions.profile_dict(),
@@ -44742,6 +44954,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             ],
             "has_vba": snapshot.macro_hash is not None,
             "has_xlm_macro_sheets": snapshot.xlm_macro_sheets.present,
+            "has_xlm_automatic_macro_bindings": (
+                snapshot.xlm_automatic_macro_bindings.present
+            ),
             "has_external_relationships": snapshot.external_relationships.present,
             "has_formula_external_actions": snapshot.formula_external_actions.present,
             "has_formula_dde_links": snapshot.formula_dde_links.present,

@@ -9,6 +9,7 @@ from formulafence.policy import evaluate_policy, parse_policy
 from formulafence.workbook import load_snapshot
 
 from .helpers import (
+    add_xlm_automatic_macro_binding,
     change_alignment_definition,
     change_border_definition,
     change_cell_hyperlink_target,
@@ -757,6 +758,24 @@ def test_policy_can_block_xlm_macro_sheet_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP026"}
+
+
+def test_policy_can_block_xlm_automatic_macro_binding_changes(tmp_path) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    add_xlm_automatic_macro_binding(baseline, target="'Macro Automation'!$A$1")
+    add_xlm_automatic_macro_binding(candidate, target="'Macro Automation'!$A$2")
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_xlm_automatic_macro_binding_changes": True}}
+    )
+
+    violations = evaluate_policy(report, policy)
+    policy_finding = next(finding for finding in violations if finding.rule_id == "FFP076")
+    assert policy_finding.severity == "high"
+    assert "'Macro Automation'!$A$1" not in str(policy_finding.details)
+    assert "'Macro Automation'!$A$2" not in str(policy_finding.details)
 
 
 def test_policy_can_block_ribbon_customization_changes(tmp_path) -> None:

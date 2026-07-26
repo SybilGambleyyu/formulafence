@@ -5,6 +5,44 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## XLM automatic-macro binding boundary — 2026-07-26
+
+FormulaFence 0.83.0 was checked against Microsoft's
+[RunAutoMacros documentation](https://learn.microsoft.com/en-us/office/vba/api/excel.workbook.runautomacros),
+which identifies the workbook-attached automatic macro surface, and its
+[XlRunAutoMacro enumeration](https://learn.microsoft.com/en-us/office/vba/api/excel.xlrunautomacro),
+which lists `Auto_Open`, `Auto_Close`, `Auto_Activate`, and
+`Auto_Deactivate`. The OOXML defined-name compatibility notes independently
+confirm that `_xlnm.` is a reserved built-in-name prefix, `localSheetId` marks a
+sheet-local name, and `definedName@xlm` is reserved and unused. Microsoft also
+continues to document that Excel supports XLM macros under its macro-security
+settings; FormulaFence deliberately does not infer those settings or runtime
+execution.
+
+Controlled macro-enabled OOXML fixtures were generated and mutated without
+opening Excel. Each fixture had a raw declared XLM macro sheet and harmless
+private test cells. The boundary recognized all four documented event names,
+including `_xlnm.Auto_Open` and mixed-case forms. Retargeting `_xlnm.Auto_Open`
+from one macro-sheet A1 cell to another kept every public automatic-binding
+count at `1 / 1 / 0 / 0 / 0` while emitting `FF076`; it did not emit `FF026`,
+because the macro-sheet declaration and program remained unchanged. The policy
+fixture converted the result to high-severity `FFP076`.
+
+Counterexamples added a workbook `Auto_Open` name pointing to an ordinary
+worksheet, a sheet-local `Auto_Close` name pointing to the macro sheet, and an
+`Auto_Activate` multi-cell macro-sheet range. None was classified as an XLM
+automatic binding. This validates the narrow static contract, not any claim
+about a dynamic name formula, external target, range, or local name being
+executable. The specialized profile section, Markdown,
+`FF076` change details, `FFP076`, and SARIF result were checked for the
+controlled name and target formulas and contained none. The ordinary
+defined-name diff intentionally retains reviewer-visible name/formula context
+outside this redacted ledger. A duplicate raw macro-sheet workbook relationship
+made the sheet binding ambiguous, produced an explicit automatic-binding
+coverage warning, and removed it from the specialized inventory; comparing it
+with the valid fixture still emitted `FF076` rather than silently accepting a
+guessed target. The full suite passed **574 tests in 77.52 seconds**.
+
 ## Unqualified runtime-function candidate boundary — 2026-07-26
 
 FormulaFence 0.82.0 was checked against Microsoft's [alphabetical Excel

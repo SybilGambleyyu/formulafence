@@ -75,6 +75,7 @@ from formulafence.models import (
     WorksheetImageSnapshot,
     WorksheetPrintLayoutSnapshot,
     WorksheetSparklineSnapshot,
+    XlmAutomaticMacroBindingSnapshot,
     XlmMacroSheetSnapshot,
     XmlMappingSnapshot,
 )
@@ -1120,6 +1121,38 @@ def _workbook_control_changes(
                 "FF026",
                 "critical",
                 "Excel 4.0 / XLM macro-sheet controls changed.",
+                details=details,
+            )
+        )
+    if before.xlm_automatic_macro_bindings != after.xlm_automatic_macro_bindings:
+        old_xlm_automatic_macro_bindings: XlmAutomaticMacroBindingSnapshot = (
+            before.xlm_automatic_macro_bindings
+        )
+        new_xlm_automatic_macro_bindings: XlmAutomaticMacroBindingSnapshot = (
+            after.xlm_automatic_macro_bindings
+        )
+        details = {
+            "before": old_xlm_automatic_macro_bindings.to_dict(),
+            "after": new_xlm_automatic_macro_bindings.to_dict(),
+        }
+        if (
+            old_xlm_automatic_macro_bindings.binding_signature
+            != new_xlm_automatic_macro_bindings.binding_signature
+        ):
+            details["automatic_macro_binding_material_changed"] = True
+        changes.append(
+            Change(
+                "xlm_automatic_macro_bindings_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF076",
+                "high",
+                "XLM automatic-macro bindings changed.",
                 details=details,
             )
         )

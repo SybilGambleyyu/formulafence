@@ -1096,6 +1096,23 @@ review prompt, not proof of an error.
   parts. Oversized, missing, unreadable, over-budget, malformed, unbound, or
   unrecognized parts remain visible parser-coverage warnings rather than being
   silently ignored.
+- Legacy XLM automatic-macro routing is separately inspected from raw workbook
+  defined names. Microsoft documents four workbook automatic-macro events:
+  `Auto_Open`, `Auto_Close`, `Auto_Activate`, and `Auto_Deactivate`. FormulaFence
+  recognizes an optional `_xlnm.` built-in prefix and counts only a
+  workbook-scoped event name whose direct internal single-cell A1 definition
+  targets a sheet declared through a raw XLM macro-sheet relationship. This catches a dispatch
+  add, removal, or same-count retarget without asserting that a local name,
+  ordinary-sheet target, external reference, or dynamic definition will run.
+  The private signature retains the name/target/definition material; profiles,
+  `FF076`, and `FFP076` expose only aggregate per-event counts. `FF076` is high
+  severity and `no_xlm_automatic_macro_binding_changes` makes it `FFP076` in
+  CI. FormulaFence does **not** evaluate or resolve a defined name, use the
+  reserved/unused `definedName@xlm` attribute, parse or execute an XLM command,
+  determine macro security settings, or claim that Excel will execute a
+  binding. Missing/malformed workbook or relationship metadata remains a
+  parser-coverage warning. The ordinary defined-name diff retains its normal
+  reviewer context rather than becoming a redacted output channel.
 - Office RibbonX custom UI is read directly from its root-package declarations
   and `customUI` XML parts before the workbook reader can omit it. FormulaFence
   recognizes the documented 2006 and Office 2010-era package forms, privately

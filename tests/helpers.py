@@ -6606,6 +6606,81 @@ def make_xlm_macro_sheet_model(path: Path, *, international: bool = False) -> Pa
     return _rewrite_archive(path, mutate, ".xlm-macro-sheet.tmp.xlsx")
 
 
+def add_xlm_automatic_macro_binding(
+    path: Path,
+    *,
+    name: str = "Auto_Open",
+    target: str = "'Macro Automation'!$A$1",
+    local_sheet_id: int | None = None,
+) -> Path:
+    """Add one raw workbook defined name for an automatic-macro fixture.
+
+    The target remains harmless static OOXML test material. This helper never
+    opens the workbook in Excel or asks a workbook reader to interpret legacy
+    macro dispatch.
+    """
+    spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        defined_names = workbook.find(f"{{{spreadsheet}}}definedNames")
+        if defined_names is None:
+            defined_names = ElementTree.Element(f"{{{spreadsheet}}}definedNames")
+            sheets = workbook.find(f"{{{spreadsheet}}}sheets")
+            if sheets is None:
+                raise ValueError("Fixture does not contain workbook sheets")
+            workbook.insert(list(workbook).index(sheets) + 1, defined_names)
+        attributes = {"name": name}
+        if local_sheet_id is not None:
+            attributes["localSheetId"] = str(local_sheet_id)
+        ElementTree.SubElement(
+            defined_names,
+            f"{{{spreadsheet}}}definedName",
+            attributes,
+        ).text = target
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".xlm-automatic-macro.tmp.xlsx")
+
+
+def duplicate_xlm_macro_sheet_workbook_relationship(path: Path) -> Path:
+    """Duplicate a macro-sheet workbook relationship to exercise fail-closed binding."""
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        relationship_tag = f"{{{package_relationships}}}Relationship"
+        macro_relationship = next(
+            (
+                relationship
+                for relationship in relationships.findall(relationship_tag)
+                if relationship.get("Type", "").rsplit("/", maxsplit=1)[-1]
+                in {"xlMacrosheet", "xlIntlMacrosheet"}
+            ),
+            None,
+        )
+        if macro_relationship is None:
+            raise ValueError("Fixture does not contain an XLM macro-sheet relationship")
+        relationships.append(
+            ElementTree.fromstring(
+                ElementTree.tostring(macro_relationship, encoding="utf-8")
+            )
+        )
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".xlm-automatic-macro-duplicate.tmp.xlsx")
+
+
 def change_xlm_macro_sheet_controls(path: Path) -> Path:
     """Change private XLM code, binding, and related-part material."""
     macro_namespace = "http://schemas.microsoft.com/office/excel/2006/main"

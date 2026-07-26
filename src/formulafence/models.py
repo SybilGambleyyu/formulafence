@@ -1519,6 +1519,43 @@ class XlmMacroSheetSnapshot:
 
 
 @dataclass(frozen=True)
+class XlmAutomaticMacroBindingSnapshot:
+    """Safe aggregate of workbook-scoped XLM automatic-macro bindings.
+
+    Legacy automatic macros are routed through special workbook defined names
+    such as ``Auto_Open``. The private signature retains the name-to-cell
+    binding material needed to identify a retarget even when aggregate counts
+    stay stable; public output intentionally exposes only documented event
+    counts.
+    """
+
+    automatic_macro_binding_count: int = 0
+    auto_open_binding_count: int = 0
+    auto_close_binding_count: int = 0
+    auto_activate_binding_count: int = 0
+    auto_deactivate_binding_count: int = 0
+    binding_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(self.automatic_macro_binding_count)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return binding counts without names, targets, or formula text."""
+        return {
+            "present": self.present,
+            "automatic_macro_binding_count": self.automatic_macro_binding_count,
+            "auto_open_binding_count": self.auto_open_binding_count,
+            "auto_close_binding_count": self.auto_close_binding_count,
+            "auto_activate_binding_count": self.auto_activate_binding_count,
+            "auto_deactivate_binding_count": self.auto_deactivate_binding_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class RibbonCustomizationSnapshot:
     """Safe aggregate of workbook-scoped Office RibbonX customization parts.
 
@@ -4172,6 +4209,9 @@ class WorkbookSnapshot:
     xlm_macro_sheets: XlmMacroSheetSnapshot = field(
         default_factory=XlmMacroSheetSnapshot
     )
+    xlm_automatic_macro_bindings: XlmAutomaticMacroBindingSnapshot = field(
+        default_factory=XlmAutomaticMacroBindingSnapshot
+    )
     ribbon_customization: RibbonCustomizationSnapshot = field(
         default_factory=RibbonCustomizationSnapshot
     )
@@ -4793,6 +4833,24 @@ class WorkbookSnapshot:
                 self.xlm_macro_sheets.fingerprinted_related_part_count
             ),
             "has_xlm_macro_sheets": self.xlm_macro_sheets.present,
+            "xlm_automatic_macro_binding_count": (
+                self.xlm_automatic_macro_bindings.automatic_macro_binding_count
+            ),
+            "xlm_auto_open_binding_count": (
+                self.xlm_automatic_macro_bindings.auto_open_binding_count
+            ),
+            "xlm_auto_close_binding_count": (
+                self.xlm_automatic_macro_bindings.auto_close_binding_count
+            ),
+            "xlm_auto_activate_binding_count": (
+                self.xlm_automatic_macro_bindings.auto_activate_binding_count
+            ),
+            "xlm_auto_deactivate_binding_count": (
+                self.xlm_automatic_macro_bindings.auto_deactivate_binding_count
+            ),
+            "has_xlm_automatic_macro_bindings": (
+                self.xlm_automatic_macro_bindings.present
+            ),
             "ribbon_customization_part_count": self.ribbon_customization.ribbon_part_count,
             "ribbon_callback_attribute_count": (
                 self.ribbon_customization.callback_attribute_count

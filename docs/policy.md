@@ -13,6 +13,7 @@ rules:
   no_new_broken_references: true
   no_macro_changes: true
   no_xlm_macro_sheet_changes: true
+  no_xlm_automatic_macro_binding_changes: true
   no_ribbon_customization_changes: true
   no_office_web_addin_changes: true
   no_chart_definition_changes: true
@@ -114,6 +115,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_broken_references` | boolean | A formula adds `#REF!`. |
 | `no_macro_changes` | boolean | The `xl/vbaProject.bin` payload is added, removed, or has a different SHA-256. |
 | `no_xlm_macro_sheet_changes` | boolean | An Excel 4.0 / XLM macro-sheet declaration, program XML, related-part relationship, or direct internal related-part payload changes. |
+| `no_xlm_automatic_macro_binding_changes` | boolean | A workbook-scoped `Auto_Open`, `Auto_Close`, `Auto_Activate`, or `Auto_Deactivate` defined name directly bound to a declared XLM macro-sheet cell is added, removed, or materially retargeted. |
 | `no_ribbon_customization_changes` | boolean | An Office RibbonX custom-UI package declaration, control/callback XML, or direct relationship changes. |
 | `no_office_web_addin_changes` | boolean | An Office Web Add-in task-pane or worksheet/in-content binding, configuration, web-extension definition, or direct relationship changes. |
 | `no_chart_definition_changes` | boolean | A legacy DrawingML or Office 2016+ ChartEx chart binding, chart definition, cached series data, chart-overlay shape, direct relationship, or bounded direct related payload changes. |
@@ -716,6 +718,33 @@ payloads never enter a profile or diff. FormulaFence does not execute, emulate,
 resolve, or parse any of them; it never follows external targets. Direct
 internal payload scanning is bounded to 32 MiB per part, 64 MiB per workbook,
 and 256 parts, with an explicit coverage warning once a bound is reached.
+
+FormulaFence separately inventories **XLM automatic-macro bindings**. Excel's
+backward-compatible workbook automatic-macro API names four events:
+`Auto_Open`, `Auto_Close`, `Auto_Activate`, and `Auto_Deactivate`. This is a
+different control plane from macro-sheet program XML: an unchanged XLM sheet can
+be added to, removed from, or retargeted in that automatic dispatch path through
+a special workbook defined name. FormulaFence reads raw `xl/workbook.xml`,
+normalizes the optional SpreadsheetML `_xlnm.` built-in-name prefix, and counts
+only a workbook-scoped special name whose stored definition is a direct,
+internal single-cell A1 reference to a sheet declared through a raw
+`xlMacrosheet` or `xlIntlMacrosheet` relationship. It deliberately excludes
+sheet-local names,
+ordinary-sheet targets, external references, and non-direct/dynamic name
+formulas rather than guessing at a target.
+
+A material add, removal, or same-count target/definition change emits `FF076`;
+enable `no_xlm_automatic_macro_binding_changes` for `FFP076` in CI. The public
+profile and `FF076`/`FFP076` details expose only total and per-event counts.
+Name spellings, target cells, and stored definitions stay in a private
+signature. The ordinary defined-name diff remains intentionally readable and
+is not redacted by this specialized ledger. FormulaFence does not evaluate or
+resolve a defined name, inspect the reserved/unused `definedName@xlm`
+attribute, parse or execute an XLM command, infer macro-security/trust settings,
+or claim that a binding will run. This scope follows Microsoft's
+[RunAutoMacros documentation](https://learn.microsoft.com/en-us/office/vba/api/excel.workbook.runautomacros),
+[automatic-macro enumeration](https://learn.microsoft.com/en-us/office/vba/api/excel.xlrunautomacro),
+and [defined-name compatibility notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/16c3c118-f358-493d-a99f-4c85ca834c00).
 
 Office RibbonX custom UI parts can bind buttons and other controls to workbook
 callbacks while sitting outside ordinary worksheet XML and the VBA payload.

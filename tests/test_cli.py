@@ -84,6 +84,7 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
     assert "no_formula_defined_xlm_environment_information_changes: true" in content
     assert "no_formula_environment_information_changes: true" in content
     assert "no_xlm_macro_sheet_changes: true" in content
+    assert "no_xlm_automatic_macro_binding_changes: true" in content
     assert "no_ribbon_customization_changes: true" in content
     assert "no_office_web_addin_changes: true" in content
     assert "no_pivot_table_definition_changes: true" in content

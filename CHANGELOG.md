@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.83.0 — 2026-07-26
+
+- Add `FF076`, a high-severity private boundary for Excel 4.0 / XLM
+  automatic-macro routing. It recognizes only workbook-scoped `Auto_Open`,
+  `Auto_Close`, `Auto_Activate`, and `Auto_Deactivate` names (including an
+  optional `_xlnm.` prefix) whose direct internal single-cell A1 definitions
+  target a raw declared XLM macro sheet.
+- Preserve private detection of same-count target or stored-definition changes,
+  while public profiles, findings, policy results, and SARIF expose only total
+  and per-event counts. The general defined-name diff deliberately remains
+  readable for normal workbook review.
+- Add the fail-closed `no_xlm_automatic_macro_binding_changes` policy rule
+  (`FFP076`). FormulaFence does not evaluate or resolve names, rely on the
+  reserved/unused `definedName@xlm` attribute, parse or execute XLM commands,
+  inspect Excel trust settings, or claim that a binding will run.
+
 ## 0.82.0 — 2026-07-26
 
 - Add `FF075`, a private ledger for unknown unqualified worksheet-call

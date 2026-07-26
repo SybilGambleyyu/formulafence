@@ -10037,7 +10037,7 @@ def corrupt_font_definition(path: Path) -> Path:
             for current in cell_xfs.findall(xf_tag)
             if current.get("fontId") == str(font_index)
         )
-        direct_xf.set("fontId", "999")
+        direct_xf.set("fontId", "999999999")
         contents["xl/styles.xml"] = ElementTree.tostring(
             styles,
             encoding="utf-8",
@@ -10393,7 +10393,7 @@ def corrupt_fill_definition(path: Path) -> Path:
             for current in cell_xfs.findall(xf_tag)
             if current.get("fillId") == str(fill_index)
         )
-        direct_xf.set("fillId", "999")
+        direct_xf.set("fillId", "999999999")
         contents["xl/styles.xml"] = ElementTree.tostring(
             styles,
             encoding="utf-8",
@@ -14120,6 +14120,501 @@ def corrupt_rich_text_run(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".rich-text-run-corrupt.tmp.xlsx")
+
+
+def make_custom_workbook_view_model(path: Path) -> Path:
+    """Create legacy Excel Custom Views with private alternate worksheet state."""
+    workbook = Workbook()
+    report = workbook.active
+    report.title = "Private Custom View Report"
+    report.append(["Region", "Status", "Amount"])
+    report.append(["North", "Open", 100])
+    report.append(["South", "Hold", 200])
+    audit = workbook.create_sheet("Private Custom View Audit")
+    audit.append(["Metric", "Value"])
+    audit.append(["Control total", 300])
+    workbook.save(path)
+
+    view_a_guid = "{01234567-89AB-CDEF-0123-456789ABCDEF}"
+    view_b_guid = "{89ABCDEF-0123-4567-89AB-CDEF01234567}"
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_standard_view(
+        container: ElementTree.Element,
+        *,
+        guid: str,
+        material: bool = False,
+        scale: str | None = None,
+    ) -> None:
+        attributes = {"guid": guid}
+        if material:
+            attributes.update(
+                {
+                    "showFormulas": "1",
+                    "showGridLines": "0",
+                    "hiddenRows": "true",
+                    "hiddenColumns": "1",
+                    "printArea": "1",
+                    "filter": "true",
+                    "showAutoFilter": "0",
+                    "topLeftCell": "B2",
+                }
+            )
+        if scale is not None:
+            attributes["scale"] = scale
+        view = ElementTree.SubElement(
+            container,
+            f"{{{_SPREADSHEETML_NS}}}customSheetView",
+            attributes,
+        )
+        if not material:
+            return
+        ElementTree.SubElement(
+            view,
+            f"{{{_SPREADSHEETML_NS}}}pane",
+            {"xSplit": "1", "state": "frozen"},
+        )
+        ElementTree.SubElement(
+            view,
+            f"{{{_SPREADSHEETML_NS}}}selection",
+            {"activeCell": "B2", "sqref": "B2"},
+        )
+        ElementTree.SubElement(
+            view,
+            f"{{{_SPREADSHEETML_NS}}}pageMargins",
+            {
+                "left": "0.3",
+                "right": "0.3",
+                "top": "0.5",
+                "bottom": "0.5",
+                "header": "0.2",
+                "footer": "0.2",
+            },
+        )
+        auto_filter = ElementTree.SubElement(
+            view,
+            f"{{{_SPREADSHEETML_NS}}}autoFilter",
+            {"ref": "A1:C3"},
+        )
+        filter_column = ElementTree.SubElement(
+            auto_filter,
+            f"{{{_SPREADSHEETML_NS}}}filterColumn",
+            {"colId": "1"},
+        )
+        filters = ElementTree.SubElement(
+            filter_column,
+            f"{{{_SPREADSHEETML_NS}}}filters",
+        )
+        ElementTree.SubElement(
+            filters,
+            f"{{{_SPREADSHEETML_NS}}}filter",
+            {"val": "PRIVATE-CUSTOM-VIEW-FILTER"},
+        )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook_xml = ElementTree.fromstring(contents["xl/workbook.xml"])
+        workbook_views = ElementTree.Element(
+            f"{{{_SPREADSHEETML_NS}}}customWorkbookViews"
+        )
+        ElementTree.SubElement(
+            workbook_views,
+            f"{{{_SPREADSHEETML_NS}}}customWorkbookView",
+            {
+                "name": "PRIVATE Executive View",
+                "guid": view_a_guid,
+                "windowWidth": "20000",
+                "windowHeight": "12000",
+                "activeSheetId": "1",
+                "includeHiddenRowCol": "1",
+                "includePrintSettings": "true",
+                "showObjects": "none",
+                "showComments": "commNone",
+                "showFormulaBar": "0",
+                "showSheetTabs": "false",
+            },
+        )
+        ElementTree.SubElement(
+            workbook_views,
+            f"{{{_SPREADSHEETML_NS}}}customWorkbookView",
+            {
+                "name": "PRIVATE Print View",
+                "guid": view_b_guid,
+                "windowWidth": "20000",
+                "windowHeight": "12000",
+                "activeSheetId": "2",
+                "includeHiddenRowCol": "true",
+                "includePrintSettings": "1",
+                "showObjects": "placeholders",
+            },
+        )
+        workbook_xml.append(workbook_views)
+        contents["xl/workbook.xml"] = serialize(workbook_xml)
+
+        for member, material, scale in (
+            ("xl/worksheets/sheet1.xml", True, "80"),
+            ("xl/worksheets/sheet2.xml", False, None),
+        ):
+            worksheet = ElementTree.fromstring(contents[member])
+            custom_sheet_views = ElementTree.Element(
+                f"{{{_SPREADSHEETML_NS}}}customSheetViews"
+            )
+            add_standard_view(
+                custom_sheet_views,
+                guid=view_a_guid,
+                material=material,
+            )
+            add_standard_view(
+                custom_sheet_views,
+                guid=view_b_guid,
+                scale=scale,
+            )
+            sheet_data_tag = f"{{{_SPREADSHEETML_NS}}}sheetData"
+            sheet_data = worksheet.find(sheet_data_tag)
+            if sheet_data is None:
+                raise ValueError("Could not locate Custom View fixture sheetData")
+            worksheet.insert(list(worksheet).index(sheet_data) + 1, custom_sheet_views)
+            contents[member] = serialize(worksheet)
+
+    return _rewrite_archive(path, mutate, ".custom-workbook-views.tmp.xlsx")
+
+
+def change_custom_workbook_view_filter(path: Path) -> Path:
+    """Change a private legacy Custom View filter without touching cells."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        filter_tag = f"{{{_SPREADSHEETML_NS}}}filter"
+        next(worksheet.iter(filter_tag)).set(
+            "val", "CANDIDATE-PRIVATE-CUSTOM-VIEW-FILTER"
+        )
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".custom-workbook-view-filter.tmp.xlsx")
+
+
+def normalize_custom_workbook_view_identifiers(path: Path) -> Path:
+    """Rewrite Custom View GUIDs and use equivalent scalar spellings."""
+
+    replacements = {
+        "{01234567-89AB-CDEF-0123-456789ABCDEF}": (
+            "{11111111-2222-3333-4444-555555555555}"
+        ),
+        "{89ABCDEF-0123-4567-89AB-CDEF01234567}": (
+            "{66666666-7777-8888-9999-AAAAAAAAAAAA}"
+        ),
+    }
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        for member in ("xl/workbook.xml", "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml"):
+            root = ElementTree.fromstring(contents[member])
+            for element in root.iter():
+                if element.get("guid") in replacements:
+                    element.set("guid", replacements[element.get("guid")])
+            if member == "xl/workbook.xml":
+                sheets = list(root.iter(f"{{{_SPREADSHEETML_NS}}}sheet"))
+                sheets[0].set("sheetId", "17")
+                sheets[1].set("sheetId", "42")
+                views = list(
+                    root.iter(f"{{{_SPREADSHEETML_NS}}}customWorkbookView")
+                )
+                views[0].set("activeSheetId", "017")
+                views[0].set("includeHiddenRowCol", "true")
+                views[0].set("showFormulaBar", "false")
+                views[0].set("showSheetTabs", "0")
+                views[1].set("activeSheetId", "042")
+                views[1].set("includePrintSettings", "true")
+            elif member == "xl/worksheets/sheet1.xml":
+                views = list(root.iter(f"{{{_SPREADSHEETML_NS}}}customSheetView"))
+                views[0].set("showFormulas", "true")
+                views[0].set("showGridLines", "false")
+                views[0].set("hiddenRows", "1")
+                views[0].set("hiddenColumns", "true")
+                views[0].set("printArea", "true")
+                views[0].set("filter", "1")
+                views[1].set("scale", "080")
+            contents[member] = ElementTree.tostring(
+                root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".custom-workbook-view-noise.tmp.xlsx")
+
+
+def make_strict_custom_workbook_view_model(path: Path) -> Path:
+    """Create a Strict SpreadsheetML Custom View fixture."""
+    make_custom_workbook_view_model(path)
+
+    def strict_name(name: str, source_namespace: str, target_namespace: str) -> str:
+        prefix = f"{{{source_namespace}}}"
+        if name.startswith(prefix):
+            return f"{{{target_namespace}}}{name[len(prefix):]}"
+        return name
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook_member = "xl/workbook.xml"
+        workbook = ElementTree.fromstring(contents[workbook_member])
+        for element in workbook.iter():
+            element.tag = strict_name(
+                element.tag,
+                _SPREADSHEETML_NS,
+                _STRICT_SPREADSHEETML_NS,
+            )
+            attributes = {
+                strict_name(
+                    name,
+                    _DOCUMENT_RELATIONSHIPS_NS,
+                    _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                ): value
+                for name, value in element.attrib.items()
+            }
+            element.attrib.clear()
+            element.attrib.update(attributes)
+        contents[workbook_member] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        for relationship in relationships.findall(relationship_tag):
+            if (relationship.get("Type") or "").casefold().endswith("/worksheet"):
+                relationship.set(
+                    "Type",
+                    f"{_STRICT_DOCUMENT_RELATIONSHIPS_NS}/worksheet",
+                )
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        for member in sorted(
+            name
+            for name in contents
+            if name.startswith("xl/worksheets/") and name.endswith(".xml")
+        ):
+            worksheet = ElementTree.fromstring(contents[member])
+            for element in worksheet.iter():
+                element.tag = strict_name(
+                    element.tag,
+                    _SPREADSHEETML_NS,
+                    _STRICT_SPREADSHEETML_NS,
+                )
+            contents[member] = ElementTree.tostring(
+                worksheet,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".strict-custom-workbook-view.tmp.xlsx")
+
+
+def corrupt_custom_workbook_view_control(path: Path) -> Path:
+    """Inject malformed Custom View scalar metadata for fail-closed coverage."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        next(worksheet.iter(f"{{{_SPREADSHEETML_NS}}}customSheetView")).set(
+            "scale", "4294967296"
+        )
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".custom-workbook-view-corrupt.tmp.xlsx")
+
+
+def unbind_custom_workbook_view(path: Path) -> Path:
+    """Break one Custom View GUID association without exposing sheet data."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet2.xml"])
+        views = list(worksheet.iter(f"{{{_SPREADSHEETML_NS}}}customSheetView"))
+        views[1].set("guid", "{BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF}")
+        contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".custom-workbook-view-unbound.tmp.xlsx")
+
+
+def make_chart_sheet_custom_workbook_view_model(path: Path) -> Path:
+    """Create a Custom View that includes a chart sheet's alternate print state."""
+    workbook = Workbook()
+    data = workbook.active
+    data.title = "Chart View Data"
+    data.append(["Period", "Amount"])
+    data.append(["January", 10])
+    data.append(["February", 20])
+    chart = BarChart()
+    chart.add_data(Reference(data, min_col=2, min_row=1, max_row=3), titles_from_data=True)
+    chartsheet = workbook.create_chartsheet("Private Custom View Chart")
+    chartsheet.add_chart(chart)
+    workbook.save(path)
+
+    guid = "{13572468-2468-1357-2468-135724681357}"
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        sheet_tag = f"{{{_SPREADSHEETML_NS}}}sheet"
+        workbook_xml = ElementTree.fromstring(contents["xl/workbook.xml"])
+        sheets = list(workbook_xml.iter(sheet_tag))
+        if len(sheets) != 2 or sheets[1].get("sheetId") is None:
+            raise ValueError("Could not locate chart-sheet Custom View fixture sheets")
+        custom_workbook_views = ElementTree.Element(
+            f"{{{_SPREADSHEETML_NS}}}customWorkbookViews"
+        )
+        ElementTree.SubElement(
+            custom_workbook_views,
+            f"{{{_SPREADSHEETML_NS}}}customWorkbookView",
+            {
+                "name": "PRIVATE Chart Print View",
+                "guid": guid,
+                "windowWidth": "20000",
+                "windowHeight": "12000",
+                "activeSheetId": sheets[1].get("sheetId"),
+                "includePrintSettings": "true",
+                "showObjects": "none",
+            },
+        )
+        workbook_xml.append(custom_workbook_views)
+        contents["xl/workbook.xml"] = serialize(workbook_xml)
+
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        worksheet_views = ElementTree.Element(
+            f"{{{_SPREADSHEETML_NS}}}customSheetViews"
+        )
+        ElementTree.SubElement(
+            worksheet_views,
+            f"{{{_SPREADSHEETML_NS}}}customSheetView",
+            {"guid": guid},
+        )
+        sheet_data = worksheet.find(f"{{{_SPREADSHEETML_NS}}}sheetData")
+        if sheet_data is None:
+            raise ValueError("Could not locate chart Custom View fixture sheetData")
+        worksheet.insert(list(worksheet).index(sheet_data) + 1, worksheet_views)
+        contents["xl/worksheets/sheet1.xml"] = serialize(worksheet)
+
+        chart_root = ElementTree.fromstring(contents["xl/chartsheets/sheet1.xml"])
+        chart_views = ElementTree.Element(f"{{{_SPREADSHEETML_NS}}}customSheetViews")
+        chart_view = ElementTree.SubElement(
+            chart_views,
+            f"{{{_SPREADSHEETML_NS}}}customSheetView",
+            {"guid": guid, "scale": "75", "zoomToFit": "true"},
+        )
+        ElementTree.SubElement(
+            chart_view,
+            f"{{{_SPREADSHEETML_NS}}}pageMargins",
+            {
+                "left": "0.3",
+                "right": "0.3",
+                "top": "0.5",
+                "bottom": "0.5",
+                "header": "0.2",
+                "footer": "0.2",
+            },
+        )
+        ElementTree.SubElement(
+            chart_view,
+            f"{{{_SPREADSHEETML_NS}}}pageSetup",
+            {"orientation": "landscape"},
+        )
+        sheet_views = chart_root.find(f"{{{_SPREADSHEETML_NS}}}sheetViews")
+        if sheet_views is None:
+            raise ValueError("Could not locate chart Custom View sheetViews")
+        chart_root.insert(list(chart_root).index(sheet_views) + 1, chart_views)
+        contents["xl/chartsheets/sheet1.xml"] = serialize(chart_root)
+
+    return _rewrite_archive(path, mutate, ".chart-custom-workbook-view.tmp.xlsx")
+
+
+def change_chart_sheet_custom_workbook_view_scale(path: Path) -> Path:
+    """Change a chart sheet's alternate Custom View scale without touching charts."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        chart_root = ElementTree.fromstring(contents["xl/chartsheets/sheet1.xml"])
+        view = next(
+            chart_root.iter(f"{{{_SPREADSHEETML_NS}}}customSheetView")
+        )
+        view.set("scale", "80")
+        contents["xl/chartsheets/sheet1.xml"] = ElementTree.tostring(
+            chart_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".chart-custom-workbook-view-scale.tmp.xlsx")
+
+
+def corrupt_chart_sheet_custom_workbook_view_page_setup(path: Path) -> Path:
+    """Inject malformed chart-sheet Custom View print metadata."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        chart_root = ElementTree.fromstring(contents["xl/chartsheets/sheet1.xml"])
+        page_setup = next(chart_root.iter(f"{{{_SPREADSHEETML_NS}}}pageSetup"))
+        page_setup.set("orientation", "PRIVATE-INVALID-CHART-ORIENTATION")
+        contents["xl/chartsheets/sheet1.xml"] = ElementTree.tostring(
+            chart_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".chart-custom-workbook-view-corrupt.tmp.xlsx")
+
+
+def make_empty_chart_sheet_custom_view_container_model(path: Path) -> Path:
+    """Create the schema-valid empty chart-sheet Custom Views container case."""
+    make_chart_sheet_custom_workbook_view_model(path)
+
+    def remove_custom_container(root: ElementTree.Element, name: str) -> None:
+        for child in list(root):
+            if child.tag == f"{{{_SPREADSHEETML_NS}}}{name}":
+                root.remove(child)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        remove_custom_container(workbook, "customWorkbookViews")
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        remove_custom_container(worksheet, "customSheetViews")
+        contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        chart_root = ElementTree.fromstring(contents["xl/chartsheets/sheet1.xml"])
+        custom_views = next(
+            chart_root.iter(f"{{{_SPREADSHEETML_NS}}}customSheetViews")
+        )
+        for view in list(custom_views):
+            custom_views.remove(view)
+        contents["xl/chartsheets/sheet1.xml"] = ElementTree.tostring(
+            chart_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".empty-chart-custom-view.tmp.xlsx")
 
 
 def make_named_sheet_view_model(path: Path, *, table_owned: bool = False) -> Path:

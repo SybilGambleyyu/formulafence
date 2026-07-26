@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.59.0 — 2026-07-26
+
+- Inspect legacy Excel Custom Views directly from raw workbook and sheet OOXML:
+  GUID-linked `customWorkbookView` / `customSheetView` declarations across
+  transitional and Strict SpreadsheetML worksheets, dialog sheets, and chart
+  sheets. Private signatures retain alternate display, hidden/filter, print,
+  pane, comment/object, and supported per-sheet state while profiles, Markdown,
+  JSON, and SARIF expose structural aggregates only.
+- Emit `FF060` for a material Custom View declaration, linked per-sheet state,
+  or coverage change, and add the fail-closed
+  `no_custom_workbook_view_changes` policy rule (`FFP060`). Coordinated GUID and
+  sheet-ID/active-sheet-ID rewrites, Boolean/default spelling, and unsigned
+  integer spelling normalize without hiding material changes.
+- Keep Custom View XML out of the ordinary workbook-reader copy only after raw
+  evidence is collected, so readers that reject otherwise valid legacy views
+  cannot silently erase coverage. Missing, duplicate, malformed, unsupported,
+  unsafe, oversized, over-budget, or incompletely linked declarations become
+  visible coverage evidence. FormulaFence does not activate/render views,
+  calculate filtered results or final print output, interpret future
+  extensions, or support Custom Views on unsupported sheet types.
+
 ## 0.58.0 — 2026-07-26
 
 - Extend `FF044` Worksheet DrawingML controls to inspect transitional and

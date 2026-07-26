@@ -229,6 +229,24 @@ review prompt, not proof of an error.
   activate/render a saved view, calculate a filtered result, infer formula
   visibility sensitivity, repair metadata, or interpret future extension/rich-
   sort or full differential-format semantics.
+- Legacy Excel Custom Views can preserve a named alternate workbook display or
+  print mode through `customWorkbookView` declarations and GUID-linked
+  `customSheetView` records on every workbook sheet. They can alter hidden
+  rows/columns, filters, print settings, panes, formula/gridline display,
+  comments, and object visibility while ordinary cells and active views stay
+  fixed. FormulaFence parses the raw workbook and supported worksheet,
+  dialog-sheet, and chart-sheet declarations, reconciles each GUID privately,
+  and emits `FF060`; `no_custom_workbook_view_changes` can block it as
+  `FFP060`. Profiles and `FF060` details expose only structural counts for
+  workbook/per-sheet views, affected sheets, hidden/filter/print/display
+  settings, and unrecognized metadata. View names, GUIDs, bindings, ranges,
+  filters, panes, print settings, and raw XML remain private. Coordinated GUID
+  and sheet-ID/active-sheet-ID rewrites plus Boolean/default and
+  unsigned-integer spelling normalize. Missing, duplicate, malformed,
+  unsupported, unsafe, oversized, over-budget, or incompletely linked metadata
+  is visible coverage evidence. FormulaFence does not activate/render a Custom
+  View, calculate an alternate filtered result, determine final print output,
+  interpret future extensions, or support Custom Views on other sheet types.
 - Excel number formats can hide or materially reinterpret an unchanged stored
   value: `;;;` can display it as blank, while custom sections, scaling commas,
   dates, percentages, literals, and text placeholders can change the review
@@ -921,7 +939,8 @@ review prompt, not proof of an error.
   Scenario Manager declarations, worksheet/Table AutoFilter and row/column-
   visibility controls, material worksheet-display and worksheet print-layout
   controls, ignored-error warning suppressions, relationship-backed Named Sheet
-  View controls, ordinary worksheet-cell hyperlink declarations/relationships,
+  View and legacy Custom View controls, ordinary worksheet-cell hyperlink
+  declarations/relationships,
   Office 2010 worksheet sparkline declarations, SpreadsheetML XML Map schema,
   refresh/export, table-column, single-cell, and relationship declarations,
   legacy Excel Note/comments/VML and threaded-placeholder package chains,

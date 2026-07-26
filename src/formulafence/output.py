@@ -1373,6 +1373,38 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "View names, IDs, criteria, target ranges, table bindings, and sort keys are "
             "compared privately and intentionally omitted."
         )
+    custom_workbook_views = profile["custom_workbook_views"]
+    if custom_workbook_views["present"]:
+        lines.extend(
+            [
+                "",
+                "## Legacy Excel Custom Views",
+                "",
+                (
+                    "- **Workbook views / per-sheet views / sheets with alternate views:** "
+                    f"{custom_workbook_views['custom_workbook_view_count']} / "
+                    f"{custom_workbook_views['custom_sheet_view_count']} / "
+                    f"{custom_workbook_views['custom_view_sheet_count']}"
+                ),
+                (
+                    "- **Per-sheet views with hidden rows-or-columns / filters / print "
+                    "settings / display settings:** "
+                    f"{custom_workbook_views['hidden_row_or_column_view_count']} / "
+                    f"{custom_workbook_views['filtered_view_count']} / "
+                    f"{custom_workbook_views['print_setting_view_count']} / "
+                    f"{custom_workbook_views['display_setting_view_count']}"
+                ),
+            ]
+        )
+        if custom_workbook_views["unrecognized_custom_view_count"]:
+            lines.append(
+                "- **Unrecognized, malformed, or incompletely linked Custom Views:** "
+                f"{custom_workbook_views['unrecognized_custom_view_count']}"
+            )
+        lines.append(
+            "View names, GUIDs, sheet bindings, ranges, filters, print settings, and raw "
+            "Custom View XML are compared privately and intentionally omitted."
+        )
     number_format_controls = profile["number_format_controls"]
     if number_format_controls["present"]:
         lines.extend(

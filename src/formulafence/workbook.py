@@ -50,6 +50,7 @@ from formulafence.models import (
     ConditionalFormattingExtensionSnapshot,
     ConditionalFormattingSnapshot,
     CustomDataStoreSnapshot,
+    CustomWorkbookViewSnapshot,
     DataValidationSnapshot,
     DigitalSignatureSnapshot,
     DynamicArrayOutputReference,
@@ -832,6 +833,37 @@ class _NamedSheetViewMetadata:
 
     views: NamedSheetViewSnapshot
     warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _CustomWorkbookViewMetadata:
+    """Raw legacy Custom View evidence retained before reader normalization."""
+
+    views: CustomWorkbookViewSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _CustomWorkbookViewSheetBinding:
+    """One workbook-sheet identity used to bind a Custom View privately."""
+
+    index: int
+    sheet_id: int | None
+    member: str | None
+    kind: str | None
+
+
+@dataclass(frozen=True)
+class _CustomWorkbookViewSheetRecord:
+    """One parsed per-sheet Custom View, with its GUID kept private."""
+
+    guid: str | None
+    sheet_index: int
+    signature: tuple[object, ...]
+    hidden: bool
+    filtered: bool
+    print_settings: bool
+    display_settings: bool
 
 
 @dataclass(frozen=True)
@@ -1994,6 +2026,64 @@ _NAMED_SHEET_VIEW_RELATIONSHIP = (
 _NAMED_SHEET_VIEW_MAX_PART_BYTES = 16 * 1024 * 1024
 _NAMED_SHEET_VIEW_TOTAL_MAX_BYTES = 64 * 1024 * 1024
 _NAMED_SHEET_VIEW_TOTAL_MAX_COUNT = 512
+_CUSTOM_WORKBOOK_VIEW_UNSIGNED_MAXIMUM = 4_294_967_295
+_CUSTOM_WORKBOOK_VIEW_SIGNED_MINIMUM = -2_147_483_648
+_CUSTOM_WORKBOOK_VIEW_SIGNED_MAXIMUM = 2_147_483_647
+_CUSTOM_WORKBOOK_VIEW_MAX_SHEET_PART_BYTES = 16 * 1024 * 1024
+_CUSTOM_WORKBOOK_VIEW_TOTAL_SHEET_PART_BYTES = 64 * 1024 * 1024
+_CUSTOM_WORKBOOK_VIEW_TOTAL_SHEET_PART_COUNT = 512
+_CUSTOM_WORKBOOK_VIEW_STANDARD_SHEET_ROOTS = frozenset(
+    {"worksheet", "dialogsheet"}
+)
+_CUSTOM_WORKBOOK_VIEW_CHART_SHEET_ROOT = "chartsheet"
+_CUSTOM_WORKBOOK_VIEW_STANDARD_CHILD_ORDER = {
+    "pane": 0,
+    "selection": 1,
+    "rowBreaks": 2,
+    "colBreaks": 3,
+    "pageMargins": 4,
+    "printOptions": 5,
+    "pageSetup": 6,
+    "headerFooter": 7,
+    "autoFilter": 8,
+    "extLst": 9,
+}
+_CUSTOM_WORKBOOK_VIEW_CHART_CHILD_ORDER = {
+    "pageMargins": 0,
+    "pageSetup": 1,
+    "headerFooter": 2,
+}
+_CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_BOOLEAN_DEFAULTS = {
+    "blackAndWhite": False,
+    "draft": False,
+    "useFirstPageNumber": False,
+    "usePrinterDefaults": True,
+}
+_CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_UNSIGNED_DEFAULTS = {
+    "copies": 1,
+    "firstPageNumber": 1,
+    "horizontalDpi": 600,
+    "paperSize": 1,
+    "verticalDpi": 600,
+}
+_CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_ENUM_DEFAULTS = {
+    "orientation": "default",
+}
+_CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_ENUM_VALUES = {
+    "orientation": frozenset({"default", "portrait", "landscape"}),
+}
+_CUSTOM_WORKBOOK_VIEW_SHEET_STATE_VALUES = frozenset(
+    {"visible", "hidden", "veryHidden"}
+)
+_CUSTOM_WORKBOOK_VIEW_SHEET_VIEW_VALUES = frozenset(
+    {"normal", "pageBreakPreview", "pageLayout"}
+)
+_CUSTOM_WORKBOOK_VIEW_COMMENTS_VALUES = frozenset(
+    {"commNone", "commIndicator", "commIndAndComment"}
+)
+_CUSTOM_WORKBOOK_VIEW_OBJECT_VALUES = frozenset(
+    {"all", "placeholders", "none"}
+)
 _FILTER_VISIBILITY_AUTO_FILTER_UID_NAMESPACES = frozenset(
     {_OFFICE_2014_REVISION_NS, _OFFICE_2015_REVISION2_NS}
 )
@@ -11833,6 +11923,103 @@ def _worksheet_dimension_reader_replacements(
     return replacements, tuple(sorted(reader_warnings))
 
 
+def _custom_workbook_view_reader_replacements(
+    path: Path,
+    prior_replacements: Mapping[str, bytes] | None = None,
+) -> tuple[dict[str, bytes], tuple[str, ...]]:
+    """Keep legacy Custom Views out of the ordinary workbook reader copy.
+
+    FormulaFence has already inspected the original raw OOXML. ``openpyxl``
+    parses these legacy structures unevenly (and rejects some valid values),
+    while its cell/dependency reader has no need to apply an alternate view.
+    Removing the isolated containers preserves the ordinary cell audit and
+    leaves the raw boundary responsible for view evidence and coverage gaps.
+    """
+    replacements: dict[str, bytes] = {}
+    reader_warnings: set[str] = set()
+    prior_replacements = prior_replacements or {}
+    try:
+        with ZipFile(path) as archive:
+            def reader_xml_root(member: str) -> ElementTree.Element:
+                """Read an earlier safe overlay before falling back to the package."""
+                if (payload := prior_replacements.get(member)) is not None:
+                    return _xml_root_from_payload(payload)
+                return _xml_root(archive, member)
+
+            try:
+                workbook = reader_xml_root("xl/workbook.xml")
+            except (
+                KeyError,
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ):
+                workbook = None
+            if workbook is not None:
+                custom_containers = [
+                    child
+                    for child in workbook
+                    if _xml_local_name(child.tag) == "customWorkbookViews"
+                ]
+                if custom_containers:
+                    for container in custom_containers:
+                        workbook.remove(container)
+                    replacements["xl/workbook.xml"] = ElementTree.tostring(
+                        workbook,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+
+            sheet_prefixes = (
+                "xl/worksheets/",
+                "xl/chartsheets/",
+                "xl/dialogsheets/",
+                "xl/macrosheets/",
+            )
+            for member in archive.namelist():
+                if not (
+                    member.endswith(".xml")
+                    and member.startswith(sheet_prefixes)
+                    and "/_rels/" not in member
+                ):
+                    continue
+                try:
+                    sheet = reader_xml_root(member)
+                except (
+                    KeyError,
+                    ElementTree.ParseError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    reader_warnings.add(
+                        "FormulaFence could not isolate legacy Excel Custom View metadata "
+                        f"from the underlying workbook reader ({type(error).__name__})."
+                    )
+                    continue
+                custom_containers = [
+                    child
+                    for child in sheet
+                    if _xml_local_name(child.tag) == "customSheetViews"
+                ]
+                if not custom_containers:
+                    continue
+                for container in custom_containers:
+                    sheet.remove(container)
+                replacements[member] = ElementTree.tostring(
+                    sheet,
+                    encoding="utf-8",
+                    xml_declaration=True,
+                )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        reader_warnings.add(
+            "FormulaFence could not prepare a legacy Excel Custom View-safe workbook "
+            f"reader copy ({type(error).__name__})."
+        )
+    return replacements, tuple(sorted(reader_warnings))
+
+
 def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...]]:
     """Return a temporary source that limits unsafe ordinary-reader behavior."""
     replacements, reader_warnings = _pivot_reader_cache_record_replacements(path)
@@ -11857,10 +12044,18 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
     worksheet_dimension_replacements, worksheet_dimension_reader_warnings = (
         _worksheet_dimension_reader_replacements(path, prior_replacements)
     )
+    prior_replacements = {
+        **prior_replacements,
+        **worksheet_dimension_replacements,
+    }
+    custom_workbook_view_replacements, custom_workbook_view_reader_warnings = (
+        _custom_workbook_view_reader_replacements(path, prior_replacements)
+    )
     replacements.update(legacy_replacements)
     replacements.update(cell_hyperlink_replacements)
     replacements.update(worksheet_sparkline_replacements)
     replacements.update(worksheet_dimension_replacements)
+    replacements.update(custom_workbook_view_replacements)
     reader_warnings = tuple(
         sorted(
             {
@@ -11869,6 +12064,7 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
                 *cell_hyperlink_reader_warnings,
                 *worksheet_sparkline_reader_warnings,
                 *worksheet_dimension_reader_warnings,
+                *custom_workbook_view_reader_warnings,
             }
         )
     )
@@ -16709,6 +16905,1147 @@ def _named_sheet_view_metadata(path: Path) -> _NamedSheetViewMetadata:
         definition_signature=_private_external_data_signature(tuple(sorted(entries))),
     )
     return _NamedSheetViewMetadata(snapshot, tuple(sorted(warnings)))
+
+
+def _custom_workbook_view_unsigned(value: str | None) -> int | None:
+    """Read one bounded XML unsigned integer without unbounded conversion."""
+    if value is None:
+        return None
+    candidate = value.strip()
+    if not (candidate.isascii() and candidate.isdecimal()):
+        return None
+    significant = candidate.lstrip("0") or "0"
+    if len(significant) > len(str(_CUSTOM_WORKBOOK_VIEW_UNSIGNED_MAXIMUM)):
+        return None
+    parsed = int(significant)
+    return parsed if parsed <= _CUSTOM_WORKBOOK_VIEW_UNSIGNED_MAXIMUM else None
+
+
+def _custom_workbook_view_signed(value: str | None) -> int | None:
+    """Read one bounded XML signed integer without accepting arbitrary values."""
+    if value is None:
+        return None
+    candidate = value.strip()
+    sign = ""
+    if candidate[:1] in {"+", "-"}:
+        sign, candidate = candidate[:1], candidate[1:]
+    if not (candidate.isascii() and candidate.isdecimal()):
+        return None
+    significant = candidate.lstrip("0") or "0"
+    if len(significant) > 10:
+        return None
+    parsed = int(f"{sign}{significant}")
+    if _CUSTOM_WORKBOOK_VIEW_SIGNED_MINIMUM <= parsed <= _CUSTOM_WORKBOOK_VIEW_SIGNED_MAXIMUM:
+        return parsed
+    return None
+
+
+def _custom_workbook_view_attributes(
+    element: ElementTree.Element,
+    *,
+    known: frozenset[str],
+    issues: set[str],
+    boolean_defaults: Mapping[str, bool] = {},
+    unsigned_defaults: Mapping[str, int] = {},
+    signed_defaults: Mapping[str, int] = {},
+    enum_defaults: Mapping[str, str] = {},
+    enum_values: Mapping[str, frozenset[str]] = {},
+    unsigned_attributes: frozenset[str] = frozenset(),
+    signed_attributes: frozenset[str] = frozenset(),
+    guid_attributes: frozenset[str] = frozenset(),
+    required: frozenset[str] = frozenset(),
+    ignored: frozenset[str] = frozenset(),
+) -> tuple[tuple[str, str], ...]:
+    """Canonicalize one Custom View attribute set without public disclosure.
+
+    SpreadsheetML writers commonly choose different Boolean and integer
+    spellings. Defaults are materialized here while GUID values are represented
+    only by a stable token; their workbook-to-sheet linkage is reconciled later.
+    """
+    values: dict[str, str] = {
+        name: "true" if value else "false"
+        for name, value in boolean_defaults.items()
+    }
+    values.update({name: str(value) for name, value in unsigned_defaults.items()})
+    values.update({name: str(value) for name, value in signed_defaults.items()})
+    values.update(enum_defaults)
+    seen: set[str] = set()
+    for attribute, value in element.attrib.items():
+        local_name = _xml_local_name(attribute)
+        namespace = _xml_namespace(attribute)
+        if local_name in ignored and namespace is None:
+            continue
+        if namespace is not None or local_name not in known:
+            issues.add(f"unknown-attribute:{_xml_display_name(attribute)}")
+            values[f"unknown:{_xml_display_name(attribute)}"] = value
+            continue
+        seen.add(local_name)
+        if local_name in boolean_defaults:
+            parsed = _number_format_boolean(value, boolean_defaults[local_name])
+            if parsed is None:
+                issues.add(f"invalid-{local_name}")
+                values[local_name] = f"invalid:{value}"
+            else:
+                values[local_name] = "true" if parsed else "false"
+        elif local_name in unsigned_attributes or local_name in unsigned_defaults:
+            parsed = _custom_workbook_view_unsigned(value)
+            if parsed is None:
+                issues.add(f"invalid-{local_name}")
+                values[local_name] = f"invalid:{value}"
+            else:
+                values[local_name] = str(parsed)
+        elif local_name in signed_attributes or local_name in signed_defaults:
+            parsed = _custom_workbook_view_signed(value)
+            if parsed is None:
+                issues.add(f"invalid-{local_name}")
+                values[local_name] = f"invalid:{value}"
+            else:
+                values[local_name] = str(parsed)
+        elif local_name in enum_values:
+            if value not in enum_values[local_name]:
+                issues.add(f"invalid-{local_name}")
+                values[local_name] = f"invalid:{value}"
+            else:
+                values[local_name] = value
+        elif local_name in guid_attributes:
+            if _named_sheet_view_guid(value) is None:
+                issues.add(f"invalid-{local_name}")
+                values[local_name] = f"invalid:{value}"
+            else:
+                values[local_name] = "{GUID}"
+        else:
+            values[local_name] = value
+    for name in required:
+        if name not in seen:
+            issues.add(f"missing-{name}")
+            values[name] = "missing"
+    return tuple(sorted(values.items()))
+
+
+def _custom_workbook_view_attribute_value(
+    attributes: tuple[tuple[str, str], ...], name: str
+) -> str | None:
+    """Return one private canonical Custom View attribute value."""
+    return dict(attributes).get(name)
+
+
+def _custom_workbook_view_replace_attribute(
+    attributes: tuple[tuple[str, str], ...], name: str, value: str
+) -> tuple[tuple[str, str], ...]:
+    """Replace an already-canonical attribute without changing its ordering."""
+    return tuple(
+        (attribute, value if attribute == name else current)
+        for attribute, current in attributes
+    )
+
+
+def _custom_workbook_view_compatibility_element(
+    element: ElementTree.Element,
+) -> ElementTree.Element:
+    """Map strict SpreadsheetML names to transitional names for shared parsers."""
+    if not any(
+        _xml_namespace(current.tag) == _STRICT_SPREADSHEETML_NS
+        or any(
+            _xml_namespace(attribute) == _STRICT_SPREADSHEETML_NS
+            for attribute in current.attrib
+        )
+        for current in element.iter()
+    ):
+        return element
+    compatible = _xml_root_from_payload(ElementTree.tostring(element, encoding="utf-8"))
+    for current in compatible.iter():
+        if _xml_namespace(current.tag) == _STRICT_SPREADSHEETML_NS:
+            current.tag = f"{{{_SPREADSHEETML_NS}}}{_xml_local_name(current.tag)}"
+        replacements = {
+            attribute: f"{{{_SPREADSHEETML_NS}}}{_xml_local_name(attribute)}"
+            for attribute in current.attrib
+            if _xml_namespace(attribute) == _STRICT_SPREADSHEETML_NS
+        }
+        for old_name, new_name in replacements.items():
+            current.attrib[new_name] = current.attrib.pop(old_name)
+    return compatible
+
+
+def _custom_workbook_view_generic_signature(element: ElementTree.Element) -> str:
+    """Hash a known-but-not-specialized Custom View subtree deterministically."""
+
+    def canonical_name(name: str) -> tuple[str, str]:
+        namespace = _xml_namespace(name)
+        if namespace == _STRICT_SPREADSHEETML_NS:
+            namespace = _SPREADSHEETML_NS
+        return namespace or "", _xml_local_name(name)
+
+    def canonical(current: ElementTree.Element) -> tuple[object, ...]:
+        attributes: list[tuple[tuple[str, str], str]] = []
+        for attribute, value in current.attrib.items():
+            normalized = (
+                "{GUID}"
+                if _xml_local_name(attribute) == "guid"
+                and _named_sheet_view_guid(value) is not None
+                else value
+            )
+            attributes.append((canonical_name(attribute), normalized))
+        return (
+            canonical_name(current.tag),
+            tuple(sorted(attributes)),
+            current.text or "",
+            tuple(canonical(child) for child in current),
+        )
+
+    return _private_external_data_signature(
+        (("custom-workbook-view-generic", repr(canonical(element))),)
+    ) or ""
+
+
+def _custom_workbook_view_unknown_signature(
+    element: ElementTree.Element,
+) -> tuple[str, str, str]:
+    """Keep unsupported Custom View XML private while retaining a stable digest."""
+    return (
+        "unknown",
+        _xml_display_name(element.tag),
+        _custom_workbook_view_generic_signature(element),
+    )
+
+
+def _custom_workbook_view_pane_signature(
+    element: ElementTree.Element, issues: set[str]
+) -> tuple[tuple[object, ...], bool]:
+    """Canonicalize material split/frozen state while ignoring navigation noise."""
+    values: list[tuple[str, str]] = []
+    unknown: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        local_name = _xml_local_name(attribute)
+        if _xml_namespace(attribute) is not None or local_name not in {
+            "activePane",
+            "state",
+            "topLeftCell",
+            "xSplit",
+            "ySplit",
+        }:
+            issues.add("unsupported-pane-attribute")
+            unknown.append((_xml_display_name(attribute), value))
+            continue
+        if local_name in {"activePane", "topLeftCell"}:
+            # Selection and navigation change constantly during ordinary use;
+            # this boundary tracks display state, not where a user last clicked.
+            continue
+        if local_name in {"xSplit", "ySplit"}:
+            parsed = _worksheet_display_decimal(value)
+            if parsed is None:
+                issues.add(f"invalid-pane-{local_name}")
+                values.append((local_name, f"invalid:{value}"))
+            elif parsed != "0":
+                values.append((local_name, parsed))
+            continue
+        if value not in _WORKSHEET_DISPLAY_PANE_STATES:
+            issues.add("invalid-pane-state")
+            values.append(("state", f"invalid:{value}"))
+        elif value != "split":
+            values.append(("state", value))
+    if list(element):
+        issues.add("unexpected-pane-children")
+        unknown.extend(
+            ("child", _custom_workbook_view_generic_signature(child))
+            for child in element
+        )
+    signature = ("pane", tuple(sorted(values)), tuple(sorted(unknown)))
+    return signature, bool(values)
+
+
+def _custom_workbook_view_standard_sheet_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+) -> tuple[tuple[object, ...], str | None, bool, bool, bool, bool]:
+    """Canonicalize one worksheet/dialog-sheet Custom View declaration."""
+    view = _custom_workbook_view_compatibility_element(element)
+    attributes = _custom_workbook_view_attributes(
+        view,
+        known=frozenset(
+            {
+                "guid",
+                "scale",
+                "colorId",
+                "showPageBreaks",
+                "showFormulas",
+                "showGridLines",
+                "showRowCol",
+                "outlineSymbols",
+                "zeroValues",
+                "fitToPage",
+                "printArea",
+                "filter",
+                "showAutoFilter",
+                "hiddenRows",
+                "hiddenColumns",
+                "state",
+                "filterUnique",
+                "view",
+                "showRuler",
+                "topLeftCell",
+            }
+        ),
+        issues=issues,
+        boolean_defaults={
+            "showPageBreaks": False,
+            "showFormulas": False,
+            "showGridLines": True,
+            "showRowCol": True,
+            "outlineSymbols": True,
+            "zeroValues": True,
+            "fitToPage": False,
+            "printArea": False,
+            "filter": False,
+            "showAutoFilter": False,
+            "hiddenRows": False,
+            "hiddenColumns": False,
+            "filterUnique": False,
+            "showRuler": True,
+        },
+        unsigned_defaults={"scale": 100, "colorId": 64},
+        enum_defaults={"state": "visible", "view": "normal"},
+        enum_values={
+            "state": _CUSTOM_WORKBOOK_VIEW_SHEET_STATE_VALUES,
+            "view": _CUSTOM_WORKBOOK_VIEW_SHEET_VIEW_VALUES,
+        },
+        unsigned_attributes=frozenset({"scale", "colorId"}),
+        guid_attributes=frozenset({"guid"}),
+        required=frozenset({"guid"}),
+        ignored=frozenset({"topLeftCell"}),
+    )
+    raw_scale = _custom_workbook_view_unsigned(view.get("scale"))
+    if raw_scale is not None and not 10 <= raw_scale <= 400:
+        issues.add("invalid-scale-range")
+    values = dict(attributes)
+    child_signatures: list[tuple[object, ...]] = []
+    seen_children: dict[str, int] = {}
+    last_child_order = -1
+    pane_material = False
+    has_filter_child = False
+    has_print_child = False
+    for child in view:
+        namespace = _xml_namespace(child.tag)
+        local_name = _xml_local_name(child.tag)
+        if (
+            namespace != _SPREADSHEETML_NS
+            or local_name not in _CUSTOM_WORKBOOK_VIEW_STANDARD_CHILD_ORDER
+        ):
+            issues.add("unsupported-custom-sheet-view-child")
+            child_signatures.append(_custom_workbook_view_unknown_signature(child))
+            continue
+        order = _CUSTOM_WORKBOOK_VIEW_STANDARD_CHILD_ORDER[local_name]
+        if order < last_child_order:
+            issues.add("out-of-order-custom-sheet-view-child")
+        last_child_order = max(last_child_order, order)
+        seen_children[local_name] = seen_children.get(local_name, 0) + 1
+        if seen_children[local_name] > 1:
+            issues.add(f"multiple-custom-sheet-view-{local_name}")
+        if local_name == "selection":
+            # Selections are explicitly navigation-only and do not alter the
+            # saved review/print surface. Their values remain unreported.
+            continue
+        if local_name == "pane":
+            signature, material = _custom_workbook_view_pane_signature(child, issues)
+            pane_material = pane_material or material
+            if material or signature[2]:
+                child_signatures.append(signature)
+            continue
+        if local_name in {"rowBreaks", "colBreaks"}:
+            axis = "row" if local_name == "rowBreaks" else "column"
+            signature, _count = _worksheet_print_layout_breaks_signature(
+                child,
+                axis=axis,
+                context=f"custom-sheet-view:{local_name}",
+                note_issue=lambda reason, detail, name=local_name: issues.add(
+                    f"{name}:{reason}"
+                ),
+            )
+            child_signatures.append((local_name, signature))
+            has_print_child = True
+            continue
+        if local_name == "pageMargins":
+            signature = _worksheet_print_layout_page_margins_signature(
+                child,
+                context="custom-sheet-view:pageMargins",
+                note_issue=lambda reason, detail: issues.add(
+                    f"pageMargins:{reason}"
+                ),
+            )
+            child_signatures.append((local_name, signature))
+            has_print_child = True
+            continue
+        if local_name == "printOptions":
+            signature, _active = _worksheet_print_layout_print_options_signature(
+                child,
+                context="custom-sheet-view:printOptions",
+                note_issue=lambda reason, detail: issues.add(
+                    f"printOptions:{reason}"
+                ),
+            )
+            child_signatures.append((local_name, signature))
+            has_print_child = True
+            continue
+        if local_name == "pageSetup":
+            fit_to_page = (
+                True
+                if values.get("fitToPage") == "true"
+                else False
+                if values.get("fitToPage") == "false"
+                else None
+            )
+            signature, _material = _worksheet_print_layout_page_setup_signature(
+                child,
+                context="custom-sheet-view:pageSetup",
+                note_issue=lambda reason, detail: issues.add(f"pageSetup:{reason}"),
+                fit_to_page=fit_to_page,
+            )
+            child_signatures.append((local_name, signature))
+            has_print_child = True
+            continue
+        if local_name == "headerFooter":
+            signature, _material = _worksheet_print_layout_header_footer_signature(
+                child,
+                context="custom-sheet-view:headerFooter",
+                note_issue=lambda reason, detail: issues.add(
+                    f"headerFooter:{reason}"
+                ),
+            )
+            child_signatures.append((local_name, signature))
+            has_print_child = True
+            continue
+        if local_name == "autoFilter":
+            signature, _columns, _criteria, _sorts, _conditions = (
+                _filter_visibility_auto_filter_signature(child, issues)
+            )
+            child_signatures.append((local_name, signature))
+            has_filter_child = True
+            continue
+        issues.add("unsupported-custom-sheet-view-extension")
+        child_signatures.append(_custom_workbook_view_unknown_signature(child))
+
+    hidden = values.get("hiddenRows") == "true" or values.get("hiddenColumns") == "true"
+    filtered = (
+        values.get("filter") == "true"
+        or values.get("filterUnique") == "true"
+        or has_filter_child
+    )
+    print_settings = (
+        values.get("scale") != "100"
+        or values.get("fitToPage") == "true"
+        or values.get("printArea") == "true"
+        or has_print_child
+    )
+    display_settings = pane_material or any(
+        values.get(name) != default
+        for name, default in {
+            "colorId": "64",
+            "showPageBreaks": "false",
+            "showFormulas": "false",
+            "showGridLines": "true",
+            "showRowCol": "true",
+            "outlineSymbols": "true",
+            "zeroValues": "true",
+            "showAutoFilter": "false",
+            "state": "visible",
+            "view": "normal",
+            "showRuler": "true",
+        }.items()
+    )
+    return (
+        ("customSheetView", attributes, tuple(child_signatures)),
+        _named_sheet_view_guid(view.get("guid")),
+        hidden,
+        filtered,
+        print_settings,
+        display_settings,
+    )
+
+
+def _custom_workbook_view_chart_page_setup_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+) -> tuple[object, ...]:
+    """Canonicalize a chart-sheet page setup without claiming printer support."""
+    page_setup = _custom_workbook_view_compatibility_element(element)
+    attributes = _custom_workbook_view_attributes(
+        page_setup,
+        known=frozenset(
+            set(_CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_BOOLEAN_DEFAULTS)
+            | set(_CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_UNSIGNED_DEFAULTS)
+            | set(_CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_ENUM_DEFAULTS)
+            | {"paperHeight", "paperWidth"}
+        ),
+        issues=issues,
+        boolean_defaults=_CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_BOOLEAN_DEFAULTS,
+        unsigned_defaults=_CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_UNSIGNED_DEFAULTS,
+        enum_defaults=_CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_ENUM_DEFAULTS,
+        enum_values=_CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_ENUM_VALUES,
+        unsigned_attributes=frozenset(
+            _CUSTOM_WORKBOOK_VIEW_CHART_PAGE_SETUP_UNSIGNED_DEFAULTS
+        ),
+    )
+    for name in ("paperHeight", "paperWidth"):
+        raw_value = page_setup.get(name)
+        if raw_value is None:
+            continue
+        value = _worksheet_print_layout_measure(raw_value, units=None)
+        if value is None:
+            issues.add(f"invalid-chart-{name}")
+            attributes = _custom_workbook_view_replace_attribute(
+                attributes,
+                name,
+                f"invalid:{raw_value}",
+            )
+        else:
+            attributes = _custom_workbook_view_replace_attribute(
+                attributes,
+                name,
+                value,
+            )
+
+    unexpected_children: list[tuple[str, str, str]] = []
+    if page_setup.text and page_setup.text.strip():
+        issues.add("unexpected-chart-page-setup-text")
+        unexpected_children.append(
+            ("text", "", _custom_workbook_view_generic_signature(page_setup))
+        )
+    for child in page_setup:
+        issues.add("unexpected-chart-page-setup-child")
+        unexpected_children.append(_custom_workbook_view_unknown_signature(child))
+    return ("chartPageSetup", attributes, tuple(unexpected_children))
+
+
+def _custom_workbook_view_chart_sheet_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+) -> tuple[tuple[object, ...], str | None, bool, bool, bool, bool]:
+    """Canonicalize one chart-sheet Custom View declaration."""
+    view = _custom_workbook_view_compatibility_element(element)
+    attributes = _custom_workbook_view_attributes(
+        view,
+        known=frozenset({"guid", "scale", "state", "zoomToFit"}),
+        issues=issues,
+        boolean_defaults={"zoomToFit": False},
+        unsigned_defaults={"scale": 100},
+        enum_defaults={"state": "visible"},
+        enum_values={"state": _CUSTOM_WORKBOOK_VIEW_SHEET_STATE_VALUES},
+        unsigned_attributes=frozenset({"scale"}),
+        guid_attributes=frozenset({"guid"}),
+        required=frozenset({"guid"}),
+    )
+    raw_scale = _custom_workbook_view_unsigned(view.get("scale"))
+    if raw_scale is not None and not 10 <= raw_scale <= 400:
+        issues.add("invalid-chart-scale-range")
+    values = dict(attributes)
+    child_signatures: list[tuple[object, ...]] = []
+    seen_children: dict[str, int] = {}
+    last_child_order = -1
+    has_print_child = False
+    for child in view:
+        namespace = _xml_namespace(child.tag)
+        local_name = _xml_local_name(child.tag)
+        if (
+            namespace != _SPREADSHEETML_NS
+            or local_name not in _CUSTOM_WORKBOOK_VIEW_CHART_CHILD_ORDER
+        ):
+            issues.add("unsupported-chart-custom-sheet-view-child")
+            child_signatures.append(_custom_workbook_view_unknown_signature(child))
+            continue
+        order = _CUSTOM_WORKBOOK_VIEW_CHART_CHILD_ORDER[local_name]
+        if order < last_child_order:
+            issues.add("out-of-order-chart-custom-sheet-view-child")
+        last_child_order = max(last_child_order, order)
+        seen_children[local_name] = seen_children.get(local_name, 0) + 1
+        if seen_children[local_name] > 1:
+            issues.add(f"multiple-chart-custom-sheet-view-{local_name}")
+        if local_name == "pageMargins":
+            signature = _worksheet_print_layout_page_margins_signature(
+                child,
+                context="chart-custom-sheet-view:pageMargins",
+                note_issue=lambda reason, detail: issues.add(
+                    f"chart-pageMargins:{reason}"
+                ),
+            )
+        elif local_name == "headerFooter":
+            signature, _material = _worksheet_print_layout_header_footer_signature(
+                child,
+                context="chart-custom-sheet-view:headerFooter",
+                note_issue=lambda reason, detail: issues.add(
+                    f"chart-headerFooter:{reason}"
+                ),
+            )
+        else:
+            signature = _custom_workbook_view_chart_page_setup_signature(child, issues)
+        child_signatures.append((local_name, signature))
+        has_print_child = True
+    print_settings = values.get("scale") != "100" or has_print_child
+    display_settings = (
+        values.get("state") != "visible" or values.get("zoomToFit") == "true"
+    )
+    return (
+        ("chartCustomSheetView", attributes, tuple(child_signatures)),
+        _named_sheet_view_guid(view.get("guid")),
+        False,
+        False,
+        print_settings,
+        display_settings,
+    )
+
+
+def _custom_workbook_view_workbook_signature(
+    element: ElementTree.Element,
+    issues: set[str],
+    *,
+    sheet_index_by_id: Mapping[int, int],
+) -> tuple[tuple[object, ...], str | None]:
+    """Canonicalize one workbook-level Custom View and bind its active sheet."""
+    attributes = _custom_workbook_view_attributes(
+        element,
+        known=frozenset(
+            {
+                "name",
+                "guid",
+                "autoUpdate",
+                "mergeInterval",
+                "changesSavedWin",
+                "onlySync",
+                "personalView",
+                "includePrintSettings",
+                "includeHiddenRowCol",
+                "maximized",
+                "minimized",
+                "showHorizontalScroll",
+                "showVerticalScroll",
+                "showSheetTabs",
+                "xWindow",
+                "yWindow",
+                "windowWidth",
+                "windowHeight",
+                "tabRatio",
+                "activeSheetId",
+                "showFormulaBar",
+                "showStatusbar",
+                "showComments",
+                "showObjects",
+            }
+        ),
+        issues=issues,
+        boolean_defaults={
+            "autoUpdate": False,
+            "changesSavedWin": False,
+            "onlySync": False,
+            "personalView": False,
+            "includePrintSettings": True,
+            "includeHiddenRowCol": True,
+            "maximized": False,
+            "minimized": False,
+            "showHorizontalScroll": True,
+            "showVerticalScroll": True,
+            "showSheetTabs": True,
+            "showFormulaBar": True,
+            "showStatusbar": True,
+        },
+        signed_defaults={"xWindow": 0, "yWindow": 0},
+        unsigned_defaults={"tabRatio": 600},
+        enum_defaults={"showComments": "commIndicator", "showObjects": "all"},
+        enum_values={
+            "showComments": _CUSTOM_WORKBOOK_VIEW_COMMENTS_VALUES,
+            "showObjects": _CUSTOM_WORKBOOK_VIEW_OBJECT_VALUES,
+        },
+        unsigned_attributes=frozenset(
+            {"mergeInterval", "windowWidth", "windowHeight", "tabRatio", "activeSheetId"}
+        ),
+        signed_attributes=frozenset({"xWindow", "yWindow"}),
+        guid_attributes=frozenset({"guid"}),
+        required=frozenset(
+            {"name", "guid", "windowWidth", "windowHeight", "activeSheetId"}
+        ),
+    )
+    active_sheet_id = _custom_workbook_view_unsigned(element.get("activeSheetId"))
+    if active_sheet_id is None:
+        issues.add("invalid-active-sheet-id")
+    elif (sheet_index := sheet_index_by_id.get(active_sheet_id)) is None:
+        issues.add("unbound-active-sheet-id")
+    else:
+        attributes = _custom_workbook_view_replace_attribute(
+            attributes, "activeSheetId", f"sheet:{sheet_index}"
+        )
+    children: list[tuple[object, ...]] = []
+    extension_count = 0
+    for child in element:
+        if (
+            _xml_namespace(child.tag) == _SPREADSHEETML_NS
+            and _xml_local_name(child.tag) == "extLst"
+        ):
+            extension_count += 1
+            issues.add("unsupported-custom-workbook-view-extension")
+            children.append(_custom_workbook_view_unknown_signature(child))
+        else:
+            issues.add("unsupported-custom-workbook-view-child")
+            children.append(_custom_workbook_view_unknown_signature(child))
+    if extension_count > 1:
+        issues.add("multiple-custom-workbook-view-extensions")
+    return (
+        ("customWorkbookView", attributes, tuple(children)),
+        _named_sheet_view_guid(element.get("guid")),
+    )
+
+
+def _custom_workbook_view_sheet_bindings(
+    archive: ZipFile,
+    workbook: ElementTree.Element,
+    *,
+    note_issue: Callable[[str, object], None],
+) -> tuple[_CustomWorkbookViewSheetBinding, ...]:
+    """Resolve workbook sheet IDs to package parts without disclosing titles."""
+    namespace = _xml_namespace(workbook.tag)
+    if (
+        _xml_local_name(workbook.tag) != "workbook"
+        or namespace not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+    ):
+        note_issue("workbook:unexpected-root", workbook.tag)
+        return ()
+    relationship_groups: dict[str, list[_PackageRelationship]] = defaultdict(list)
+    for relationship in _package_relationships(archive, "xl/workbook.xml"):
+        if relationship.relationship_id:
+            relationship_groups[relationship.relationship_id].append(relationship)
+    sheets_tag = f"{{{namespace}}}sheets"
+    sheet_tag = f"{{{namespace}}}sheet"
+    containers = [child for child in workbook if child.tag == sheets_tag]
+    if len(containers) != 1:
+        note_issue("workbook:invalid-sheets-container-count", len(containers))
+    if not containers:
+        return ()
+    bindings: list[_CustomWorkbookViewSheetBinding] = []
+    seen_sheet_ids: set[int] = set()
+    relationship_attributes = (
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
+        f"{{{_STRICT_DOCUMENT_RELATIONSHIP_NS}}}id",
+    )
+    for sheet_index, sheet in enumerate(containers[0]):
+        context = f"sheet:{sheet_index}"
+        if sheet.tag != sheet_tag:
+            note_issue(f"{context}:unsupported-child", sheet.tag)
+            continue
+        sheet_id = _custom_workbook_view_unsigned(sheet.get("sheetId"))
+        if sheet_id is None:
+            note_issue(f"{context}:invalid-sheet-id", sheet.get("sheetId"))
+        elif sheet_id in seen_sheet_ids:
+            note_issue(f"{context}:duplicate-sheet-id", sheet_id)
+        else:
+            seen_sheet_ids.add(sheet_id)
+        relationship_ids = [
+            value for attribute in relationship_attributes if (value := sheet.get(attribute))
+        ]
+        if len(relationship_ids) != 1:
+            note_issue(f"{context}:invalid-relationship-id", tuple(relationship_ids))
+            bindings.append(
+                _CustomWorkbookViewSheetBinding(sheet_index, sheet_id, None, None)
+            )
+            continue
+        relationships = relationship_groups.get(relationship_ids[0], [])
+        if len(relationships) != 1:
+            note_issue(
+                f"{context}:invalid-relationship-binding",
+                tuple(
+                    (
+                        relationship.relationship_type,
+                        relationship.target_mode,
+                        relationship.raw_target,
+                    )
+                    for relationship in relationships
+                ),
+            )
+            bindings.append(
+                _CustomWorkbookViewSheetBinding(sheet_index, sheet_id, None, None)
+            )
+            continue
+        relationship = relationships[0]
+        if relationship.target is None:
+            note_issue(
+                f"{context}:unsafe-or-external-sheet-target",
+                (relationship.target_mode, relationship.raw_target),
+            )
+            bindings.append(
+                _CustomWorkbookViewSheetBinding(sheet_index, sheet_id, None, None)
+            )
+            continue
+        kind = relationship.relationship_type.rsplit("/", maxsplit=1)[-1]
+        bindings.append(
+            _CustomWorkbookViewSheetBinding(
+                sheet_index,
+                sheet_id,
+                relationship.target,
+                kind,
+            )
+        )
+    return tuple(bindings)
+
+
+def _custom_workbook_view_metadata(path: Path) -> _CustomWorkbookViewMetadata:
+    """Inspect legacy Excel Custom Views directly from their raw OOXML parts.
+
+    A workbook-level ``customWorkbookView`` binds its alternate display/print
+    settings to ``customSheetView`` declarations through a GUID. The scanner
+    resolves that linkage privately, normalizing a coordinated GUID rewrite
+    while failing closed for ambiguous or incomplete associations.
+    """
+    default = CustomWorkbookViewSnapshot()
+    warnings: set[str] = set()
+    issues: dict[str, str] = {}
+    association_issues: dict[str, str] = {}
+    has_custom_view_container = False
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    def note_association_issue(context: str, detail: object) -> None:
+        """Defer sheet-binding errors until this boundary is actually present."""
+        association_issues.setdefault(context, repr(detail))
+
+    custom_workbook_view_count = 0
+    custom_sheet_view_count = 0
+    custom_view_sheet_indices: set[int] = set()
+    sheet_records: list[_CustomWorkbookViewSheetRecord] = []
+    workbook_records: list[tuple[str | None, tuple[object, ...]]] = []
+    bindings: tuple[_CustomWorkbookViewSheetBinding, ...] = ()
+    try:
+        with ZipFile(path) as archive:
+            workbook = _xml_root(archive, "xl/workbook.xml")
+            bindings = _custom_workbook_view_sheet_bindings(
+                archive, workbook, note_issue=note_association_issue
+            )
+            sheet_index_by_id: dict[int, int] = {}
+            duplicate_sheet_ids: set[int] = set()
+            for binding in bindings:
+                if binding.sheet_id is None:
+                    continue
+                if binding.sheet_id in sheet_index_by_id:
+                    duplicate_sheet_ids.add(binding.sheet_id)
+                    continue
+                sheet_index_by_id[binding.sheet_id] = binding.index
+            for duplicate_id in duplicate_sheet_ids:
+                sheet_index_by_id.pop(duplicate_id, None)
+
+            workbook_namespace = _xml_namespace(workbook.tag)
+            containers = [
+                child
+                for child in workbook
+                if _xml_local_name(child.tag) == "customWorkbookViews"
+            ]
+            has_custom_view_container = bool(containers)
+            if workbook_namespace in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}:
+                if len(containers) > 1:
+                    note_issue(
+                        "workbook:multiple-custom-workbook-view-containers",
+                        len(containers),
+                    )
+                for container_index, container in enumerate(containers):
+                    container_context = f"workbook:custom-views:{container_index}"
+                    if _xml_namespace(container.tag) not in {
+                        _SPREADSHEETML_NS,
+                        _STRICT_SPREADSHEETML_NS,
+                    }:
+                        note_issue(
+                            f"{container_context}:unsupported-namespace", container.tag
+                        )
+                        continue
+                    compatible = _custom_workbook_view_compatibility_element(container)
+                    if compatible.attrib:
+                        note_issue(
+                            f"{container_context}:unexpected-attributes",
+                            tuple(sorted(compatible.attrib.items())),
+                        )
+                    if not list(compatible):
+                        note_issue(f"{container_context}:missing-custom-views", "empty")
+                    for view_index, view in enumerate(compatible):
+                        view_context = f"{container_context}:view:{view_index}"
+                        if (
+                            _xml_namespace(view.tag) != _SPREADSHEETML_NS
+                            or _xml_local_name(view.tag) != "customWorkbookView"
+                        ):
+                            note_issue(
+                                f"{view_context}:unsupported-child",
+                                _custom_workbook_view_unknown_signature(view),
+                            )
+                            continue
+                        custom_workbook_view_count += 1
+                        view_issues: set[str] = set()
+                        signature, guid = _custom_workbook_view_workbook_signature(
+                            view,
+                            view_issues,
+                            sheet_index_by_id=sheet_index_by_id,
+                        )
+                        if view_issues:
+                            note_issue(
+                                view_context,
+                                (tuple(sorted(view_issues)), signature),
+                            )
+                        workbook_records.append((guid, signature))
+            elif containers:
+                note_issue("workbook:unsupported-namespace", workbook.tag)
+
+            inspected_members: set[str] = set()
+            total_sheet_part_bytes = 0
+            inspected_sheet_part_count = 0
+            for binding in bindings:
+                context = f"sheet:{binding.index}"
+                if binding.member is None:
+                    continue
+                if binding.member in inspected_members:
+                    note_association_issue(
+                        f"{context}:repeated-sheet-target", binding.member
+                    )
+                    continue
+                inspected_members.add(binding.member)
+                if inspected_sheet_part_count >= _CUSTOM_WORKBOOK_VIEW_TOTAL_SHEET_PART_COUNT:
+                    note_association_issue(
+                        f"{context}:sheet-part-count-limit", binding.member
+                    )
+                    continue
+                try:
+                    info = archive.getinfo(binding.member)
+                except KeyError:
+                    note_association_issue(
+                        f"{context}:missing-sheet-part", binding.member
+                    )
+                    continue
+                if info.file_size > _CUSTOM_WORKBOOK_VIEW_MAX_SHEET_PART_BYTES:
+                    note_association_issue(
+                        f"{context}:oversized-sheet-part", info.file_size
+                    )
+                    continue
+                if (
+                    total_sheet_part_bytes + info.file_size
+                    > _CUSTOM_WORKBOOK_VIEW_TOTAL_SHEET_PART_BYTES
+                ):
+                    note_association_issue(
+                        f"{context}:total-sheet-part-size-limit", info.file_size
+                    )
+                    continue
+                total_sheet_part_bytes += info.file_size
+                inspected_sheet_part_count += 1
+                try:
+                    sheet_root = _xml_root(archive, binding.member)
+                except (
+                    ElementTree.ParseError,
+                    KeyError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    note_association_issue(
+                        f"{context}:unreadable-sheet-part", type(error).__name__
+                    )
+                    continue
+                root_namespace = _xml_namespace(sheet_root.tag)
+                root_name = _xml_local_name(sheet_root.tag)
+                containers = [
+                    child
+                    for child in sheet_root
+                    if _xml_local_name(child.tag) == "customSheetViews"
+                ]
+                if not containers:
+                    continue
+                has_custom_view_container = True
+                if len(containers) > 1:
+                    note_issue(
+                        f"{context}:multiple-custom-sheet-view-containers",
+                        len(containers),
+                    )
+                for container_index, container in enumerate(containers):
+                    container_context = f"{context}:custom-sheet-views:{container_index}"
+                    if _xml_namespace(container.tag) not in {
+                        _SPREADSHEETML_NS,
+                        _STRICT_SPREADSHEETML_NS,
+                    }:
+                        note_issue(
+                            f"{container_context}:unsupported-namespace", container.tag
+                        )
+                        continue
+                    compatible = _custom_workbook_view_compatibility_element(container)
+                    if compatible.attrib:
+                        note_issue(
+                            f"{container_context}:unexpected-attributes",
+                            tuple(sorted(compatible.attrib.items())),
+                        )
+                    if (
+                        not list(compatible)
+                        and root_name != _CUSTOM_WORKBOOK_VIEW_CHART_SHEET_ROOT
+                    ):
+                        note_issue(f"{container_context}:missing-custom-views", "empty")
+                    for view_index, view in enumerate(compatible):
+                        view_context = f"{container_context}:view:{view_index}"
+                        if (
+                            _xml_namespace(view.tag) != _SPREADSHEETML_NS
+                            or _xml_local_name(view.tag) != "customSheetView"
+                        ):
+                            note_issue(
+                                f"{view_context}:unsupported-child",
+                                _custom_workbook_view_unknown_signature(view),
+                            )
+                            continue
+                        custom_sheet_view_count += 1
+                        view_issues: set[str] = set()
+                        if (
+                            root_namespace
+                            in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+                            and root_name in _CUSTOM_WORKBOOK_VIEW_STANDARD_SHEET_ROOTS
+                        ):
+                            (
+                                signature,
+                                guid,
+                                hidden,
+                                filtered,
+                                print_settings,
+                                display_settings,
+                            ) = _custom_workbook_view_standard_sheet_signature(
+                                view, view_issues
+                            )
+                        elif (
+                            root_namespace
+                            in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+                            and root_name == _CUSTOM_WORKBOOK_VIEW_CHART_SHEET_ROOT
+                        ):
+                            (
+                                signature,
+                                guid,
+                                hidden,
+                                filtered,
+                                print_settings,
+                                display_settings,
+                            ) = _custom_workbook_view_chart_sheet_signature(
+                                view, view_issues
+                            )
+                        else:
+                            view_issues.add("unsupported-custom-view-sheet-root")
+                            signature = (
+                                "unsupportedCustomSheetView",
+                                _custom_workbook_view_generic_signature(view),
+                            )
+                            guid = _named_sheet_view_guid(view.get("guid"))
+                            hidden = filtered = print_settings = display_settings = False
+                        if view_issues:
+                            note_issue(
+                                view_context,
+                                (tuple(sorted(view_issues)), signature),
+                            )
+                        custom_view_sheet_indices.add(binding.index)
+                        sheet_records.append(
+                            _CustomWorkbookViewSheetRecord(
+                                guid=guid,
+                                sheet_index=binding.index,
+                                signature=signature,
+                                hidden=hidden,
+                                filtered=filtered,
+                                print_settings=print_settings,
+                                display_settings=display_settings,
+                            )
+                        )
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        return _CustomWorkbookViewMetadata(
+            default,
+            (
+                "FormulaFence could not inspect legacy Excel Custom View OOXML "
+                f"({type(error).__name__}); alternate display and print views were not "
+                "compared.",
+            ),
+        )
+
+    if has_custom_view_container:
+        for context, detail in association_issues.items():
+            issues.setdefault(context, detail)
+
+    records_by_guid: dict[str, list[_CustomWorkbookViewSheetRecord]] = defaultdict(list)
+    for record in sheet_records:
+        if record.guid is None:
+            note_issue(
+                f"sheet:{record.sheet_index}:custom-view:invalid-guid", record.signature
+            )
+        else:
+            records_by_guid[record.guid].append(record)
+    workbook_by_guid: dict[str, list[tuple[int, tuple[object, ...]]]] = defaultdict(list)
+    for workbook_index, (guid, signature) in enumerate(workbook_records):
+        if guid is None:
+            note_issue(f"workbook:custom-view:{workbook_index}:invalid-guid", signature)
+        else:
+            workbook_by_guid[guid].append((workbook_index, signature))
+    for guid, records in workbook_by_guid.items():
+        if len(records) > 1:
+            note_issue("workbook:duplicate-custom-view-guid", (guid, len(records)))
+    for guid, records in records_by_guid.items():
+        if guid not in workbook_by_guid:
+            note_issue(
+                "sheet:unbound-custom-view-guid",
+                tuple((record.sheet_index, record.signature) for record in records),
+            )
+
+    definition_entries: list[tuple[str, str]] = []
+    expected_sheet_indices = tuple(binding.index for binding in bindings)
+    for guid, views in sorted(workbook_by_guid.items()):
+        matching_sheet_records = records_by_guid.get(guid, [])
+        for workbook_index, workbook_signature in views:
+            linked_sheets: list[tuple[int, tuple[object, ...]]] = []
+            for sheet_index in expected_sheet_indices:
+                matching = [
+                    record
+                    for record in matching_sheet_records
+                    if record.sheet_index == sheet_index
+                ]
+                if len(matching) != 1:
+                    note_issue(
+                        (
+                            f"workbook:custom-view:{workbook_index}:"
+                            f"sheet:{sheet_index}:association"
+                        ),
+                        tuple(record.signature for record in matching),
+                    )
+                    linked_sheets.append((sheet_index, ("association", len(matching))))
+                    continue
+                linked_sheets.append((sheet_index, matching[0].signature))
+            definition_entries.append(
+                (
+                    f"custom-workbook-view:{workbook_index}",
+                    repr((workbook_signature, tuple(linked_sheets))),
+                )
+            )
+
+    issue_entries = tuple(
+        (f"custom-workbook-view-issue:{context}", detail)
+        for context, detail in sorted(issues.items())
+    )
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed, unsupported, or incompletely linked legacy "
+            "Excel Custom View metadata; affected alternate display and print views have "
+            "a coverage gap."
+        )
+    snapshot = CustomWorkbookViewSnapshot(
+        custom_workbook_view_count=custom_workbook_view_count,
+        custom_sheet_view_count=custom_sheet_view_count,
+        custom_view_sheet_count=len(custom_view_sheet_indices),
+        hidden_row_or_column_view_count=sum(record.hidden for record in sheet_records),
+        filtered_view_count=sum(record.filtered for record in sheet_records),
+        print_setting_view_count=sum(record.print_settings for record in sheet_records),
+        display_setting_view_count=sum(record.display_settings for record in sheet_records),
+        unrecognized_custom_view_count=len(issues),
+        definition_signature=(
+            _private_external_data_signature(tuple(sorted(definition_entries)))
+            if definition_entries
+            else None
+        ),
+        unrecognized_signature=(
+            _private_external_data_signature(issue_entries) if issue_entries else None
+        ),
+    )
+    return _CustomWorkbookViewMetadata(snapshot, tuple(sorted(warnings)))
 
 
 _NUMBER_FORMAT_BUILT_IN_MAXIMUM = 163
@@ -35719,6 +37056,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     filter_visibility_metadata = _filter_visibility_metadata(source)
     ignored_error_metadata = _ignored_error_metadata(source)
     named_sheet_view_metadata = _named_sheet_view_metadata(source)
+    custom_workbook_view_metadata = _custom_workbook_view_metadata(source)
     number_format_metadata = _number_format_metadata(source)
     font_metadata = _font_metadata(source)
     fill_metadata = _fill_metadata(source)
@@ -35777,6 +37115,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(filter_visibility_metadata.warnings)
     parser_warnings.update(ignored_error_metadata.warnings)
     parser_warnings.update(named_sheet_view_metadata.warnings)
+    parser_warnings.update(custom_workbook_view_metadata.warnings)
     parser_warnings.update(number_format_metadata.warnings)
     parser_warnings.update(font_metadata.warnings)
     parser_warnings.update(fill_metadata.warnings)
@@ -36019,6 +37358,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         filter_visibility_controls=filter_visibility_metadata.controls,
         ignored_error_controls=ignored_error_metadata.controls,
         named_sheet_views=named_sheet_view_metadata.views,
+        custom_workbook_views=custom_workbook_view_metadata.views,
         number_format_controls=number_format_metadata.controls,
         font_controls=font_metadata.controls,
         fill_controls=fill_metadata.controls,
@@ -36114,6 +37454,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "filter_visibility_controls": snapshot.filter_visibility_controls.profile_dict(),
         "ignored_error_controls": snapshot.ignored_error_controls.profile_dict(),
         "named_sheet_views": snapshot.named_sheet_views.profile_dict(),
+        "custom_workbook_views": snapshot.custom_workbook_views.profile_dict(),
         "number_format_controls": snapshot.number_format_controls.profile_dict(),
         "font_controls": snapshot.font_controls.profile_dict(),
         "fill_controls": snapshot.fill_controls.profile_dict(),
@@ -36167,6 +37508,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_filter_visibility_controls": snapshot.filter_visibility_controls.present,
             "has_ignored_error_controls": snapshot.ignored_error_controls.present,
             "has_named_sheet_views": snapshot.named_sheet_views.present,
+            "has_custom_workbook_views": snapshot.custom_workbook_views.present,
             "has_number_format_controls": snapshot.number_format_controls.present,
             "has_font_controls": snapshot.font_controls.present,
             "has_fill_controls": snapshot.fill_controls.present,

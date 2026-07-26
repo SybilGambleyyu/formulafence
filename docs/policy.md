@@ -24,6 +24,7 @@ rules:
   no_filter_visibility_changes: true
   no_ignored_error_changes: true
   no_named_sheet_view_changes: true
+  no_custom_workbook_view_changes: true
   no_number_format_changes: true
   no_cell_font_changes: true
   no_cell_fill_changes: true
@@ -110,6 +111,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_filter_visibility_changes` | boolean | A worksheet/Table AutoFilter, stored filter criterion, filter sort state, explicitly hidden/zero-height/outlined/collapsed row, hidden/zero-width/outlined/collapsed column, or hidden/zero-dimension-by-default worksheet setting changes. Criteria, selected values, sort keys/lists, raw dimensions, table names, and row/column ranges are compared privately. |
 | `no_ignored_error_changes` | boolean | A standard or Office 2010 extension ignored-error declaration changes a per-range suppression of Excel evaluation, formula-consistency, range-omission, unlocked-formula, empty-reference, list-validation, calculated-column, text-number, or two-digit-year warnings. Targets and exact suppressions are compared privately. |
 | `no_named_sheet_view_changes` | boolean | A relationship-backed Excel Named Sheet View, alternate AutoFilter criterion, sort rule, or reconciled base-filter binding changes. View names, IDs, criteria, ranges, table bindings, and sort keys are compared privately. |
+| `no_custom_workbook_view_changes` | boolean | A legacy Excel Custom View's workbook declaration, GUID-linked per-sheet alternate display/filter/print state, or recognized sheet binding changes. View names, GUIDs, sheet bindings, ranges, filters, pane locations, print settings, and raw XML are compared privately. |
 | `no_number_format_changes` | boolean | An effective default, direct-cell, row, or column number-format control changes. Format codes, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_font_changes` | boolean | An effective default, direct-cell, row, or column font control changes. Font names, colours, effects, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
@@ -513,6 +515,29 @@ coverage warnings. FormulaFence does not activate/render a saved view,
 calculate its filtered result, infer formula visibility sensitivity, repair
 metadata, or interpret full differential-format, future extension, or rich-sort
 semantics.
+
+Legacy Excel Custom Views persist a named alternate workbook display/print mode
+in `<customWorkbookView>` and a GUID-linked `<customSheetView>` on each
+worksheet, dialog sheet, or chart sheet. That alternate state can hide
+rows/columns, preserve a filter, alter print settings, panes, gridlines,
+formula display, comments, or object visibility while cells and the active
+worksheet view remain unchanged. FormulaFence reads and reconciles the raw
+workbook/sheet declarations privately. A material change emits `FF060`; enable
+`no_custom_workbook_view_changes` to make it `FFP060` in CI.
+
+Profiles and `FF060` details expose only structural counts: workbook views,
+per-sheet views, sheets with alternate state, per-sheet
+hidden/filter/print/display settings, and unrecognized metadata. Names, GUIDs,
+bindings, ranges, filter
+criteria, pane locations, print settings, and raw XML remain private.
+Coordinated GUID and sheet-ID/active-sheet-ID rewrites plus equivalent
+Boolean/default and unsigned-integer spellings normalize. Transitional and
+Strict SpreadsheetML worksheets/dialog sheets and chart sheets are supported.
+Missing, duplicate, malformed, unsupported, unsafe, oversized, over-budget, or
+incompletely linked declarations are explicit coverage warnings. FormulaFence
+does not activate/render a Custom View, calculate an alternate filtered result,
+determine final print output, interpret future extensions, or support Custom
+Views on other sheet types.
 
 Excel number formats can hide or materially reinterpret a value without changing
 its stored value or formula: `;;;` can make it appear blank, while custom

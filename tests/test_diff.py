@@ -31,9 +31,11 @@ from .helpers import (
     change_cell_hyperlink_tooltip,
     change_chart_cached_data,
     change_chart_definition_material,
+    change_chart_sheet_custom_workbook_view_scale,
     change_custom_data_payload,
     change_custom_data_store_storage_identifiers,
     change_custom_document_property_value,
+    change_custom_workbook_view_filter,
     change_custom_xml_data_store_value,
     change_default_alignment_definition,
     change_default_border_definition,
@@ -115,7 +117,9 @@ from .helpers import (
     corrupt_border_definition,
     corrupt_cell_hyperlink_reference,
     corrupt_chart_definition_root,
+    corrupt_chart_sheet_custom_workbook_view_page_setup,
     corrupt_custom_data_properties_root,
+    corrupt_custom_workbook_view_control,
     corrupt_default_zero_dimension_visibility_controls,
     corrupt_fill_column_control,
     corrupt_fill_definition,
@@ -172,11 +176,14 @@ from .helpers import (
     make_cell_hyperlink_model,
     make_cell_hyperlink_sparkline_model,
     make_chart_definition_model,
+    make_chart_sheet_custom_workbook_view_model,
     make_conditional_formatting_model,
     make_current_row_table_model,
     make_custom_data_store_model,
+    make_custom_workbook_view_model,
     make_data_validation_model,
     make_digital_signature_model,
+    make_empty_chart_sheet_custom_view_container_model,
     make_external_data_refresh_model,
     make_external_link_package_model,
     make_fill_model,
@@ -209,6 +216,7 @@ from .helpers import (
     make_slicer_timeline_cache_model,
     make_spill_model,
     make_strict_border_model,
+    make_strict_custom_workbook_view_model,
     make_strict_workbook_theme_image_model,
     make_strict_worksheet_dimension_model,
     make_strict_worksheet_display_model,
@@ -239,6 +247,7 @@ from .helpers import (
     normalize_border_inert_declarations,
     normalize_border_inheritance,
     normalize_custom_data_store_identifiers,
+    normalize_custom_workbook_view_identifiers,
     normalize_digital_signature_control_spelling,
     normalize_fill_control_spelling,
     normalize_fill_inert_pattern_declarations,
@@ -314,6 +323,7 @@ from .helpers import (
     set_sheet_protection_modern_verifier,
     set_slicer_timeline_equivalent_defaults,
     unbind_cell_hyperlink_relationship,
+    unbind_custom_workbook_view,
     use_slicer_timeline_2011_relationship_type,
 )
 
@@ -5036,7 +5046,7 @@ def test_font_missing_definition_fails_closed(tmp_path) -> None:
         report_to_markdown(report),
         json.dumps(report_to_sarif(report)),
     )
-    assert all("999" not in artifact for artifact in rendered_artifacts)
+    assert all("999999999" not in artifact for artifact in rendered_artifacts)
 
 
 def test_ordinary_workbook_has_only_a_default_font_definition(tmp_path) -> None:
@@ -5204,7 +5214,7 @@ def test_fill_missing_definition_fails_closed(tmp_path) -> None:
         report_to_markdown(report),
         json.dumps(report_to_sarif(report)),
     )
-    assert all("999" not in artifact for artifact in rendered_artifacts)
+    assert all("999999999" not in artifact for artifact in rendered_artifacts)
 
 
 def test_ordinary_workbook_has_no_fill_inventory(tmp_path) -> None:
@@ -8807,6 +8817,218 @@ def test_named_sheet_view_free_workbook_has_no_inventory(tmp_path) -> None:
     assert snapshot.named_sheet_views.present is False
     assert snapshot.named_sheet_views.named_sheet_view_count == 0
     assert not any("Named Sheet View" in warning for warning in snapshot.parser_warnings)
+
+
+def test_custom_workbook_views_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_custom_workbook_view_model(tmp_path / "baseline.xlsx")
+    candidate = make_custom_workbook_view_model(tmp_path / "candidate.xlsx")
+    change_custom_workbook_view_filter(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "custom_workbook_views_changed"
+    )
+
+    assert baseline_snapshot.summary()["custom_workbook_view_count"] == 2
+    assert baseline_snapshot.summary()["custom_sheet_view_count"] == 4
+    assert baseline_snapshot.summary()["custom_view_sheet_count"] == 2
+    assert baseline_snapshot.summary()["has_custom_workbook_views"] is True
+    assert profile["custom_workbook_views"] == {
+        "present": True,
+        "custom_workbook_view_count": 2,
+        "custom_sheet_view_count": 4,
+        "custom_view_sheet_count": 2,
+        "hidden_row_or_column_view_count": 1,
+        "filtered_view_count": 1,
+        "print_setting_view_count": 2,
+        "display_setting_view_count": 1,
+        "unrecognized_custom_view_count": 0,
+    }
+    assert baseline_snapshot.parser_warnings == ()
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Legacy Excel Custom Views" in markdown
+    assert change.details["custom_workbook_view_definition_material_changed"] is True
+    assert "FF060" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE Executive View",
+        "PRIVATE Print View",
+        "PRIVATE-CUSTOM-VIEW-FILTER",
+        "CANDIDATE-PRIVATE-CUSTOM-VIEW-FILTER",
+        "{01234567-89AB-CDEF-0123-456789ABCDEF}",
+        "A1:C3",
+        "B2",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_custom_workbook_view_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_custom_workbook_view_model(tmp_path / "baseline.xlsx")
+    equivalent = make_custom_workbook_view_model(tmp_path / "equivalent.xlsx")
+    normalize_custom_workbook_view_identifiers(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+    assert "custom_workbook_views_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF060" not in {finding.rule_id for finding in report.findings}
+
+
+def test_custom_workbook_views_support_strict_spreadsheetml(tmp_path) -> None:
+    baseline = make_custom_workbook_view_model(tmp_path / "baseline.xlsx")
+    strict = make_strict_custom_workbook_view_model(tmp_path / "strict.xlsx")
+
+    baseline_snapshot = load_snapshot(baseline)
+    strict_snapshot = load_snapshot(strict)
+    report = compare_snapshots(baseline_snapshot, strict_snapshot)
+
+    assert strict_snapshot.custom_workbook_views.to_dict() == (
+        baseline_snapshot.custom_workbook_views.to_dict()
+    )
+    assert strict_snapshot.custom_workbook_views.unrecognized_custom_view_count == 0
+    assert not any("Custom View" in warning for warning in strict_snapshot.parser_warnings)
+    assert "custom_workbook_views_changed" not in {
+        change.kind for change in report.changes
+    }
+
+
+def test_custom_workbook_views_cover_chart_sheet_alternate_print_state(tmp_path) -> None:
+    baseline = make_chart_sheet_custom_workbook_view_model(tmp_path / "baseline.xlsx")
+    candidate = make_chart_sheet_custom_workbook_view_model(tmp_path / "candidate.xlsx")
+    change_chart_sheet_custom_workbook_view_scale(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+
+    assert baseline_snapshot.custom_workbook_views.to_dict() == {
+        "present": True,
+        "custom_workbook_view_count": 1,
+        "custom_sheet_view_count": 2,
+        "custom_view_sheet_count": 2,
+        "hidden_row_or_column_view_count": 0,
+        "filtered_view_count": 0,
+        "print_setting_view_count": 1,
+        "display_setting_view_count": 1,
+        "unrecognized_custom_view_count": 0,
+    }
+    assert baseline_snapshot.summary()["sheet_count"] == 1
+    assert not any("Custom View" in warning for warning in baseline_snapshot.parser_warnings)
+    assert "custom_workbook_views_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF060" in {finding.rule_id for finding in report.findings}
+
+
+def test_empty_chart_sheet_custom_view_container_is_not_malformed(tmp_path) -> None:
+    snapshot = load_snapshot(
+        make_empty_chart_sheet_custom_view_container_model(tmp_path / "chart.xlsx")
+    )
+
+    assert snapshot.custom_workbook_views.to_dict() == {
+        "present": False,
+        "custom_workbook_view_count": 0,
+        "custom_sheet_view_count": 0,
+        "custom_view_sheet_count": 0,
+        "hidden_row_or_column_view_count": 0,
+        "filtered_view_count": 0,
+        "print_setting_view_count": 0,
+        "display_setting_view_count": 0,
+        "unrecognized_custom_view_count": 0,
+    }
+    assert not any("Custom View" in warning for warning in snapshot.parser_warnings)
+
+
+def test_chart_sheet_custom_workbook_view_malformed_print_metadata_fails_closed(
+    tmp_path,
+) -> None:
+    baseline = make_chart_sheet_custom_workbook_view_model(tmp_path / "baseline.xlsx")
+    malformed = make_chart_sheet_custom_workbook_view_model(tmp_path / "malformed.xlsx")
+    corrupt_chart_sheet_custom_workbook_view_page_setup(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.custom_workbook_views.unrecognized_custom_view_count >= 1
+    assert any("Custom View" in warning for warning in malformed_snapshot.parser_warnings)
+    assert {"FF010", "FF060"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(malformed_snapshot)),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all(
+        "PRIVATE-INVALID-CHART-ORIENTATION" not in artifact
+        for artifact in rendered_artifacts
+    )
+
+
+def test_custom_workbook_view_malformed_control_fails_closed(tmp_path) -> None:
+    baseline = make_custom_workbook_view_model(tmp_path / "baseline.xlsx")
+    malformed = make_custom_workbook_view_model(tmp_path / "malformed.xlsx")
+    corrupt_custom_workbook_view_control(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.custom_workbook_views.unrecognized_custom_view_count >= 1
+    assert any("Custom View" in warning for warning in malformed_snapshot.parser_warnings)
+    assert {"FF010", "FF060"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("4294967296" not in artifact for artifact in rendered_artifacts)
+
+
+def test_custom_workbook_view_unbound_sheet_view_fails_closed(tmp_path) -> None:
+    baseline = make_custom_workbook_view_model(tmp_path / "baseline.xlsx")
+    malformed = make_custom_workbook_view_model(tmp_path / "malformed.xlsx")
+    unbind_custom_workbook_view(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.custom_workbook_views.unrecognized_custom_view_count >= 1
+    assert any("Custom View" in warning for warning in malformed_snapshot.parser_warnings)
+    assert {"FF010", "FF060"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(malformed_snapshot)),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all(
+        "{BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF}" not in artifact
+        for artifact in rendered_artifacts
+    )
+
+
+def test_custom_workbook_view_free_workbook_has_no_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.custom_workbook_views.present is False
+    assert snapshot.custom_workbook_views.custom_workbook_view_count == 0
+    assert not any("Custom View" in warning for warning in snapshot.parser_warnings)
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

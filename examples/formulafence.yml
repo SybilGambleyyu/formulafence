@@ -16,6 +16,7 @@ rules:
   no_filter_visibility_changes: true
   no_ignored_error_changes: true
   no_named_sheet_view_changes: true
+  no_custom_workbook_view_changes: true
   no_worksheet_embedded_control_changes: true
   no_new_parser_warnings: true
   no_new_unresolved_references: true

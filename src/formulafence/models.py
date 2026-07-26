@@ -1622,6 +1622,57 @@ class NamedSheetViewSnapshot:
 
 
 @dataclass(frozen=True)
+class CustomWorkbookViewSnapshot:
+    """Safe aggregate of legacy Excel Custom View declarations.
+
+    A legacy Custom View stores a named alternate workbook display and print
+    surface. Its linked per-sheet declarations can hide rows or columns,
+    preserve filters, change worksheet display controls, and change print
+    settings without touching the default worksheet state. View names, GUIDs,
+    ranges, filters, page settings, header/footer text, and raw XML remain in
+    private signatures; public evidence is intentionally structural only.
+    """
+
+    custom_workbook_view_count: int = 0
+    custom_sheet_view_count: int = 0
+    custom_view_sheet_count: int = 0
+    hidden_row_or_column_view_count: int = 0
+    filtered_view_count: int = 0
+    print_setting_view_count: int = 0
+    display_setting_view_count: int = 0
+    unrecognized_custom_view_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+    unrecognized_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.custom_workbook_view_count
+            or self.custom_sheet_view_count
+            or self.unrecognized_custom_view_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural Custom View evidence without private settings."""
+        return {
+            "present": self.present,
+            "custom_workbook_view_count": self.custom_workbook_view_count,
+            "custom_sheet_view_count": self.custom_sheet_view_count,
+            "custom_view_sheet_count": self.custom_view_sheet_count,
+            "hidden_row_or_column_view_count": (
+                self.hidden_row_or_column_view_count
+            ),
+            "filtered_view_count": self.filtered_view_count,
+            "print_setting_view_count": self.print_setting_view_count,
+            "display_setting_view_count": self.display_setting_view_count,
+            "unrecognized_custom_view_count": self.unrecognized_custom_view_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class NumberFormatSnapshot:
     """Safe aggregate of cell, row, and column number-format controls.
 
@@ -3330,6 +3381,9 @@ class WorkbookSnapshot:
     named_sheet_views: NamedSheetViewSnapshot = field(
         default_factory=NamedSheetViewSnapshot
     )
+    custom_workbook_views: CustomWorkbookViewSnapshot = field(
+        default_factory=CustomWorkbookViewSnapshot
+    )
     number_format_controls: NumberFormatSnapshot = field(
         default_factory=NumberFormatSnapshot
     )
@@ -3544,6 +3598,16 @@ class WorkbookSnapshot:
             "named_sheet_view_count": self.named_sheet_views.named_sheet_view_count,
             "named_sheet_view_filter_count": self.named_sheet_views.named_filter_count,
             "has_named_sheet_views": self.named_sheet_views.present,
+            "custom_workbook_view_count": (
+                self.custom_workbook_views.custom_workbook_view_count
+            ),
+            "custom_sheet_view_count": (
+                self.custom_workbook_views.custom_sheet_view_count
+            ),
+            "custom_view_sheet_count": (
+                self.custom_workbook_views.custom_view_sheet_count
+            ),
+            "has_custom_workbook_views": self.custom_workbook_views.present,
             "number_format_assignment_count": (
                 self.number_format_controls.default_format_override_count
                 + self.number_format_controls.cell_format_assignment_count

@@ -29,6 +29,7 @@ _RULE_FIELDS = {
     "no_filter_visibility_changes",
     "no_ignored_error_changes",
     "no_named_sheet_view_changes",
+    "no_custom_workbook_view_changes",
     "no_number_format_changes",
     "no_cell_font_changes",
     "no_cell_fill_changes",
@@ -112,6 +113,7 @@ class Policy:
     no_filter_visibility_changes: bool = False
     no_ignored_error_changes: bool = False
     no_named_sheet_view_changes: bool = False
+    no_custom_workbook_view_changes: bool = False
     no_number_format_changes: bool = False
     no_cell_font_changes: bool = False
     no_cell_fill_changes: bool = False
@@ -177,6 +179,7 @@ rules:
   no_filter_visibility_changes: true
   no_ignored_error_changes: true
   no_named_sheet_view_changes: true
+  no_custom_workbook_view_changes: true
   no_number_format_changes: true
   no_cell_font_changes: true
   no_cell_fill_changes: true
@@ -326,6 +329,9 @@ def parse_policy(data: object) -> Policy:
         ),
         no_ignored_error_changes=_boolean_rule(rules, "no_ignored_error_changes"),
         no_named_sheet_view_changes=_boolean_rule(rules, "no_named_sheet_view_changes"),
+        no_custom_workbook_view_changes=_boolean_rule(
+            rules, "no_custom_workbook_view_changes"
+        ),
         no_number_format_changes=_boolean_rule(rules, "no_number_format_changes"),
         no_cell_font_changes=_boolean_rule(rules, "no_cell_font_changes"),
         no_cell_fill_changes=_boolean_rule(rules, "no_cell_fill_changes"),
@@ -755,6 +761,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP038",
                     "high",
                     "Policy forbids Excel Named Sheet View changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_custom_workbook_view_changes:
+        for finding in _rule_triggered(report, "FF060"):
+            violations.append(
+                Finding(
+                    "FFP060",
+                    "high",
+                    "Policy forbids legacy Excel Custom View changes.",
                     details=finding.details,
                 )
             )

@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Legacy Excel Custom Views — 2026-07-26
+
+FormulaFence 0.59.0 was checked against Microsoft's documented
+[`customWorkbookView`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.customworkbookview?view=openxml-3.0.1)
+and
+[`customSheetView`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.customsheetview?view=openxml-3.0.1)
+SpreadsheetML declarations, including the workbook `sheetId` /
+`activeSheetId` linkage. A controlled raw-OOXML pair used two workbook Custom
+Views and four GUID-linked worksheet Custom Views across two sheets. The
+candidate changed only a private Custom View filter criterion: both archives
+had the same member set and only `xl/worksheets/sheet1.xml` differed in
+uncompressed bytes, leaving ordinary cells and formulas untouched. The
+baseline and candidate SHA-256 values were respectively
+`21c0ba8dc0a3eed867d26d40b206c56562cec523e27666e7d539c6bbae24dbbd` and
+`51ed7dc5bcf34648ec9c874708a0206cf37dd3600591d9a0bee662fcaa790943`.
+
+A clean Python virtual environment installed the staged 0.59.0 wheel
+(SHA-256 `e1a1615c481b734ea08bebd940caab92973173252e83183e9950368cd05836c3`)
+and returned `FormulaFence 0.59.0`. It profiled two workbook views, four
+per-sheet views, two participating sheets, and, among per-sheet views, one
+hidden-row/column view, one filtered view, two print-setting views, one
+display-setting view, and no
+coverage gap. The candidate emitted exactly one
+`custom_workbook_views_changed` change with `FF060`; the installed starter
+policy exited `1` and added `FFP060`. JSON profile and report output was
+checked to ensure the Custom View names and private filter values stayed
+absent.
+
+The suite separately validates transitional and Strict worksheet views, real
+chart-sheet alternate print state, a schema-valid empty chart-sheet container,
+coordinated GUID/sheet-ID and writer-spelling normalization, malformed print
+metadata, incomplete GUID binding, temporary-reader isolation, redaction, and
+policy enforcement. FormulaFence compares stored declarations only: it does
+not activate or render a view, calculate filtered results or final pagination,
+interpret future extensions, or support Custom Views on unsupported sheet
+types.
+
 ## Worksheet DrawingML connector controls — 2026-07-26
 
 FormulaFence 0.58.0 was validated against an independently maintained,

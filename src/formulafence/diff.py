@@ -20,6 +20,7 @@ from formulafence.models import (
     ConditionalFormattingExtensionSnapshot,
     ConditionalFormattingSnapshot,
     CustomDataStoreSnapshot,
+    CustomWorkbookViewSnapshot,
     DataValidationSnapshot,
     DiffReport,
     DigitalSignatureSnapshot,
@@ -1451,6 +1452,34 @@ def _workbook_control_changes(
                 "high",
                 "Excel Named Sheet View controls changed; alternate filter or sort views "
                 "may show a different report.",
+                details=details,
+            )
+        )
+    if before.custom_workbook_views != after.custom_workbook_views:
+        old_views: CustomWorkbookViewSnapshot = before.custom_workbook_views
+        new_views: CustomWorkbookViewSnapshot = after.custom_workbook_views
+        details: dict[str, object] = {
+            "before": old_views.to_dict(),
+            "after": new_views.to_dict(),
+        }
+        if old_views.definition_signature != new_views.definition_signature:
+            details["custom_workbook_view_definition_material_changed"] = True
+        if old_views.unrecognized_signature != new_views.unrecognized_signature:
+            details["unrecognized_custom_workbook_view_metadata_changed"] = True
+        changes.append(
+            Change(
+                "custom_workbook_views_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF060",
+                "high",
+                "Legacy Excel Custom Views changed; saved alternate display, visibility, "
+                "filter, or print settings may show a different workbook.",
                 details=details,
             )
         )

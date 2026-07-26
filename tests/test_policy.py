@@ -12,6 +12,7 @@ from .helpers import (
     change_border_definition,
     change_cell_hyperlink_target,
     change_chart_definition_material,
+    change_custom_workbook_view_filter,
     change_custom_xml_data_store_value,
     change_external_data_refresh_controls,
     change_external_link_package_controls,
@@ -55,6 +56,7 @@ from .helpers import (
     make_chart_definition_model,
     make_conditional_formatting_model,
     make_custom_data_store_model,
+    make_custom_workbook_view_model,
     make_data_validation_model,
     make_digital_signature_model,
     make_external_data_refresh_model,
@@ -508,6 +510,21 @@ def test_policy_can_block_named_sheet_view_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP038"}
+
+
+def test_policy_can_block_custom_workbook_view_changes(tmp_path) -> None:
+    baseline = make_custom_workbook_view_model(tmp_path / "baseline.xlsx")
+    candidate = make_custom_workbook_view_model(tmp_path / "candidate.xlsx")
+    change_custom_workbook_view_filter(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_custom_workbook_view_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP060"
+    }
 
 
 def test_policy_can_block_number_format_changes(tmp_path) -> None:

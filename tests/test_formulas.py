@@ -55,13 +55,25 @@ def test_formula_inspection_resolves_names_and_marks_static_coverage_gaps() -> N
     assert inspection.dynamic_reference_functions == ("INDIRECT",)
 
 
-def test_formula_inspection_inventories_external_action_functions_without_evaluation() -> None:
+def test_formula_inspection_inventories_external_action_and_provider_functions() -> None:
     inspection = inspect_formula(
         '=_xlfn.IMAGE("https://private.example.test/image.png")'
         '&HYPERLINK("#Inputs!A1","Internal")'
         '&WEBSERVICE("https://private.example.test/service")'
         '&RTD("Private.Provider","PrivateServer","Topic")'
         '&HYPERLINK("https://private.example.test/second","External")'
+        '+_xlfn.STOCKHISTORY("XNAS:MSFT",DATE(2024,1,1))'
+        '+CUBEVALUE("Finance","[Measures].[Revenue]")'
+        '+CUBEMEMBER("Finance","[Date].[All]")'
+        '+CUBEMEMBERPROPERTY("Finance","[Date].[All]","MEMBER_CAPTION")'
+        '+CUBERANKEDMEMBER("Finance",A1,1)'
+        '+CUBESET("Finance","[Date].[All].Children")'
+        '+CUBESETCOUNT(A1)'
+        '+CUBEKPIMEMBER("Finance","KPI",1)'
+    )
+    shadowed = inspect_formula(
+        '=STOCKHISTORY(A1,DATE(2024,1,1))',
+        named_function_references={"stockhistory": ()},
     )
 
     assert inspection.external_action_functions == (
@@ -70,7 +82,16 @@ def test_formula_inspection_inventories_external_action_functions_without_evalua
         "WEBSERVICE",
         "RTD",
         "HYPERLINK",
+        "STOCKHISTORY",
+        "CUBEVALUE",
+        "CUBEMEMBER",
+        "CUBEMEMBERPROPERTY",
+        "CUBERANKEDMEMBER",
+        "CUBESET",
+        "CUBESETCOUNT",
+        "CUBEKPIMEMBER",
     )
+    assert shadowed.external_action_functions == ()
 
 
 def test_formula_inspection_propagates_external_actions_from_named_definitions() -> None:
@@ -88,6 +109,13 @@ def test_formula_inspection_propagates_external_actions_from_named_definitions()
             "fence.direct": ("WEBSERVICE",),
         },
     )
+    named_provider = inspect_formula(
+        "=FENCE.MARKET(A1)",
+        named_function_references={"fence.market": ()},
+        named_function_formula_external_action_functions={
+            "fence.market": ("STOCKHISTORY", "CUBEVALUE"),
+        },
+    )
 
     assert named_lambda.external_action_functions == ("HYPERLINK",)
     assert named_lambda.references == (
@@ -95,6 +123,7 @@ def test_formula_inspection_propagates_external_actions_from_named_definitions()
     )
     assert named_formula.external_action_functions == ("WEBSERVICE",)
     assert named_formula.unresolved_range_tokens == ()
+    assert named_provider.external_action_functions == ("STOCKHISTORY", "CUBEVALUE")
 
 
 def test_formula_inspection_inventories_python_in_excel_function_spellings() -> None:

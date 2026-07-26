@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.77.0 — 2026-07-26
+
+- Extend the existing `FF064` formula external-action ledger to stored
+  provider-backed `STOCKHISTORY` and every documented Cube function:
+  `CUBEKPIMEMBER`, `CUBEMEMBER`, `CUBEMEMBERPROPERTY`,
+  `CUBERANKEDMEMBER`, `CUBESET`, `CUBESETCOUNT`, and `CUBEVALUE`.
+  FormulaFence now detects same-count market-provider, connection, query, and
+  Cube-set changes without evaluating a formula, contacting a provider, or
+  exposing formula arguments.
+- Preserve the existing named-formula, named-`LAMBDA`, recursive-chain,
+  sheet-local-resolution, static-input, private-signature, and fail-closed
+  `no_formula_external_action_changes` (`FFP064`) semantics for the expanded
+  provider family. Workbook-defined callables shadow the native spelling rather
+  than being misclassified.
+- Extend safe profiles and Markdown reports with separate `STOCKHISTORY` and
+  aggregate Cube-function counts. Connection names, MDX expressions, market
+  symbols, field/property names, formula cells, and results remain private.
+
 ## 0.76.0 — 2026-07-26
 
 - Add FF072, a private ledger for native Excel CELL and INFO calls in worksheet

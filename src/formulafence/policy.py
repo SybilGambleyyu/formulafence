@@ -752,7 +752,7 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                 Finding(
                     "FFP064",
                     "high",
-                    "Policy forbids formula external-action changes.",
+                    "Policy forbids formula external-action or data-provider changes.",
                     details=finding.details,
                 )
             )

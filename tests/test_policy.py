@@ -30,6 +30,7 @@ from .helpers import (
     change_formula_environment_information_definition,
     change_formula_external_action_input,
     change_formula_external_action_target,
+    change_formula_external_data_provider_target,
     change_ignored_error_target,
     change_legacy_comment_text,
     change_legacy_vml_control_controls,
@@ -94,6 +95,7 @@ from .helpers import (
     make_formula_defined_xlm_registration_model,
     make_formula_environment_information_model,
     make_formula_external_action_model,
+    make_formula_external_data_provider_model,
     make_ignored_error_model,
     make_legacy_array_model,
     make_legacy_comment_model,
@@ -388,6 +390,19 @@ def test_policy_can_block_formula_external_action_changes(tmp_path) -> None:
     baseline = make_formula_external_action_model(tmp_path / "baseline.xlsx")
     candidate = make_formula_external_action_model(tmp_path / "candidate.xlsx")
     change_formula_external_action_target(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_formula_external_action_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP064"}
+
+
+def test_policy_can_block_formula_external_data_provider_changes(tmp_path) -> None:
+    baseline = make_formula_external_data_provider_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_external_data_provider_model(tmp_path / "candidate.xlsx")
+    change_formula_external_data_provider_target(candidate)
 
     report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
     policy = parse_policy(

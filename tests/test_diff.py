@@ -69,6 +69,9 @@ from .helpers import (
     change_formula_environment_information_input,
     change_formula_external_action_input,
     change_formula_external_action_target,
+    change_formula_external_data_provider_definition,
+    change_formula_external_data_provider_input,
+    change_formula_external_data_provider_target,
     change_gradient_fill_definition,
     change_ignored_error_extension_target,
     change_ignored_error_target,
@@ -251,6 +254,7 @@ from .helpers import (
     make_formula_defined_xlm_registration_model,
     make_formula_environment_information_model,
     make_formula_external_action_model,
+    make_formula_external_data_provider_model,
     make_ignored_error_model,
     make_implicit_intersection_model,
     make_in_content_office_web_addin_model,
@@ -2010,6 +2014,8 @@ def test_formula_external_actions_are_profiled_diffed_and_redacted(tmp_path) -> 
         "webservice_function_count": 1,
         "image_function_count": 2,
         "rtd_function_count": 1,
+        "stockhistory_function_count": 0,
+        "cube_function_count": 0,
     }
     assert baseline_snapshot.formula_external_actions.to_dict() == expected_actions
     assert baseline_snapshot.summary()["formula_external_action_cell_count"] == 8
@@ -2020,7 +2026,7 @@ def test_formula_external_actions_are_profiled_diffed_and_redacted(tmp_path) -> 
     assert baseline_snapshot.summary()["formula_rtd_function_count"] == 1
     assert baseline_snapshot.summary()["has_formula_external_actions"] is True
     assert profile["formula_external_actions"] == expected_actions
-    assert "## Formula external-action surfaces" in markdown
+    assert "## Formula external-action and data-provider surfaces" in markdown
     assert "**Formula cells / function calls / formula-defined names:** 8 / 9 / 0" in markdown
     assert "**HYPERLINK / WEBSERVICE / IMAGE / RTD:** 5 / 1 / 2 / 1" in markdown
 
@@ -2099,6 +2105,176 @@ def test_formula_external_action_static_inputs_are_guarded(tmp_path) -> None:
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
 
 
+def test_formula_external_data_provider_calls_are_profiled_diffed_and_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_formula_external_data_provider_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_external_data_provider_model(tmp_path / "candidate.xlsx")
+    change_formula_external_data_provider_target(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    expected_actions = {
+        "present": True,
+        "formula_external_action_cell_count": 11,
+        "action_defined_name_count": 3,
+        "hyperlink_function_count": 0,
+        "webservice_function_count": 0,
+        "image_function_count": 0,
+        "rtd_function_count": 0,
+        "stockhistory_function_count": 3,
+        "cube_function_count": 8,
+    }
+    assert baseline_snapshot.formula_external_actions.to_dict() == expected_actions
+    assert baseline_snapshot.summary()["formula_stockhistory_function_count"] == 3
+    assert baseline_snapshot.summary()["formula_cube_function_count"] == 8
+    assert profile["formula_external_actions"] == expected_actions
+    assert "## Formula external-action and data-provider surfaces" in markdown
+    assert "**Formula cells / function calls / formula-defined names:** 11 / 11 / 3" in markdown
+    assert "**STOCKHISTORY / Cube functions:** 3 / 8" in markdown
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    action_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_external_actions_changed"
+    )
+    action_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF064"
+    )
+    assert action_change.details["before"] == expected_actions
+    assert action_change.details["after"] == expected_actions
+    assert action_change.details["formula_external_action_material_changed"] is True
+    assert action_finding.details == action_change.details
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(action_change.details),
+        json.dumps(action_finding.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-STOCK-BASELINE",
+        "PRIVATE-CUBE-CONNECTION-BASELINE",
+        "PRIVATE-CUBE-CONNECTION-CANDIDATE",
+        "PRIVATE-REVENUE",
+        "PRIVATE-MEMBER-PROPERTY",
+        "PRIVATE-CUBE-CAPTION",
+        "PRIVATE-KPI",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_named_formula_external_data_provider_calls_are_propagated_and_private(
+    tmp_path,
+) -> None:
+    baseline = make_formula_external_data_provider_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_external_data_provider_model(tmp_path / "candidate.xlsx")
+    change_formula_external_data_provider_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.formula_external_actions.action_cells == frozenset(
+        {("Inputs", f"B{row}") for row in range(2, 13)}
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    action_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_external_actions_changed"
+    )
+    assert action_change.details[
+        "formula_external_action_definition_material_changed"
+    ] is True
+    ff064_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF064"
+    )
+
+    rendered_ledger_artifacts = (
+        json.dumps(profile_snapshot(baseline_snapshot)["formula_external_actions"]),
+        json.dumps(action_change.details),
+        json.dumps(ff064_sarif_result),
+    )
+    for sensitive_value in (
+        "FENCE",
+        "PRIVATE-NAMED-CUBE-CONNECTION-BASELINE",
+        "PRIVATE-NAMED-CUBE-CONNECTION-CANDIDATE",
+        "PRIVATE-NAMED-REVENUE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_formula_external_data_provider_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_formula_external_data_provider_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_external_data_provider_model(tmp_path / "candidate.xlsx")
+    change_formula_external_data_provider_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.formula_external_actions == candidate_snapshot.formula_external_actions
+    assert {("Inputs", "B2"), ("Inputs", "B10"), ("Inputs", "B11")} <= set(
+        baseline_snapshot.reverse_dependencies[("Inputs", "A2")]
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    action_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_external_actions_changed"
+    )
+    assert action_change.details["formula_external_action_static_input_changed"] is True
+    assert action_change.details["formula_external_action_static_input_change_count"] == 1
+    assert "formula_external_action_material_changed" not in action_change.details
+    assert "formula_external_action_definition_material_changed" not in action_change.details
+    assert "FF064" in {finding.rule_id for finding in report.findings}
+
+
+def test_formula_external_data_provider_respects_named_lambda_shadowing(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "shadowed-data-provider.xlsx")
+
+    def add_shadowing_lambdas(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "STOCKHISTORY",
+                attr_text="=LAMBDA(stock,start_date,stock)",
+            )
+        )
+        workbook.defined_names.add(
+            DefinedName(
+                "CUBEVALUE",
+                attr_text="=LAMBDA(connection,member,connection)",
+            )
+        )
+        workbook["Model"]["D2"] = "=STOCKHISTORY(Inputs!B2,Inputs!B3)"
+        workbook["Model"]["D3"] = "=CUBEVALUE(Inputs!A1,Inputs!B2)"
+
+    rewrite(workbook_path, add_shadowing_lambdas)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_external_actions.to_dict() == {
+        "present": False,
+        "formula_external_action_cell_count": 0,
+        "action_defined_name_count": 0,
+        "hyperlink_function_count": 0,
+        "webservice_function_count": 0,
+        "image_function_count": 0,
+        "rtd_function_count": 0,
+        "stockhistory_function_count": 0,
+        "cube_function_count": 0,
+    }
+    assert snapshot.unresolved_reference_tokens == {}
+
+
 def test_named_formula_external_actions_are_propagated_diffed_and_private(tmp_path) -> None:
     baseline = make_named_formula_external_action_model(tmp_path / "baseline.xlsx")
     candidate = make_named_formula_external_action_model(tmp_path / "candidate.xlsx")
@@ -2115,6 +2291,8 @@ def test_named_formula_external_actions_are_propagated_diffed_and_private(tmp_pa
         "webservice_function_count": 1,
         "image_function_count": 0,
         "rtd_function_count": 0,
+        "stockhistory_function_count": 0,
+        "cube_function_count": 0,
     }
     assert baseline_snapshot.formula_external_actions.to_dict() == expected_actions
     assert baseline_snapshot.formula_external_actions.action_cells == frozenset(
@@ -2207,6 +2385,8 @@ def test_uninvoked_formula_defined_external_action_is_profiled(tmp_path) -> None
         "webservice_function_count": 0,
         "image_function_count": 0,
         "rtd_function_count": 0,
+        "stockhistory_function_count": 0,
+        "cube_function_count": 0,
     }
     assert snapshot.formula_external_actions.action_cells == frozenset()
 
@@ -2237,6 +2417,8 @@ def test_recursive_named_formula_external_actions_are_cycle_safe(tmp_path) -> No
         "webservice_function_count": 0,
         "image_function_count": 0,
         "rtd_function_count": 0,
+        "stockhistory_function_count": 0,
+        "cube_function_count": 0,
     }
     assert snapshot.formula_external_actions.action_cells == frozenset(
         {("Model", "D2")}

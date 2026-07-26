@@ -629,6 +629,8 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             formula_external_actions["webservice_function_count"],
             formula_external_actions["image_function_count"],
             formula_external_actions["rtd_function_count"],
+            formula_external_actions["stockhistory_function_count"],
+            formula_external_actions["cube_function_count"],
         )
     )
     has_nondefault_external_settings = external_settings != {
@@ -934,7 +936,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "## Formula external-action surfaces",
+                "## Formula external-action and data-provider surfaces",
                 "",
                 (
                     "- **Formula cells / function calls / formula-defined names:** "
@@ -950,10 +952,15 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     f"{formula_external_actions['rtd_function_count']}"
                 ),
                 (
+                    "- **STOCKHISTORY / Cube functions:** "
+                    f"{formula_external_actions['stockhistory_function_count']} / "
+                    f"{formula_external_actions['cube_function_count']}"
+                ),
+                (
                     "FormulaFence inventories stored calls in cells, formula-defined names, "
                     "and named LAMBDAs. Formula cells, name identities, arguments, destinations, "
-                    "provider names, and results are compared privately and intentionally omitted; "
-                    "no formula is evaluated or action taken."
+                    "connections, queries, provider names, and results are compared privately and "
+                    "intentionally omitted; no formula is evaluated or provider contacted."
                 ),
             ]
         )

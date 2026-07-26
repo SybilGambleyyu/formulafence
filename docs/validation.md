@@ -5,6 +5,60 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Formula data-provider boundary — 2026-07-26
+
+FormulaFence 0.77.0 was checked against Microsoft's
+[`STOCKHISTORY` documentation](https://support.microsoft.com/en-us/office/stockhistory-function-1ac8b5b3-5f62-4d94-8ab8-7504ec7239a8),
+which describes retrieving historical financial-instrument data, and the
+documented [Cube function category](https://support.microsoft.com/en-us/office/excel-functions-by-category-5f91f4e9-7b42-46d2-9bd1-63f26a86c0eb),
+including `CUBESET` creating a server-side set and `CUBEVALUE` retrieving an
+aggregate through a stored connection. The scope remains static: FormulaFence
+records stored `STOCKHISTORY` and all seven Cube spellings, but does not
+calculate them, resolve a connection, contact a market provider, query a cube,
+or interpret a returned value.
+
+Four fresh, controlled `.xlsx` artifacts were generated without opening Excel.
+The baseline (SHA-256
+`bd65d08ff6ab0eaa5f1f179bdc13d8038e6d298ffea10b1b63da2d9b649002b9`)
+uses direct calls for every Cube function, direct `STOCKHISTORY`, a named
+`LAMBDA`, and a nested named `LAMBDA`/formula-defined value. Its public
+`formula_external_actions` ledger reports eleven invoking formula cells,
+eleven calls, three relevant formula-defined names, three `STOCKHISTORY`
+calls, and eight Cube calls. Changing only a private formula-defined Cube
+connection (SHA-256
+`ca7c236525ac677c968360b21cf2a77f8bab09e4cbdfd911b831c3174f54769e`)
+kept every public count fixed while emitting `FF064` with the private
+definition-material flag. Changing only a statically visible stock input
+(SHA-256
+`de6d3a630a25fdae0e6fa28e6f39b2638f73b6ff731b3aafa9bc3ce996b7a907`)
+kept the ledger equal and emitted `FF064` with a static-input count of one.
+
+The state-only candidate (SHA-256
+`a2991bb14ed0c0a8b47409104b091671d65d3373cb419c463985b1affe9a76d0`)
+adds an unrelated worksheet while retaining every stored provider call. It
+emitted no `FF064` or `FFP064` and passed the narrow policy with exit 0,
+demonstrating that FormulaFence does not simulate a provider refresh or infer
+an external result from workbook state. The suite separately covers direct
+calls, the entire Cube family, `_xlfn.` compatibility spelling, named chains,
+definition-only changes, static inputs, and native-name shadowing.
+
+Dedicated `FF064` / `FFP064` SARIF results and the profile excluded controlled
+formula-name identities, stock symbols, Cube connections, MDX expressions, and
+field/property text. Ordinary semantic and defined-name changes intentionally
+remain normal reviewer context, so that redaction claim is limited to the
+dedicated ledger and policy-facing results. No formula was evaluated and no
+market provider, Cube, connection, or external service was contacted during
+validation. The full suite passed with 527 tests.
+
+The staged `formulafence-0.77.0-py3-none-any.whl` (SHA-256
+`d6e4cfa72c8d4f87f3d76064e05781d2c134c23372433a315b2b7512554f7ce8`)
+was built from the release tree and installed with its declared dependencies
+into a fresh virtual environment. Its CLI returned `FormulaFence 0.77.0`; the
+definition candidate exited 1 with `FF064` / `FFP064`, while the state-only
+candidate exited 0 without either rule. The packaged profile retained the
+11 / 11 / 3 / 3 / 8 formula-cell, call, defined-name, `STOCKHISTORY`, and
+Cube-call counts; dedicated packaged SARIF results remained redacted.
+
 ## Native CELL and INFO environment-information boundary — 2026-07-26
 
 FormulaFence 0.76.0 was checked against Microsoft's [CELL function

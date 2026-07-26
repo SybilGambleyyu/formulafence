@@ -20,7 +20,33 @@ _DYNAMIC_REFERENCE_FUNCTIONS = {"INDIRECT", "OFFSET"}
 # or bind to a host-side data provider.  HYPERLINK also supports in-workbook
 # destinations, but its link location may be dynamically computed, so retain
 # every call as a reviewable action surface rather than evaluating arguments.
-_EXTERNAL_ACTION_FUNCTIONS = {"HYPERLINK", "WEBSERVICE", "IMAGE", "RTD"}
+#
+# ``STOCKHISTORY`` retrieves provider-backed market history.  The documented
+# Cube family can bind a stored formula to a workbook connection, an OLAP server,
+# or an offline cube.  Keep all seven Cube functions together: even helpers
+# such as ``CUBESETCOUNT`` carry a value whose semantics depend on a cube-set
+# chain, and splitting that family would create a misleading partial boundary.
+_EXTERNAL_ACTION_CUBE_FUNCTIONS = frozenset(
+    {
+        "CUBEKPIMEMBER",
+        "CUBEMEMBER",
+        "CUBEMEMBERPROPERTY",
+        "CUBERANKEDMEMBER",
+        "CUBESET",
+        "CUBESETCOUNT",
+        "CUBEVALUE",
+    }
+)
+_EXTERNAL_ACTION_FUNCTIONS = frozenset(
+    {
+        "HYPERLINK",
+        "WEBSERVICE",
+        "IMAGE",
+        "RTD",
+        "STOCKHISTORY",
+        *_EXTERNAL_ACTION_CUBE_FUNCTIONS,
+    }
+)
 # ``PY`` is intentionally separate from the remote-content/action ledger. Excel
 # stores its executable code in a workbook-level Python part, so callers need a
 # dedicated code boundary that can fingerprint both the formula and that part.

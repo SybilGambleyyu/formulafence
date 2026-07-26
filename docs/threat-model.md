@@ -544,28 +544,35 @@ review prompt, not proof of an error.
   definitions.
 - A formula can create a link without a stored worksheet `hyperlink` element,
   request data from an intranet or Internet service, render a URL-sourced image,
-  or bind a real-time provider. FormulaFence inventories stored `HYPERLINK`,
-  `WEBSERVICE`, `IMAGE`, and `RTD` calls (including `_xlfn.` compatibility
-  spellings) in cells, formula-defined names, and named `LAMBDA` bodies. It
+  bind a real-time provider, retrieve financial history, or query a stored Cube
+  connection. FormulaFence inventories stored `HYPERLINK`, `WEBSERVICE`,
+  `IMAGE`, `RTD`, `STOCKHISTORY`, and all documented Cube-family calls
+  (`CUBEKPIMEMBER`, `CUBEMEMBER`, `CUBEMEMBERPROPERTY`, `CUBERANKEDMEMBER`,
+  `CUBESET`, `CUBESETCOUNT`, and `CUBEVALUE`), including `_xlfn.` compatibility
+  spellings in cells, formula-defined names, and named `LAMBDA` bodies. It
   privately fingerprints cell, function-inventory, and relevant named-definition
   material. Public profiles and `FF064` details expose only action-cell,
-  formula-defined-name, and per-function counts, so an argument-only,
-  name-definition-only, or same-count retarget remains reviewable without
-  disclosing an endpoint, provider, formula, or location. A normal cell change
-  that reaches an invoking action formula through FormulaFence's static
-  dependency graph also emits `FF064`, covering a static source such as
-  `HYPERLINK(A1, ...)` without reading `A1` as an endpoint. Dynamic or
-  unresolved sources remain explicit formula-coverage limits.
+  formula-defined-name, `STOCKHISTORY`, and aggregate Cube-function counts, so
+  an argument-only, name-definition-only, connection/query-only, or same-count
+  retarget remains reviewable without disclosing an endpoint, market symbol,
+  provider, formula, query, or location. A normal cell change that reaches an
+  invoking action/provider formula through FormulaFence's static dependency
+  graph also emits `FF064`, covering static sources such as `HYPERLINK(A1, ...)`
+  or `STOCKHISTORY(A1, ...)` without reading `A1` as an endpoint or symbol.
+  Dynamic or unresolved sources remain explicit formula-coverage limits.
   `HYPERLINK` is deliberately included even when an argument appears internal:
   it can be dynamically calculated, and the ledger does not evaluate it to
   decide that. FormulaFence does **not** calculate a formula, resolve/open/fetch
   a destination, click/follow a link, authenticate, load a COM object, start an
-  RTD server, or execute a provider. A material change emits `FF064`; enable
+  RTD server, contact a market provider, query a Cube, or execute a provider. A
+  material change emits `FF064`; enable
   `no_formula_external_action_changes` for `FFP064`. This boundary follows
   Microsoft's [link guidance](https://support.microsoft.com/en-US/Excel/work-with-links-in-excel),
   [`WEBSERVICE` reference](https://support.microsoft.com/en-US/Excel/functions/webservice-function),
   [`IMAGE` reference](https://support.microsoft.com/en-us/excel/functions/image-function),
-  and [`RTD` reference](https://support.microsoft.com/en-us/excel/functions/rtd-function).
+  [`RTD` reference](https://support.microsoft.com/en-us/excel/functions/rtd-function),
+  [`STOCKHISTORY` reference](https://support.microsoft.com/en-us/office/stockhistory-function-1ac8b5b3-5f62-4d94-8ab8-7504ec7239a8),
+  and [`CUBESET` reference](https://support.microsoft.com/en-us/excel/functions/cubeset-function).
 - Python in Excel keeps executable source separately from its `PY` formula
   placeholder. FormulaFence recognizes stored `PY` spellings, privately
   fingerprints the documented workbook Python part, relationship, content type,

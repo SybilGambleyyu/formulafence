@@ -26,6 +26,7 @@ from openpyxl.utils.cell import column_index_from_string, get_column_letter, ran
 from openpyxl.utils.exceptions import InvalidFileException
 
 from formulafence.formulas import (
+    _EXTERNAL_ACTION_CUBE_FUNCTIONS,
     MAX_EXCEL_COLUMN,
     MAX_EXCEL_ROW,
     ParsedReference,
@@ -43843,6 +43844,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             webservice_function_count=formula_external_action_counts["WEBSERVICE"],
             image_function_count=formula_external_action_counts["IMAGE"],
             rtd_function_count=formula_external_action_counts["RTD"],
+            stockhistory_function_count=formula_external_action_counts["STOCKHISTORY"],
+            cube_function_count=sum(
+                formula_external_action_counts[function]
+                for function in _EXTERNAL_ACTION_CUBE_FUNCTIONS
+            ),
             action_signature=_private_external_data_signature(
                 tuple(sorted(formula_external_action_entries))
             ),

@@ -920,15 +920,17 @@ class ExternalRelationshipSnapshot:
 class FormulaExternalActionSnapshot:
     """Safe aggregate of formula calls that can cross workbook or host boundaries.
 
-    ``HYPERLINK`` can be in-workbook, while ``WEBSERVICE``, ``IMAGE``, and
-    ``RTD`` can use dynamic expressions or host-side providers.  FormulaFence
-    inventories the known action functions without evaluating an argument,
-    resolving a destination, requesting content, or starting an automation
-    server. Formula-defined names and named LAMBDAs can hold those calls too,
-    so their relevant definitions are retained in a separate private signature.
-    Private signatures retain cell and formula material so same-count endpoint
-    or provider changes remain visible without exposing them. Private
-    action-cell identities allow the diff to guard statically visible inputs.
+    ``HYPERLINK`` can be in-workbook, while ``WEBSERVICE``, ``IMAGE``, ``RTD``,
+    ``STOCKHISTORY``, and the Cube family can use dynamic expressions or
+    host-side data providers. FormulaFence inventories the known action and
+    provider functions without evaluating an argument, resolving a destination,
+    requesting content, querying a cube, or starting an automation server.
+    Formula-defined names and named LAMBDAs can hold those calls too, so their
+    relevant definitions are retained in a separate private signature. Private
+    signatures retain cell and formula material so same-count endpoint,
+    connection, query, or provider changes remain visible without exposing
+    them. Private action-cell identities allow the diff to guard statically
+    visible inputs.
     """
 
     formula_external_action_cell_count: int = 0
@@ -937,6 +939,8 @@ class FormulaExternalActionSnapshot:
     webservice_function_count: int = 0
     image_function_count: int = 0
     rtd_function_count: int = 0
+    stockhistory_function_count: int = 0
+    cube_function_count: int = 0
     action_signature: str | None = field(default=None, repr=False)
     definition_signature: str | None = field(default=None, repr=False)
     action_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
@@ -957,6 +961,8 @@ class FormulaExternalActionSnapshot:
             "webservice_function_count": self.webservice_function_count,
             "image_function_count": self.image_function_count,
             "rtd_function_count": self.rtd_function_count,
+            "stockhistory_function_count": self.stockhistory_function_count,
+            "cube_function_count": self.cube_function_count,
         }
 
     def profile_dict(self) -> dict[str, Any]:
@@ -4483,6 +4489,12 @@ class WorkbookSnapshot:
             ),
             "formula_rtd_function_count": (
                 self.formula_external_actions.rtd_function_count
+            ),
+            "formula_stockhistory_function_count": (
+                self.formula_external_actions.stockhistory_function_count
+            ),
+            "formula_cube_function_count": (
+                self.formula_external_actions.cube_function_count
             ),
             "has_formula_external_actions": self.formula_external_actions.present,
             "python_in_excel_part_count": self.python_in_excel.python_part_count,

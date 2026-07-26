@@ -212,6 +212,96 @@ def change_formula_external_action_input(path: Path) -> Path:
     return path
 
 
+def make_formula_external_data_provider_model(path: Path) -> Path:
+    """Create provider-backed formulas, including all documented Cube functions."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Formula external data-provider controls"
+    inputs["A2"] = "XNAS:PRIVATE-STOCK-BASELINE"
+    inputs["B2"] = (
+        '=_xlfn.STOCKHISTORY(A2,DATE(2024,1,1),DATE(2024,1,31),0,0,1)'
+    )
+    inputs["B3"] = (
+        '=CUBEVALUE("PRIVATE-CUBE-CONNECTION-BASELINE","[Measures].[PRIVATE-REVENUE]")'
+    )
+    inputs["B4"] = '=CUBEMEMBER("PRIVATE-CUBE-CONNECTION","[Date].[Calendar].&[2024]")'
+    inputs["B5"] = (
+        '=CUBEMEMBERPROPERTY("PRIVATE-CUBE-CONNECTION",B4,"PRIVATE-MEMBER-PROPERTY")'
+    )
+    inputs["B6"] = (
+        '=CUBESET("PRIVATE-CUBE-CONNECTION","[Product].[Category].Members",'
+        '"PRIVATE-CUBE-CAPTION")'
+    )
+    inputs["B7"] = '=CUBERANKEDMEMBER("PRIVATE-CUBE-CONNECTION",B6,1)'
+    inputs["B8"] = "=CUBESETCOUNT(B6)"
+    inputs["B9"] = '=CUBEKPIMEMBER("PRIVATE-CUBE-CONNECTION","PRIVATE-KPI",1)'
+    inputs["B10"] = "=FENCE.MARKET(A2)"
+    inputs["B11"] = "=FENCE.CHAIN(A2)"
+    inputs["B12"] = "=FENCE.CUBE"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.MARKET",
+            attr_text=(
+                '=LAMBDA(stock,_xlfn.STOCKHISTORY(stock,DATE(2024,1,1),'
+                "DATE(2024,1,31),0,0,1))"
+            ),
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.CHAIN",
+            attr_text="=LAMBDA(stock,FENCE.MARKET(stock))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.CUBE",
+            attr_text=(
+                '=CUBEVALUE("PRIVATE-NAMED-CUBE-CONNECTION-BASELINE",'
+                '"[Measures].[PRIVATE-NAMED-REVENUE]")'
+            ),
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_external_data_provider_target(path: Path) -> Path:
+    """Retarget one stored Cube connection without changing its call inventory."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["B3"] = (
+        '=CUBEVALUE("PRIVATE-CUBE-CONNECTION-CANDIDATE","[Measures].[PRIVATE-REVENUE]")'
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_external_data_provider_definition(path: Path) -> Path:
+    """Retarget a private formula-defined Cube query without moving callers."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.CUBE"]
+    if definition.attr_text != (
+        '=CUBEVALUE("PRIVATE-NAMED-CUBE-CONNECTION-BASELINE",'
+        '"[Measures].[PRIVATE-NAMED-REVENUE]")'
+    ):
+        raise ValueError("Fixture does not contain the expected named Cube query")
+    definition.attr_text = (
+        '=CUBEVALUE("PRIVATE-NAMED-CUBE-CONNECTION-CANDIDATE",'
+        '"[Measures].[PRIVATE-NAMED-REVENUE]")'
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_external_data_provider_input(path: Path) -> Path:
+    """Change a statically visible STOCKHISTORY input without editing a call."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A2"] = "XNAS:PRIVATE-STOCK-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_named_formula_external_action_model(path: Path) -> Path:
     """Create action calls reached through names and named LAMBDA bodies."""
     workbook = Workbook()

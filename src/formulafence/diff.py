@@ -2280,9 +2280,10 @@ def _formula_external_action_changes(
         "FF064",
         "high",
         (
-            "Formula external-action functions, a relevant formula-defined name, or a "
-            "statically visible input changed; a formula may now redirect a reviewer, "
-            "request content, or invoke a real-time data provider."
+            "Formula external-action or data-provider functions, a relevant "
+            "formula-defined name, or a statically visible input changed; a formula "
+            "may now redirect a reviewer, request content, query a cube, or invoke a "
+            "real-time data provider."
         ),
         details=details,
     )

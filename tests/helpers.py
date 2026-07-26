@@ -474,6 +474,107 @@ def change_named_office_custom_function_input(path: Path) -> Path:
     return path
 
 
+def make_unqualified_runtime_function_model(path: Path) -> Path:
+    """Create unknown bare calls without installing or invoking a provider.
+
+    The workbook deliberately contains only stored formula text. It exercises
+    the conservative candidate boundary while keeping a range of native and
+    workbook-defined calls nearby as non-candidate controls.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Unqualified runtime-function controls"
+    inputs["A9"] = "PRIVATE-RUNTIME-FUNCTION-INPUT-BASELINE"
+    inputs["A10"] = 45_000
+    inputs["B2"] = '=PRIVATEUDF(A9,"PRIVATE-RUNTIME-FUNCTION-QUERY-BASELINE")'
+    inputs["B3"] = "=RISKUDF(A9)"
+    inputs["B4"] = (
+        '=PRIVATEUDF(A9,"PRIVATE-RUNTIME-FUNCTION-SECOND-BASELINE")+RISKUDF(A9)'
+    )
+    inputs["B5"] = "=SUM(A10)"
+    inputs["B6"] = "=XLOOKUP(A10,A10,A10)"
+    inputs["B7"] = "=VSTACK(A10,A10)"
+    inputs["B8"] = '=FIELDVALUE(A10,"Price")'
+    inputs["B9"] = "=LOCALFUN(A9)"
+    inputs["B10"] = "=LET(LOCALUDF,LAMBDA(value,value),LOCALUDF(A9))"
+    workbook.defined_names.add(
+        DefinedName("LOCALFUN", attr_text="=LAMBDA(value,value)")
+    )
+    workbook.save(path)
+    return path
+
+
+def change_unqualified_runtime_function_call(path: Path) -> Path:
+    """Rewrite an unknown callable without changing public candidate counts."""
+    workbook = load_workbook(path)
+    formula = workbook["Inputs"]["B2"].value
+    if not isinstance(formula, str) or "PRIVATEUDF" not in formula:
+        raise ValueError("Fixture does not contain the expected runtime function")
+    workbook["Inputs"]["B2"] = formula.replace("PRIVATEUDF", "UPDATEDUDF")
+    workbook.save(path)
+    return path
+
+
+def change_unqualified_runtime_function_input(path: Path) -> Path:
+    """Change a static source without rewriting an unknown callable."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-RUNTIME-FUNCTION-INPUT-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
+def make_named_unqualified_runtime_function_model(path: Path) -> Path:
+    """Create unknown bare calls reached through names and named LAMBDAs."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Named unqualified runtime-function controls"
+    inputs["A9"] = "PRIVATE-NAMED-RUNTIME-FUNCTION-INPUT-BASELINE"
+    inputs["B2"] = "=FENCE.WRAPPER(A9)"
+    inputs["B3"] = "=FENCE.DIRECT"
+    inputs["B4"] = "=FENCE.CHAIN(A9)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.WRAPPER",
+            attr_text="=LAMBDA(value,PRIVATEUDF(value)+PRIVATEUDF(value))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.CHAIN",
+            attr_text="=LAMBDA(value,FENCE.WRAPPER(value))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.DIRECT",
+            attr_text="=PRIVATEUDF(Inputs!$A$9)",
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_named_unqualified_runtime_function_definition(path: Path) -> Path:
+    """Rewrite a hidden unknown call without moving its callers."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.WRAPPER"]
+    if definition.attr_text != "=LAMBDA(value,PRIVATEUDF(value)+PRIVATEUDF(value))":
+        raise ValueError("Fixture does not contain the expected named runtime function")
+    definition.attr_text = "=LAMBDA(value,UPDATEDUDF(value)+UPDATEDUDF(value))"
+    workbook.save(path)
+    return path
+
+
+def change_named_unqualified_runtime_function_input(path: Path) -> Path:
+    """Change a static source used through named runtime-function definitions."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-NAMED-RUNTIME-FUNCTION-INPUT-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_worksheet_code_resource_registration_model(path: Path) -> Path:
     """Create inert stored ``REGISTER.ID`` expressions for boundary tests.
 

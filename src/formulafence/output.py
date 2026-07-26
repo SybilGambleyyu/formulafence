@@ -126,6 +126,12 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['namespaced_custom_function_call_count']} / "
             f"{workbook['namespaced_custom_function_namespace_count']}"
         ),
+        (
+            "- **Unqualified runtime-function formula cells / calls / named definitions:** "
+            f"{workbook['unqualified_runtime_function_formula_cell_count']} / "
+            f"{workbook['unqualified_runtime_function_call_count']} / "
+            f"{workbook['unqualified_runtime_function_defined_name_count']}"
+        ),
         f"- **XLM macro-sheet parts:** {workbook['xlm_macro_sheet_count']}",
         (
             "- **XLM macro-sheet formula cells:** "
@@ -575,6 +581,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     formula_dde_links = profile["formula_dde_links"]
     python_in_excel = profile["python_in_excel"]
     office_custom_functions = profile["office_custom_functions"]
+    unqualified_runtime_functions = profile["unqualified_runtime_functions"]
     worksheet_code_resource_registrations = profile[
         "worksheet_code_resource_registrations"
     ]
@@ -1056,6 +1063,41 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     "A matching call is not proof that an Office Add-in is installed or "
                     "runnable: its manifest, code, and runtime are outside the workbook. "
                     "Unqualified VBA, COM, and XLL UDF calls are outside this boundary."
+                ),
+            ]
+        )
+    if unqualified_runtime_functions["present"]:
+        runtime_formula_cell_count = unqualified_runtime_functions[
+            "unqualified_runtime_function_formula_cell_count"
+        ]
+        runtime_call_count = unqualified_runtime_functions[
+            "unqualified_runtime_function_call_count"
+        ]
+        runtime_definition_count = unqualified_runtime_functions[
+            "unqualified_runtime_function_defined_name_count"
+        ]
+        lines.extend(
+            [
+                "",
+                "## Unqualified runtime-function candidates",
+                "",
+                (
+                    "- **Formula cells / calls / relevant named definitions:** "
+                    f"{runtime_formula_cell_count} / {runtime_call_count} / "
+                    f"{runtime_definition_count}"
+                ),
+                (
+                    "FormulaFence inventories bare callable identifiers that are not "
+                    "known native Excel functions or workbook-defined names, then "
+                    "propagates candidates through formula-defined names and named "
+                    "LAMBDAs. Candidate names, cells, formulas, and arguments are "
+                    "compared privately and intentionally omitted."
+                ),
+                (
+                    "A candidate is not proof that any runtime is installed or can run: "
+                    "it may resolve to VBA, COM/Automation, an XLL, or another "
+                    "registered provider. FormulaFence does not evaluate formulas, "
+                    "resolve a provider, load code, or inspect the host environment."
                 ),
             ]
         )

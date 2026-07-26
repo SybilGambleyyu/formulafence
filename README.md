@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.81.0/formulafence-0.81.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.82.0/formulafence-0.82.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -67,7 +67,7 @@ readability and pin to an immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.81.0
+  uses: SybilGambleyyu/formulafence@v0.82.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -143,6 +143,7 @@ rules:
   no_formula_dde_link_changes: true
   no_python_in_excel_changes: true
   no_office_custom_function_changes: true
+  no_unqualified_runtime_function_changes: true
   no_worksheet_code_resource_registration_changes: true
   no_formula_defined_xlm_registration_changes: true
   no_formula_defined_xlm_evaluation_changes: true
@@ -478,8 +479,9 @@ candidate rather than proof that an add-in is installed or runnable.
 
 The direct-call classifier accepts only a namespaced callable that is not a
 known native dotted Excel function or a workbook-defined name. It excludes
-OOXML `_xlfn.` / `_xlws.` compatibility forms and does not try to classify
-unqualified VBA, COM, or XLL UDF calls. FormulaFence separately propagates a
+OOXML `_xlfn.` / `_xlws.` compatibility forms. Unqualified VBA, COM, and XLL
+UDF-shaped calls are intentionally handled by the separate `FF075` boundary.
+FormulaFence separately propagates a
 candidate stored inside a formula-defined name or named `LAMBDA` body to the
 worksheet formulas that invoke that definition. Profiles and `FF066`/`FFP066`
 details show only formula-cell, call, and namespace counts. Candidate names,
@@ -497,6 +499,44 @@ reviewer context; it is not a redacted add-in ledger. Enable
 follows Microsoft's [custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview),
 [tutorial](https://learn.microsoft.com/en-us/office/dev/add-ins/tutorials/excel-tutorial-create-custom-functions),
 and [external-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).
+
+FormulaFence also inventories **unqualified runtime-function candidates**.
+Microsoft documents that installed add-ins can expose user-defined and
+Automation functions, that VBA custom functions can be made available through
+an add-in, and that registered XLL worksheet functions can be called anywhere
+a built-in function can be called. A normal workbook formula does not identify
+which provider—if any—will resolve a bare unknown call, so FormulaFence treats
+it as a review candidate rather than proof that code exists, is trusted, or can
+run.
+
+The classifier accepts only a bare identifier such as `=MYUDF(A1)`, excludes
+workbook-defined names and local `LET`/`LAMBDA` bindings, and uses a pinned
+catalogue of native Excel function spellings so ordinary calls such as `SUM`,
+`XLOOKUP`, `VSTACK`, `FIELDVALUE`, and `PY` are not candidates. Qualified
+namespaced calls remain under `FF066`; direct `REGISTER.ID` has its dedicated
+`FF067` ledger. Candidate calls stored inside formula-defined names and named
+`LAMBDA` bodies are propagated to their invoking formulas. The native catalogue
+is intentionally versioned with FormulaFence rather than inherited from a
+third-party parser, so a newly introduced Excel function may be conservatively
+reported until its spelling is added in a FormulaFence release.
+
+A stored candidate definition is also compared even if no worksheet formula
+currently invokes it. This catches dormant runtime bindings without pretending
+that they are active.
+
+Profiles and `FF075`/`FFP075` details expose only formula-cell, call, and
+relevant formula-defined-name counts. Candidate names, formula text, arguments,
+provider identities, and locations stay in private signatures; same-count call
+or definition changes remain reviewable. `FF075` also covers an ordinary cell
+edit that statically reaches a candidate. FormulaFence does not evaluate a
+formula, resolve or load VBA, COM/Automation, XLL, or any registered provider,
+inspect host trust settings, or execute code. Dynamic and unresolved inputs
+remain explicit coverage limits. Enable
+`no_unqualified_runtime_function_changes` to block this boundary in CI. This
+scope follows Microsoft's [native function catalogue](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188),
+[installed UDF guidance](https://support.microsoft.com/en-us/excel/user-defined-functions-that-are-installed-with-add-ins-reference),
+[VBA custom-function guidance](https://support.microsoft.com/en-us/excel/create-custom-functions-in-excel),
+and [XLL registration/call guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/accessing-xll-code-in-excel).
 
 FormulaFence separately inventories **worksheet code-resource registrations**
 through `REGISTER.ID`. Microsoft's [function reference](https://support.microsoft.com/en-us/office/register-id-function-f8f0af0f-fd66-4704-a0f2-87b27b175b50)

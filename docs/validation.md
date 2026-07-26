@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Unqualified runtime-function candidate boundary — 2026-07-26
+
+FormulaFence 0.82.0 was checked against Microsoft's [alphabetical Excel
+function catalogue](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188),
+[installed UDF reference](https://support.microsoft.com/en-us/excel/user-defined-functions-that-are-installed-with-add-ins-reference),
+[VBA custom-function guidance](https://support.microsoft.com/en-us/excel/create-custom-functions-in-excel),
+and [XLL registration/call guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/accessing-xll-code-in-excel).
+Those sources establish that a bare worksheet function can be supplied by an
+installed add-in, VBA, or a registered XLL, while the stored formula alone does
+not identify its provider or prove it can run.
+
+Controlled `.xlsx` fixtures were generated without opening Excel. The direct
+fixture had three candidate formula cells and four bare calls, alongside native
+`SUM`, `XLOOKUP`, `VSTACK`, `FIELDVALUE`, `PY`, a workbook-defined `LAMBDA`, and
+a local `LET`/`LAMBDA` binding as exclusion controls. Replacing one private
+candidate name preserved the public `3 / 4 / 0` formula-cell/call/definition
+counts while emitting `FF075`; changing only a static input emitted `FF075`
+with a static-input count of one. The named fixture exercised a formula-defined
+value, a named `LAMBDA`, and a nested named `LAMBDA`, producing three invoking
+formula cells, five calls, and three relevant definitions. Same-count hidden
+definition changes and static inputs were separately guarded. Recursive and
+sheet-local named-LAMBDA tests verified cycle safety and local precedence. An
+uninvoked stored definition remained independently reviewable as `0 / 0 / 1`
+without exposing its candidate name.
+
+The formula parser tests also verify that namespaced calls stay under `FF066`,
+documented native calls do not become generic candidates, and a current
+openpyxl native-function catalogue is a subset of FormulaFence's pinned
+allowlist; FormulaFence does not import that mutable catalogue at runtime. The
+public profile, Markdown, `FF075` details, `FFP075` policy result, and SARIF
+result were checked for all controlled candidate names and private input/query
+values and contained none. The full suite passed **569 tests in 80.99 seconds**.
+
 ## GitHub Action execution boundary — 2026-07-26
 
 FormulaFence 0.81.0 was exercised as the root composite GitHub Action, rather

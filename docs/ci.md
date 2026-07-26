@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.81.0
+        uses: SybilGambleyyu/formulafence@v0.82.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -83,7 +83,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.81.0/formulafence-0.81.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.82.0/formulafence-0.82.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

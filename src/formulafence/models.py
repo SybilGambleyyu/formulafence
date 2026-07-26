@@ -1103,6 +1103,51 @@ class OfficeCustomFunctionSnapshot:
 
 
 @dataclass(frozen=True)
+class UnqualifiedRuntimeFunctionSnapshot:
+    """Private ledger for unknown bare worksheet-call candidates.
+
+    Excel can bind an unqualified function token to a VBA UDF, COM/Automation
+    add-in, XLL, or another registered runtime. FormulaFence cannot establish
+    which provider, if any, would resolve the call, so the public model keeps
+    only aggregate counts. Private signatures retain the candidate formula and
+    relevant formula-defined-name chain for comparison; cell identities support
+    static-input guarding without publishing names, formulas, or arguments.
+    """
+
+    unqualified_runtime_function_formula_cell_count: int = 0
+    unqualified_runtime_function_call_count: int = 0
+    unqualified_runtime_function_defined_name_count: int = 0
+    call_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    call_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.unqualified_runtime_function_formula_cell_count
+            or self.unqualified_runtime_function_defined_name_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate candidate counts without formula material."""
+        return {
+            "present": self.present,
+            "unqualified_runtime_function_formula_cell_count": (
+                self.unqualified_runtime_function_formula_cell_count
+            ),
+            "unqualified_runtime_function_call_count": (
+                self.unqualified_runtime_function_call_count
+            ),
+            "unqualified_runtime_function_defined_name_count": (
+                self.unqualified_runtime_function_defined_name_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class WorksheetCodeResourceRegistrationSnapshot:
     """Private ledger for stored worksheet/formula-defined ``REGISTER.ID`` calls.
 
@@ -4100,6 +4145,9 @@ class WorkbookSnapshot:
     office_custom_functions: OfficeCustomFunctionSnapshot = field(
         default_factory=OfficeCustomFunctionSnapshot
     )
+    unqualified_runtime_functions: UnqualifiedRuntimeFunctionSnapshot = field(
+        default_factory=UnqualifiedRuntimeFunctionSnapshot
+    )
     worksheet_code_resource_registrations: WorksheetCodeResourceRegistrationSnapshot = (
         field(default_factory=WorksheetCodeResourceRegistrationSnapshot)
     )
@@ -4630,6 +4678,18 @@ class WorkbookSnapshot:
             ),
             "has_namespaced_custom_function_calls": (
                 self.office_custom_functions.present
+            ),
+            "unqualified_runtime_function_formula_cell_count": (
+                self.unqualified_runtime_functions.unqualified_runtime_function_formula_cell_count
+            ),
+            "unqualified_runtime_function_call_count": (
+                self.unqualified_runtime_functions.unqualified_runtime_function_call_count
+            ),
+            "unqualified_runtime_function_defined_name_count": (
+                self.unqualified_runtime_functions.unqualified_runtime_function_defined_name_count
+            ),
+            "has_unqualified_runtime_function_calls": (
+                self.unqualified_runtime_functions.present
             ),
             "worksheet_code_resource_registration_formula_cell_count": (
                 self.worksheet_code_resource_registrations.registration_formula_cell_count

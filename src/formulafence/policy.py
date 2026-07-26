@@ -73,6 +73,7 @@ _RULE_FIELDS = {
     "no_formula_dde_link_changes",
     "no_python_in_excel_changes",
     "no_office_custom_function_changes",
+    "no_unqualified_runtime_function_changes",
     "no_worksheet_code_resource_registration_changes",
     "no_formula_defined_xlm_registration_changes",
     "no_formula_defined_xlm_evaluation_changes",
@@ -171,6 +172,7 @@ class Policy:
     no_formula_dde_link_changes: bool = False
     no_python_in_excel_changes: bool = False
     no_office_custom_function_changes: bool = False
+    no_unqualified_runtime_function_changes: bool = False
     no_worksheet_code_resource_registration_changes: bool = False
     no_formula_defined_xlm_registration_changes: bool = False
     no_formula_defined_xlm_evaluation_changes: bool = False
@@ -251,6 +253,7 @@ rules:
   no_formula_dde_link_changes: true
   no_python_in_excel_changes: true
   no_office_custom_function_changes: true
+  no_unqualified_runtime_function_changes: true
   no_worksheet_code_resource_registration_changes: true
   no_formula_defined_xlm_registration_changes: true
   no_formula_defined_xlm_evaluation_changes: true
@@ -468,6 +471,9 @@ def parse_policy(data: object) -> Policy:
         ),
         no_office_custom_function_changes=_boolean_rule(
             rules, "no_office_custom_function_changes"
+        ),
+        no_unqualified_runtime_function_changes=_boolean_rule(
+            rules, "no_unqualified_runtime_function_changes"
         ),
         no_worksheet_code_resource_registration_changes=_boolean_rule(
             rules, "no_worksheet_code_resource_registration_changes"
@@ -796,6 +802,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                         "Policy forbids namespaced Office custom-function "
                         "candidate changes."
                     ),
+                    details=finding.details,
+                )
+            )
+    if policy.no_unqualified_runtime_function_changes:
+        for finding in _rule_triggered(report, "FF075"):
+            violations.append(
+                Finding(
+                    "FFP075",
+                    "high",
+                    "Policy forbids unqualified runtime-function candidate changes.",
                     details=finding.details,
                 )
             )

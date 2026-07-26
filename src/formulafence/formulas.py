@@ -222,6 +222,70 @@ _EXCEL_DOTTED_FUNCTIONS = {
     "Z.TEST",
 }
 
+# A bare formula call that is not a workbook-defined LAMBDA can be resolved by
+# Excel through VBA, a COM/Automation add-in, an XLL, or another registered
+# runtime.  That is a useful review surface, but classifying ordinary native
+# functions as candidates would make the boundary unusable.  Keep a stable
+# snapshot rather than importing a third-party runtime catalog: Microsoft’s
+# alphabetical worksheet-function reference is the primary source, with the
+# formula-serialization/runtime-only names added explicitly below.  The source
+# was reviewed on 2026-07-26:
+# https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188
+#
+# Dotted native functions are intentionally absent because the classifier below
+# accepts bare identifiers only.  ``PY`` is listed separately because its own
+# Microsoft reference documents a formula spelling that is not currently
+# present in the alphabetical index. ``SINGLE`` and ``ANCHORARRAY`` are the
+# OOXML-compatible function spellings used to serialize implicit intersection
+# and spilled-array references; neither is a runtime-function candidate. The
+# selected bare XLM spellings below are already handled by dedicated stored
+# definition boundaries, so they are excluded instead of producing a duplicate
+# generic UDF signal.
+_EXCEL_UNQUALIFIED_NATIVE_FUNCTIONS = frozenset(
+    """
+    ABS ACCRINT ACCRINTM ACOS ACOSH ACOT ACOTH ADDRESS AGGREGATE AMORDEGRC AMORLINC AND
+    ARABIC AREAS ARRAYTOTEXT ASC ASIN ASINH ATAN ATAN2 ATANH AVEDEV AVERAGE AVERAGEA
+    AVERAGEIF AVERAGEIFS BAHTTEXT BASE BESSELI BESSELJ BESSELK BESSELY BETADIST BETAINV
+    BIN2DEC BIN2HEX BIN2OCT BINOMDIST BITAND BITLSHIFT BITOR BITRSHIFT BITXOR BYCOL BYROW
+    CALL CEILING CELL CHAR CHIDIST CHIINV CHITEST CHOOSE CHOOSECOLS CHOOSEROWS CLEAN CODE
+    COLUMN COLUMNS COMBIN COMBINA COMPLEX CONCAT CONCATENATE CONFIDENCE CONVERT COPILOT
+    CORREL COS COSH COT COTH COUNT COUNTA COUNTBLANK COUNTIF COUNTIFS COUPDAYBS COUPDAYS
+    COUPDAYSNC COUPNCD COUPNUM COUPPCD COVAR CRITBINOM CSC CSCH CUBEKPIMEMBER CUBEMEMBER
+    CUBEMEMBERPROPERTY CUBERANKEDMEMBER CUBESET CUBESETCOUNT CUBEVALUE CUMIPMT CUMPRINC
+    DATE DATEDIF DATEVALUE DAVERAGE DAY DAYS DAYS360 DB DBCS DCOUNT DCOUNTA DDB DEC2BIN
+    DEC2HEX DEC2OCT DECIMAL DEGREES DELTA DETECTLANGUAGE DEVSQ DGET DISC DMAX DMIN DOLLAR
+    DOLLARDE DOLLARFR DPRODUCT DROP DSTDEV DSTDEVP DSUM DURATION DVAR DVARP EDATE EFFECT
+    ENCODEURL EOMONTH ERF ERFC EUROCONVERT EVEN EXACT EXP EXPAND EXPONDIST FACT FACTDOUBLE
+    FALSE FDIST FIELDVALUE FILTER FILTERXML FIND FINDB FINV FISHER FISHERINV FIXED FLOOR
+    FORECAST FORMULATEXT FREQUENCY FTEST FV FVSCHEDULE GAMMA GAMMADIST GAMMAINV GAMMALN
+    GAUSS GCD GEOMEAN GESTEP GETPIVOTDATA GROUPBY GROWTH HARMEAN HEX2BIN HEX2DEC HEX2OCT
+    HLOOKUP HOUR HSTACK HYPERLINK HYPGEOMDIST IF IFERROR IFNA IFS IMABS IMAGE IMAGINARY
+    IMARGUMENT IMCONJUGATE IMCOS IMCOSH IMCOT IMCSC IMCSCH IMDIV IMEXP IMLN IMLOG10 IMLOG2
+    IMPOWER IMPRODUCT IMREAL IMSEC IMSECH IMSIN IMSINH IMSQRT IMSUB IMSUM IMTAN INDEX
+    INDIRECT INFO INT INTERCEPT INTRATE IPMT IRR ISBLANK ISERR ISERROR ISEVEN ISFORMULA
+    ISLOGICAL ISNA ISNONTEXT ISNUMBER ISODD ISOMITTED ISOWEEKNUM ISPMT ISREF ISTEXT JIS
+    KURT LAMBDA LARGE LCM LEFT LEFTB LEN LENB LET LINEST LN LOG LOG10 LOGEST LOGINV
+    LOGNORMDIST LOOKUP LOWER MAKEARRAY MAP MATCH MAX MAXA MAXIFS MDETERM MDURATION MEDIAN
+    MID MIDB MIN MINA MINIFS MINUTE MINVERSE MIRR MMULT MOD MODE MONTH MROUND MULTINOMIAL
+    MUNIT N NA NEGBINOMDIST NETWORKDAYS NOMINAL NORMDIST NORMINV NORMSDIST NORMSINV NOT
+    NOW NPER NPV NUMBERVALUE OCT2BIN OCT2DEC OCT2HEX ODD ODDFPRICE ODDFYIELD ODDLPRICE
+    ODDLYIELD OFFSET OR PDURATION PEARSON PERCENTILE PERCENTOF PERCENTRANK PERMUT
+    PERMUTATIONA PHI PHONETIC PI PIVOTBY PMT POISSON POWER PPMT PRICE PRICEDISC PRICEMAT
+    PROB PRODUCT PROPER PV QUARTILE QUOTIENT RADIANS RAND RANDARRAY RANDBETWEEN RANK RATE
+    RECEIVED REDUCE REGEXEXTRACT REGEXREPLACE REGEXTEST REPLACE REPLACEB REPT RIGHT RIGHTB
+    ROMAN ROUND ROUNDDOWN ROUNDUP ROW ROWS RRI RSQ RTD SCAN SEARCH SEARCHB SEC SECH SECOND
+    SEQUENCE SERIESSUM SHEET SHEETS SIGN SIN SINH SKEW SLN SLOPE SMALL SORT SORTBY SQRT
+    SQRTPI STANDARDIZE STDEV STDEVA STDEVP STDEVPA STEYX STOCKHISTORY SUBSTITUTE SUBTOTAL
+    SUM SUMIF SUMIFS SUMPRODUCT SUMSQ SUMX2MY2 SUMX2PY2 SUMXMY2 SWITCH SYD T TAKE TAN TANH
+    TBILLEQ TBILLPRICE TBILLYIELD TDIST TEXT TEXTAFTER TEXTBEFORE TEXTJOIN TEXTSPLIT TIME
+    TIMEVALUE TINV TOCOL TODAY TOROW TRANSLATE TRANSPOSE TREND TRIM TRIMMEAN TRIMRANGE TRUE
+    TRUNC TTEST TYPE UNICHAR UNICODE UNIQUE UPPER VALUE VALUETOTEXT VAR VARA VARP VARPA VDB
+    VLOOKUP VSTACK WEBSERVICE WEEKDAY WEEKNUM WEIBULL WORKDAY WRAPCOLS WRAPROWS XIRR
+    XLOOKUP XMATCH XNPV XOR YEAR YEARFRAC YIELD YIELDDISC YIELDMAT ZTEST
+    PY SINGLE ANCHORARRAY EVALUATE EXEC EXECUTE REGISTER RUN SEND
+    """.split()
+)
+
 _CELL_REFERENCE = re.compile(
     r"(?<![A-Z0-9_])(?P<column_absolute>\$?)(?P<column>[A-Z]{1,3})"
     r"(?P<row_absolute>\$?)(?P<row>[1-9][0-9]*)(?![A-Z0-9_])",
@@ -297,6 +361,7 @@ class FormulaInspection:
     formula_dde_link_markers: tuple[str, ...] = ()
     python_functions: tuple[str, ...] = ()
     office_custom_function_candidates: tuple[str, ...] = ()
+    unqualified_runtime_function_candidates: tuple[str, ...] = ()
     worksheet_code_resource_registration_functions: tuple[str, ...] = ()
     formula_defined_xlm_registration_functions: tuple[str, ...] = ()
     formula_defined_xlm_evaluation_functions: tuple[str, ...] = ()
@@ -1220,6 +1285,30 @@ def _office_custom_function_candidate(token: object) -> str | None:
     return upper_candidate
 
 
+def _unqualified_runtime_function_candidate(token: object) -> str | None:
+    """Return a bare callable that may resolve through an Excel runtime.
+
+    A stored formula cannot prove whether an unknown bare identifier resolves
+    to a VBA UDF, COM/Automation add-in, XLL, or another registered runtime.
+    This classifier is therefore deliberately lexical and conservative: a
+    documented native function, a qualified/dotted spelling, and every
+    non-identifier are outside the candidate boundary. Callers additionally
+    suppress workbook-defined names and local LET/LAMBDA bindings before using
+    this result.
+    """
+    raw_name = str(getattr(token, "value", "")).rstrip("(").strip()
+    candidate = raw_name.removeprefix("@")
+    upper_candidate = candidate.upper()
+    if (
+        not candidate
+        or "." in candidate
+        or not _LOCAL_IDENTIFIER.fullmatch(candidate)
+        or upper_candidate in _EXCEL_UNQUALIFIED_NATIVE_FUNCTIONS
+    ):
+        return None
+    return upper_candidate
+
+
 def _worksheet_code_resource_registration_function(token: object) -> str | None:
     """Return a documented worksheet code-resource registration call, if present.
 
@@ -1856,6 +1945,12 @@ def inspect_formula(
     named_function_custom_function_candidates: (
         Mapping[str, Sequence[str]] | None
     ) = None,
+    named_unqualified_runtime_function_candidates: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
+    named_function_unqualified_runtime_function_candidates: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
     named_formula_external_action_functions: (
         Mapping[str, Sequence[str]] | None
     ) = None,
@@ -1947,6 +2042,12 @@ def inspect_formula(
     resolved_named_function_custom_functions = (
         named_function_custom_function_candidates or {}
     )
+    resolved_named_unqualified_runtime_functions = (
+        named_unqualified_runtime_function_candidates or {}
+    )
+    resolved_named_function_unqualified_runtime_functions = (
+        named_function_unqualified_runtime_function_candidates or {}
+    )
     resolved_named_formula_external_actions = (
         named_formula_external_action_functions or {}
     )
@@ -2007,6 +2108,7 @@ def inspect_formula(
     formula_dde_link_markers: list[str] = list(direct_formula_dde_link_markers)
     python_functions: list[str] = []
     office_custom_function_candidates: list[str] = []
+    unqualified_runtime_function_candidates: list[str] = []
     worksheet_code_resource_registration_functions: list[str] = []
     formula_defined_xlm_registration_functions: list[str] = []
     formula_defined_xlm_evaluation_functions: list[str] = []
@@ -2067,6 +2169,9 @@ def inspect_formula(
                 office_custom_function_candidates.extend(
                     resolved_named_custom_functions.get(named_key, ())
                 )
+                unqualified_runtime_function_candidates.extend(
+                    resolved_named_unqualified_runtime_functions.get(named_key, ())
+                )
                 worksheet_code_resource_registration_functions.extend(
                     resolved_named_worksheet_code_resource_registrations.get(
                         named_key, ()
@@ -2106,6 +2211,12 @@ def inspect_formula(
                 formula_dde_link_markers.extend(named_formula_dde_links)
             if named_custom_functions := resolved_named_custom_functions.get(named_key):
                 office_custom_function_candidates.extend(named_custom_functions)
+            if named_unqualified_runtime_functions := (
+                resolved_named_unqualified_runtime_functions.get(named_key)
+            ):
+                unqualified_runtime_function_candidates.extend(
+                    named_unqualified_runtime_functions
+                )
             if (
                 named_worksheet_code_resource_registrations := (
                     resolved_named_worksheet_code_resource_registrations.get(named_key)
@@ -2192,6 +2303,11 @@ def inspect_formula(
                     office_custom_function_candidates.extend(
                         resolved_named_function_custom_functions.get(function_key, ())
                     )
+                    unqualified_runtime_function_candidates.extend(
+                        resolved_named_function_unqualified_runtime_functions.get(
+                            function_key, ()
+                        )
+                    )
                     worksheet_code_resource_registration_functions.extend(
                         resolved_named_function_worksheet_code_resource_registrations.get(
                             function_key, ()
@@ -2238,6 +2354,19 @@ def inspect_formula(
                     is not None
                 ):
                     office_custom_function_candidates.append(custom_function_candidate)
+                if (
+                    function_key not in resolved_names
+                    and function_key not in resolved_named_functions
+                    and (
+                        unqualified_runtime_function_candidate := (
+                            _unqualified_runtime_function_candidate(token)
+                        )
+                    )
+                    is not None
+                ):
+                    unqualified_runtime_function_candidates.append(
+                        unqualified_runtime_function_candidate
+                    )
                 if (
                     function_key not in resolved_names
                     and function_key not in resolved_named_functions
@@ -2374,6 +2503,9 @@ def inspect_formula(
         formula_dde_link_markers=tuple(formula_dde_link_markers),
         python_functions=tuple(python_functions),
         office_custom_function_candidates=tuple(office_custom_function_candidates),
+        unqualified_runtime_function_candidates=tuple(
+            unqualified_runtime_function_candidates
+        ),
         worksheet_code_resource_registration_functions=tuple(
             worksheet_code_resource_registration_functions
         ),

@@ -59,6 +59,8 @@ from .helpers import (
     change_slicer_timeline_filter_material,
     change_table_style_control,
     change_threaded_comment_reply,
+    change_unqualified_runtime_function_call,
+    change_unqualified_runtime_function_input,
     change_what_if_data_table_input,
     change_workbook_theme_colour,
     change_worksheet_code_resource_registration_call,
@@ -129,6 +131,7 @@ from .helpers import (
     make_table_style_control_model,
     make_threaded_comment_model,
     make_three_d_model,
+    make_unqualified_runtime_function_model,
     make_what_if_data_table_model,
     make_workbook_theme_image_model,
     make_worksheet_code_resource_registration_model,
@@ -512,6 +515,34 @@ def test_policy_can_block_office_custom_function_static_input_changes(tmp_path) 
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP066"}
+
+
+def test_policy_can_block_unqualified_runtime_function_changes(tmp_path) -> None:
+    baseline = make_unqualified_runtime_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_unqualified_runtime_function_model(tmp_path / "candidate.xlsx")
+    change_unqualified_runtime_function_call(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_unqualified_runtime_function_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP075"}
+
+
+def test_policy_can_block_unqualified_runtime_function_static_input_changes(
+    tmp_path,
+) -> None:
+    baseline = make_unqualified_runtime_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_unqualified_runtime_function_model(tmp_path / "candidate.xlsx")
+    change_unqualified_runtime_function_input(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_unqualified_runtime_function_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP075"}
 
 
 def test_policy_can_block_named_office_custom_function_changes(tmp_path) -> None:

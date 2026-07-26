@@ -102,6 +102,7 @@ from formulafence.models import (
     TableSnapshot,
     TableStyleControlsSnapshot,
     ThreadedCommentSnapshot,
+    UnqualifiedRuntimeFunctionSnapshot,
     WhatIfDataTableSnapshot,
     WorkbookLoadError,
     WorkbookProtectionSnapshot,
@@ -41826,6 +41827,10 @@ def _named_reference_maps(
         identity: f"FORMULAFENCE_OFFICE_CUSTOM_MARKER_{index}"
         for index, identity in enumerate(definition_identities)
     }
+    unqualified_runtime_function_markers = {
+        identity: f"FORMULAFENCE_UNQUALIFIED_RUNTIME_FUNCTION_MARKER_{index}"
+        for index, identity in enumerate(definition_identities)
+    }
     code_resource_registration_markers = {
         identity: f"FORMULAFENCE_CODE_RESOURCE_REGISTRATION_MARKER_{index}"
         for index, identity in enumerate(definition_identities)
@@ -41863,6 +41868,7 @@ def _named_reference_maps(
             external_action_markers,
             formula_dde_link_markers,
             custom_function_markers,
+            unqualified_runtime_function_markers,
             code_resource_registration_markers,
             formula_defined_xlm_registration_markers,
             formula_defined_xlm_evaluation_markers,
@@ -41915,6 +41921,9 @@ def _named_reference_maps(
     ] = {}
     direct_formula_dde_links: dict[tuple[str | None, str], tuple[str, ...]] = {}
     direct_custom_function_candidates: dict[tuple[str | None, str], tuple[str, ...]] = {}
+    direct_unqualified_runtime_function_candidates: dict[
+        tuple[str | None, str], tuple[str, ...]
+    ] = {}
     direct_code_resource_registration_functions: dict[
         tuple[str | None, str], tuple[str, ...]
     ] = {}
@@ -41967,6 +41976,14 @@ def _named_reference_maps(
             ),
             named_function_custom_function_candidates=visible_named_function_markers(
                 definition.scope, custom_function_markers
+            ),
+            named_unqualified_runtime_function_candidates=visible_named_markers(
+                definition.scope, unqualified_runtime_function_markers
+            ),
+            named_function_unqualified_runtime_function_candidates=(
+                visible_named_function_markers(
+                    definition.scope, unqualified_runtime_function_markers
+                )
             ),
             named_worksheet_code_resource_registration_functions=(
                 visible_named_markers(
@@ -42052,6 +42069,11 @@ def _named_reference_maps(
             for candidate in inspection.office_custom_function_candidates
             if candidate not in identities_by_marker
         )
+        direct_unqualified_runtime_function_candidates[identity] = tuple(
+            candidate
+            for candidate in inspection.unqualified_runtime_function_candidates
+            if candidate not in identities_by_marker
+        )
         direct_code_resource_registration_functions[identity] = tuple(
             function
             for function in inspection.worksheet_code_resource_registration_functions
@@ -42094,6 +42116,7 @@ def _named_reference_maps(
                     inspection.external_action_functions
                     + inspection.formula_dde_link_markers
                     + inspection.office_custom_function_candidates
+                    + inspection.unqualified_runtime_function_candidates
                     + inspection.worksheet_code_resource_registration_functions
                     + inspection.formula_defined_xlm_registration_functions
                     + inspection.formula_defined_xlm_evaluation_functions
@@ -42158,6 +42181,9 @@ def _named_reference_maps(
     component_direct_external_action_functions: dict[int, tuple[str, ...]] = {}
     component_direct_formula_dde_links: dict[int, tuple[str, ...]] = {}
     component_direct_candidates: dict[int, tuple[str, ...]] = {}
+    component_direct_unqualified_runtime_function_candidates: dict[
+        int, tuple[str, ...]
+    ] = {}
     component_direct_code_resource_registration_functions: dict[
         int, tuple[str, ...]
     ] = {}
@@ -42194,6 +42220,11 @@ def _named_reference_maps(
             candidate
             for identity in members
             for candidate in direct_custom_function_candidates[identity]
+        )
+        component_direct_unqualified_runtime_function_candidates[component] = tuple(
+            candidate
+            for identity in members
+            for candidate in direct_unqualified_runtime_function_candidates[identity]
         )
         component_direct_code_resource_registration_functions[component] = tuple(
             function
@@ -42259,6 +42290,7 @@ def _named_reference_maps(
     component_external_action_functions: dict[int, tuple[str, ...]] = {}
     component_formula_dde_links: dict[int, tuple[str, ...]] = {}
     component_custom_function_candidates: dict[int, tuple[str, ...]] = {}
+    component_unqualified_runtime_function_candidates: dict[int, tuple[str, ...]] = {}
     component_code_resource_registration_functions: dict[int, tuple[str, ...]] = {}
     component_formula_defined_xlm_registration_functions: dict[
         int, tuple[str, ...]
@@ -42298,6 +42330,16 @@ def _named_reference_maps(
                 candidate
                 for dependency in component_dependencies[component]
                 for candidate in component_custom_function_candidates[dependency]
+            )
+        )
+        component_unqualified_runtime_function_candidates[component] = (
+            component_direct_unqualified_runtime_function_candidates[component]
+            + tuple(
+                candidate
+                for dependency in component_dependencies[component]
+                for candidate in component_unqualified_runtime_function_candidates[
+                    dependency
+                ]
             )
         )
         component_code_resource_registration_functions[component] = (
@@ -42380,6 +42422,10 @@ def _named_reference_maps(
 
     custom_function_candidates_by_definition = {
         identity: component_custom_function_candidates[component]
+        for identity, component in component_by_definition.items()
+    }
+    unqualified_runtime_function_candidates_by_definition = {
+        identity: component_unqualified_runtime_function_candidates[component]
         for identity, component in component_by_definition.items()
     }
     external_action_functions_by_definition = {
@@ -42617,6 +42663,82 @@ def _named_reference_maps(
         }
         if candidates:
             local_function_custom_result[scope] = candidates
+
+    global_unqualified_runtime_function_result: dict[str, tuple[str, ...]] = {
+        key: unqualified_runtime_function_candidates_by_definition[
+            identity_for(definition)
+        ]
+        for key, definition in global_formulas.items()
+    }
+    for scope, definitions in local_formulas.items():
+        for key, definition in definitions.items():
+            global_unqualified_runtime_function_result[
+                _qualified_name_key(sheet_titles[scope], key)
+            ] = unqualified_runtime_function_candidates_by_definition[
+                identity_for(definition)
+            ]
+
+    local_unqualified_runtime_function_result: dict[
+        str, dict[str, tuple[str, ...]]
+    ] = {}
+    for scope, definitions in local_formulas.items():
+        candidates = {
+            key: unqualified_runtime_function_candidates_by_definition[
+                identity_for(definition)
+            ]
+            for key, definition in definitions.items()
+        }
+        if candidates:
+            local_unqualified_runtime_function_result[scope] = candidates
+
+    global_function_unqualified_runtime_function_result: dict[
+        str, tuple[str, ...]
+    ] = {
+        key: unqualified_runtime_function_candidates_by_definition[
+            identity_for(definition)
+        ]
+        for key, definition in global_lambdas.items()
+    }
+    for scope, definitions in local_lambdas.items():
+        for key, definition in definitions.items():
+            global_function_unqualified_runtime_function_result[
+                _qualified_name_key(sheet_titles[scope], key)
+            ] = unqualified_runtime_function_candidates_by_definition[
+                identity_for(definition)
+            ]
+
+    local_function_unqualified_runtime_function_result: dict[
+        str, dict[str, tuple[str, ...]]
+    ] = {}
+    for scope, definitions in local_lambdas.items():
+        candidates = {
+            key: unqualified_runtime_function_candidates_by_definition[
+                identity_for(definition)
+            ]
+            for key, definition in definitions.items()
+        }
+        if candidates:
+            local_function_unqualified_runtime_function_result[scope] = candidates
+
+    unqualified_runtime_function_definition_entries = tuple(
+        sorted(
+            (
+                repr((definition.scope, definition.key)),
+                repr(
+                    (
+                        unqualified_runtime_function_candidates_by_definition[
+                            identity_for(definition)
+                        ],
+                        definition.formula,
+                    )
+                ),
+            )
+            for definition in all_definitions
+            if unqualified_runtime_function_candidates_by_definition[
+                identity_for(definition)
+            ]
+        )
+    )
 
     global_code_resource_registration_result: dict[str, tuple[str, ...]] = {
         key: code_resource_registration_functions_by_definition[
@@ -43169,6 +43291,11 @@ def _named_reference_maps(
         local_custom_result,
         global_function_custom_result,
         local_function_custom_result,
+        global_unqualified_runtime_function_result,
+        local_unqualified_runtime_function_result,
+        global_function_unqualified_runtime_function_result,
+        local_function_unqualified_runtime_function_result,
+        unqualified_runtime_function_definition_entries,
         global_code_resource_registration_result,
         local_code_resource_registration_result,
         global_function_code_resource_registration_result,
@@ -43539,6 +43666,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     office_custom_function_call_count = 0
     office_custom_function_namespaces: set[str] = set()
     office_custom_function_formula_entries: list[tuple[str, str]] = []
+    unqualified_runtime_function_cells: set[CellKey] = set()
+    unqualified_runtime_function_call_count = 0
+    unqualified_runtime_function_formula_entries: list[tuple[str, str]] = []
     worksheet_code_resource_registration_cells: set[CellKey] = set()
     worksheet_code_resource_registration_function_count = 0
     worksheet_code_resource_registration_formula_entries: list[tuple[str, str]] = []
@@ -43596,6 +43726,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         local_named_custom_function_candidates,
         global_named_function_custom_function_candidates,
         local_named_function_custom_function_candidates,
+        global_named_unqualified_runtime_function_candidates,
+        local_named_unqualified_runtime_function_candidates,
+        global_named_function_unqualified_runtime_function_candidates,
+        local_named_function_unqualified_runtime_function_candidates,
+        unqualified_runtime_function_definition_entries,
         global_named_worksheet_code_resource_registration_functions,
         local_named_worksheet_code_resource_registration_functions,
         global_named_function_worksheet_code_resource_registration_functions,
@@ -43675,6 +43810,18 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         named_function_custom_function_candidates = {
             **global_named_function_custom_function_candidates,
             **local_named_function_custom_function_candidates.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
+        named_unqualified_runtime_function_candidates = {
+            **global_named_unqualified_runtime_function_candidates,
+            **local_named_unqualified_runtime_function_candidates.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
+        named_function_unqualified_runtime_function_candidates = {
+            **global_named_function_unqualified_runtime_function_candidates,
+            **local_named_function_unqualified_runtime_function_candidates.get(
                 worksheet.title.casefold(), {}
             ),
         }
@@ -43812,6 +43959,12 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 named_function_custom_function_candidates=(
                     named_function_custom_function_candidates
                 ),
+                named_unqualified_runtime_function_candidates=(
+                    named_unqualified_runtime_function_candidates
+                ),
+                named_function_unqualified_runtime_function_candidates=(
+                    named_function_unqualified_runtime_function_candidates
+                ),
                 named_worksheet_code_resource_registration_functions=(
                     named_worksheet_code_resource_registration_functions
                 ),
@@ -43905,6 +44058,22 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                         repr(
                             (
                                 inspection.office_custom_function_candidates,
+                                snapshot.formula,
+                            )
+                        ),
+                    )
+                )
+            if inspection.unqualified_runtime_function_candidates:
+                unqualified_runtime_function_cells.add(snapshot.location)
+                unqualified_runtime_function_call_count += len(
+                    inspection.unqualified_runtime_function_candidates
+                )
+                unqualified_runtime_function_formula_entries.append(
+                    (
+                        f"{snapshot.location[0]}!{snapshot.location[1]}",
+                        repr(
+                            (
+                                inspection.unqualified_runtime_function_candidates,
                                 snapshot.formula,
                             )
                         ),
@@ -44152,6 +44321,24 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         ),
         call_cells=frozenset(office_custom_function_cells),
     )
+    unqualified_runtime_functions = UnqualifiedRuntimeFunctionSnapshot(
+        unqualified_runtime_function_formula_cell_count=len(
+            unqualified_runtime_function_cells
+        ),
+        unqualified_runtime_function_call_count=(
+            unqualified_runtime_function_call_count
+        ),
+        unqualified_runtime_function_defined_name_count=len(
+            unqualified_runtime_function_definition_entries
+        ),
+        call_signature=_private_external_data_signature(
+            tuple(sorted(unqualified_runtime_function_formula_entries))
+        ),
+        definition_signature=_private_external_data_signature(
+            unqualified_runtime_function_definition_entries
+        ),
+        call_cells=frozenset(unqualified_runtime_function_cells),
+    )
     worksheet_code_resource_registrations = (
         WorksheetCodeResourceRegistrationSnapshot(
             registration_formula_cell_count=len(
@@ -44357,6 +44544,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         ),
         python_in_excel=python_in_excel,
         office_custom_functions=office_custom_functions,
+        unqualified_runtime_functions=unqualified_runtime_functions,
         worksheet_code_resource_registrations=worksheet_code_resource_registrations,
         formula_defined_xlm_registrations=formula_defined_xlm_registrations,
         formula_defined_xlm_evaluations=formula_defined_xlm_evaluations,
@@ -44471,6 +44659,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "formula_dde_links": snapshot.formula_dde_links.profile_dict(),
         "python_in_excel": snapshot.python_in_excel.profile_dict(),
         "office_custom_functions": snapshot.office_custom_functions.profile_dict(),
+        "unqualified_runtime_functions": (
+            snapshot.unqualified_runtime_functions.profile_dict()
+        ),
         "worksheet_code_resource_registrations": (
             snapshot.worksheet_code_resource_registrations.profile_dict()
         ),
@@ -44557,6 +44748,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_python_in_excel": snapshot.python_in_excel.present,
             "has_namespaced_custom_function_calls": (
                 snapshot.office_custom_functions.present
+            ),
+            "has_unqualified_runtime_function_calls": (
+                snapshot.unqualified_runtime_functions.present
             ),
             "has_formula_defined_xlm_registrations": (
                 snapshot.formula_defined_xlm_registrations.present

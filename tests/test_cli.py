@@ -75,6 +75,7 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
     assert "no_formula_dde_link_changes: true" in content
     assert "no_python_in_excel_changes: true" in content
     assert "no_office_custom_function_changes: true" in content
+    assert "no_unqualified_runtime_function_changes: true" in content
     assert "no_worksheet_code_resource_registration_changes: true" in content
     assert "no_formula_defined_xlm_registration_changes: true" in content
     assert "no_formula_defined_xlm_evaluation_changes: true" in content

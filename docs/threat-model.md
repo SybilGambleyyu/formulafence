@@ -612,9 +612,9 @@ review prompt, not proof of an error.
   manifest, code, or runtime identity. FormulaFence therefore inventories only
   a conservative namespaced-call candidate: the direct-call classifier excludes
   known native dotted Excel functions, workbook-defined names, and `_xlfn.` /
-  `_xlws.` compatibility names, and it does not classify unqualified VBA, COM,
-  or XLL UDFs. Candidates inside formula-defined names and named `LAMBDA` bodies
-  are propagated to their invoking worksheet formulas. A candidate call or a
+  `_xlws.` compatibility names. Unqualified VBA, COM, or XLL UDF-shaped calls
+  are covered separately by `FF075`. Candidates inside formula-defined names
+  and named `LAMBDA` bodies are propagated to their invoking worksheet formulas. A candidate call or a
   normal edit that statically reaches one emits `FF066`; enable
   `no_office_custom_function_changes` for `FFP066`. The public profile exposes
   only formula-cell, call, and namespace counts; names, formulas, arguments,
@@ -626,6 +626,32 @@ review prompt, not proof of an error.
   follows Microsoft's [custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview),
   [tutorial](https://learn.microsoft.com/en-us/office/dev/add-ins/tutorials/excel-tutorial-create-custom-functions),
   and [web-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).
+- A bare unknown worksheet call can resolve through VBA, a COM/Automation
+  add-in, an XLL, or another registered runtime, but formula text alone does
+  not prove a provider exists, is trusted, or can run. FormulaFence therefore
+  inventories a conservative unqualified-runtime-function candidate rather
+  than resolving or loading anything. The direct classifier accepts a bare
+  identifier only after excluding workbook-defined names, local `LET`/`LAMBDA`
+  bindings, qualified/dotted calls, and a stable native Excel function
+  catalogue. This includes current native spellings such as `XLOOKUP`,
+  `VSTACK`, `FIELDVALUE`, and `PY`; the pinned catalogue avoids third-party
+  parser-version drift, while a new native function can be conservatively
+  reported until FormulaFence adds it. Candidate calls inside formula-defined
+  names and named `LAMBDA` bodies propagate through nested, recursive, and
+  sheet-local chains to their invoking formulas. A private candidate/definition
+  change or normal static input edit that reaches one emits `FF075`; enable
+  `no_unqualified_runtime_function_changes` for `FFP075`. Public output has
+  only formula-cell, call, and relevant definition counts; names, formulas,
+  arguments, cells, provider identities, and host details stay private.
+  FormulaFence does not evaluate a formula, resolve/load a VBA, COM/Automation,
+  XLL, or registered provider, inspect host trust settings, or execute code.
+  Stored candidate definitions remain independently reviewable even when no
+  worksheet formula invokes them, while static-input paths require an actual
+  inspected call. Dynamic and unresolved inputs remain static-coverage limits. This boundary
+  follows Microsoft's [native function catalogue](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188),
+  [installed UDF guidance](https://support.microsoft.com/en-us/excel/user-defined-functions-that-are-installed-with-add-ins-reference),
+  [VBA custom-function guidance](https://support.microsoft.com/en-us/excel/create-custom-functions-in-excel),
+  and [XLL registration/call guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/accessing-xll-code-in-excel).
 - Excel's worksheet-capable `REGISTER.ID` function can register a DLL or code
   resource when needed and return its registration ID. FormulaFence keeps a
   dedicated private ledger for stored worksheet and formula-defined `REGISTER.ID` calls,

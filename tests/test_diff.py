@@ -95,6 +95,8 @@ from .helpers import (
     change_named_office_custom_function_definition,
     change_named_office_custom_function_input,
     change_named_sheet_view_criterion,
+    change_named_unqualified_runtime_function_definition,
+    change_named_unqualified_runtime_function_input,
     change_named_worksheet_code_resource_registration_definition,
     change_named_worksheet_code_resource_registration_input,
     change_number_format_code,
@@ -136,6 +138,8 @@ from .helpers import (
     change_table_style_definition,
     change_threaded_comment_person_identity,
     change_threaded_comment_reply,
+    change_unqualified_runtime_function_call,
+    change_unqualified_runtime_function_input,
     change_vba_project_signature_payload,
     change_what_if_data_table_input,
     change_workbook_theme_colour,
@@ -280,6 +284,7 @@ from .helpers import (
     make_named_lambda_model,
     make_named_office_custom_function_model,
     make_named_sheet_view_model,
+    make_named_unqualified_runtime_function_model,
     make_named_worksheet_code_resource_registration_model,
     make_number_format_model,
     make_office_custom_function_model,
@@ -313,6 +318,7 @@ from .helpers import (
     make_table_style_control_model,
     make_threaded_comment_model,
     make_three_d_model,
+    make_unqualified_runtime_function_model,
     make_what_if_data_table_model,
     make_workbook_theme_image_model,
     make_worksheet_code_resource_registration_model,
@@ -2886,6 +2892,259 @@ def test_named_custom_function_static_inputs_are_guarded(tmp_path) -> None:
     assert "FF066" in {finding.rule_id for finding in report.findings}
 
 
+def test_unqualified_runtime_function_candidates_are_profiled_diffed_and_private(
+    tmp_path,
+) -> None:
+    baseline = make_unqualified_runtime_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_unqualified_runtime_function_model(tmp_path / "candidate.xlsx")
+    change_unqualified_runtime_function_call(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    expected_functions = {
+        "present": True,
+        "unqualified_runtime_function_formula_cell_count": 3,
+        "unqualified_runtime_function_call_count": 4,
+        "unqualified_runtime_function_defined_name_count": 0,
+    }
+    assert baseline_snapshot.unqualified_runtime_functions.to_dict() == expected_functions
+    assert baseline_snapshot.unqualified_runtime_functions.call_cells == frozenset(
+        {("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")}
+    )
+    assert (
+        baseline_snapshot.summary()["unqualified_runtime_function_formula_cell_count"]
+        == 3
+    )
+    assert baseline_snapshot.summary()["unqualified_runtime_function_call_count"] == 4
+    assert (
+        baseline_snapshot.summary()["unqualified_runtime_function_defined_name_count"]
+        == 0
+    )
+    assert baseline_snapshot.summary()["has_unqualified_runtime_function_calls"] is True
+    assert profile["unqualified_runtime_functions"] == expected_functions
+    assert profile["features"]["has_unqualified_runtime_function_calls"] is True
+    assert "## Unqualified runtime-function candidates" in markdown
+    assert "**Formula cells / calls / relevant named definitions:** 3 / 4 / 0" in markdown
+    assert baseline_snapshot.office_custom_functions.present is False
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    function_change = next(
+        change
+        for change in report.changes
+        if change.kind == "unqualified_runtime_functions_changed"
+    )
+    function_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF075"
+    )
+    assert function_change.details["before"] == expected_functions
+    assert function_change.details["after"] == expected_functions
+    assert function_change.details["unqualified_runtime_function_material_changed"] is True
+    assert function_finding.details == function_change.details
+
+    rendered_ledger_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(function_change.details),
+        json.dumps(function_finding.to_dict()),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATEUDF",
+        "UPDATEDUDF",
+        "RISKUDF",
+        "PRIVATE-RUNTIME-FUNCTION-QUERY-BASELINE",
+        "PRIVATE-RUNTIME-FUNCTION-SECOND-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_unqualified_runtime_function_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_unqualified_runtime_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_unqualified_runtime_function_model(tmp_path / "candidate.xlsx")
+    change_unqualified_runtime_function_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.unqualified_runtime_functions
+        == candidate_snapshot.unqualified_runtime_functions
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    function_change = next(
+        change
+        for change in report.changes
+        if change.kind == "unqualified_runtime_functions_changed"
+    )
+    assert function_change.details["unqualified_runtime_function_static_input_changed"] is True
+    assert function_change.details["unqualified_runtime_function_static_input_change_count"] == 1
+    assert "unqualified_runtime_function_material_changed" not in function_change.details
+    assert "FF075" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(function_change.details),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-RUNTIME-FUNCTION-INPUT-BASELINE",
+        "PRIVATE-RUNTIME-FUNCTION-INPUT-CANDIDATE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_named_unqualified_runtime_function_candidates_are_propagated_and_private(
+    tmp_path,
+) -> None:
+    baseline = make_named_unqualified_runtime_function_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_named_unqualified_runtime_function_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_named_unqualified_runtime_function_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_functions = {
+        "present": True,
+        "unqualified_runtime_function_formula_cell_count": 3,
+        "unqualified_runtime_function_call_count": 5,
+        "unqualified_runtime_function_defined_name_count": 3,
+    }
+    assert baseline_snapshot.unqualified_runtime_functions.to_dict() == expected_functions
+    assert baseline_snapshot.unqualified_runtime_functions.call_cells == frozenset(
+        {("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")}
+    )
+    assert profile["unqualified_runtime_functions"] == expected_functions
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    function_change = next(
+        change
+        for change in report.changes
+        if change.kind == "unqualified_runtime_functions_changed"
+    )
+    function_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF075"
+    )
+    assert function_change.details["before"] == expected_functions
+    assert function_change.details["after"] == expected_functions
+    assert function_change.details["unqualified_runtime_function_material_changed"] is True
+    assert function_change.details["unqualified_runtime_function_definition_changed"] is True
+    assert function_finding.details == function_change.details
+
+    ff075_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF075"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["unqualified_runtime_functions"]),
+        profile_to_markdown(profile),
+        json.dumps(function_change.details),
+        json.dumps(function_finding.to_dict()),
+        json.dumps(ff075_sarif_result),
+    )
+    for sensitive_value in (
+        "PRIVATEUDF",
+        "UPDATEDUDF",
+        "RISKUDF",
+        "PRIVATE-NAMED-RUNTIME-FUNCTION-INPUT-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_named_unqualified_runtime_function_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_named_unqualified_runtime_function_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_named_unqualified_runtime_function_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_named_unqualified_runtime_function_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.unqualified_runtime_functions
+        == candidate_snapshot.unqualified_runtime_functions
+    )
+    assert {("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")} <= set(
+        baseline_snapshot.reverse_dependencies[("Inputs", "A9")]
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    function_change = next(
+        change
+        for change in report.changes
+        if change.kind == "unqualified_runtime_functions_changed"
+    )
+    assert function_change.details["unqualified_runtime_function_static_input_changed"] is True
+    assert function_change.details["unqualified_runtime_function_static_input_change_count"] == 1
+    assert "unqualified_runtime_function_material_changed" not in function_change.details
+    assert "unqualified_runtime_function_definition_changed" not in function_change.details
+    assert "FF075" in {finding.rule_id for finding in report.findings}
+
+
+def test_uninvoked_runtime_function_definitions_are_inventory_and_private(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+
+    def add_uninvoked_runtime_function(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName("FENCE.DORMANT", attr_text="=PRIVATEUDF(Inputs!$A$1)")
+        )
+
+    rewrite(baseline, add_uninvoked_runtime_function)
+    rewrite(candidate, add_uninvoked_runtime_function)
+    candidate_workbook = load_workbook(candidate)
+    candidate_workbook.defined_names["FENCE.DORMANT"].attr_text = (
+        "=UPDATEDUDF(Inputs!$A$1)"
+    )
+    candidate_workbook.save(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    expected_functions = {
+        "present": True,
+        "unqualified_runtime_function_formula_cell_count": 0,
+        "unqualified_runtime_function_call_count": 0,
+        "unqualified_runtime_function_defined_name_count": 1,
+    }
+    assert baseline_snapshot.unqualified_runtime_functions.to_dict() == expected_functions
+    assert baseline_snapshot.unqualified_runtime_functions.call_cells == frozenset()
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    function_change = next(
+        change
+        for change in report.changes
+        if change.kind == "unqualified_runtime_functions_changed"
+    )
+    assert function_change.details["before"] == expected_functions
+    assert function_change.details["after"] == expected_functions
+    assert function_change.details["unqualified_runtime_function_definition_changed"] is True
+    assert "unqualified_runtime_function_material_changed" not in function_change.details
+
+    ff075_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF075"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile_snapshot(baseline_snapshot)),
+        json.dumps(function_change.details),
+        json.dumps(ff075_sarif_result),
+    )
+    for sensitive_value in ("PRIVATEUDF", "UPDATEDUDF"):
+        assert all(
+            sensitive_value not in artifact for artifact in rendered_ledger_artifacts
+        )
+
+
 def test_worksheet_code_resource_registrations_are_profiled_diffed_and_private(
     tmp_path,
 ) -> None:
@@ -5039,6 +5298,33 @@ def test_recursive_named_custom_function_candidates_are_cycle_safe(tmp_path) -> 
     assert snapshot.unresolved_reference_tokens[("Model", "D2")] == ("FENCE.LOOP",)
 
 
+def test_recursive_named_unqualified_runtime_functions_are_cycle_safe(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "recursive-runtime.xlsx")
+
+    def add_recursive_runtime_function(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCELOOP",
+                attr_text="=LAMBDA(value,PRIVATEUDF(value)+FENCELOOP(value))",
+            )
+        )
+        workbook["Model"]["D2"] = "=FENCELOOP(Inputs!B2)"
+
+    rewrite(workbook_path, add_recursive_runtime_function)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.unqualified_runtime_functions.to_dict() == {
+        "present": True,
+        "unqualified_runtime_function_formula_cell_count": 1,
+        "unqualified_runtime_function_call_count": 1,
+        "unqualified_runtime_function_defined_name_count": 1,
+    }
+    assert snapshot.unqualified_runtime_functions.call_cells == frozenset(
+        {("Model", "D2")}
+    )
+    assert snapshot.unresolved_reference_tokens[("Model", "D2")] == ("FENCELOOP",)
+
+
 def test_scoped_named_custom_function_candidates_follow_local_precedence(tmp_path) -> None:
     workbook_path = make_scoped_named_lambda_model(tmp_path / "scoped.xlsx")
     workbook = load_workbook(workbook_path)
@@ -5064,6 +5350,36 @@ def test_scoped_named_custom_function_candidates_follow_local_precedence(tmp_pat
         "namespaced_custom_function_namespace_count": 1,
     }
     assert snapshot.office_custom_functions.call_cells == frozenset(
+        {("Model", "C2"), ("Report", "C2")}
+    )
+    assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_scoped_unqualified_runtime_functions_follow_local_precedence(tmp_path) -> None:
+    workbook_path = make_scoped_named_lambda_model(tmp_path / "scoped-runtime.xlsx")
+    workbook = load_workbook(workbook_path)
+    model = workbook["Model"]
+    report = workbook["Report"]
+    model["C2"] = "=LOCALUDF(A2)"
+    report["C2"] = "=Model!LOCALUDF(A2)"
+    model.defined_names.add(
+        DefinedName(
+            "LOCALUDF",
+            attr_text="=LAMBDA(value,PRIVATEUDF(value))",
+            localSheetId=1,
+        )
+    )
+    workbook.save(workbook_path)
+
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.unqualified_runtime_functions.to_dict() == {
+        "present": True,
+        "unqualified_runtime_function_formula_cell_count": 2,
+        "unqualified_runtime_function_call_count": 2,
+        "unqualified_runtime_function_defined_name_count": 1,
+    }
+    assert snapshot.unqualified_runtime_functions.call_cells == frozenset(
         {("Model", "C2"), ("Report", "C2")}
     )
     assert snapshot.unresolved_reference_tokens == {}

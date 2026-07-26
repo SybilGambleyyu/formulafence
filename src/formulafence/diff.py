@@ -63,6 +63,7 @@ from formulafence.models import (
     SlicerTimelineCacheSnapshot,
     TableStyleControlsSnapshot,
     ThreadedCommentSnapshot,
+    UnqualifiedRuntimeFunctionSnapshot,
     WhatIfDataTableSnapshot,
     WorkbookSnapshot,
     WorkbookThemeSnapshot,
@@ -2438,6 +2439,61 @@ def _office_custom_function_changes(
     return [change], [finding]
 
 
+def _unqualified_runtime_function_changes(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+    static_input_change_locations: set[CellKey],
+) -> tuple[list[Change], list[Finding]]:
+    """Flag unknown bare callable candidates and static input changes.
+
+    A workbook does not identify the provider for an unknown unqualified call.
+    FormulaFence therefore compares the stored candidate surface and relevant
+    formula-defined-name chain privately, plus ordinary edits that can reach a
+    candidate through the static dependency graph. It does not resolve VBA,
+    COM/Automation add-ins, XLLs, or any registered runtime; execute a formula;
+    or inspect the host environment.
+    """
+    old_functions: UnqualifiedRuntimeFunctionSnapshot = (
+        before.unqualified_runtime_functions
+    )
+    new_functions: UnqualifiedRuntimeFunctionSnapshot = (
+        after.unqualified_runtime_functions
+    )
+    if old_functions == new_functions and not static_input_change_locations:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_functions.to_dict(),
+        "after": new_functions.to_dict(),
+    }
+    if old_functions.call_signature != new_functions.call_signature:
+        details["unqualified_runtime_function_material_changed"] = True
+    if old_functions.definition_signature != new_functions.definition_signature:
+        details["unqualified_runtime_function_definition_changed"] = True
+    if static_input_change_locations:
+        details["unqualified_runtime_function_static_input_changed"] = True
+        details["unqualified_runtime_function_static_input_change_count"] = len(
+            static_input_change_locations
+        )
+    change = Change(
+        "unqualified_runtime_functions_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF075",
+        "high",
+        (
+            "An unqualified runtime-function candidate, relevant formula-defined "
+            "name, or statically visible input changed; a formula may now bind to "
+            "a different VBA, COM/Automation, XLL, or registered runtime."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _worksheet_code_resource_registration_changes(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
@@ -3507,6 +3563,7 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     formula_dde_link_static_input_changes: set[CellKey] = set()
     python_in_excel_static_input_changes: set[CellKey] = set()
     office_custom_function_static_input_changes: set[CellKey] = set()
+    unqualified_runtime_function_static_input_changes: set[CellKey] = set()
     worksheet_code_resource_registration_static_input_changes: set[CellKey] = set()
     formula_defined_xlm_registration_static_input_changes: set[CellKey] = set()
     formula_defined_xlm_evaluation_static_input_changes: set[CellKey] = set()
@@ -3529,6 +3586,10 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     office_custom_function_cells = (
         before.office_custom_functions.call_cells
         | after.office_custom_functions.call_cells
+    )
+    unqualified_runtime_function_cells = (
+        before.unqualified_runtime_functions.call_cells
+        | after.unqualified_runtime_functions.call_cells
     )
     worksheet_code_resource_registration_cells = (
         before.worksheet_code_resource_registrations.registration_cells
@@ -3597,6 +3658,8 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
             python_in_excel_static_input_changes.add(location)
         if office_custom_function_cells & impact:
             office_custom_function_static_input_changes.add(location)
+        if unqualified_runtime_function_cells & impact:
+            unqualified_runtime_function_static_input_changes.add(location)
         if worksheet_code_resource_registration_cells & impact:
             worksheet_code_resource_registration_static_input_changes.add(location)
         if formula_defined_xlm_registration_cells & impact:
@@ -3685,6 +3748,17 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(office_custom_function_changes)
     findings.extend(office_custom_function_findings)
+
+    (
+        unqualified_runtime_function_changes,
+        unqualified_runtime_function_findings,
+    ) = _unqualified_runtime_function_changes(
+        before,
+        after,
+        unqualified_runtime_function_static_input_changes,
+    )
+    changes.extend(unqualified_runtime_function_changes)
+    findings.extend(unqualified_runtime_function_findings)
 
     (
         worksheet_code_resource_registration_changes,

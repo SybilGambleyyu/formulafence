@@ -67,6 +67,7 @@ rules:
   no_formula_external_action_changes: true
   no_python_in_excel_changes: true
   no_office_custom_function_changes: true
+  no_unqualified_runtime_function_changes: true
   no_worksheet_code_resource_registration_changes: true
   no_formula_defined_xlm_registration_changes: true
   no_formula_defined_xlm_evaluation_changes: true
@@ -168,6 +169,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_formula_dde_link_changes` | boolean | A direct lexical `application|topic!item` DDE-style formula link in a worksheet formula, formula-defined name, or named `LAMBDA`; its private invocation/definition material; or a statically visible input to an invoking named `LAMBDA` changes. Services, topics, items, formulas, locations, and identities are compared privately. FormulaFence never evaluates a formula, resolves an endpoint, looks up/launches a DDE server, or sends a DDE command. Raw `externalLink` DDE/OLE packages remain under `no_external_link_package_changes`. |
 | `no_python_in_excel_changes` | boolean | Stored Python-in-Excel package code/environment/XML, a `PY` formula binding, function inventory, or a statically visible input changes. Python source, environment IDs, script indexes, formula arguments, locations, and raw XML are compared privately; FormulaFence never parses or runs Python, evaluates `PY`, or contacts the Microsoft Cloud runtime. |
 | `no_office_custom_function_changes` | boolean | A namespaced Office custom-function call candidate, its private formula/call inventory, or a statically visible input changes. A candidate is not proof that an add-in is installed: FormulaFence does not load the add-in manifest or code, execute a formula, or contact a custom-function runtime. Names, namespaces, cells, formulas, and arguments are compared privately. |
+| `no_unqualified_runtime_function_changes` | boolean | An unknown unqualified worksheet-call candidate, relevant formula-defined-name chain, private invocation/definition inventory, or a statically visible input changes. Candidate names, formulas, arguments, locations, and provider identities stay private. FormulaFence never evaluates a formula; resolves or loads VBA, COM/Automation, XLL, or another registered provider; or inspects host trust settings. |
 | `no_worksheet_code_resource_registration_changes` | boolean | A stored worksheet or formula-defined `REGISTER.ID` call, relevant formula-defined-name chain, private call inventory, or statically visible input changes. Module paths, procedure names, type strings, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates a formula, resolves a path, loads a DLL/XLL, or determines whether registration succeeds. |
 | `no_formula_defined_xlm_registration_changes` | boolean | A legacy XLM `REGISTER` call stored in a formula-defined name or named `LAMBDA`, its relevant definition chain/private invocation inventory, or a statically visible input changes. Module paths, procedure names, type strings, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates a formula, executes a macro, resolves a path, loads a DLL/XLL, or determines whether registration succeeds. |
 | `no_formula_defined_xlm_evaluation_changes` | boolean | A legacy XLM `EVALUATE` call stored in a formula-defined name or named `LAMBDA`, its relevant definition chain/private invocation inventory, or a statically visible argument input changes. Expressions, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates the text, parses the runtime-generated expression, executes a macro, or infers dependencies inside that expression. |
@@ -438,8 +440,9 @@ present or executable.
 
 The direct-call classifier admits only namespaced callable tokens that are not
 known native dotted Excel functions or workbook-defined names. It excludes
-`_xlfn.` and `_xlws.` compatibility names and does not classify unqualified
-VBA, COM, or XLL UDFs. A candidate found in a formula-defined name or named
+`_xlfn.` and `_xlws.` compatibility names. Unqualified VBA, COM, and XLL
+UDF-shaped calls are handled by the separate `FF075` boundary. A candidate found
+in a formula-defined name or named
 `LAMBDA` body is propagated to its invoking worksheet formulas instead.
 Public profiles and `FF066` contain only formula-cell, call, and namespace
 counts; names, namespaces, locations, formulas, and arguments stay private. A
@@ -457,6 +460,45 @@ This boundary follows Microsoft's
 [custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview),
 [custom-functions tutorial](https://learn.microsoft.com/en-us/office/dev/add-ins/tutorials/excel-tutorial-create-custom-functions),
 and [web-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).
+
+## Unqualified runtime-function candidates
+
+Excel can bind a bare unknown formula call such as `=MYUDF(A1)` to a VBA UDF,
+COM/Automation add-in, XLL, or another registered runtime. The formula alone
+does not prove which provider, if any, will resolve that name. FormulaFence
+therefore inventories a candidate rather than loading a provider or claiming it
+can execute.
+
+The classifier accepts only a bare identifier and excludes known native Excel
+functions, qualified/dotted calls, workbook-defined names, and local
+`LET`/`LAMBDA` bindings. Its native-function catalogue is a stable FormulaFence
+snapshot derived from Microsoft's alphabetical reference, with explicit
+compatibility additions for runtime-only/native serialization spellings. This
+avoids third-party parser-version drift; a new native Excel function can be a
+conservative candidate until FormulaFence adds it to that catalogue. `PY` stays
+under the separate Python-in-Excel boundary, namespaced Office calls stay under
+`FF066`, and direct `REGISTER.ID` stays under `FF067`.
+
+Candidates stored in formula-defined names and named `LAMBDA` bodies are
+propagated through nested, recursive, and sheet-local definition chains to
+their invoking worksheet formulas. Public profiles and `FF075` expose only
+formula-cell, call, and relevant definition counts. Names, cells, formulas,
+arguments, provider identities, and host details remain private; private
+signatures preserve same-count candidate and definition changes. A normal edit
+that statically reaches a candidate emits `FF075` too. Dynamic or unresolved
+inputs remain coverage limits. A stored candidate definition is compared even
+when no worksheet formula currently invokes it, but it does not create a
+synthetic static-input path.
+
+`no_unqualified_runtime_function_changes` turns `FF075` into `FFP075`.
+FormulaFence does not evaluate a formula; resolve or load VBA, COM/Automation,
+an XLL, or another registered runtime; inspect host trust settings; or execute
+code. The ordinary semantic diff still retains changed formulas and definitions
+for reviewer context, so it is not a redacted candidate ledger. This boundary
+follows Microsoft's [native function catalogue](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188),
+[installed UDF guidance](https://support.microsoft.com/en-us/excel/user-defined-functions-that-are-installed-with-add-ins-reference),
+[VBA custom-function guidance](https://support.microsoft.com/en-us/excel/create-custom-functions-in-excel),
+and [XLL registration/call guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/accessing-xll-code-in-excel).
 
 ## Worksheet code-resource registrations
 

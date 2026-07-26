@@ -1,4 +1,7 @@
+from openpyxl.utils import FORMULAE
+
 from formulafence.formulas import (
+    _EXCEL_UNQUALIFIED_NATIVE_FUNCTIONS,
     ParsedReference,
     StructuredTable,
     extract_references,
@@ -162,6 +165,73 @@ def test_formula_inspection_inventories_namespaced_custom_function_candidates() 
     )
     assert named_lambda.office_custom_function_candidates == ()
     assert named_formula.office_custom_function_candidates == ()
+
+
+def test_pinned_native_function_catalog_covers_openpyxl_bare_catalog() -> None:
+    """Keep FormulaFence's stable allowlist ahead of its parser dependency.
+
+    FormulaFence deliberately does not import this mutable dependency catalogue
+    at runtime. This test instead makes an openpyxl catalogue update an explicit
+    review event so a newly recognized bare native function cannot silently
+    become a generic runtime-function candidate.
+    """
+    parser_native_functions = {
+        name.upper() for name in FORMULAE if "." not in name
+    }
+
+    assert parser_native_functions <= _EXCEL_UNQUALIFIED_NATIVE_FUNCTIONS
+
+
+def test_formula_inspection_inventories_unqualified_runtime_function_candidates() -> None:
+    inspection = inspect_formula(
+        "=LOCALUDF(A1)+ANOTHER_UDF(A2)+@MYUDF(A3)+SUM(A4)+XLOOKUP(A5,A5,A5)"
+        "+VSTACK(A6,A7)+FIELDVALUE(A8,\"name\")+PY(\"1+1\",0)"
+        "+CONTOSO.ADD(A9)+_xlfn._xlws.PY(0,0,A10)"
+    )
+    named_lambda = inspect_formula(
+        "=WORKBOOKUDF(A1)",
+        named_function_references={"workbookudf": ()},
+    )
+    named_formula = inspect_formula(
+        "=FORMULANAME(A1)",
+        named_references={"formulaname": ()},
+    )
+    local_lambda = inspect_formula(
+        "=LET(LOCALUDF,LAMBDA(value,value),LOCALUDF(A1))"
+    )
+
+    assert inspection.unqualified_runtime_function_candidates == (
+        "LOCALUDF",
+        "ANOTHER_UDF",
+        "MYUDF",
+    )
+    assert named_lambda.unqualified_runtime_function_candidates == ()
+    assert named_formula.unqualified_runtime_function_candidates == ()
+    assert local_lambda.unqualified_runtime_function_candidates == ()
+
+
+def test_formula_inspection_propagates_unqualified_runtime_function_candidates() -> None:
+    named_lambda = inspect_formula(
+        "=FENCE.WRAPPER(A1)",
+        named_function_references={"fence.wrapper": ()},
+        named_function_unqualified_runtime_function_candidates={
+            "fence.wrapper": ("PRIVATEUDF",),
+        },
+    )
+    named_formula = inspect_formula(
+        "=FENCE.DIRECT",
+        named_references={"fence.direct": ()},
+        named_unqualified_runtime_function_candidates={
+            "fence.direct": ("PRIVATEUDF",),
+        },
+    )
+
+    assert named_lambda.unqualified_runtime_function_candidates == ("PRIVATEUDF",)
+    assert named_lambda.references == (
+        ParsedReference(None, 1, 1, 1, 1, raw="A1"),
+    )
+    assert named_formula.unqualified_runtime_function_candidates == ("PRIVATEUDF",)
+    assert named_formula.unresolved_range_tokens == ()
 
 
 def test_formula_inspection_propagates_candidates_from_named_definitions() -> None:

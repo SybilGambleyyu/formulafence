@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "formulafence"
-version = "0.81.0"
+version = "0.82.0"
 description = "Local-first spreadsheet change assurance for CI and audit workflows."
 readme = "README.md"
 requires-python = ">=3.10"

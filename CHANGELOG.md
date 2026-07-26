@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.82.0 — 2026-07-26
+
+- Add `FF075`, a private ledger for unknown unqualified worksheet-call
+  candidates that could resolve through VBA, a COM/Automation add-in, an XLL,
+  or another registered runtime. The public profile and finding details expose
+  only formula-cell, call, and relevant formula-defined-name counts; candidate
+  names, formulas, arguments, locations, provider identities, and host details
+  remain private.
+- Use a stable native Excel function catalogue derived from Microsoft's current
+  alphabetical reference, with explicit modern/runtime compatibility additions,
+  so ordinary calls such as `XLOOKUP`, `VSTACK`, `FIELDVALUE`, and `PY` do not
+  become candidates because a third-party parser changes. Workbook-defined
+  names, local `LET`/`LAMBDA` bindings, qualified calls, and dedicated legacy
+  XLM spellings remain outside this generic boundary.
+- Propagate candidates through formula-defined names, named LAMBDAs, recursive
+  groups, and sheet-local definitions; retain private signatures for same-count
+  callable and definition changes; inventory dormant stored definitions; and
+  guard ordinary edits that statically reach a candidate formula.
+- Add the fail-closed `no_unqualified_runtime_function_changes` policy rule
+  (`FFP075`). FormulaFence does not evaluate formulas, resolve/load VBA,
+  COM/Automation, XLL, or any registered provider, inspect host trust settings,
+  or execute code.
+
 ## 0.81.0 — 2026-07-26
 
 - Add a root composite GitHub Action for FormulaFence policy checks and

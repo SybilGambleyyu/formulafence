@@ -2987,13 +2987,13 @@ class ThreadedCommentSnapshot:
 
 @dataclass(frozen=True)
 class WorksheetDrawingShapeSnapshot:
-    """Safe aggregate of non-chart Worksheet DrawingML shape controls.
+    """Safe aggregate of non-chart Worksheet DrawingML drawing controls.
 
-    Worksheet DrawingML can carry text boxes, shapes, and connectors outside
-    the cell grid. Their private signatures retain anchors, presentation,
-    connector attachments, text, linked actions, and relationship semantics
-    for comparison without exposing any of that material in a profile or
-    change report.
+    Worksheet DrawingML can carry text boxes, shapes, connectors, and
+    non-chart graphic frames outside the cell grid. Their private signatures
+    retain anchors, presentation, connector attachments, SmartArt diagram
+    material, text, linked actions, and relationship semantics for comparison
+    without exposing any of that material in a profile or change report.
     """
 
     worksheet_drawing_sheet_count: int = 0
@@ -3003,6 +3003,13 @@ class WorksheetDrawingShapeSnapshot:
     connector_shape_count: int = 0
     connector_attachment_count: int = 0
     group_shape_count: int = 0
+    graphic_frame_count: int = 0
+    diagram_graphic_frame_count: int = 0
+    diagram_data_part_count: int = 0
+    diagram_layout_part_count: int = 0
+    diagram_quick_style_part_count: int = 0
+    diagram_colour_part_count: int = 0
+    diagram_drawing_part_count: int = 0
     text_shape_count: int = 0
     text_paragraph_count: int = 0
     text_run_count: int = 0
@@ -3011,9 +3018,11 @@ class WorksheetDrawingShapeSnapshot:
     hyperlink_count: int = 0
     related_relationship_count: int = 0
     external_relationship_count: int = 0
+    unrecognized_graphic_frame_count: int = 0
     unrecognized_shape_count: int = 0
     declaration_signature: str | None = field(default=None, repr=False)
     definition_signature: str | None = field(default=None, repr=False)
+    diagram_signature: str | None = field(default=None, repr=False)
     relationship_signature: str | None = field(default=None, repr=False)
 
     @property
@@ -3023,6 +3032,8 @@ class WorksheetDrawingShapeSnapshot:
             or self.shape_count
             or self.connector_shape_count
             or self.group_shape_count
+            or self.graphic_frame_count
+            or self.unrecognized_graphic_frame_count
             or self.unrecognized_shape_count
         )
 
@@ -3037,6 +3048,13 @@ class WorksheetDrawingShapeSnapshot:
             "connector_shape_count": self.connector_shape_count,
             "connector_attachment_count": self.connector_attachment_count,
             "group_shape_count": self.group_shape_count,
+            "graphic_frame_count": self.graphic_frame_count,
+            "diagram_graphic_frame_count": self.diagram_graphic_frame_count,
+            "diagram_data_part_count": self.diagram_data_part_count,
+            "diagram_layout_part_count": self.diagram_layout_part_count,
+            "diagram_quick_style_part_count": self.diagram_quick_style_part_count,
+            "diagram_colour_part_count": self.diagram_colour_part_count,
+            "diagram_drawing_part_count": self.diagram_drawing_part_count,
             "text_shape_count": self.text_shape_count,
             "text_paragraph_count": self.text_paragraph_count,
             "text_run_count": self.text_run_count,
@@ -3045,6 +3063,9 @@ class WorksheetDrawingShapeSnapshot:
             "hyperlink_count": self.hyperlink_count,
             "related_relationship_count": self.related_relationship_count,
             "external_relationship_count": self.external_relationship_count,
+            "unrecognized_graphic_frame_count": (
+                self.unrecognized_graphic_frame_count
+            ),
             "unrecognized_shape_count": self.unrecognized_shape_count,
         }
 
@@ -3684,6 +3705,12 @@ class WorkbookSnapshot:
             ),
             "worksheet_drawing_text_shape_count": (
                 self.worksheet_drawing_shapes.text_shape_count
+            ),
+            "worksheet_drawing_graphic_frame_count": (
+                self.worksheet_drawing_shapes.graphic_frame_count
+            ),
+            "worksheet_drawing_diagram_frame_count": (
+                self.worksheet_drawing_shapes.diagram_graphic_frame_count
             ),
             "has_worksheet_drawing_shapes": self.worksheet_drawing_shapes.present,
             "worksheet_anchored_picture_count": (

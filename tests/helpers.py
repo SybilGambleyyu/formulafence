@@ -13627,6 +13627,464 @@ def corrupt_worksheet_drawing_shape_root(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".worksheet-drawing-shape-corrupt.tmp.xlsx")
 
 
+def _worksheet_smartart_part_names(contents: dict[str, bytes]) -> tuple[str, str]:
+    """Return the drawing and relationship members for the SmartArt fixture."""
+    drawing_member = "xl/drawings/drawing1.xml"
+    relationship_member = _relationship_member(drawing_member)
+    if drawing_member not in contents or relationship_member not in contents:
+        raise ValueError("Fixture does not contain Worksheet DrawingML SmartArt parts")
+    return drawing_member, relationship_member
+
+
+def make_worksheet_smartart_model(path: Path) -> Path:
+    """Create a raw Worksheet DrawingML SmartArt package outside the cell grid."""
+    make_model(path)
+    content_types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    drawing_main = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    diagram = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
+    diagram_drawing = "http://schemas.microsoft.com/office/drawing/2008/diagram"
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def marker(
+        parent: ElementTree.Element,
+        name: str,
+        *,
+        column: int,
+        row: int,
+    ) -> None:
+        point = ElementTree.SubElement(parent, f"{{{drawing}}}{name}")
+        ElementTree.SubElement(point, f"{{{drawing}}}col").text = str(column)
+        ElementTree.SubElement(point, f"{{{drawing}}}colOff").text = "0"
+        ElementTree.SubElement(point, f"{{{drawing}}}row").text = str(row)
+        ElementTree.SubElement(point, f"{{{drawing}}}rowOff").text = "0"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member = "xl/drawings/drawing1.xml"
+        drawing_root = ElementTree.Element(f"{{{drawing}}}wsDr")
+        anchor = ElementTree.SubElement(
+            drawing_root,
+            f"{{{drawing}}}twoCellAnchor",
+            {"editAs": "oneCell"},
+        )
+        marker(anchor, "from", column=2, row=3)
+        marker(anchor, "to", column=8, row=12)
+        frame = ElementTree.SubElement(
+            anchor,
+            f"{{{drawing}}}graphicFrame",
+            {"macro": "PrivateSmartArtMacro"},
+        )
+        nonvisual = ElementTree.SubElement(frame, f"{{{drawing}}}nvGraphicFramePr")
+        ElementTree.SubElement(
+            nonvisual,
+            f"{{{drawing}}}cNvPr",
+            {
+                "id": "501",
+                "name": "PRIVATE-SMARTART-NAME",
+                "descr": "PRIVATE-SMARTART-DESCRIPTION",
+            },
+        )
+        ElementTree.SubElement(nonvisual, f"{{{drawing}}}cNvGraphicFramePr")
+        transform = ElementTree.SubElement(frame, f"{{{drawing}}}xfrm")
+        ElementTree.SubElement(transform, f"{{{drawing_main}}}off", {"x": "0", "y": "0"})
+        ElementTree.SubElement(
+            transform,
+            f"{{{drawing_main}}}ext",
+            {"cx": "0", "cy": "0"},
+        )
+        graphic = ElementTree.SubElement(frame, f"{{{drawing_main}}}graphic")
+        graphic_data = ElementTree.SubElement(
+            graphic,
+            f"{{{drawing_main}}}graphicData",
+            {"uri": diagram},
+        )
+        ElementTree.SubElement(
+            graphic_data,
+            f"{{{diagram}}}relIds",
+            {
+                f"{{{document_relationships}}}dm": "rIdFenceDiagramData",
+                f"{{{document_relationships}}}lo": "rIdFenceDiagramLayout",
+                f"{{{document_relationships}}}qs": "rIdFenceDiagramStyle",
+                f"{{{document_relationships}}}cs": "rIdFenceDiagramColours",
+            },
+        )
+        ElementTree.SubElement(anchor, f"{{{drawing}}}clientData")
+        contents[drawing_member] = serialize(drawing_root)
+
+        relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        for relationship_id, relationship_type, target in (
+            (
+                "rIdFenceDiagramData",
+                f"{document_relationships}/diagramData",
+                "../diagrams/data1.xml",
+            ),
+            (
+                "rIdFenceDiagramLayout",
+                f"{document_relationships}/diagramLayout",
+                "../diagrams/layout1.xml",
+            ),
+            (
+                "rIdFenceDiagramStyle",
+                f"{document_relationships}/diagramQuickStyle",
+                "../diagrams/quickStyle1.xml",
+            ),
+            (
+                "rIdFenceDiagramColours",
+                f"{document_relationships}/diagramColors",
+                "../diagrams/colors1.xml",
+            ),
+            (
+                "rIdFenceDiagramRendering",
+                "http://schemas.microsoft.com/office/2007/relationships/diagramDrawing",
+                "../diagrams/drawing1.xml",
+            ),
+        ):
+            ElementTree.SubElement(
+                relationships,
+                f"{{{package_relationships}}}Relationship",
+                {"Id": relationship_id, "Type": relationship_type, "Target": target},
+            )
+        contents[_relationship_member(drawing_member)] = serialize(relationships)
+
+        data_root = ElementTree.Element(f"{{{diagram}}}dataModel")
+        points = ElementTree.SubElement(data_root, f"{{{diagram}}}ptLst")
+        point = ElementTree.SubElement(
+            points,
+            f"{{{diagram}}}pt",
+            {"modelId": "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}", "type": "doc"},
+        )
+        text = ElementTree.SubElement(point, f"{{{diagram}}}t")
+        text.text = "PRIVATE-SMARTART-DO-NOT-APPROVE"
+        contents["xl/diagrams/data1.xml"] = serialize(data_root)
+
+        layout_root = ElementTree.Element(
+            f"{{{diagram}}}layoutDef",
+            {"uniqueId": "{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}"},
+        )
+        ElementTree.SubElement(layout_root, f"{{{diagram}}}title").text = (
+            "PRIVATE-SMARTART-LAYOUT"
+        )
+        contents["xl/diagrams/layout1.xml"] = serialize(layout_root)
+
+        quick_style_root = ElementTree.Element(
+            f"{{{diagram}}}styleDef",
+            {"uniqueId": "{CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC}"},
+        )
+        ElementTree.SubElement(quick_style_root, f"{{{diagram}}}title").text = (
+            "PRIVATE-SMARTART-STYLE"
+        )
+        contents["xl/diagrams/quickStyle1.xml"] = serialize(quick_style_root)
+
+        colours_root = ElementTree.Element(
+            f"{{{diagram}}}colorsDef",
+            {"uniqueId": "{DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD}"},
+        )
+        ElementTree.SubElement(colours_root, f"{{{diagram}}}title").text = (
+            "PRIVATE-SMARTART-COLOURS"
+        )
+        contents["xl/diagrams/colors1.xml"] = serialize(colours_root)
+
+        rendering_root = ElementTree.Element(f"{{{diagram_drawing}}}drawing")
+        ElementTree.SubElement(rendering_root, f"{{{diagram_drawing}}}sp").text = (
+            "PRIVATE-SMARTART-RENDERING"
+        )
+        contents["xl/diagrams/drawing1.xml"] = serialize(rendering_root)
+
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+        ElementTree.SubElement(
+            worksheet,
+            f"{{{spreadsheet}}}drawing",
+            {f"{{{document_relationships}}}id": "rIdFenceWorksheetDrawing"},
+        )
+        contents["xl/worksheets/sheet1.xml"] = serialize(worksheet)
+        worksheet_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            worksheet_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceWorksheetDrawing",
+                "Type": f"{document_relationships}/drawing",
+                "Target": "../drawings/drawing1.xml",
+            },
+        )
+        contents[_relationship_member("xl/worksheets/sheet1.xml")] = serialize(
+            worksheet_relationships
+        )
+
+        types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        for part_name, content_type in (
+            (
+                "/xl/drawings/drawing1.xml",
+                "application/vnd.openxmlformats-officedocument.drawing+xml",
+            ),
+            (
+                "/xl/diagrams/data1.xml",
+                "application/vnd.openxmlformats-officedocument.drawingml.diagramData+xml",
+            ),
+            (
+                "/xl/diagrams/layout1.xml",
+                "application/vnd.openxmlformats-officedocument.drawingml.diagramLayout+xml",
+            ),
+            (
+                "/xl/diagrams/quickStyle1.xml",
+                "application/vnd.openxmlformats-officedocument.drawingml.diagramStyle+xml",
+            ),
+            (
+                "/xl/diagrams/colors1.xml",
+                "application/vnd.openxmlformats-officedocument.drawingml.diagramColors+xml",
+            ),
+            (
+                "/xl/diagrams/drawing1.xml",
+                "application/vnd.ms-office.drawingml.diagramDrawing+xml",
+            ),
+        ):
+            ElementTree.SubElement(
+                types,
+                f"{{{content_types}}}Override",
+                {"PartName": part_name, "ContentType": content_type},
+            )
+        contents["[Content_Types].xml"] = serialize(types)
+
+    return _rewrite_archive(path, mutate, ".worksheet-smartart.tmp.xlsx")
+
+
+def change_worksheet_smartart_data(path: Path) -> Path:
+    """Change only private SmartArt data, leaving every worksheet cell unchanged."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        member = "xl/diagrams/data1.xml"
+        root = ElementTree.fromstring(contents[member])
+        diagram = root.tag[1:].split("}", maxsplit=1)[0]
+        text = next(root.iter(f"{{{diagram}}}t"))
+        text.text = "PRIVATE-SMARTART-CANDIDATE-REVIEW-STATE"
+        contents[member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-smartart-data.tmp.xlsx")
+
+
+def change_worksheet_smartart_graphic_frame_uri(path: Path) -> Path:
+    """Turn a SmartArt frame into an unsupported non-chart graphic frame."""
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, _relationships_member = _worksheet_smartart_part_names(contents)
+        root = ElementTree.fromstring(contents[drawing_member])
+        graphic_data = next(root.iter(f"{{{drawing}}}graphicData"))
+        graphic_data.set("uri", "https://example.invalid/formulafence/unknown-graphic")
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-unknown-graphic-frame.tmp.xlsx")
+
+
+def renumber_worksheet_smartart_identifiers(path: Path) -> Path:
+    """Rewrite harmless DrawingML and relationship IDs without changing SmartArt."""
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    mapping = {
+        "rIdFenceDiagramData": "rIdFenceDiagramDataRenumbered",
+        "rIdFenceDiagramLayout": "rIdFenceDiagramLayoutRenumbered",
+        "rIdFenceDiagramStyle": "rIdFenceDiagramStyleRenumbered",
+        "rIdFenceDiagramColours": "rIdFenceDiagramColoursRenumbered",
+        "rIdFenceDiagramRendering": "rIdFenceDiagramRenderingRenumbered",
+    }
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, relationships_member = _worksheet_smartart_part_names(contents)
+        root = ElementTree.fromstring(contents[drawing_member])
+        next(root.iter(f"{{{drawing}}}cNvPr")).set("id", "9501")
+        for element in root.iter():
+            for attribute, value in tuple(element.attrib.items()):
+                if value in mapping:
+                    element.set(attribute, mapping[value])
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        for relationship in relationships.findall(
+            f"{{{package_relationships}}}Relationship"
+        ):
+            if relationship.get("Id") in mapping:
+                relationship.set("Id", mapping[relationship.get("Id")])
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-smartart-id.tmp.xlsx")
+
+
+def corrupt_worksheet_smartart_relationships(path: Path) -> Path:
+    """Remove a required diagram colour relationship to exercise coverage evidence."""
+    diagram = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, _relationships_member = _worksheet_smartart_part_names(contents)
+        root = ElementTree.fromstring(contents[drawing_member])
+        relationship_ids = next(root.iter(f"{{{diagram}}}relIds"))
+        relationship_ids.attrib.pop(f"{{{document_relationships}}}cs")
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-smartart-corrupt.tmp.xlsx")
+
+
+def corrupt_worksheet_smartart_component_root(path: Path) -> Path:
+    """Replace a diagram component root to exercise fail-closed validation."""
+    diagram = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        member = "xl/diagrams/data1.xml"
+        root = ElementTree.fromstring(contents[member])
+        root.tag = f"{{{diagram}}}unexpectedDataModel"
+        contents[member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-smartart-component-root.tmp.xlsx")
+
+
+def add_worksheet_smartart_component_relationship(path: Path) -> Path:
+    """Add an unfollowed component relationship to exercise the scan boundary."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceSmartArtComponentTarget",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/hyperlink",
+                "Target": "https://example.invalid/private-smartart-target",
+                "TargetMode": "External",
+            },
+        )
+        contents[_relationship_member("xl/diagrams/data1.xml")] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-smartart-component-rels.tmp.xlsx")
+
+
+def make_strict_worksheet_smartart_model(path: Path) -> Path:
+    """Create a Strict SpreadsheetML variant of the SmartArt fixture."""
+    make_worksheet_smartart_model(path)
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    strict_drawing = "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"
+    diagram = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
+    strict_diagram = "http://purl.oclc.org/ooxml/drawingml/diagram"
+
+    def strict_name(name: str, source_namespace: str, target_namespace: str) -> str:
+        prefix = f"{{{source_namespace}}}"
+        if name.startswith(prefix):
+            return f"{{{target_namespace}}}{name[len(prefix):]}"
+        return name
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member, drawing_relationships_member = _worksheet_smartart_part_names(
+            contents
+        )
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        for member, source_namespace, target_namespace in (
+            (worksheet_member, _SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS),
+            (drawing_member, drawing, strict_drawing),
+            ("xl/diagrams/data1.xml", diagram, strict_diagram),
+            ("xl/diagrams/layout1.xml", diagram, strict_diagram),
+            ("xl/diagrams/quickStyle1.xml", diagram, strict_diagram),
+            ("xl/diagrams/colors1.xml", diagram, strict_diagram),
+        ):
+            root = ElementTree.fromstring(contents[member])
+            for element in root.iter():
+                element.tag = strict_name(
+                    element.tag,
+                    source_namespace,
+                    target_namespace,
+                )
+                element.tag = strict_name(
+                    element.tag,
+                    _DRAWINGML_MAIN_NS,
+                    _DRAWINGML_STRICT_MAIN_NS,
+                )
+                attributes = {
+                    strict_name(
+                        name,
+                        _DOCUMENT_RELATIONSHIPS_NS,
+                        _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                    ): value
+                    for name, value in element.attrib.items()
+                }
+                element.attrib.clear()
+                element.attrib.update(attributes)
+                if (
+                    element.tag == f"{{{_DRAWINGML_STRICT_MAIN_NS}}}graphicData"
+                    and element.get("uri") == diagram
+                ):
+                    element.set("uri", strict_diagram)
+            contents[member] = ElementTree.tostring(
+                root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        for member in (
+            _relationship_member(worksheet_member),
+            drawing_relationships_member,
+        ):
+            relationships = ElementTree.fromstring(contents[member])
+            for relationship in relationships.findall(relationship_tag):
+                relationship_type = relationship.get("Type")
+                if relationship_type and relationship_type.startswith(
+                    _DOCUMENT_RELATIONSHIPS_NS
+                ):
+                    relationship.set(
+                        "Type",
+                        relationship_type.replace(
+                            _DOCUMENT_RELATIONSHIPS_NS,
+                            _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                            1,
+                        ),
+                    )
+            contents[member] = ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".strict-worksheet-smartart.tmp.xlsx")
+
+
 def make_worksheet_drawing_connector_model(
     path: Path,
     *,

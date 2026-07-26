@@ -489,6 +489,12 @@ _DRAWINGML_STRICT_SPREADSHEET_NS = "http://purl.oclc.org/ooxml/drawingml/spreads
 _DRAWINGML_MAIN_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _DRAWINGML_STRICT_MAIN_NS = "http://purl.oclc.org/ooxml/drawingml/main"
 _DRAWINGML_CHART_NS = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+_DRAWINGML_STRICT_CHART_NS = "http://purl.oclc.org/ooxml/drawingml/chart"
+_DRAWINGML_DIAGRAM_NS = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
+_DRAWINGML_STRICT_DIAGRAM_NS = "http://purl.oclc.org/ooxml/drawingml/diagram"
+_DRAWINGML_DIAGRAM_DRAWING_NS = (
+    "http://schemas.microsoft.com/office/drawing/2008/diagram"
+)
 _DRAWINGML_CHART_DRAWING_NS = (
     "http://schemas.openxmlformats.org/drawingml/2006/chartDrawing"
 )
@@ -591,6 +597,11 @@ _WORKSHEET_DRAWING_SHAPE_RELATIONSHIP_ATTRIBUTES = frozenset(
     for namespace in {_DOCUMENT_RELATIONSHIP_NS, _STRICT_DOCUMENT_RELATIONSHIP_NS}
     for local_name in {"id", "embed", "link"}
 )
+_WORKSHEET_DRAWING_SHAPE_DIAGRAM_RELATIONSHIP_ATTRIBUTES = frozenset(
+    f"{{{namespace}}}{local_name}"
+    for namespace in {_DOCUMENT_RELATIONSHIP_NS, _STRICT_DOCUMENT_RELATIONSHIP_NS}
+    for local_name in {"dm", "lo", "qs", "cs"}
+)
 _WORKSHEET_IMAGE_RELATIONSHIP_ATTRIBUTES = frozenset(
     f"{{{namespace}}}{local_name}"
     for namespace in {_DOCUMENT_RELATIONSHIP_NS, _STRICT_DOCUMENT_RELATIONSHIP_NS}
@@ -617,6 +628,17 @@ _WORKSHEET_DRAWING_SHAPE_DRAWING_RELATIONSHIPS = frozenset(
         _WORKSHEET_STRICT_DRAWING_RELATIONSHIP,
     }
 )
+_WORKSHEET_DRAWING_DIAGRAM_RELATIONSHIP_KINDS = {
+    f"{_DOCUMENT_RELATIONSHIP_NS}/diagramData".casefold(): "data",
+    f"{_DOCUMENT_RELATIONSHIP_NS}/diagramLayout".casefold(): "layout",
+    f"{_DOCUMENT_RELATIONSHIP_NS}/diagramQuickStyle".casefold(): "quick-style",
+    f"{_DOCUMENT_RELATIONSHIP_NS}/diagramColors".casefold(): "colours",
+    f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/diagramData".casefold(): "data",
+    f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/diagramLayout".casefold(): "layout",
+    f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/diagramQuickStyle".casefold(): "quick-style",
+    f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/diagramColors".casefold(): "colours",
+    "http://schemas.microsoft.com/office/2007/relationships/diagramDrawing".casefold(): "drawing",
+}
 _WORKSHEET_IMAGE_VML_RELATIONSHIPS = frozenset(
     relationship.casefold()
     for relationship in {
@@ -1619,7 +1641,7 @@ class _ChartDrawingInspection:
 
 @dataclass(frozen=True)
 class _WorksheetDrawingShapeInspection:
-    """Private shape controls discovered in one worksheet DrawingML part."""
+    """Private drawing controls discovered in one worksheet DrawingML part."""
 
     member: str
     present: bool = False
@@ -1628,6 +1650,13 @@ class _WorksheetDrawingShapeInspection:
     connector_shape_count: int = 0
     connector_attachment_count: int = 0
     group_shape_count: int = 0
+    graphic_frame_count: int = 0
+    diagram_graphic_frame_count: int = 0
+    diagram_data_part_count: int = 0
+    diagram_layout_part_count: int = 0
+    diagram_quick_style_part_count: int = 0
+    diagram_colour_part_count: int = 0
+    diagram_drawing_part_count: int = 0
     text_shape_count: int = 0
     text_paragraph_count: int = 0
     text_run_count: int = 0
@@ -1636,9 +1665,11 @@ class _WorksheetDrawingShapeInspection:
     hyperlink_count: int = 0
     related_relationship_count: int = 0
     external_relationship_count: int = 0
+    unrecognized_graphic_frame_count: int = 0
     unrecognized_count: int = 0
     inspected: bool = False
     definition_signature: str | None = None
+    diagram_signature: str | None = None
     relationship_signature: str | None = None
 
 
@@ -35629,18 +35660,108 @@ _WORKSHEET_DRAWING_SHAPE_MAIN_NAMESPACES = frozenset(
     {_DRAWINGML_MAIN_NS, _DRAWINGML_STRICT_MAIN_NS}
 )
 _WORKSHEET_DRAWING_SHAPE_ANCHOR_CHILDREN = frozenset(
-    {"from", "to", "pos", "ext", "sp", "cxnSp", "grpSp", "clientData"}
+    {
+        "from",
+        "to",
+        "pos",
+        "ext",
+        "sp",
+        "cxnSp",
+        "graphicFrame",
+        "grpSp",
+        "clientData",
+    }
 )
 _WORKSHEET_DRAWING_GROUP_CHILDREN = frozenset(
-    {"nvGrpSpPr", "grpSpPr", "sp", "cxnSp", "grpSp"}
+    {"nvGrpSpPr", "grpSpPr", "sp", "cxnSp", "graphicFrame", "grpSp"}
 )
-_WORKSHEET_DRAWING_SHAPE_CONTAINER_NAMES = frozenset({"sp", "cxnSp", "grpSp"})
+_WORKSHEET_DRAWING_SHAPE_CONTAINER_NAMES = frozenset(
+    {"sp", "cxnSp", "graphicFrame", "grpSp"}
+)
 _WORKSHEET_DRAWING_CONNECTOR_ENDPOINT_NAMES = frozenset({"stCxn", "endCxn"})
 _WORKSHEET_DRAWING_CONTAINER_NONVISUAL_NAMES = {
     "sp": "nvSpPr",
     "cxnSp": "nvCxnSpPr",
+    "graphicFrame": "nvGraphicFramePr",
     "grpSp": "nvGrpSpPr",
 }
+_WORKSHEET_DRAWING_GRAPHIC_DATA_CHART_URIS = frozenset(
+    {_DRAWINGML_CHART_NS, _DRAWINGML_STRICT_CHART_NS}
+)
+_WORKSHEET_DRAWING_GRAPHIC_DATA_DIAGRAM_URIS = frozenset(
+    {_DRAWINGML_DIAGRAM_NS, _DRAWINGML_STRICT_DIAGRAM_NS}
+)
+_WORKSHEET_DRAWING_DIAGRAM_COMPONENT_ROOTS = {
+    "data": frozenset(
+        (namespace, "dataModel")
+        for namespace in _WORKSHEET_DRAWING_GRAPHIC_DATA_DIAGRAM_URIS
+    ),
+    "layout": frozenset(
+        (namespace, "layoutDef")
+        for namespace in _WORKSHEET_DRAWING_GRAPHIC_DATA_DIAGRAM_URIS
+    ),
+    "quick-style": frozenset(
+        (namespace, "styleDef")
+        for namespace in _WORKSHEET_DRAWING_GRAPHIC_DATA_DIAGRAM_URIS
+    ),
+    "colours": frozenset(
+        (namespace, "colorsDef")
+        for namespace in _WORKSHEET_DRAWING_GRAPHIC_DATA_DIAGRAM_URIS
+    ),
+    "drawing": frozenset({(_DRAWINGML_DIAGRAM_DRAWING_NS, "drawing")}),
+}
+
+
+def _worksheet_drawing_shape_graphic_frame_kind(
+    frame: ElementTree.Element,
+) -> str | None:
+    """Classify one non-visual graphic frame without inspecting its payload."""
+    if (
+        _xml_namespace(frame.tag) not in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
+        or _xml_local_name(frame.tag) != "graphicFrame"
+    ):
+        return None
+    graphics = [
+        child
+        for child in frame
+        if (
+            _xml_namespace(child.tag) in _WORKSHEET_DRAWING_SHAPE_MAIN_NAMESPACES
+            and _xml_local_name(child.tag) == "graphic"
+        )
+    ]
+    if len(graphics) != 1:
+        return None
+    graphic_data = [
+        child
+        for child in graphics[0]
+        if (
+            _xml_namespace(child.tag) in _WORKSHEET_DRAWING_SHAPE_MAIN_NAMESPACES
+            and _xml_local_name(child.tag) == "graphicData"
+        )
+    ]
+    if len(graphic_data) != 1:
+        return None
+    uri = graphic_data[0].get("uri")
+    if uri in _WORKSHEET_DRAWING_GRAPHIC_DATA_CHART_URIS:
+        return "chart"
+    if uri in _WORKSHEET_DRAWING_GRAPHIC_DATA_DIAGRAM_URIS:
+        return "diagram"
+    return "other" if uri else None
+
+
+def _worksheet_drawing_shape_supported_container(
+    element: ElementTree.Element,
+) -> bool:
+    """Return whether a drawing object belongs to this non-chart boundary."""
+    if _xml_namespace(element.tag) not in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES:
+        return False
+    local_name = _xml_local_name(element.tag)
+    if local_name not in _WORKSHEET_DRAWING_SHAPE_CONTAINER_NAMES:
+        return False
+    return (
+        local_name != "graphicFrame"
+        or _worksheet_drawing_shape_graphic_frame_kind(element) != "chart"
+    )
 
 
 def _worksheet_drawing_shape_raw_relationships(
@@ -35781,7 +35902,10 @@ def _worksheet_drawing_shape_xml_fragment(
             and _xml_local_name(attribute) == "id"
         ):
             continue
-        if attribute in _WORKSHEET_DRAWING_SHAPE_RELATIONSHIP_ATTRIBUTES:
+        if attribute in (
+            _WORKSHEET_DRAWING_SHAPE_RELATIONSHIP_ATTRIBUTES
+            | _WORKSHEET_DRAWING_SHAPE_DIAGRAM_RELATIONSHIP_ATTRIBUTES
+        ):
             relationship = relationship_semantics.get(value)
             resolved: object = (
                 ("relationship", relationship)
@@ -35825,6 +35949,10 @@ def _worksheet_drawing_shape_xml_fragment(
             if (
                 _xml_namespace(child.tag) in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
                 and _xml_local_name(child.tag) in _WORKSHEET_DRAWING_GROUP_CHILDREN
+                and (
+                    _xml_local_name(child.tag) != "graphicFrame"
+                    or _worksheet_drawing_shape_graphic_frame_kind(child) != "chart"
+                )
             )
         )
     else:
@@ -35869,6 +35997,10 @@ def _worksheet_drawing_shape_anchor_fragment(
         if (
             _xml_namespace(child.tag) in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
             and _xml_local_name(child.tag) in _WORKSHEET_DRAWING_SHAPE_ANCHOR_CHILDREN
+            and (
+                _xml_local_name(child.tag) != "graphicFrame"
+                or _worksheet_drawing_shape_graphic_frame_kind(child) != "chart"
+            )
         )
     )
     return (_xml_display_name(anchor.tag), attributes, children)
@@ -35881,11 +36013,9 @@ def _worksheet_drawing_shape_containers(
     containers: list[ElementTree.Element] = []
 
     def visit(element: ElementTree.Element) -> None:
-        if _xml_namespace(element.tag) not in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES:
+        if not _worksheet_drawing_shape_supported_container(element):
             return
         local_name = _xml_local_name(element.tag)
-        if local_name not in _WORKSHEET_DRAWING_SHAPE_CONTAINER_NAMES:
-            return
         containers.append(element)
         if local_name == "grpSp":
             for child in element:
@@ -35997,11 +36127,7 @@ def _worksheet_drawing_shape_inspection(
     all_container_nodes = [
         element
         for element in root.iter()
-        if (
-            _xml_namespace(element.tag) in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
-            and _xml_local_name(element.tag)
-            in _WORKSHEET_DRAWING_SHAPE_CONTAINER_NAMES
-        )
+        if _worksheet_drawing_shape_supported_container(element)
     ]
     selected_container_ids = {
         id(container)
@@ -36042,6 +36168,32 @@ def _worksheet_drawing_shape_inspection(
         _xml_local_name(container.tag) == "grpSp"
         for _anchor_index, _container_index, container in container_records
     )
+    graphic_frame_nodes = [
+        container
+        for _anchor_index, _container_index, container in container_records
+        if _xml_local_name(container.tag) == "graphicFrame"
+    ]
+    diagram_graphic_frame_nodes = [
+        frame
+        for frame in graphic_frame_nodes
+        if _worksheet_drawing_shape_graphic_frame_kind(frame) == "diagram"
+    ]
+    unrecognized_graphic_frame_count = sum(
+        _worksheet_drawing_shape_graphic_frame_kind(frame) != "diagram"
+        for frame in graphic_frame_nodes
+    )
+    if unrecognized_graphic_frame_count:
+        warnings.add(
+            "FormulaFence found unsupported non-chart Worksheet DrawingML graphic "
+            "frames; affected graphic-frame controls have a coverage gap."
+        )
+        unrecognized_count += unrecognized_graphic_frame_count
+        issue_entries.append(
+            (
+                "unsupported-graphic-frame-count",
+                str(unrecognized_graphic_frame_count),
+            )
+        )
 
     connection_target_candidates: dict[str, list[tuple[object, ...]]] = defaultdict(
         list
@@ -36203,7 +36355,7 @@ def _worksheet_drawing_shape_inspection(
                 and _xml_local_name(child.tag) in {"r", "fld"}
                 for child in text_body.iter()
             )
-    for drawing_object in [*shape_nodes, *connector_nodes]:
+    for drawing_object in [*shape_nodes, *connector_nodes, *graphic_frame_nodes]:
         for element in drawing_object.iter():
             if (
                 _xml_namespace(element.tag) in _WORKSHEET_DRAWING_SHAPE_MAIN_NAMESPACES
@@ -36212,24 +36364,29 @@ def _worksheet_drawing_shape_inspection(
                 hyperlink_count += 1
             for attribute, value in element.attrib.items():
                 if (
-                    attribute in _WORKSHEET_DRAWING_SHAPE_RELATIONSHIP_ATTRIBUTES
+                    attribute
+                    in (
+                        _WORKSHEET_DRAWING_SHAPE_RELATIONSHIP_ATTRIBUTES
+                        | _WORKSHEET_DRAWING_SHAPE_DIAGRAM_RELATIONSHIP_ATTRIBUTES
+                    )
                     and value
                 ):
                     relationship_ids.add(value)
 
     relationship_semantics: dict[str, tuple[str, str, str]] = {}
     selected_relationships: list[_WorksheetDrawingShapeRawRelationship] = []
-    if relationship_ids:
+    relationships: tuple[_WorksheetDrawingShapeRawRelationship, ...] | None = ()
+    relationships_by_id: dict[
+        str,
+        list[_WorksheetDrawingShapeRawRelationship],
+    ] = defaultdict(list)
+    if relationship_ids or diagram_graphic_frame_nodes:
         relationships = _worksheet_drawing_shape_raw_relationships(
             archive,
             member,
             warnings,
             context="Worksheet DrawingML",
         )
-        relationships_by_id: dict[
-            str,
-            list[_WorksheetDrawingShapeRawRelationship],
-        ] = defaultdict(list)
         if relationships is not None:
             for relationship in relationships:
                 if relationship.relationship_id:
@@ -36277,6 +36434,298 @@ def _worksheet_drawing_shape_inspection(
             relationship_semantics[relationship_id] = relationship.semantic_key()
             selected_relationships.append(relationship)
 
+    diagram_members_by_kind: dict[str, set[str]] = defaultdict(set)
+    diagram_signature_entries: list[tuple[str, str]] = []
+    if diagram_graphic_frame_nodes:
+        expected_component_kinds = {
+            "dm": "data",
+            "lo": "layout",
+            "qs": "quick-style",
+            "cs": "colours",
+        }
+        if relationships is None:
+            warnings.add(
+                "FormulaFence could not inspect Worksheet DrawingML diagram "
+                "relationships; affected SmartArt controls were not compared."
+            )
+            unrecognized_count += 1
+            issue_entries.append(("unreadable-diagram-relationships", member))
+        else:
+            for frame_index, frame in enumerate(diagram_graphic_frame_nodes):
+                relationship_nodes = [
+                    element
+                    for element in frame.iter()
+                    if (
+                        _xml_namespace(element.tag)
+                        in {_DRAWINGML_DIAGRAM_NS, _DRAWINGML_STRICT_DIAGRAM_NS}
+                        and _xml_local_name(element.tag) == "relIds"
+                    )
+                ]
+                if len(relationship_nodes) != 1:
+                    warnings.add(
+                        "FormulaFence found a Worksheet DrawingML SmartArt frame without "
+                        "one diagram relationship declaration; affected diagram controls "
+                        "have a coverage gap."
+                    )
+                    unrecognized_count += 1
+                    issue_entries.append(
+                        ("diagram-relationship-declaration", str(frame_index))
+                    )
+                    continue
+                relationship_node = relationship_nodes[0]
+                for attribute_name, expected_kind in expected_component_kinds.items():
+                    relationship_ids_for_component = [
+                        value
+                        for attribute, value in relationship_node.attrib.items()
+                        if (
+                            _xml_namespace(attribute)
+                            in {
+                                _DOCUMENT_RELATIONSHIP_NS,
+                                _STRICT_DOCUMENT_RELATIONSHIP_NS,
+                            }
+                            and _xml_local_name(attribute) == attribute_name
+                        )
+                    ]
+                    if len(relationship_ids_for_component) != 1:
+                        warnings.add(
+                            "FormulaFence found a Worksheet DrawingML SmartArt frame with "
+                            "an incomplete diagram relationship declaration; affected diagram "
+                            "controls have a coverage gap."
+                        )
+                        unrecognized_count += 1
+                        issue_entries.append(
+                            (
+                                "diagram-component-relationship",
+                                repr((frame_index, attribute_name)),
+                            )
+                        )
+                        continue
+                    relationship_id = relationship_ids_for_component[0]
+                    matches = relationships_by_id.get(relationship_id, [])
+                    if len(matches) != 1:
+                        warnings.add(
+                            "FormulaFence found a Worksheet DrawingML SmartArt component "
+                            "reference without one matching relationship; affected diagram "
+                            "controls have a coverage gap."
+                        )
+                        unrecognized_count += 1
+                        issue_entries.append(
+                            (
+                                "diagram-component-relationship-binding",
+                                repr((frame_index, attribute_name)),
+                            )
+                        )
+                        continue
+                    relationship = matches[0]
+                    actual_kind = _WORKSHEET_DRAWING_DIAGRAM_RELATIONSHIP_KINDS.get(
+                        relationship.relationship_type.casefold()
+                    )
+                    if (
+                        actual_kind != expected_kind
+                        or relationship.target_mode.casefold() != "internal"
+                        or relationship.safe_target is None
+                    ):
+                        warnings.add(
+                            "FormulaFence found a Worksheet DrawingML SmartArt component "
+                            "with an unsafe or unexpected relationship; affected diagram "
+                            "controls have a coverage gap."
+                        )
+                        unrecognized_count += 1
+                        issue_entries.append(
+                            (
+                                "unsafe-or-unexpected-diagram-component",
+                                repr((frame_index, attribute_name)),
+                            )
+                        )
+                        continue
+                    diagram_members_by_kind[expected_kind].add(relationship.safe_target)
+
+            for relationship in relationships:
+                if (
+                    _WORKSHEET_DRAWING_DIAGRAM_RELATIONSHIP_KINDS.get(
+                        relationship.relationship_type.casefold()
+                    )
+                    != "drawing"
+                ):
+                    continue
+                if relationship not in selected_relationships:
+                    selected_relationships.append(relationship)
+                if (
+                    relationship.target_mode.casefold() != "internal"
+                    or relationship.safe_target is None
+                ):
+                    warnings.add(
+                        "FormulaFence found a Worksheet DrawingML SmartArt rendering "
+                        "relationship without a safe internal target; affected diagram "
+                        "controls have a coverage gap."
+                    )
+                    unrecognized_count += 1
+                    issue_entries.append(
+                        ("unsafe-diagram-rendering-target", repr(relationship.semantic_key()))
+                    )
+                    continue
+                diagram_members_by_kind["drawing"].add(relationship.safe_target)
+
+        for component_kind in (
+            "data",
+            "layout",
+            "quick-style",
+            "colours",
+            "drawing",
+        ):
+            for component_member in sorted(
+                diagram_members_by_kind[component_kind], key=str.casefold
+            ):
+                component_payload, component_fallback = (
+                    _worksheet_drawing_shape_xml_payload(
+                        archive,
+                        component_member,
+                        warnings,
+                        budget,
+                    )
+                )
+                if component_payload is None:
+                    unrecognized_count += 1
+                    issue_entries.append(
+                        (
+                            "unreadable-diagram-component",
+                            repr((component_kind, component_member)),
+                        )
+                    )
+                    diagram_signature_entries.append(
+                        (
+                            f"diagram-{component_kind}",
+                            component_fallback or "",
+                        )
+                    )
+                    continue
+                try:
+                    component_root = _xml_root_from_payload(component_payload)
+                except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+                    warnings.add(
+                        "FormulaFence could not inspect a Worksheet DrawingML SmartArt "
+                        f"component ({type(error).__name__}); affected diagram controls were "
+                        "not compared."
+                    )
+                    unrecognized_count += 1
+                    issue_entries.append(
+                        (
+                            "malformed-diagram-component",
+                            repr((component_kind, component_member)),
+                        )
+                    )
+                    diagram_signature_entries.append(
+                        (
+                            f"diagram-{component_kind}",
+                            _private_payload_signature(component_payload),
+                        )
+                    )
+                    continue
+                if (
+                    _xml_namespace(component_root.tag),
+                    _xml_local_name(component_root.tag),
+                ) not in _WORKSHEET_DRAWING_DIAGRAM_COMPONENT_ROOTS[component_kind]:
+                    warnings.add(
+                        "FormulaFence found a Worksheet DrawingML SmartArt component "
+                        "with an unexpected root; affected diagram controls have a "
+                        "coverage gap."
+                    )
+                    unrecognized_count += 1
+                    issue_entries.append(
+                        (
+                            "unexpected-diagram-component-root",
+                            repr((component_kind, component_member)),
+                        )
+                    )
+                    diagram_signature_entries.append(
+                        (
+                            f"diagram-{component_kind}",
+                            _private_payload_signature(component_payload),
+                        )
+                    )
+                    continue
+                component_relationships = _worksheet_drawing_shape_raw_relationships(
+                    archive,
+                    component_member,
+                    warnings,
+                    context="Worksheet DrawingML SmartArt component",
+                )
+                component_relationship_semantics: dict[str, tuple[str, str, str]] = {}
+                if component_relationships is None:
+                    unrecognized_count += 1
+                    issue_entries.append(
+                        (
+                            "unreadable-diagram-component-relationships",
+                            repr((component_kind, component_member)),
+                        )
+                    )
+                else:
+                    component_relationships_by_id: dict[
+                        str,
+                        list[_WorksheetDrawingShapeRawRelationship],
+                    ] = defaultdict(list)
+                    for component_relationship in component_relationships:
+                        if component_relationship.relationship_id:
+                            component_relationships_by_id[
+                                component_relationship.relationship_id
+                            ].append(component_relationship)
+                    for relationship_id, matches in component_relationships_by_id.items():
+                        if len(matches) != 1:
+                            warnings.add(
+                                "FormulaFence found duplicate Worksheet DrawingML SmartArt "
+                                "component relationship IDs; affected diagram controls have "
+                                "a coverage gap."
+                            )
+                            unrecognized_count += 1
+                            issue_entries.append(
+                                (
+                                    "duplicate-diagram-component-relationship",
+                                    repr((component_kind, component_member, relationship_id)),
+                                )
+                            )
+                        component_relationship_semantics[relationship_id] = sorted(
+                            relationship.semantic_key() for relationship in matches
+                        )[0]
+                    if component_relationships:
+                        warnings.add(
+                            "FormulaFence found relationships from a Worksheet DrawingML "
+                            "SmartArt component that are outside the bounded diagram-part "
+                            "scan; affected diagram controls have a coverage gap."
+                        )
+                        unrecognized_count += len(component_relationships)
+                        issue_entries.append(
+                            (
+                                "unfollowed-diagram-component-relationships",
+                                repr((component_kind, component_member)),
+                            )
+                        )
+                try:
+                    component_fragment = _worksheet_drawing_shape_xml_fragment(
+                        component_root,
+                        component_relationship_semantics,
+                        {},
+                    )
+                except RecursionError:
+                    warnings.add(
+                        "FormulaFence could not fully traverse an excessively nested "
+                        "Worksheet DrawingML SmartArt component; affected diagram controls "
+                        "were not compared."
+                    )
+                    unrecognized_count += 1
+                    issue_entries.append(
+                        (
+                            "nested-diagram-component",
+                            repr((component_kind, component_member)),
+                        )
+                    )
+                    component_fragment = _private_payload_signature(component_payload)
+                diagram_signature_entries.append(
+                    (
+                        f"diagram-{component_kind}",
+                        repr((component_member, component_fragment)),
+                    )
+                )
+
     try:
         definition_entries = [
             (
@@ -36304,8 +36753,21 @@ def _worksheet_drawing_shape_inspection(
             connector_shape_count=len(connector_nodes),
             connector_attachment_count=connector_attachment_count,
             group_shape_count=group_shape_count,
+            graphic_frame_count=len(graphic_frame_nodes),
+            diagram_graphic_frame_count=len(diagram_graphic_frame_nodes),
+            diagram_data_part_count=len(diagram_members_by_kind["data"]),
+            diagram_layout_part_count=len(diagram_members_by_kind["layout"]),
+            diagram_quick_style_part_count=len(
+                diagram_members_by_kind["quick-style"]
+            ),
+            diagram_colour_part_count=len(diagram_members_by_kind["colours"]),
+            diagram_drawing_part_count=len(diagram_members_by_kind["drawing"]),
+            unrecognized_graphic_frame_count=unrecognized_graphic_frame_count,
             unrecognized_count=unrecognized_count + 1,
             definition_signature=_private_payload_signature(payload),
+            diagram_signature=_private_external_data_signature(
+                tuple(sorted(diagram_signature_entries))
+            ),
             relationship_signature=_worksheet_drawing_shape_relationship_signature(
                 tuple(selected_relationships)
             ),
@@ -36325,11 +36787,19 @@ def _worksheet_drawing_shape_inspection(
         connector_shape_count=len(connector_nodes),
         connector_attachment_count=connector_attachment_count,
         group_shape_count=group_shape_count,
+        graphic_frame_count=len(graphic_frame_nodes),
+        diagram_graphic_frame_count=len(diagram_graphic_frame_nodes),
+        diagram_data_part_count=len(diagram_members_by_kind["data"]),
+        diagram_layout_part_count=len(diagram_members_by_kind["layout"]),
+        diagram_quick_style_part_count=len(diagram_members_by_kind["quick-style"]),
+        diagram_colour_part_count=len(diagram_members_by_kind["colours"]),
+        diagram_drawing_part_count=len(diagram_members_by_kind["drawing"]),
         text_shape_count=text_shape_count,
         text_paragraph_count=text_paragraph_count,
         text_run_count=text_run_count,
         macro_assignment_count=sum(
-            bool(shape.get("macro")) for shape in shape_nodes
+            bool(container.get("macro"))
+            for container in [*shape_nodes, *connector_nodes, *graphic_frame_nodes]
         ),
         text_link_count=sum(
             bool(shape.get("textlink")) for shape in shape_nodes
@@ -36340,10 +36810,14 @@ def _worksheet_drawing_shape_inspection(
             relationship.target_mode.casefold() != "internal"
             for relationship in selected_relationships
         ),
+        unrecognized_graphic_frame_count=unrecognized_graphic_frame_count,
         unrecognized_count=unrecognized_count,
         inspected=True,
         definition_signature=_private_external_data_signature(
             tuple(definition_entries)
+        ),
+        diagram_signature=_private_external_data_signature(
+            tuple(sorted(diagram_signature_entries))
         ),
         relationship_signature=_worksheet_drawing_shape_relationship_signature(
             tuple(selected_relationships)
@@ -36483,6 +36957,28 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
                 group_shape_count=sum(
                     inspection.group_shape_count for inspection in inspections
                 ),
+                graphic_frame_count=sum(
+                    inspection.graphic_frame_count for inspection in inspections
+                ),
+                diagram_graphic_frame_count=sum(
+                    inspection.diagram_graphic_frame_count for inspection in inspections
+                ),
+                diagram_data_part_count=sum(
+                    inspection.diagram_data_part_count for inspection in inspections
+                ),
+                diagram_layout_part_count=sum(
+                    inspection.diagram_layout_part_count for inspection in inspections
+                ),
+                diagram_quick_style_part_count=sum(
+                    inspection.diagram_quick_style_part_count
+                    for inspection in inspections
+                ),
+                diagram_colour_part_count=sum(
+                    inspection.diagram_colour_part_count for inspection in inspections
+                ),
+                diagram_drawing_part_count=sum(
+                    inspection.diagram_drawing_part_count for inspection in inspections
+                ),
                 text_shape_count=sum(
                     inspection.text_shape_count for inspection in inspections
                 ),
@@ -36507,6 +37003,10 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
                 external_relationship_count=sum(
                     inspection.external_relationship_count for inspection in inspections
                 ),
+                unrecognized_graphic_frame_count=sum(
+                    inspection.unrecognized_graphic_frame_count
+                    for inspection in inspections
+                ),
                 unrecognized_shape_count=(
                     len(unresolved_declarations)
                     + sum(inspection.unrecognized_count for inspection in inspections)
@@ -36515,6 +37015,7 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
                     tuple(sorted(declaration_entries))
                 ),
                 definition_signature=aggregate_signature("definition_signature"),
+                diagram_signature=aggregate_signature("diagram_signature"),
                 relationship_signature=aggregate_signature("relationship_signature"),
             )
     except (BadZipFile, OSError, RuntimeError, ValueError) as error:

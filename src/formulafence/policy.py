@@ -1002,7 +1002,8 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                 Finding(
                     "FFP044",
                     "high",
-                    "Policy forbids Worksheet DrawingML shape or connector control changes.",
+                    "Policy forbids Worksheet DrawingML shape, connector, or graphic-frame "
+                    "control changes.",
                     details=finding.details,
                 )
             )

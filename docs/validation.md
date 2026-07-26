@@ -5,6 +5,54 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Worksheet DrawingML SmartArt graphic frames — 2026-07-26
+
+FormulaFence 0.62.0 was checked against Microsoft's documented
+[Graphic Object Data](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/f58e82a5-5590-4e36-b178-e12989960415)
+and [Diagram relationship IDs](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.diagrams.relationshipids?view=openxml-3.0.1)
+models, plus the independently maintained
+[`JanMarvin/openxlsx-data`](https://github.com/JanMarvin/openxlsx-data) fixture
+at commit
+[`b89fc5dec8cc9f03b8026a87cbdffe4f5b785207`](https://github.com/JanMarvin/openxlsx-data/tree/b89fc5dec8cc9f03b8026a87cbdffe4f5b785207):
+[`diagram.xlsx`](https://github.com/JanMarvin/openxlsx-data/blob/b89fc5dec8cc9f03b8026a87cbdffe4f5b785207/diagram.xlsx)
+(SHA-256
+`cd708e028cb575f3b6821e721fde620bf15a307efda9893bbca0b96ec7a3b515`).
+The workbook contains two worksheet DrawingML parts and three non-chart
+`xdr:graphicFrame` diagrams. FormulaFence profiled two participating
+worksheets, two drawing parts, three anchors, three graphic frames / SmartArt
+diagrams, and three each of the data, layout, quick-style, colour, and
+`diagramDrawing` component parts, with no parser warning.
+
+A controlled copy changed only one private text-bearing node in
+`xl/diagrams/data1.xml`. Both archives passed `unzip -t`, had the same member
+set, and differed in uncompressed bytes only for that diagram-data member. The
+baseline and candidate SHA-256 values were respectively
+`cd708e028cb575f3b6821e721fde620bf15a307efda9893bbca0b96ec7a3b515` and
+`780c6515b626579dce966e76500df14a04739178a57b5e0c94b8ed43207eacf3`.
+The ordinary cell and sheet inventories stayed equal while the CLI emitted
+exactly one `worksheet_drawing_shape_controls_changed` change with high-
+severity `FF044` and the safe detail
+`worksheet_drawing_diagram_material_changed`. A policy enabling
+`no_worksheet_drawing_shape_changes` exited `1` and added `FFP044`. Profile,
+JSON, Markdown, SARIF, and policy-report output were checked to ensure the
+private candidate text stayed absent.
+
+A clean Python virtual environment installed the staged 0.62.0 wheel
+(SHA-256 `ca0bfb7b1b4ab1e005035b6ac7ab9a5ad55031517929bd4eebe0f423c254019d`)
+and returned `FormulaFence 0.62.0`. Its installed CLI profiled the public
+fixture with the same three SmartArt frames and three parts of every supported
+component kind, emitted exactly `worksheet_drawing_shape_controls_changed`
+with `FF044`, and its policy check exited `1` with `FFP044`. The installed
+profile, diff, and policy-report JSON were checked again for private candidate
+text redaction.
+
+The suite separately validates controlled data changes, transitional and Strict
+DrawingML, coordinated non-visual and relationship-ID rewrites, malformed
+diagram bindings, unknown non-chart graphic frames, redaction, and policy
+enforcement. FormulaFence compares bounded stored declarations only: it does
+not render SmartArt, calculate its final layout or visibility, resolve themes,
+or follow component-side relationships to media or hyperlinks.
+
 ## Legacy shared-workbook revision history — 2026-07-26
 
 FormulaFence 0.61.0 was checked against Microsoft's documented

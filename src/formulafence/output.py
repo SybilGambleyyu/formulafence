@@ -148,9 +148,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         f"- **Chart parts:** {workbook['chart_part_count']}",
         f"- **Cached chart data points:** {workbook['chart_cached_data_point_count']}",
         (
-            "- **Worksheet DrawingML shapes / text-bearing shapes:** "
+            "- **Worksheet DrawingML shapes / text-bearing shapes / graphic frames / SmartArt:** "
             f"{workbook['worksheet_drawing_shape_count']} / "
-            f"{workbook['worksheet_drawing_text_shape_count']}"
+            f"{workbook['worksheet_drawing_text_shape_count']} / "
+            f"{workbook['worksheet_drawing_graphic_frame_count']} / "
+            f"{workbook['worksheet_drawing_diagram_frame_count']}"
         ),
         (
             "- **Worksheet images (anchored / backgrounds / header-footer):** "
@@ -2187,7 +2189,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "## Worksheet DrawingML shape and connector controls",
+                "## Worksheet DrawingML shape, connector, and graphic-frame controls",
                 "",
                 (
                     "- **Worksheets / drawing parts / shape anchors:** "
@@ -2201,6 +2203,19 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     f"({worksheet_drawing_shapes['text_shape_count']} / "
                     f"{worksheet_drawing_shapes['connector_shape_count']} / "
                     f"{worksheet_drawing_shapes['group_shape_count']})"
+                ),
+                (
+                    "- **Non-chart graphic frames / SmartArt diagrams:** "
+                    f"{worksheet_drawing_shapes['graphic_frame_count']} / "
+                    f"{worksheet_drawing_shapes['diagram_graphic_frame_count']}"
+                ),
+                (
+                    "- **SmartArt data / layouts / quick styles / colours / renderings:** "
+                    f"{worksheet_drawing_shapes['diagram_data_part_count']} / "
+                    f"{worksheet_drawing_shapes['diagram_layout_part_count']} / "
+                    f"{worksheet_drawing_shapes['diagram_quick_style_part_count']} / "
+                    f"{worksheet_drawing_shapes['diagram_colour_part_count']} / "
+                    f"{worksheet_drawing_shapes['diagram_drawing_part_count']}"
                 ),
                 (
                     "- **Connector attachments:** "
@@ -2229,10 +2244,15 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 "- **Unrecognized or malformed shape controls:** "
                 f"{worksheet_drawing_shapes['unrecognized_shape_count']}"
             )
+        if worksheet_drawing_shapes["unrecognized_graphic_frame_count"]:
+            lines.append(
+                "- **Unsupported non-chart graphic frames:** "
+                f"{worksheet_drawing_shapes['unrecognized_graphic_frame_count']}"
+            )
         lines.append(
-            "Shape and connector presentation, attachment targets, anchors, macro "
-            "assignments, text links, hyperlink targets, and raw XML are compared "
-            "privately and intentionally omitted."
+            "Shape, connector, and SmartArt presentation; attachment targets; anchors; "
+            "diagram content; macro assignments; text links; hyperlink targets; and raw "
+            "XML are compared privately and intentionally omitted."
         )
     worksheet_images = profile["worksheet_images"]
     if worksheet_images["present"]:

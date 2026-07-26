@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.62.0 — 2026-07-26
+
+- Extend the existing `FF044` Worksheet DrawingML control boundary to inspect
+  non-chart `xdr:graphicFrame` SmartArt diagrams. FormulaFence follows the
+  graphic frame's `dgm:relIds` bindings for diagram data, layout, quick-style,
+  and colour parts, plus direct worksheet-drawing `diagramDrawing` rendering
+  parts; private signatures retain the frame, anchor, relationship semantics,
+  and component material while profiles, Markdown, JSON, and SARIF expose only
+  structural counts.
+- Keep chart graphic frames in `FF030` and native pictures in `FF059`. Unknown
+  non-chart graphic-frame URI types, malformed/missing/duplicate/unsafe
+  SmartArt bindings, unreadable/oversized/over-budget component material, and
+  component-side relationships outside the bounded scan become visible coverage
+  evidence rather than silent omissions. Transitional and Strict DrawingML are
+  supported.
+- A SmartArt component or frame change emits the existing high-severity
+  `FF044` finding and can be blocked by the existing fail-closed
+  `no_worksheet_drawing_shape_changes` policy (`FFP044`). Relationship-ID and
+  non-visual-ID rewrites normalize when their supported semantics are unchanged.
+  FormulaFence compares stored declarations only: it does not render SmartArt,
+  calculate final layout or visibility, resolve themes, follow component-side
+  media/hyperlink targets, or parse/hash media.
+
 ## 0.61.0 — 2026-07-26
 
 - Inspect legacy shared-workbook revision history directly from raw OOXML:

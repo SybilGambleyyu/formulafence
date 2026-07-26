@@ -2741,7 +2741,7 @@ def _worksheet_drawing_shape_controls_changed(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
 ) -> tuple[list[Change], list[Finding]]:
-    """Flag DrawingML shape or connector changes that cell diffs cannot expose."""
+    """Flag DrawingML shape, connector, or graphic-frame changes outside cells."""
     old_shapes: WorksheetDrawingShapeSnapshot = before.worksheet_drawing_shapes
     new_shapes: WorksheetDrawingShapeSnapshot = after.worksheet_drawing_shapes
     if old_shapes == new_shapes:
@@ -2755,6 +2755,8 @@ def _worksheet_drawing_shape_controls_changed(
         details["worksheet_drawing_shape_binding_changed"] = True
     if old_shapes.definition_signature != new_shapes.definition_signature:
         details["worksheet_drawing_shape_definition_material_changed"] = True
+    if old_shapes.diagram_signature != new_shapes.diagram_signature:
+        details["worksheet_drawing_diagram_material_changed"] = True
     if old_shapes.relationship_signature != new_shapes.relationship_signature:
         details["worksheet_drawing_shape_relationships_changed"] = True
     if (
@@ -2775,8 +2777,9 @@ def _worksheet_drawing_shape_controls_changed(
         "FF044",
         "high",
         (
-            "Worksheet DrawingML shape or connector controls changed; text, visual "
-            "cues, anchors, attachments, or linked actions may be altered outside cells."
+            "Worksheet DrawingML shape, connector, or non-chart graphic-frame controls "
+            "changed; text, visual cues, anchors, diagrams, attachments, or linked "
+            "actions may be altered outside cells."
         ),
         details=details,
     )

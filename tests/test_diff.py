@@ -21,6 +21,7 @@ from .helpers import (
     add_power_pivot_data_model_direct_relationship,
     add_protected_range,
     add_worksheet_dimension_baseline_adjustments,
+    add_worksheet_smartart_component_relationship,
     break_slicer_timeline_pivot_cache_binding,
     change_alignment_definition,
     change_border_definition,
@@ -109,6 +110,8 @@ from .helpers import (
     change_worksheet_image_payload,
     change_worksheet_image_presentation,
     change_worksheet_print_layout_controls,
+    change_worksheet_smartart_data,
+    change_worksheet_smartart_graphic_frame_uri,
     change_worksheet_sparkline_presentation,
     change_worksheet_sparkline_source,
     change_xlm_macro_sheet_controls,
@@ -159,6 +162,8 @@ from .helpers import (
     corrupt_worksheet_embedded_control_activex_root,
     corrupt_worksheet_image_drawing_root,
     corrupt_worksheet_print_layout_control,
+    corrupt_worksheet_smartart_component_root,
+    corrupt_worksheet_smartart_relationships,
     corrupt_worksheet_sparkline_destination,
     corrupt_xlm_macro_sheet_root,
     corrupt_xml_mapping_single_cell_reference,
@@ -233,6 +238,7 @@ from .helpers import (
     make_strict_worksheet_drawing_connector_model,
     make_strict_worksheet_image_model,
     make_strict_worksheet_print_layout_model,
+    make_strict_worksheet_smartart_model,
     make_table_model,
     make_table_style_control_model,
     make_threaded_comment_model,
@@ -246,6 +252,7 @@ from .helpers import (
     make_worksheet_embedded_control_model,
     make_worksheet_image_model,
     make_worksheet_print_layout_model,
+    make_worksheet_smartart_model,
     make_worksheet_sparkline_model,
     make_xlm_macro_sheet_model,
     make_xml_mapping_model,
@@ -315,6 +322,7 @@ from .helpers import (
     renumber_worksheet_drawing_shape_identifiers,
     renumber_worksheet_embedded_control_relationships,
     renumber_worksheet_image_identifiers,
+    renumber_worksheet_smartart_identifiers,
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
     reorder_worksheet_sparklines,
@@ -8104,6 +8112,13 @@ def test_worksheet_drawing_shapes_are_profiled_diffed_and_redacted(tmp_path) -> 
         "connector_shape_count": 0,
         "connector_attachment_count": 0,
         "group_shape_count": 1,
+        "graphic_frame_count": 0,
+        "diagram_graphic_frame_count": 0,
+        "diagram_data_part_count": 0,
+        "diagram_layout_part_count": 0,
+        "diagram_quick_style_part_count": 0,
+        "diagram_colour_part_count": 0,
+        "diagram_drawing_part_count": 0,
         "text_shape_count": 2,
         "text_paragraph_count": 2,
         "text_run_count": 2,
@@ -8112,9 +8127,10 @@ def test_worksheet_drawing_shapes_are_profiled_diffed_and_redacted(tmp_path) -> 
         "hyperlink_count": 1,
         "related_relationship_count": 1,
         "external_relationship_count": 1,
+        "unrecognized_graphic_frame_count": 0,
         "unrecognized_shape_count": 0,
     }
-    assert "## Worksheet DrawingML shape and connector controls" in markdown
+    assert "## Worksheet DrawingML shape, connector, and graphic-frame controls" in markdown
     assert change.details["worksheet_drawing_shape_definition_material_changed"] is True
     assert "FF044" in {finding.rule_id for finding in report.findings}
     assert "FF044" in {finding.rule_id for finding in hyperlink_report.findings}
@@ -8161,6 +8177,200 @@ def test_worksheet_drawing_shape_identifier_rewrites_are_ignored(tmp_path) -> No
         change.kind for change in report.changes
     }
     assert "FF044" not in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_smartart_diagrams_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_worksheet_smartart_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_smartart_model(tmp_path / "candidate.xlsx")
+    change_worksheet_smartart_data(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_drawing_shape_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["worksheet_drawing_graphic_frame_count"] == 1
+    assert baseline_snapshot.summary()["worksheet_drawing_diagram_frame_count"] == 1
+    assert baseline_snapshot.summary()["has_worksheet_drawing_shapes"] is True
+    assert baseline_snapshot.chart_definitions.present is False
+    assert profile["worksheet_drawing_shapes"] == {
+        "present": True,
+        "worksheet_drawing_sheet_count": 1,
+        "worksheet_drawing_part_count": 1,
+        "shape_anchor_count": 1,
+        "shape_count": 0,
+        "connector_shape_count": 0,
+        "connector_attachment_count": 0,
+        "group_shape_count": 0,
+        "graphic_frame_count": 1,
+        "diagram_graphic_frame_count": 1,
+        "diagram_data_part_count": 1,
+        "diagram_layout_part_count": 1,
+        "diagram_quick_style_part_count": 1,
+        "diagram_colour_part_count": 1,
+        "diagram_drawing_part_count": 1,
+        "text_shape_count": 0,
+        "text_paragraph_count": 0,
+        "text_run_count": 0,
+        "macro_assignment_count": 1,
+        "text_link_count": 0,
+        "hyperlink_count": 0,
+        "related_relationship_count": 5,
+        "external_relationship_count": 0,
+        "unrecognized_graphic_frame_count": 0,
+        "unrecognized_shape_count": 0,
+    }
+    assert "SmartArt diagrams" in markdown
+    assert change.details["worksheet_drawing_diagram_material_changed"] is True
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-SMARTART-DO-NOT-APPROVE",
+        "PRIVATE-SMARTART-CANDIDATE-REVIEW-STATE",
+        "PRIVATE-SMARTART-NAME",
+        "PRIVATE-SMARTART-DESCRIPTION",
+        "PrivateSmartArtMacro",
+        "rIdFenceDiagramData",
+        "rIdFenceDiagramLayout",
+        "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_smartart_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_worksheet_smartart_model(tmp_path / "baseline.xlsx")
+    renumbered = make_worksheet_smartart_model(tmp_path / "renumbered.xlsx")
+    renumber_worksheet_smartart_identifiers(renumbered)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered))
+
+    assert "worksheet_drawing_shape_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" not in {finding.rule_id for finding in report.findings}
+
+
+def test_malformed_worksheet_smartart_relationships_fail_closed(tmp_path) -> None:
+    baseline = make_worksheet_smartart_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_smartart_model(tmp_path / "candidate.xlsx")
+    corrupt_worksheet_smartart_relationships(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.worksheet_drawing_shapes.unrecognized_shape_count >= 1
+    assert any(
+        "incomplete diagram relationship declaration" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "worksheet_drawing_shape_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("rIdFenceDiagramColours" not in artifact for artifact in rendered_artifacts)
+
+
+def test_malformed_worksheet_smartart_component_roots_fail_closed(tmp_path) -> None:
+    baseline = make_worksheet_smartart_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_smartart_model(tmp_path / "candidate.xlsx")
+    corrupt_worksheet_smartart_component_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.worksheet_drawing_shapes.unrecognized_shape_count >= 1
+    assert any(
+        "SmartArt component with an unexpected root" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "worksheet_drawing_shape_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("unexpectedDataModel" not in artifact for artifact in rendered_artifacts)
+
+
+def test_unknown_worksheet_graphic_frames_fail_closed(tmp_path) -> None:
+    baseline = make_worksheet_smartart_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_smartart_model(tmp_path / "candidate.xlsx")
+    change_worksheet_smartart_graphic_frame_uri(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    profile = profile_snapshot(candidate_snapshot)
+
+    assert candidate_snapshot.worksheet_drawing_shapes.graphic_frame_count == 1
+    assert candidate_snapshot.worksheet_drawing_shapes.diagram_graphic_frame_count == 0
+    assert (
+        candidate_snapshot.worksheet_drawing_shapes.unrecognized_graphic_frame_count
+        == 1
+    )
+    assert candidate_snapshot.worksheet_drawing_shapes.unrecognized_shape_count >= 1
+    assert any(
+        "unsupported non-chart Worksheet DrawingML graphic frames" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "worksheet_drawing_shape_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("unknown-graphic" not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_smartart_component_relationships_fail_closed(tmp_path) -> None:
+    baseline = make_worksheet_smartart_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_smartart_model(tmp_path / "candidate.xlsx")
+    add_worksheet_smartart_component_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.worksheet_drawing_shapes.unrecognized_shape_count >= 1
+    assert any(
+        "relationships from a Worksheet DrawingML SmartArt component" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "worksheet_drawing_shape_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("private-smartart-target" not in artifact for artifact in rendered_artifacts)
 
 
 def test_worksheet_drawing_connectors_are_profiled_diffed_and_redacted(
@@ -8304,6 +8514,25 @@ def test_strict_worksheet_drawing_connectors_are_supported(tmp_path) -> None:
     assert snapshot.worksheet_drawing_shapes.unrecognized_shape_count == 0
     assert not any(
         "Worksheet DrawingML shape" in warning for warning in snapshot.parser_warnings
+    )
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+
+
+def test_strict_worksheet_smartart_diagrams_are_supported(tmp_path) -> None:
+    baseline = make_strict_worksheet_smartart_model(tmp_path / "baseline.xlsx")
+    candidate = make_strict_worksheet_smartart_model(tmp_path / "candidate.xlsx")
+    change_worksheet_smartart_data(candidate)
+
+    snapshot = load_snapshot(baseline)
+    report = compare_snapshots(snapshot, load_snapshot(candidate))
+
+    assert snapshot.worksheet_drawing_shapes.graphic_frame_count == 1
+    assert snapshot.worksheet_drawing_shapes.diagram_graphic_frame_count == 1
+    assert snapshot.worksheet_drawing_shapes.diagram_data_part_count == 1
+    assert snapshot.worksheet_drawing_shapes.diagram_drawing_part_count == 1
+    assert snapshot.worksheet_drawing_shapes.unrecognized_shape_count == 0
+    assert not any(
+        "SmartArt" in warning for warning in snapshot.parser_warnings
     )
     assert "FF044" in {finding.rule_id for finding in report.findings}
 

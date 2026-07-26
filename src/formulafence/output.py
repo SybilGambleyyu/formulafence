@@ -589,6 +589,9 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     formula_defined_xlm_environment_information_calls = profile[
         "formula_defined_xlm_environment_information_calls"
     ]
+    formula_environment_information_calls = profile[
+        "formula_environment_information_calls"
+    ]
     environment_information_formula_cell_count = (
         formula_defined_xlm_environment_information_calls[
             "environment_information_formula_cell_count"
@@ -604,6 +607,22 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "environment_information_defined_name_count"
         ]
     )
+    native_environment_information_formula_cell_count = (
+        formula_environment_information_calls[
+            "environment_information_formula_cell_count"
+        ]
+    )
+    native_environment_information_function_count = (
+        formula_environment_information_calls["environment_information_function_count"]
+    )
+    native_environment_information_defined_name_count = (
+        formula_environment_information_calls[
+            "environment_information_defined_name_count"
+        ]
+    )
+    implicit_cell_reference_function_count = formula_environment_information_calls[
+        "implicit_cell_reference_function_count"
+    ]
     formula_external_action_call_count = sum(
         (
             formula_external_actions["hyperlink_function_count"],
@@ -1132,6 +1151,38 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     "document, client, add-in, printer, or other Excel state. "
                     "Direct worksheet calls and raw XLM macro-sheet parts are "
                     "outside this narrow boundary."
+                ),
+            ]
+        )
+    if formula_environment_information_calls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Native CELL and INFO environment information",
+                "",
+                (
+                    "- **Formula cells / native calls / formula-defined names:** "
+                    f"{native_environment_information_formula_cell_count} / "
+                    f"{native_environment_information_function_count} / "
+                    f"{native_environment_information_defined_name_count}"
+                ),
+                (
+                    "- **CELL calls without an explicit reference:** "
+                    f"{implicit_cell_reference_function_count}"
+                ),
+                (
+                    "FormulaFence inventories native CELL and INFO calls in "
+                    "worksheet formulas, formula-defined names, and named "
+                    "LAMBDAs. Information types, references, formulas, arguments, "
+                    "locations, and name identities are compared privately and "
+                    "intentionally omitted; no formula is evaluated."
+                ),
+                (
+                    "CELL calls without a stored reference are counted because Excel "
+                    "may use the current selection at calculation time. FormulaFence "
+                    "does not determine an information type, resolve dynamic "
+                    "arguments, or simulate file, folder, client, workspace, or "
+                    "selection state."
                 ),
             ]
         )

@@ -711,6 +711,60 @@ def change_formula_defined_xlm_environment_information_input(path: Path) -> Path
     return path
 
 
+def make_formula_environment_information_model(path: Path) -> Path:
+    """Create native CELL/INFO calls without opening the workbook in Excel.
+
+    The fixture keeps location, information type, inputs, and defined-name
+    identities private. It proves FormulaFence inventories stored syntax and
+    static edges without evaluating a call or simulating a file/client/current
+    selection environment.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Native CELL and INFO environment-information controls"
+    inputs["A9"] = "PRIVATE-NATIVE-ENVIRONMENT-INPUT-BASELINE"
+    inputs["B2"] = '=CELL("filename")'
+    inputs["B3"] = '=CELL("type",A9)'
+    inputs["B4"] = '=INFO("directory")'
+    inputs["B5"] = "=FENCE.NATIVE.ENVIRONMENT(A9)"
+    inputs["B6"] = "=FENCE.NATIVE.DIRECT"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.NATIVE.ENVIRONMENT",
+            attr_text='=LAMBDA(value,CELL("filename")+INFO("system")+value)',
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.NATIVE.DIRECT",
+            attr_text='=CELL("filename")',
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_environment_information_definition(path: Path) -> Path:
+    """Change private native CELL/INFO material without changing counts."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.NATIVE.ENVIRONMENT"]
+    expected = '=LAMBDA(value,CELL("filename")+INFO("system")+value)'
+    if definition.attr_text != expected:
+        raise ValueError("Fixture does not contain the expected native environment call")
+    definition.attr_text = '=LAMBDA(value,CELL("filename")+INFO("osversion")+value)'
+    workbook.save(path)
+    return path
+
+
+def change_formula_environment_information_input(path: Path) -> Path:
+    """Change a static input used by a native CELL/INFO formula call."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-NATIVE-ENVIRONMENT-INPUT-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_python_in_excel_model(path: Path) -> Path:
     """Create a workbook with stored Python-in-Excel package code.
 

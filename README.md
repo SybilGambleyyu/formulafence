@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.75.0/formulafence-0.75.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.76.0/formulafence-0.76.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -122,6 +122,7 @@ rules:
   no_formula_defined_xlm_evaluation_changes: true
   no_formula_defined_xlm_get_cell_changes: true
   no_formula_defined_xlm_environment_information_changes: true
+  no_formula_environment_information_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -550,6 +551,33 @@ not asserted to change a stored call. Direct worksheet calls and raw XLM
 macro-sheet parts are deliberately outside this narrow stored-definition
 boundary. Enable no_formula_defined_xlm_environment_information_changes to
 block this boundary in CI.
+
+FormulaFence also keeps a separate **native CELL and INFO environment-
+information ledger** for ordinary worksheet formulas, formula-defined names,
+and named LAMBDA bodies. Microsoft's [CELL function
+documentation](https://support.microsoft.com/en-us/office/cell-function-51bd39a5-f338-4dbe-a33f-955d67c2b2cf)
+explains that CELL can return file, location, formatting, or content
+information and can use the selected cell when its optional reference is
+omitted. Microsoft's [INFO function
+documentation](https://support.microsoft.com/en-au/office/info-function-725f259a-0e4b-49b3-8b52-58815c69acae)
+lists operating-environment values such as the current folder, operating-system
+version, calculation mode, and workbook-count information. Those values can
+change even when visible precedents do not.
+
+The ledger propagates calls through nested and sheet-local formula names to
+invoking cells. Profiles and FF072/FFP072 details expose only formula-cell,
+call, relevant formula-defined-name, and omitted-CELL-reference counts;
+information types, references, formulas, arguments, cells, and name identities
+remain private. Same-count definition or invocation changes, uninvoked stored
+names, and ordinary edits that reach a call through a statically visible
+argument edge remain reviewable through private signatures.
+
+FormulaFence does not evaluate a formula or information call, determine an
+information type, resolve a dynamic reference, infer the selected cell,
+inspect a file/folder/client/workspace state, or simulate any of those states.
+A state-only workbook change is not asserted to change a call. The
+no_formula_environment_information_changes rule blocks material call,
+definition, invocation, or statically visible input changes in CI.
 
 FormulaFence separately inventories **Excel 4.0 / XLM macro sheets**. Unlike
 VBA, this executable automation is stored in raw macro-sheet XML parts (usually

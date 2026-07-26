@@ -692,6 +692,27 @@ review prompt, not proof of an error.
   worksheet calls and raw XLM macro-sheet parts remain intentionally outside
   this narrow boundary; dynamic/unresolved inputs remain static-coverage
   limits.
+- Native CELL and INFO calls can observe file/location/content or operating
+  environment information outside ordinary visible precedents. FormulaFence
+  inventories them in worksheet formulas, formula-defined names, and named
+  LAMBDA bodies, then propagates private signals through nested and sheet-local
+  names to invoking formula cells. Microsoft's [CELL function
+  documentation](https://support.microsoft.com/en-us/office/cell-function-51bd39a5-f338-4dbe-a33f-955d67c2b2cf)
+  notes that an omitted CELL reference can use the selected cell at calculation
+  time; FormulaFence therefore aggregates that subset privately without
+  inferring what the selection is. Microsoft's [INFO function
+  documentation](https://support.microsoft.com/en-au/office/info-function-725f259a-0e4b-49b3-8b52-58815c69acae)
+  describes operating-environment information such as directory, platform, and
+  calculation mode. A material stored definition, invocation, or ordinary
+  static argument-input change emits FF072; enable
+  no_formula_environment_information_changes for FFP072. Public output exposes
+  only formula-cell, call, relevant definition, and omitted-reference counts;
+  information types, references, formulas, arguments, locations, and name
+  identities remain private. FormulaFence does not evaluate a call, determine
+  an information type, resolve a dynamic argument, infer a selected cell, or
+  simulate file/folder/client/workspace state. A state-only workbook change is
+  not asserted to alter a call; dynamic/unresolved inputs remain explicit
+  static-coverage limits.
 - Office 2010 worksheet sparklines live in `x14:sparklineGroups` worksheet
   extensions, outside ordinary cell values. A group can be retargeted, moved,
   or have its type, axes, display, marker, line-weight, or colour controls

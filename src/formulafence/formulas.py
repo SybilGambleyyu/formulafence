@@ -61,6 +61,19 @@ _FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_FUNCTIONS = {
     "GET.WORKBOOK",
     "GET.WORKSPACE",
 }
+# ``CELL`` and ``INFO`` are ordinary worksheet functions, but their result can
+# depend on the current file, client, folder, selection, or other environment
+# state rather than just visible cell precedents.  Unlike the intentionally
+# narrow XLM boundary above, inspect these native calls wherever a formula can
+# be stored.  The private marker carries one additional static fact through a
+# named-formula chain: ``CELL`` was called without its optional reference.
+# Microsoft documents that Excel can then use the currently selected cell at
+# calculation time; FormulaFence inventories that surface without evaluating
+# the call or simulating a selection.
+_FORMULA_ENVIRONMENT_INFORMATION_FUNCTIONS = {"CELL", "INFO"}
+_FORMULA_ENVIRONMENT_INFORMATION_IMPLICIT_CELL_REFERENCE_MARKER = (
+    "FORMULAFENCE_CELL_IMPLICIT_REFERENCE_MARKER"
+)
 # Excel's native function catalog includes a small but important set of dotted
 # names.  A namespace separator is also how Office Add-in custom functions are
 # displayed (for example, ``CONTOSO.ADD``), so keep these known native names out
@@ -224,10 +237,31 @@ class FormulaInspection:
     formula_defined_xlm_evaluation_functions: tuple[str, ...] = ()
     formula_defined_xlm_get_cell_functions: tuple[str, ...] = ()
     formula_defined_xlm_environment_information_functions: tuple[str, ...] = ()
+    formula_environment_information_functions: tuple[str, ...] = ()
+    formula_environment_information_implicit_cell_reference_count: int = 0
     three_d_reference_tokens: tuple[str, ...] = ()
     tokenization_failed: bool = False
     spill_reference_tokens: tuple[str, ...] = ()
     implicit_intersection_tokens: tuple[str, ...] = ()
+
+    @property
+    def formula_environment_information_function_count(self) -> int:
+        """Return native CELL/INFO calls without exposing their arguments."""
+        return len(self.formula_environment_information_functions)
+
+    @property
+    def formula_environment_information_signal_values(self) -> tuple[str, ...]:
+        """Return private propagation values for named-formula resolution.
+
+        The marker is deliberately not part of
+        ``formula_environment_information_functions`` so normal consumers see
+        only native function names.  It remains necessary internally to retain
+        the statically visible omitted-reference distinction through a named
+        formula or named LAMBDA invocation chain.
+        """
+        return self.formula_environment_information_functions + (
+            _FORMULA_ENVIRONMENT_INFORMATION_IMPLICIT_CELL_REFERENCE_MARKER,
+        ) * self.formula_environment_information_implicit_cell_reference_count
 
 
 @dataclass(frozen=True)
@@ -1184,6 +1218,36 @@ def _formula_defined_xlm_environment_information_function(
     return None
 
 
+def _formula_environment_information_function(
+    tokens: Sequence[object], position: int
+) -> tuple[str, bool] | None:
+    """Return a native CELL/INFO call and whether CELL omits its reference.
+
+    This only reads token structure.  It intentionally does not inspect the
+    information type, calculate a formula, resolve a dynamic argument, or
+    infer the active cell.  A malformed CELL call still remains an inventory
+    item, but cannot safely be asserted to have the documented omitted-
+    reference behavior.
+    """
+    token = tokens[position]
+    raw_name = str(getattr(token, "value", "")).rstrip("(").strip()
+    normalized = raw_name.removeprefix("@").upper()
+    if normalized not in _FORMULA_ENVIRONMENT_INFORMATION_FUNCTIONS:
+        return None
+    if normalized != "CELL":
+        return normalized, False
+
+    closing = _matching_group_close(tokens, position, len(tokens))
+    if closing is None:
+        return normalized, False
+    arguments = _function_argument_spans(tokens, position + 1, closing)
+    has_single_nonempty_argument = len(arguments) == 1 and any(
+        not _is_whitespace(tokens[index])
+        for index in range(arguments[0][0], arguments[0][1])
+    )
+    return normalized, has_single_nonempty_argument
+
+
 def _fingerprint_token_value(token: object) -> str:
     """Normalize OOXML spellings of the two dynamic-array compatibility functions."""
     if (
@@ -1496,6 +1560,12 @@ def inspect_formula(
     named_function_formula_defined_xlm_environment_information_functions: (
         Mapping[str, Sequence[str]] | None
     ) = None,
+    named_formula_environment_information_functions: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
+    named_function_formula_environment_information_functions: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
     *,
     inspect_formula_defined_xlm_registrations: bool = False,
     inspect_formula_defined_xlm_evaluations: bool = False,
@@ -1568,6 +1638,12 @@ def inspect_formula(
     resolved_named_function_formula_defined_xlm_environment_information_calls = (
         named_function_formula_defined_xlm_environment_information_functions or {}
     )
+    resolved_named_formula_environment_information_calls = (
+        named_formula_environment_information_functions or {}
+    )
+    resolved_named_function_formula_environment_information_calls = (
+        named_function_formula_environment_information_functions or {}
+    )
     resolved_tables = structured_tables or {}
     references: list[ParsedReference] = []
     unresolved_range_tokens: list[str] = []
@@ -1580,6 +1656,8 @@ def inspect_formula(
     formula_defined_xlm_evaluation_functions: list[str] = []
     formula_defined_xlm_get_cell_functions: list[str] = []
     formula_defined_xlm_environment_information_functions: list[str] = []
+    formula_environment_information_functions: list[str] = []
+    formula_environment_information_implicit_cell_reference_count = 0
     three_d_reference_tokens: list[str] = []
     spill_reference_tokens: list[str] = list(literal_spill_tokens)
     implicit_intersection_tokens: list[str] = list(literal_implicit_intersection_tokens)
@@ -1587,6 +1665,17 @@ def inspect_formula(
     implicit_intersection_replacements = _implicit_intersection_reference_replacements(
         tokens, origin
     )
+
+    def extend_formula_environment_information_signals(
+        signals: Sequence[str],
+    ) -> None:
+        nonlocal formula_environment_information_implicit_cell_reference_count
+        for signal in signals:
+            if signal == _FORMULA_ENVIRONMENT_INFORMATION_IMPLICIT_CELL_REFERENCE_MARKER:
+                formula_environment_information_implicit_cell_reference_count += 1
+            else:
+                formula_environment_information_functions.append(signal)
+
     for position, token in enumerate(tokens):
         if token.type == "OPERAND" and token.subtype == "RANGE":
             if position in local_variable_indexes:
@@ -1633,6 +1722,11 @@ def inspect_formula(
                         named_key, ()
                     )
                 )
+                extend_formula_environment_information_signals(
+                    resolved_named_formula_environment_information_calls.get(
+                        named_key, ()
+                    )
+                )
                 continue
             if named_external_actions := resolved_named_formula_external_actions.get(
                 named_key
@@ -1673,6 +1767,12 @@ def inspect_formula(
             ):
                 formula_defined_xlm_environment_information_functions.extend(
                     named_formula_defined_xlm_environment_information_calls
+                )
+            if named_formula_environment_information_calls := (
+                resolved_named_formula_environment_information_calls.get(named_key)
+            ):
+                extend_formula_environment_information_signals(
+                    named_formula_environment_information_calls
                 )
             table_reference = resolve_structured_reference(
                 token.value, resolved_tables, origin
@@ -1721,6 +1821,11 @@ def inspect_formula(
                     )
                     formula_defined_xlm_environment_information_functions.extend(
                         resolved_named_function_formula_defined_xlm_environment_information_calls.get(
+                            function_key, ()
+                        )
+                    )
+                    extend_formula_environment_information_signals(
+                        resolved_named_function_formula_environment_information_calls.get(
                             function_key, ()
                         )
                     )
@@ -1806,6 +1911,22 @@ def inspect_formula(
                     formula_defined_xlm_environment_information_functions.append(
                         formula_defined_xlm_environment_information_function
                     )
+                if (
+                    function_key not in resolved_names
+                    and function_key not in resolved_named_functions
+                    and (
+                        formula_environment_information_function := (
+                            _formula_environment_information_function(tokens, position)
+                        )
+                    )
+                    is not None
+                ):
+                    function_name, has_implicit_cell_reference = (
+                        formula_environment_information_function
+                    )
+                    formula_environment_information_functions.append(function_name)
+                    if has_implicit_cell_reference:
+                        formula_environment_information_implicit_cell_reference_count += 1
             function_name = _function_name(token)
             if function_name in _DYNAMIC_REFERENCE_FUNCTIONS:
                 dynamic_reference_functions.append(function_name)
@@ -1848,6 +1969,12 @@ def inspect_formula(
         ),
         formula_defined_xlm_environment_information_functions=tuple(
             formula_defined_xlm_environment_information_functions
+        ),
+        formula_environment_information_functions=tuple(
+            formula_environment_information_functions
+        ),
+        formula_environment_information_implicit_cell_reference_count=(
+            formula_environment_information_implicit_cell_reference_count
         ),
         three_d_reference_tokens=tuple(dict.fromkeys(three_d_reference_tokens)),
         spill_reference_tokens=tuple(dict.fromkeys(spill_reference_tokens)),

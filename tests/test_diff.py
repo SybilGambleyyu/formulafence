@@ -65,6 +65,8 @@ from .helpers import (
     change_formula_defined_xlm_get_cell_input,
     change_formula_defined_xlm_registration_definition,
     change_formula_defined_xlm_registration_input,
+    change_formula_environment_information_definition,
+    change_formula_environment_information_input,
     change_formula_external_action_input,
     change_formula_external_action_target,
     change_gradient_fill_definition,
@@ -247,6 +249,7 @@ from .helpers import (
     make_formula_defined_xlm_evaluation_model,
     make_formula_defined_xlm_get_cell_model,
     make_formula_defined_xlm_registration_model,
+    make_formula_environment_information_model,
     make_formula_external_action_model,
     make_ignored_error_model,
     make_implicit_intersection_model,
@@ -3862,6 +3865,307 @@ def test_xlm_environment_information_respects_named_lambda_shadowing(tmp_path) -
         "environment_information_function_count": 0,
         "environment_information_defined_name_count": 0,
     }
+    assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_native_environment_information_calls_are_private_and_traced(tmp_path) -> None:
+    baseline = make_formula_environment_information_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_environment_information_model(tmp_path / "candidate.xlsx")
+    change_formula_environment_information_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_calls = {
+        "present": True,
+        "environment_information_formula_cell_count": 5,
+        "environment_information_function_count": 6,
+        "environment_information_defined_name_count": 2,
+        "implicit_cell_reference_function_count": 3,
+    }
+    assert baseline_snapshot.formula_environment_information_calls.to_dict() == expected_calls
+    assert (
+        baseline_snapshot.summary()[
+            "formula_environment_information_formula_cell_count"
+        ]
+        == 5
+    )
+    assert baseline_snapshot.summary()["formula_environment_information_function_count"] == 6
+    assert (
+        baseline_snapshot.summary()[
+            "formula_environment_information_implicit_cell_reference_function_count"
+        ]
+        == 3
+    )
+    assert baseline_snapshot.summary()["has_formula_environment_information_calls"] is True
+    assert (
+        baseline_snapshot.formula_environment_information_calls.environment_information_cells
+        == frozenset(
+            {
+                ("Inputs", "B2"),
+                ("Inputs", "B3"),
+                ("Inputs", "B4"),
+                ("Inputs", "B5"),
+                ("Inputs", "B6"),
+            }
+        )
+    )
+    assert profile["formula_environment_information_calls"] == expected_calls
+    assert "## Native CELL and INFO environment information" in profile_to_markdown(
+        profile
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    environment_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_environment_information_calls_changed"
+    )
+    environment_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF072"
+    )
+    assert environment_change.details["before"] == expected_calls
+    assert environment_change.details["after"] == expected_calls
+    assert (
+        environment_change.details[
+            "formula_environment_information_definition_material_changed"
+        ]
+        is True
+    )
+    assert environment_finding.details == environment_change.details
+
+    ff072_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF072"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["formula_environment_information_calls"]),
+        profile_to_markdown(profile),
+        json.dumps(environment_change.details),
+        json.dumps(environment_finding.to_dict()),
+        json.dumps(ff072_sarif_result),
+    )
+    for sensitive_value in (
+        "FENCE.NATIVE.ENVIRONMENT",
+        "PRIVATE-NATIVE-ENVIRONMENT-INPUT-BASELINE",
+        'CELL("filename")',
+        'INFO("system")',
+        'INFO("osversion")',
+        "FORMULAFENCE_CELL_IMPLICIT_REFERENCE_MARKER",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_native_environment_information_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_formula_environment_information_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_environment_information_model(tmp_path / "candidate.xlsx")
+    change_formula_environment_information_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.formula_environment_information_calls
+        == candidate_snapshot.formula_environment_information_calls
+    )
+    assert {("Inputs", "B3"), ("Inputs", "B5")} <= set(
+        baseline_snapshot.reverse_dependencies[("Inputs", "A9")]
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    environment_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_environment_information_calls_changed"
+    )
+    assert (
+        environment_change.details[
+            "formula_environment_information_static_input_changed"
+        ]
+        is True
+    )
+    assert (
+        environment_change.details[
+            "formula_environment_information_static_input_change_count"
+        ]
+        == 1
+    )
+    assert "FF072" in {finding.rule_id for finding in report.findings}
+
+
+def test_native_environment_information_state_is_not_simulated(tmp_path) -> None:
+    baseline = make_formula_environment_information_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_environment_information_model(tmp_path / "candidate.xlsx")
+    workbook = load_workbook(candidate)
+    workbook.create_sheet("Candidate State")
+    workbook.save(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.formula_environment_information_calls
+        == candidate_snapshot.formula_environment_information_calls
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    assert "FF072" not in {finding.rule_id for finding in report.findings}
+
+
+def test_native_environment_information_tracks_implicit_cell_reference_changes(
+    tmp_path,
+) -> None:
+    baseline = make_formula_environment_information_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_environment_information_model(tmp_path / "candidate.xlsx")
+    workbook = load_workbook(candidate)
+    workbook["Inputs"]["B2"] = '=CELL("filename",A1)'
+    workbook.save(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.formula_environment_information_calls.to_dict()[
+            "implicit_cell_reference_function_count"
+        ]
+        == 3
+    )
+    assert (
+        candidate_snapshot.formula_environment_information_calls.to_dict()[
+            "implicit_cell_reference_function_count"
+        ]
+        == 2
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    environment_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_environment_information_calls_changed"
+    )
+    assert (
+        environment_change.details[
+            "formula_environment_information_invocation_material_changed"
+        ]
+        is True
+    )
+
+
+def test_native_environment_information_respects_named_lambda_shadowing(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "shadowed-native-environment.xlsx")
+
+    def add_shadowing_lambda(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "CELL",
+                attr_text="=LAMBDA(value,value)",
+            )
+        )
+        workbook["Model"]["D2"] = '=CELL("filename")'
+
+    rewrite(workbook_path, add_shadowing_lambda)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_environment_information_calls.to_dict() == {
+        "present": False,
+        "environment_information_formula_cell_count": 0,
+        "environment_information_function_count": 0,
+        "environment_information_defined_name_count": 0,
+        "implicit_cell_reference_function_count": 0,
+    }
+    assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_uninvoked_native_environment_information_is_profiled(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "stored-native-environment.xlsx")
+
+    def add_stored_environment_call(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.NATIVE.STORED.ENVIRONMENT",
+                attr_text='=CELL("filename")',
+            )
+        )
+
+    rewrite(workbook_path, add_stored_environment_call)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_environment_information_calls.to_dict() == {
+        "present": True,
+        "environment_information_formula_cell_count": 0,
+        "environment_information_function_count": 0,
+        "environment_information_defined_name_count": 1,
+        "implicit_cell_reference_function_count": 0,
+    }
+    assert (
+        snapshot.formula_environment_information_calls.environment_information_cells
+        == frozenset()
+    )
+
+
+def test_recursive_named_native_environment_information_calls_are_cycle_safe(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "recursive-native-environment.xlsx")
+
+    def add_recursive_environment_call(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.NATIVE.ENVIRONMENT.LOOP",
+                attr_text=(
+                    '=LAMBDA(value,CELL("filename")'
+                    "+FENCE.NATIVE.ENVIRONMENT.LOOP(value))"
+                ),
+            )
+        )
+        workbook["Model"]["D2"] = "=FENCE.NATIVE.ENVIRONMENT.LOOP(Inputs!B2)"
+
+    rewrite(workbook_path, add_recursive_environment_call)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_environment_information_calls.to_dict() == {
+        "present": True,
+        "environment_information_formula_cell_count": 1,
+        "environment_information_function_count": 1,
+        "environment_information_defined_name_count": 1,
+        "implicit_cell_reference_function_count": 1,
+    }
+    assert snapshot.formula_environment_information_calls.environment_information_cells == (
+        frozenset({("Model", "D2")})
+    )
+    assert snapshot.unresolved_reference_tokens[("Model", "D2")] == (
+        "FENCE.NATIVE.ENVIRONMENT.LOOP",
+    )
+
+
+def test_scoped_native_environment_information_calls_follow_local_precedence(
+    tmp_path,
+) -> None:
+    workbook_path = make_scoped_named_lambda_model(tmp_path / "scoped-native.xlsx")
+    workbook = load_workbook(workbook_path)
+    model = workbook["Model"]
+    report = workbook["Report"]
+    model["D2"] = "=FENCE.NATIVE.ENVIRONMENT(A2)"
+    report["D2"] = "=Model!FENCE.NATIVE.ENVIRONMENT(A2)"
+    model.defined_names.add(
+        DefinedName(
+            "FENCE.NATIVE.ENVIRONMENT",
+            attr_text='=LAMBDA(value,CELL("filename")+value)',
+            localSheetId=1,
+        )
+    )
+    workbook.save(workbook_path)
+
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_environment_information_calls.to_dict() == {
+        "present": True,
+        "environment_information_formula_cell_count": 2,
+        "environment_information_function_count": 2,
+        "environment_information_defined_name_count": 1,
+        "implicit_cell_reference_function_count": 2,
+    }
+    assert snapshot.formula_environment_information_calls.environment_information_cells == (
+        frozenset({("Model", "D2"), ("Report", "D2")})
+    )
     assert snapshot.unresolved_reference_tokens == {}
 
 

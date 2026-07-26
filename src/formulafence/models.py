@@ -1267,6 +1267,59 @@ class FormulaDefinedXlmEnvironmentInformationSnapshot:
 
 
 @dataclass(frozen=True)
+class FormulaEnvironmentInformationSnapshot:
+    """Private ledger for native CELL and INFO formula calls.
+
+    Excel's ordinary CELL and INFO functions can observe workbook/file and
+    client environment information outside visible cell precedents. FormulaFence
+    inventories stored calls in worksheet formulas, formula-defined names, and
+    named LAMBDAs. It separately aggregates CELL calls whose optional reference
+    is omitted, because Excel may use the current selection at calculation time.
+    The ledger preserves material only in private signatures; it does not
+    evaluate a formula, determine an information type, resolve dynamic
+    arguments, or simulate file, client, workspace, or selection state.
+    """
+
+    environment_information_formula_cell_count: int = 0
+    environment_information_function_count: int = 0
+    environment_information_defined_name_count: int = 0
+    implicit_cell_reference_function_count: int = 0
+    invocation_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    environment_information_cells: frozenset[CellKey] = field(
+        default_factory=frozenset, repr=False
+    )
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.environment_information_formula_cell_count
+            or self.environment_information_defined_name_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate counts without environment or formula material."""
+        return {
+            "present": self.present,
+            "environment_information_formula_cell_count": (
+                self.environment_information_formula_cell_count
+            ),
+            "environment_information_function_count": (
+                self.environment_information_function_count
+            ),
+            "environment_information_defined_name_count": (
+                self.environment_information_defined_name_count
+            ),
+            "implicit_cell_reference_function_count": (
+                self.implicit_cell_reference_function_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class XlmMacroSheetSnapshot:
     """Safe aggregate of raw Excel 4.0 / XLM macro-sheet package parts.
 
@@ -3966,6 +4019,9 @@ class WorkbookSnapshot:
     formula_defined_xlm_environment_information_calls: (
         FormulaDefinedXlmEnvironmentInformationSnapshot
     ) = field(default_factory=FormulaDefinedXlmEnvironmentInformationSnapshot)
+    formula_environment_information_calls: FormulaEnvironmentInformationSnapshot = field(
+        default_factory=FormulaEnvironmentInformationSnapshot
+    )
     xlm_macro_sheets: XlmMacroSheetSnapshot = field(
         default_factory=XlmMacroSheetSnapshot
     )
@@ -4515,6 +4571,21 @@ class WorkbookSnapshot:
             ),
             "has_formula_defined_xlm_environment_information_calls": (
                 self.formula_defined_xlm_environment_information_calls.present
+            ),
+            "formula_environment_information_formula_cell_count": (
+                self.formula_environment_information_calls.environment_information_formula_cell_count
+            ),
+            "formula_environment_information_function_count": (
+                self.formula_environment_information_calls.environment_information_function_count
+            ),
+            "formula_environment_information_defined_name_count": (
+                self.formula_environment_information_calls.environment_information_defined_name_count
+            ),
+            "formula_environment_information_implicit_cell_reference_function_count": (
+                self.formula_environment_information_calls.implicit_cell_reference_function_count
+            ),
+            "has_formula_environment_information_calls": (
+                self.formula_environment_information_calls.present
             ),
             "xlm_macro_sheet_count": self.xlm_macro_sheets.macro_sheet_count,
             "xlm_macro_formula_cell_count": self.xlm_macro_sheets.formula_cell_count,

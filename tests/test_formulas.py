@@ -392,6 +392,49 @@ def test_formula_inspection_propagates_xlm_environment_information_calls() -> No
     assert named_formula.unresolved_range_tokens == ()
 
 
+def test_formula_inspection_inventories_native_environment_information_calls() -> None:
+    ordinary = inspect_formula(
+        '=CELL("filename")+@CELL("type",A1)+INFO("directory")'
+    )
+    shadowed = inspect_formula(
+        '=CELL("filename")',
+        named_function_references={"cell": ()},
+    )
+
+    assert ordinary.formula_environment_information_functions == (
+        "CELL",
+        "CELL",
+        "INFO",
+    )
+    assert ordinary.formula_environment_information_implicit_cell_reference_count == 1
+    assert ordinary.formula_environment_information_function_count == 3
+    assert shadowed.formula_environment_information_functions == ()
+
+
+def test_formula_inspection_propagates_native_environment_information_calls() -> None:
+    named_lambda = inspect_formula(
+        "=FENCE.ENVIRONMENT(A1)",
+        named_function_references={"fence.environment": ()},
+        named_function_formula_environment_information_functions={
+            "fence.environment": ("CELL", "INFO")
+        },
+    )
+    named_formula = inspect_formula(
+        "=FENCE.DIRECT",
+        named_references={"fence.direct": ()},
+        named_formula_environment_information_functions={
+            "fence.direct": ("CELL",)
+        },
+    )
+
+    assert named_lambda.formula_environment_information_functions == ("CELL", "INFO")
+    assert named_lambda.references == (
+        ParsedReference(None, 1, 1, 1, 1, raw="A1"),
+    )
+    assert named_formula.formula_environment_information_functions == ("CELL",)
+    assert named_formula.unresolved_range_tokens == ()
+
+
 def test_formula_inspection_recognises_a_known_named_constant() -> None:
     inspection = inspect_formula("=StaticRate", {"staticrate": ()})
 

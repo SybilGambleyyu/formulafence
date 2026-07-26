@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.76.0 — 2026-07-26
+
+- Add FF072, a private ledger for native Excel CELL and INFO calls in worksheet
+  formulas, formula-defined names, and named LAMBDA bodies. The calls can
+  observe file, folder, location, client, calculation, and workbook state
+  beyond ordinary visible precedents; FormulaFence captures stored syntax and
+  definition chains without evaluating a call or simulating Excel state.
+- Propagate stored calls through nested and sheet-local formula names to
+  invoking cells. Profiles aggregate only safe formula-cell, call,
+  formula-defined-name, and CELL-without-explicit-reference counts; same-count
+  definition/invocation changes, uninvoked names, and ordinary static input
+  edits remain reviewable through private signatures.
+- Add the fail-closed no_formula_environment_information_changes policy rule
+  (FFP072). FormulaFence does not infer the selected cell, determine an
+  information type, resolve dynamic arguments, inspect file/folder/client or
+  workspace state, or claim that a state-only workbook change alters a call.
+
 ## 0.75.0 — 2026-07-26
 
 - Add FF071, a private ledger for selected legacy XLM environment-information

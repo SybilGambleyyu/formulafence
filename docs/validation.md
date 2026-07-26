@@ -5,6 +5,58 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Native CELL and INFO environment-information boundary — 2026-07-26
+
+FormulaFence 0.76.0 was checked against Microsoft's [CELL function
+documentation](https://support.microsoft.com/en-us/office/cell-function-51bd39a5-f338-4dbe-a33f-955d67c2b2cf),
+which documents the optional reference and selected-cell behavior, and its
+[INFO function documentation](https://support.microsoft.com/en-au/office/info-function-725f259a-0e4b-49b3-8b52-58815c69acae),
+which lists current operating-environment values. The scope is intentionally
+static: FormulaFence inventories native CELL and INFO calls in worksheet
+formulas, formula-defined names, and named LAMBDAs, but never evaluates them
+or simulates their file, client, workspace, or selected-cell state.
+
+Four fresh, controlled `.xlsx` artifacts were generated without opening Excel.
+The baseline (SHA-256
+`e6ce60697af78490f8bbb5c4d0347018203eb03468857f6ec9fcfedc2f79cbdc`)
+uses direct CELL/INFO formulas, a named LAMBDA, and a formula-defined value.
+Its public ledger reports five invoking formula cells, six native calls, two
+relevant formula-defined names, and three CELL calls without an explicit
+reference. Changing only a private INFO definition (SHA-256
+`4a25058ea767207e44322fd49374045ce6fbd12997d58e9ca79de86b69cfb70b`)
+kept every public count fixed while emitting FF072 with the private
+definition-material flag. Changing only a statically visible shared input
+(SHA-256
+`23ef5299f3b5ed1a382b23391e3584b07037a77e5605fbe228488351752a7963`)
+kept the ledger equal and emitted FF072 with a static-input count of one.
+
+The state-only candidate (SHA-256
+`8fd70009b265b7601fe6b320e7c64a63c239885f88d8b05331cd64782b781580`)
+adds a worksheet while retaining the stored calls. It produced no FF072 or
+FFP072 and passed the narrow policy, proving the implementation does not claim
+to infer the selected cell or simulate a file, folder, client, workspace, or
+workbook state. The suite separately covers direct calls, explicit versus
+omitted CELL references, uninvoked stored names, recursive named LAMBDAs,
+sheet-local precedence, native-name shadowing, static inputs, and state-only
+changes. The full suite passed with 522 tests.
+
+The dedicated formula_environment_information_calls profile object and FF072 /
+FFP072 SARIF results excluded controlled names, values, formulas, arguments,
+and the private omitted-reference propagation marker. Ordinary defined-name and
+semantic-diff output deliberately retains normal reviewer context, so that
+redaction claim is limited to the dedicated ledger and policy-facing results.
+No formula or information call was evaluated, and no client/workbook state was
+simulated during validation.
+
+The staged formulafence-0.76.0-py3-none-any.whl (SHA-256
+`732d9994bd028a79d2a5da5ec5b0e41816c502ea7ec0c2002cd2a48c33ec64ca`)
+was built from the release tree and installed into a fresh virtual environment
+with its declared dependencies. Its CLI returned FormulaFence 0.76.0; its
+generated starter policy retained
+`no_formula_environment_information_changes: true`; the definition candidate
+exited 1 with FF072 and FFP072; and the state-only candidate exited 0 without
+either rule. The packaged profile retained the 5 / 6 / 2 / 3 ledger counts.
+
 ## Formula-defined XLM environment-information boundary — 2026-07-26
 
 FormulaFence 0.75.0 was checked against Microsoft's [Excel C API

@@ -39,10 +39,12 @@ from formulafence.formulas import (
     parse_external_link_indexed_defined_name_reference,
     parse_external_link_indexed_sheet_defined_name_reference,
     parse_external_link_indexed_workbook_reference,
+    parse_external_link_indexed_workbook_structured_reference,
     parse_external_link_indexed_workbook_three_d_reference,
     parse_external_workbook_defined_name_reference,
     parse_external_workbook_reference,
     parse_external_workbook_sheet_defined_name_reference,
+    parse_external_workbook_structured_reference,
     parse_external_workbook_three_d_reference,
     parse_reference_token,
     parse_workbook_defined_name_alias,
@@ -72,6 +74,7 @@ from formulafence.models import (
     ExternalRelationshipSnapshot,
     ExternalWorkbookDefinedNameReference,
     ExternalWorkbookReference,
+    ExternalWorkbookStructuredReference,
     ExternalWorkbookThreeDReference,
     FillSnapshot,
     FilterVisibilitySnapshot,
@@ -44134,6 +44137,7 @@ _ExternalAliasReference = TypeVar(
     "_ExternalAliasReference",
     ExternalWorkbookReference,
     ExternalWorkbookThreeDReference,
+    ExternalWorkbookStructuredReference,
     ExternalWorkbookDefinedNameReference,
 )
 
@@ -44516,6 +44520,80 @@ def _package_indexed_external_workbook_three_d_references(
     return result
 
 
+def _direct_external_workbook_structured_references(
+    workbook: object,
+) -> dict[str, tuple[ExternalWorkbookStructuredReference, ...]]:
+    """Keep exact global aliases for direct external table selectors.
+
+    A direct structured-reference endpoint identifies a source book and a
+    table, but no source worksheet.  It remains private until portfolio
+    analysis resolves the path against an already inspected candidate and
+    finds exactly one matching source-table definition.  Local names and
+    formula-valued aliases never enter this endpoint map.
+    """
+    names = getattr(workbook, "defined_names", {})
+    try:
+        items = names.items()
+    except AttributeError:
+        return {}
+    result: dict[str, tuple[ExternalWorkbookStructuredReference, ...]] = {}
+    for name, definition in items:
+        if getattr(definition, "localSheetId", None) is not None:
+            continue
+        reference = parse_external_workbook_structured_reference(
+            _definition_text(definition)
+        )
+        if reference is None:
+            continue
+        name_key = reference_lookup_key(str(name))
+        if name_key:
+            result[name_key] = (reference,)
+    return result
+
+
+def _package_indexed_external_workbook_structured_references(
+    workbook: object,
+    indexed_external_workbook_paths: Mapping[int, str],
+) -> dict[str, tuple[ExternalWorkbookStructuredReference, ...]]:
+    """Resolve direct global aliases for indexed external tables only.
+
+    A workbook name can store ``[1]!Sales[Amount]``. The index becomes useful
+    only after raw package metadata establishes one exact target spelling;
+    after that, the source table is still resolved only against a candidate
+    snapshot. Formula-valued aliases, local names, row-relative selectors,
+    and unresolved package indexes remain outside this graph.
+    """
+    if not indexed_external_workbook_paths:
+        return {}
+    names = getattr(workbook, "defined_names", {})
+    try:
+        items = names.items()
+    except AttributeError:
+        return {}
+    result: dict[str, tuple[ExternalWorkbookStructuredReference, ...]] = {}
+    for name, definition in items:
+        if getattr(definition, "localSheetId", None) is not None:
+            continue
+        indexed_reference = parse_external_link_indexed_workbook_structured_reference(
+            _definition_text(definition)
+        )
+        if indexed_reference is None:
+            continue
+        source_path = indexed_external_workbook_paths.get(indexed_reference.index)
+        if source_path is None:
+            continue
+        name_key = reference_lookup_key(str(name))
+        if name_key:
+            result[name_key] = (
+                ExternalWorkbookStructuredReference(
+                    source_path=source_path,
+                    table_name=indexed_reference.table_name,
+                    table_reference=indexed_reference.table_reference,
+                ),
+            )
+    return result
+
+
 def _table_columns(
     worksheet: object,
     table: object,
@@ -44845,6 +44923,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     external_workbook_three_d_references: dict[
         CellKey, tuple[ExternalWorkbookThreeDReference, ...]
     ] = {}
+    external_workbook_structured_references: dict[
+        CellKey, tuple[ExternalWorkbookStructuredReference, ...]
+    ] = {}
     external_workbook_defined_name_references: dict[
         CellKey, tuple[ExternalWorkbookDefinedNameReference, ...]
     ] = {}
@@ -45034,6 +45115,24 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             workbook_scoped_external_aliases,
         )
     )
+    package_indexed_external_workbook_structured_references = (
+        _package_indexed_external_workbook_structured_references(
+            workbook,
+            indexed_external_workbook_paths,
+        )
+    )
+    direct_external_workbook_structured_references = (
+        _direct_external_workbook_structured_references(workbook)
+    )
+    named_external_workbook_structured_references = (
+        _expand_workbook_scoped_external_aliases(
+            {
+                **package_indexed_external_workbook_structured_references,
+                **direct_external_workbook_structured_references,
+            },
+            workbook_scoped_external_aliases,
+        )
+    )
 
     for worksheet in workbook.worksheets:
         shadowing_local_names = local_defined_name_keys.get(
@@ -45052,6 +45151,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         visible_named_external_workbook_three_d_references = {
             name_key: references
             for name_key, references in named_external_workbook_three_d_references.items()
+            if name_key not in shadowing_local_names
+        }
+        visible_named_external_workbook_structured_references = {
+            name_key: references
+            for name_key, references in named_external_workbook_structured_references.items()
             if name_key not in shadowing_local_names
         }
         named_references = {
@@ -45235,6 +45339,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 ),
                 named_external_workbook_three_d_references=(
                     visible_named_external_workbook_three_d_references
+                ),
+                named_external_workbook_structured_references=(
+                    visible_named_external_workbook_structured_references
                 ),
                 structured_tables=structured_tables,
                 origin=snapshot.location,
@@ -45524,6 +45631,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 external_workbook_three_d_references[snapshot.location] = (
                     inspection.external_workbook_three_d_references
                 )
+            if inspection.external_workbook_structured_references:
+                external_workbook_structured_references[snapshot.location] = (
+                    inspection.external_workbook_structured_references
+                )
             if inspection.external_workbook_defined_name_references:
                 external_workbook_defined_name_references[snapshot.location] = (
                     inspection.external_workbook_defined_name_references
@@ -45801,6 +45912,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         dynamic_array_output_references=dynamic_array_output_references,
         external_workbook_references=external_workbook_references,
         external_workbook_three_d_references=external_workbook_three_d_references,
+        external_workbook_structured_references=(
+            external_workbook_structured_references
+        ),
         external_workbook_defined_name_references=(
             external_workbook_defined_name_references
         ),

@@ -11,14 +11,20 @@ from formulafence.formulas import (
     parse_external_link_indexed_defined_name_reference,
     parse_external_link_indexed_sheet_defined_name_reference,
     parse_external_link_indexed_workbook_reference,
+    parse_external_link_indexed_workbook_structured_reference,
     parse_external_link_indexed_workbook_three_d_reference,
     parse_external_workbook_defined_name_reference,
     parse_external_workbook_reference,
     parse_external_workbook_sheet_defined_name_reference,
+    parse_external_workbook_structured_reference,
     parse_external_workbook_three_d_reference,
     parse_workbook_defined_name_alias,
 )
-from formulafence.models import ExternalWorkbookReference, ExternalWorkbookThreeDReference
+from formulafence.models import (
+    ExternalWorkbookReference,
+    ExternalWorkbookStructuredReference,
+    ExternalWorkbookThreeDReference,
+)
 
 
 def test_fingerprint_normalises_relative_copy_patterns() -> None:
@@ -186,6 +192,85 @@ def test_external_workbook_three_d_references_keep_private_endpoints_for_portfol
         ("Inputs.xlsx", "Jan", "Mar"),
         ("..\\shared\\Other.xlsx", "Jan 2026", "Mar 2026"),
     ]
+
+
+def test_external_workbook_structured_references_keep_private_table_lookup_data() -> None:
+    direct = parse_external_workbook_structured_reference(
+        "'..\\shared\\Inputs.xlsx'!Sales[#Data]"
+    )
+    bracketed = parse_external_workbook_structured_reference(
+        "'..\\shared\\[Inputs.xlsx]'!Sales[[#Headers],[Amount]:[Rate]]"
+    )
+    leading_equals = parse_external_workbook_structured_reference(
+        "='..\\shared\\Inputs.xlsx'!Sales[Amount]"
+    )
+
+    assert direct is not None
+    assert (direct.source_path, direct.table_name, direct.table_reference) == (
+        "..\\shared\\Inputs.xlsx",
+        "Sales",
+        "Sales[#Data]",
+    )
+    assert repr(direct) == "ExternalWorkbookStructuredReference()"
+    assert bracketed is not None
+    assert (
+        bracketed.source_path,
+        bracketed.table_name,
+        bracketed.table_reference,
+    ) == (
+        "..\\shared\\Inputs.xlsx",
+        "Sales",
+        "Sales[[#Headers],[Amount]:[Rate]]",
+    )
+    assert leading_equals is not None
+    assert leading_equals.source_path == "..\\shared\\Inputs.xlsx"
+    assert parse_external_workbook_structured_reference(
+        "'[Inputs.xlsx]Data'!Sales[Amount]"
+    ) is None
+    assert parse_external_workbook_structured_reference(
+        "[Inputs.xlsx]Data!Sales[Amount]"
+    ) is None
+    assert parse_external_workbook_structured_reference(
+        "[Inputs.xlsx]!Sales[@Amount]"
+    ) is None
+    assert parse_external_workbook_structured_reference(
+        "'..\\shared\\Inputs.xlsx'!Sales"
+    ) is None
+    assert parse_external_workbook_structured_reference("[1]!Sales[Amount]") is None
+    assert parse_external_workbook_structured_reference(
+        "=SUM('[Inputs.xlsx]'!Sales[Amount])"
+    ) is None
+    assert parse_external_workbook_structured_reference(
+        "'..\\O'Brien\\Inputs.xlsx'!Sales[Amount]"
+    ) is None
+
+    inspection = inspect_formula(
+        "=SUM('..\\shared\\Inputs.xlsx'!Sales[Amount])"
+        "+SUM('..\\shared\\[Other.xlsx]'!Margin[#All])"
+    )
+    assert inspection.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in inspection.references)
+    assert [
+        (reference.source_path, reference.table_name, reference.table_reference)
+        for reference in inspection.external_workbook_structured_references
+    ] == [
+        ("..\\shared\\Inputs.xlsx", "Sales", "Sales[Amount]"),
+        ("..\\shared\\Other.xlsx", "Margin", "Margin[#All]"),
+    ]
+
+    row_relative = inspect_formula(
+        "=SUM('..\\shared\\Inputs.xlsx'!Sales[@Amount])"
+    )
+    assert len(row_relative.references) == 1
+    assert row_relative.references[0].is_external
+    assert row_relative.external_workbook_structured_references == ()
+    assert row_relative.unresolved_range_tokens == ()
+
+    bare_table = inspect_formula("=SUM('..\\shared\\Inputs.xlsx'!Sales)")
+    assert len(bare_table.references) == 1
+    assert bare_table.references[0].is_external
+    assert bare_table.external_workbook_structured_references == ()
+    assert bare_table.unresolved_range_tokens == ()
 
 
 def test_external_workbook_defined_name_references_keep_private_lookup_data() -> None:
@@ -620,6 +705,92 @@ def test_package_indexed_external_three_d_references_require_a_declared_index() 
         (reference.source_path, reference.first_sheet, reference.last_sheet)
         for reference in alias.external_workbook_three_d_references
     ] == [("../inputs/source.xlsx", "Jan", "Mar")]
+
+
+def test_package_indexed_external_structured_references_require_a_declared_index() -> None:
+    direct = parse_external_link_indexed_workbook_structured_reference(
+        "[1]!Sales[Amount]"
+    )
+    selector = parse_external_link_indexed_workbook_structured_reference(
+        "[42]!Sales[[#Data],[Amount]:[Rate]]"
+    )
+    leading_equals = parse_external_link_indexed_workbook_structured_reference(
+        "=[7]!Sales[#All]"
+    )
+
+    assert direct is not None
+    assert (direct.index, direct.table_name, direct.table_reference) == (
+        1,
+        "Sales",
+        "Sales[Amount]",
+    )
+    assert selector is not None
+    assert (selector.index, selector.table_reference) == (
+        42,
+        "Sales[[#Data],[Amount]:[Rate]]",
+    )
+    assert leading_equals is not None
+    assert leading_equals.index == 7
+    assert parse_external_link_indexed_workbook_structured_reference(
+        "[0]!Sales[Amount]"
+    ) is None
+    assert parse_external_link_indexed_workbook_structured_reference(
+        "[01]!Sales[Amount]"
+    ) is None
+    assert parse_external_link_indexed_workbook_structured_reference(
+        "'[1]'!Sales[Amount]"
+    ) is None
+    assert parse_external_link_indexed_workbook_structured_reference(
+        "[1]Data!Sales[Amount]"
+    ) is None
+    assert parse_external_link_indexed_workbook_structured_reference(
+        "[1]!Sales[@Amount]"
+    ) is None
+    assert parse_external_link_indexed_workbook_structured_reference(
+        "[1]!Sales[#This Row]"
+    ) is None
+    assert parse_external_link_indexed_workbook_structured_reference("[1]!A1") is None
+
+    inspection = inspect_formula(
+        "=SUM([1]!Sales[Amount])+SUM([2]!Margin[[#Data],[Net]:[Tax]])",
+        indexed_external_workbook_paths={
+            1: "../inputs/source.xlsx",
+            2: "../inputs/other.xlsx",
+        },
+    )
+    assert inspection.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in inspection.references)
+    assert [
+        (reference.source_path, reference.table_name, reference.table_reference)
+        for reference in inspection.external_workbook_structured_references
+    ] == [
+        ("../inputs/source.xlsx", "Sales", "Sales[Amount]"),
+        ("../inputs/other.xlsx", "Margin", "Margin[[#Data],[Net]:[Tax]]"),
+    ]
+
+    unresolved = inspect_formula("=SUM([1]!Sales[Amount])")
+    assert unresolved.unresolved_range_tokens == ()
+    assert unresolved.external_workbook_structured_references == ()
+    assert all(reference.is_external for reference in unresolved.references)
+
+    alias = inspect_formula(
+        "=PackageExternalTable",
+        named_external_workbook_structured_references={
+            "packageexternaltable": (
+                ExternalWorkbookStructuredReference(
+                    source_path="../inputs/source.xlsx",
+                    table_name="Sales",
+                    table_reference="Sales[Amount]",
+                ),
+            )
+        },
+    )
+    assert alias.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in alias.references)
+    assert [
+        (reference.source_path, reference.table_name, reference.table_reference)
+        for reference in alias.external_workbook_structured_references
+    ] == [("../inputs/source.xlsx", "Sales", "Sales[Amount]")]
 
 
 def test_formula_inspection_resolves_names_and_marks_static_coverage_gaps() -> None:

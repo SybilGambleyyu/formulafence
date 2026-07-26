@@ -17,6 +17,7 @@ from openpyxl.utils.cell import (
 from formulafence.models import (
     ExternalWorkbookDefinedNameReference,
     ExternalWorkbookReference,
+    ExternalWorkbookStructuredReference,
     ExternalWorkbookThreeDReference,
 )
 
@@ -396,6 +397,21 @@ class IndexedExternalWorkbookThreeDReference:
 
 
 @dataclass(frozen=True)
+class IndexedExternalWorkbookStructuredReference:
+    """One package-indexed external table selector without a source path.
+
+    A nonzero book index becomes meaningful only after the workbook package
+    validates its external-link declaration. Keep the table identity and its
+    exact static selector private until that separate candidate-only bridge
+    supplies a source path.
+    """
+
+    index: int
+    table_name: str
+    table_reference: str
+
+
+@dataclass(frozen=True)
 class FormulaInspection:
     """Static formula coverage collected from one formula without evaluation."""
 
@@ -405,6 +421,9 @@ class FormulaInspection:
     external_workbook_references: tuple[ExternalWorkbookReference, ...] = ()
     external_workbook_three_d_references: tuple[
         ExternalWorkbookThreeDReference, ...
+    ] = ()
+    external_workbook_structured_references: tuple[
+        ExternalWorkbookStructuredReference, ...
     ] = ()
     external_workbook_defined_name_references: tuple[
         ExternalWorkbookDefinedNameReference, ...
@@ -917,6 +936,203 @@ def parse_external_link_indexed_workbook_three_d_reference(
         min_row=min_row or 1,
         max_column=max_column or MAX_EXCEL_COLUMN,
         max_row=max_row or MAX_EXCEL_ROW,
+    )
+
+
+def _static_external_structured_table_reference(
+    value: str,
+) -> tuple[str, str] | None:
+    """Return one static table identity and selector, without resolving it.
+
+    The OOXML structured-reference grammar puts an external book prefix before
+    a table name, not before a source worksheet.  Reuse the ordinary static
+    table parser for the selector, but reject row-relative forms here: an
+    external source table has no safe relationship to the consuming formula's
+    row.  The original selector stays private until candidate portfolio
+    analysis can resolve it against exactly one inspected source table.
+    """
+    # A bare ``[N]!InputRange`` is indistinguishable from the longstanding
+    # package-indexed external defined-name form. Require a selector bracket
+    # so the new table boundary never steals that established interpretation.
+    if "[" not in value:
+        return None
+    parsed = _structured_reference_parts(value)
+    if parsed is None:
+        return None
+    table_name, groups, _ = parsed
+    if (
+        not table_name
+        or len(table_name) > 255
+        or table_name != table_name.strip()
+        or not _is_external_link_name_identity(table_name)
+        or parse_reference_token(table_name) is not None
+    ):
+        return None
+    if any(
+        group.strip().casefold() in {"#this row", "@"}
+        or group.strip().startswith("@")
+        for group in groups
+    ):
+        return None
+    return table_name, value.strip()
+
+
+def _is_static_direct_external_workbook_path(
+    source_path: str, *, quoted: bool
+) -> bool:
+    """Check a direct book-only path before later bounded resolution.
+
+    This is syntax validation, not filesystem validation.  The portfolio
+    resolver remains responsible for rejecting absolute paths, URIs, and any
+    target outside its already inspected candidate set.  Require a supported
+    workbook suffix here so a local ``Sheet!Table`` spelling cannot be
+    reclassified as an external-table source merely because its sheet name is
+    name-like.
+    """
+    if (
+        not source_path
+        or source_path != source_path.strip()
+        or "[" in source_path
+        or "]" in source_path
+        or any(character in "?*" for character in source_path)
+        or any(ord(character) < 32 or ord(character) == 127 for character in source_path)
+        or not source_path.casefold().endswith((".xlsx", ".xlsm"))
+    ):
+        return False
+    if not quoted and any(
+        character in "'+-*/^&=<>%,;(){}!" for character in source_path
+    ):
+        return False
+    return True
+
+
+def _parse_direct_external_workbook_only_prefix(
+    value: str,
+) -> tuple[str, str] | None:
+    """Split a direct book-only prefix used by an external table reference.
+
+    Excel's direct table-link spelling is ``'path/book.xlsx'!Table[Column]``
+    or ``'[book.xlsx]'!Table[Column]``.  Unlike external A1 syntax it has no
+    source-sheet suffix.  Keeping those forms separate avoids inventing a
+    sheet relationship for a table identifier and rejects the tempting but
+    nonstandard ``[book.xlsx]Sheet!Table[...]`` form.
+    """
+    token = value.strip()
+    if token.startswith("="):
+        token = token[1:].strip()
+        if not token.startswith(("[", "'")):
+            return None
+    prefix, payload = _split_sheet_reference(token)
+    if prefix is None or not payload:
+        return None
+    unescaped_prefix = _unescape_external_reference_prefix(prefix.strip())
+    if unescaped_prefix is None:
+        return None
+    raw_prefix, quoted = unescaped_prefix
+    if any(ord(character) < 32 or ord(character) == 127 for character in raw_prefix):
+        return None
+
+    opening = raw_prefix.find("[")
+    if opening >= 0:
+        closing = raw_prefix.find("]", opening + 1)
+        if closing < opening + 2 or closing != len(raw_prefix) - 1:
+            return None
+        source_prefix = raw_prefix[:opening]
+        workbook_name = raw_prefix[opening + 1 : closing]
+        if (
+            not workbook_name
+            or workbook_name != workbook_name.strip()
+            or "[" in source_prefix
+            or "]" in source_prefix
+            or any(character in "[]\\?*/:" for character in workbook_name)
+            or (source_prefix and not source_prefix.endswith(("/", "\\")))
+            or (
+                not quoted
+                and any(
+                    character in "'+-*/^&=<>%,;(){}!" for character in source_prefix
+                )
+            )
+            or (
+                not source_prefix
+                and
+                workbook_name.isascii()
+                and workbook_name.isdecimal()
+            )
+        ):
+            return None
+        source_path = f"{source_prefix}{workbook_name}"
+    else:
+        # An unbracketed source book is accepted only when it is quoted. This
+        # keeps a local name-like sheet prefix from being reinterpreted as a
+        # path while retaining Excel's documented direct table-link spelling.
+        if not quoted:
+            return None
+        source_path = raw_prefix
+
+    if not _is_static_direct_external_workbook_path(source_path, quoted=quoted):
+        return None
+    return source_path, payload
+
+
+def parse_external_workbook_structured_reference(
+    value: str,
+) -> ExternalWorkbookStructuredReference | None:
+    """Parse one direct static external table selector without resolving it.
+
+    A direct external structured reference uses a book-only prefix, for
+    example ``'../inputs/source.xlsx'!Sales[#Data]``.  The source path, table
+    identity, and selector are private candidate lookup data; no file is
+    opened here and no table calculation is attempted.
+    """
+    parsed_prefix = _parse_direct_external_workbook_only_prefix(value)
+    if parsed_prefix is None:
+        return None
+    source_path, selector = parsed_prefix
+    parsed_selector = _static_external_structured_table_reference(selector)
+    if parsed_selector is None:
+        return None
+    table_name, table_reference = parsed_selector
+    return ExternalWorkbookStructuredReference(
+        source_path=source_path,
+        table_name=table_name,
+        table_reference=table_reference,
+    )
+
+
+def parse_external_link_indexed_workbook_structured_reference(
+    value: str,
+) -> IndexedExternalWorkbookStructuredReference | None:
+    """Parse one package-indexed external table selector without resolving it.
+
+    The standards form ``[N]!Table[Column]`` uses an external-link collection
+    position, not a filename.  Keep only a nonzero index and static table
+    selector until raw package metadata validates one candidate source path.
+    Sheet-qualified forms deliberately remain outside this parser because an
+    external structured reference's table identifier is workbook-scoped.
+    """
+    token = value.strip()
+    if token.startswith("="):
+        token = token[1:].strip()
+    prefix, selector = _split_sheet_reference(token)
+    if prefix is None or not selector:
+        return None
+    unescaped_prefix = _unescape_external_reference_prefix(prefix.strip())
+    if unescaped_prefix is None:
+        return None
+    raw_prefix, quoted = unescaped_prefix
+    if quoted or not raw_prefix.startswith("[") or not raw_prefix.endswith("]"):
+        return None
+    index = _parse_external_link_index(raw_prefix[1:-1])
+    if index is None:
+        return None
+    parsed_selector = _static_external_structured_table_reference(selector)
+    if parsed_selector is None:
+        return None
+    table_name, table_reference = parsed_selector
+    return IndexedExternalWorkbookStructuredReference(
+        index=index,
+        table_name=table_name,
+        table_reference=table_reference,
     )
 
 
@@ -2604,6 +2820,9 @@ def inspect_formula(
     named_external_workbook_three_d_references: (
         Mapping[str, Sequence[ExternalWorkbookThreeDReference]] | None
     ) = None,
+    named_external_workbook_structured_references: (
+        Mapping[str, Sequence[ExternalWorkbookStructuredReference]] | None
+    ) = None,
     *,
     inspect_formula_defined_xlm_registrations: bool = False,
     inspect_formula_defined_xlm_evaluations: bool = False,
@@ -2647,6 +2866,9 @@ def inspect_formula(
     resolved_named_external_workbooks = named_external_workbook_references or {}
     resolved_named_external_workbook_three_d_references = (
         named_external_workbook_three_d_references or {}
+    )
+    resolved_named_external_workbook_structured_references = (
+        named_external_workbook_structured_references or {}
     )
     resolved_named_functions = named_function_references or {}
     resolved_named_custom_functions = named_custom_function_candidates or {}
@@ -2717,6 +2939,9 @@ def inspect_formula(
     dynamic_reference_functions: list[str] = []
     external_workbook_references: list[ExternalWorkbookReference] = []
     external_workbook_three_d_references: list[ExternalWorkbookThreeDReference] = []
+    external_workbook_structured_references: list[
+        ExternalWorkbookStructuredReference
+    ] = []
     external_workbook_defined_name_references: list[
         ExternalWorkbookDefinedNameReference
     ] = []
@@ -2763,6 +2988,38 @@ def inspect_formula(
                 implicit_intersection_tokens.append(token.value.strip())
             if selected_reference := implicit_intersection_replacements.get(position):
                 references.append(selected_reference)
+                continue
+            if indexed_external_workbook_structured_reference := (
+                parse_external_link_indexed_workbook_structured_reference(token.value)
+            ):
+                # The package index is only a declaration position, never a
+                # source filename. Keep an explicit external ledger entry even
+                # when package metadata cannot safely bind it to a candidate.
+                references.append(
+                    ParsedReference(
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        token.value,
+                        is_external=True,
+                    )
+                )
+                if source_path := resolved_indexed_external_workbook_paths.get(
+                    indexed_external_workbook_structured_reference.index
+                ):
+                    external_workbook_structured_references.append(
+                        ExternalWorkbookStructuredReference(
+                            source_path=source_path,
+                            table_name=(
+                                indexed_external_workbook_structured_reference.table_name
+                            ),
+                            table_reference=(
+                                indexed_external_workbook_structured_reference.table_reference
+                            ),
+                        )
+                    )
                 continue
             if indexed_external_name := (
                 parse_external_link_indexed_defined_name_reference(token.value)
@@ -2886,6 +3143,40 @@ def inspect_formula(
                         )
                     )
                 continue
+            if direct_external_table_prefix := (
+                _parse_direct_external_workbook_only_prefix(token.value)
+            ):
+                source_path, selector = direct_external_table_prefix
+                # A valid book-only table prefix is explicit external syntax
+                # even when its selector is row-relative or outside our static
+                # subset. Keep it in the ordinary external ledger so its raw
+                # source spelling does not become an unresolved-token payload.
+                references.append(
+                    ParsedReference(
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        token.value,
+                        is_external=True,
+                    )
+                )
+                if parsed_selector := _static_external_structured_table_reference(
+                    selector
+                ):
+                    table_name, table_reference = parsed_selector
+                    # The static source table becomes a dependency only after
+                    # candidate portfolio analysis resolves this private path
+                    # and selector against one inspected table definition.
+                    external_workbook_structured_references.append(
+                        ExternalWorkbookStructuredReference(
+                            source_path=source_path,
+                            table_name=table_name,
+                            table_reference=table_reference,
+                        )
+                    )
+                continue
             reference = parse_reference_token(token.value)
             if reference is not None:
                 references.append(reference)
@@ -2975,6 +3266,28 @@ def inspect_formula(
                 )
                 external_workbook_three_d_references.extend(
                     named_external_workbook_three_d_references
+                )
+                continue
+            if named_external_workbook_structured_references := (
+                resolved_named_external_workbook_structured_references.get(named_key)
+            ):
+                # Workbook-scoped aliases are expanded only from an exact
+                # direct or package endpoint. The selector and source path
+                # stay private and are resolved later against candidate table
+                # metadata, never against a live external workbook.
+                references.append(
+                    ParsedReference(
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        token.value,
+                        is_external=True,
+                    )
+                )
+                external_workbook_structured_references.extend(
+                    named_external_workbook_structured_references
                 )
                 continue
             if named_external_references := (
@@ -3344,6 +3657,9 @@ def inspect_formula(
         external_workbook_references=tuple(dict.fromkeys(external_workbook_references)),
         external_workbook_three_d_references=tuple(
             dict.fromkeys(external_workbook_three_d_references)
+        ),
+        external_workbook_structured_references=tuple(
+            dict.fromkeys(external_workbook_structured_references)
         ),
         external_workbook_defined_name_references=tuple(
             dict.fromkeys(external_workbook_defined_name_references)

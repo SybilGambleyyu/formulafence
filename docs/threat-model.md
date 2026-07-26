@@ -97,28 +97,34 @@ financial correctness or replace model review.
   supplied inventory. FormulaFence retains raw external source spellings and
   package targets only as private parser state, then resolves a direct static
   A1 source, an exact static external 3-D A1 span, a direct workbook-scoped or
-  sheet-local external name, or narrow package-indexed forms `[N]Sheet!A1`,
-  `[N]First:Last!A1`, `[N]!Name`, and `[N]Sheet!LocalName`. For an indexed
-  form, `N` must select exactly one
+  sheet-local external name, a direct book-only table selector, or narrow
+  package-indexed forms `[N]Sheet!A1`, `[N]First:Last!A1`, `[N]!Name`,
+  `[N]Sheet!LocalName`, and `[N]!Table[Column]`. For an indexed form, `N` must
+  select exactly one
   document-order `externalReference`, `externalLink` part, `externalBook`, and
   external `externalLinkPath` relationship before that target may normalize to
   one exact relative candidate. A workbook-scoped consumer alias may terminate
-  in one exact static indexed spelling or one direct A1,
-  workbook-scoped-name, or sheet-local spelling. It may reach that terminal
+  in one exact static indexed spelling or one direct A1, workbook-scoped-name,
+  sheet-local, or selector-bearing table spelling. It may reach that terminal
   through a finite, acyclic chain whose intermediate definitions are each one
   unqualified non-A1 name identity; a same-named sheet-local consumer
   definition shadows the workbook alias. A 3-D span is expanded only when its
   source candidate has a complete raw OOXML tab catalog consistent with the
   inspected ordinary-worksheet order, and only from exact forward endpoints.
   Sheet-scoped aliases, formula wrappers/expressions, missing or cyclic bridges,
-  caches, non-static package A1 forms, ambiguous package shapes, and spans with
-  missing, reversed, non-worksheet, or inconsistent-tab-catalog endpoints are
-  not expanded. A source name must also expand completely to static internal A1
+  caches, non-static package A1 forms, ambiguous package shapes, bare or
+  source-sheet-qualified table forms, `@`/`#This Row`, unsupported selectors,
+  missing/colliding source tables, and spans with missing, reversed,
+  non-worksheet, or inconsistent-tab-catalog endpoints are not expanded. A
+  source table must be the sole case-insensitive match in the inspected
+  candidate; FormulaFence then maps only its static selector bounds to source
+  cells. A source name must also expand completely to static internal A1
   destinations in that source candidate; an explicit source sheet selects only
   that local scope, never a global or other sheet fallback. It never opens a target path,
   searches by basename, follows an absolute/UNC/URI/escaping path, fetches
   anything, evaluates a formula, trusts cached external-link values, or emits
-  the stored external path or source-name spelling in portfolio evidence.
+  the stored external path, source-name spelling, table identity, or selector
+  in portfolio evidence.
   Ordinary source and consumer defined-name declarations remain normal profile
   context. Static ranges stay lazy. A global 100,000-state default bound emits
   `FF080` and exit status 2 rather than presenting incomplete `FF079` impact

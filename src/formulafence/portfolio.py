@@ -19,11 +19,17 @@ from typing import Any
 from openpyxl.utils.cell import coordinate_to_tuple
 
 from formulafence.diff import compare_snapshots
+from formulafence.formulas import (
+    ParsedReference,
+    StructuredTable,
+    resolve_structured_reference,
+)
 from formulafence.models import (
     SEVERITY_ORDER,
     CellKey,
     Change,
     DiffReport,
+    ExternalWorkbookStructuredReference,
     Finding,
     FormulaFenceError,
     WorkbookSnapshot,
@@ -326,6 +332,58 @@ def _canonical_three_d_sheet_span(
     return span
 
 
+def _canonical_external_table_references(
+    snapshot: WorkbookSnapshot,
+    reference: ExternalWorkbookStructuredReference,
+) -> tuple[ParsedReference, ...]:
+    """Resolve one external table selector only against one source snapshot.
+
+    A table identifier is workbook-scoped.  It is safe to create candidate
+    graph edges only when the inspected source snapshot contains exactly one
+    case-insensitive table-name match, its worksheet identity is unambiguous,
+    and the existing static structured-reference resolver can turn the
+    selector into fixed source cells.  Current-row and unsupported selectors
+    return no references rather than approximating a relationship.
+    """
+    tables = [
+        table
+        for table in snapshot.tables.values()
+        if table.name.casefold() == reference.table_name.casefold()
+    ]
+    if len(tables) != 1:
+        return ()
+    table = tables[0]
+    source_sheet = _canonical_sheet_name(snapshot, table.sheet)
+    if source_sheet is None:
+        return ()
+    source_table = StructuredTable(
+        name=table.name,
+        sheet=source_sheet,
+        ref=table.ref,
+        columns=table.columns,
+        header_row_count=table.header_row_count,
+        totals_row_count=table.totals_row_count,
+    )
+    resolved = resolve_structured_reference(
+        reference.table_reference,
+        {table.name.casefold(): source_table},
+    )
+    if resolved is None:
+        return ()
+    return tuple(
+        source_reference
+        for source_reference in resolved
+        if source_reference.sheet == source_sheet
+        and None
+        not in {
+            source_reference.min_column,
+            source_reference.min_row,
+            source_reference.max_column,
+            source_reference.max_row,
+        }
+    )
+
+
 def _build_candidate_impact_graph(
     entries: Iterable[PortfolioWorkbookReport],
 ) -> _PortfolioImpactGraph:
@@ -396,6 +454,41 @@ def _build_candidate_impact_graph(
                         min_row=reference.min_row,
                         max_column=reference.max_column,
                         max_row=reference.max_row,
+                        dependent=(dependent_workbook, dependent_location),
+                    )
+                    external_dependents[
+                        (source_workbook, source_sheet.casefold())
+                    ].append(dependency)
+
+        for dependent_location in sorted(
+            snapshot.external_workbook_structured_references,
+            key=_location_sort_key,
+        ):
+            for reference in snapshot.external_workbook_structured_references[
+                dependent_location
+            ]:
+                source_workbook = _resolve_relative_external_workbook(
+                    dependent_workbook,
+                    reference.source_path,
+                    candidate_paths,
+                )
+                if source_workbook is None:
+                    continue
+                source_snapshot = snapshots[source_workbook]
+                for source_reference in _canonical_external_table_references(
+                    source_snapshot,
+                    reference,
+                ):
+                    source_sheet = source_reference.sheet
+                    if source_sheet is None:  # defensive; helper validates bounds/sheet
+                        continue
+                    dependency = _ExternalPortfolioDependency(
+                        source_workbook=source_workbook,
+                        source_sheet=source_sheet,
+                        min_column=source_reference.min_column,
+                        min_row=source_reference.min_row,
+                        max_column=source_reference.max_column,
+                        max_row=source_reference.max_row,
                         dependent=(dependent_workbook, dependent_location),
                     )
                     external_dependents[

@@ -10,12 +10,15 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook, load_workbook
 from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.table import Table
 
 from formulafence.cli import main
+from formulafence.models import ExternalWorkbookStructuredReference
 from formulafence.output import as_json, portfolio_to_markdown, portfolio_to_sarif
 from formulafence.policy import parse_policy
 from formulafence.portfolio import (
     PortfolioError,
+    _canonical_external_table_references,
     _canonical_three_d_sheet_span,
     compare_portfolios,
     discover_workbooks,
@@ -45,6 +48,32 @@ def _write_workbook(path: Path, sheet_name: str, cells: dict[str, object]) -> Pa
     worksheet.title = sheet_name
     for coordinate, value in cells.items():
         worksheet[coordinate] = value
+    workbook.save(path)
+    return path
+
+
+def _write_table_source_workbook(path: Path) -> Path:
+    """Create a small source table whose data cells can change independently."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Data"
+    for coordinate, value in {
+        "B2": "Amount",
+        "C2": "Rate",
+        "D2": "Label",
+        "B3": 10,
+        "C3": 0.1,
+        "D3": "North",
+        "B4": 20,
+        "C4": 0.2,
+        "D4": "South",
+        "B5": 30,
+        "C5": 0.3,
+        "D5": "West",
+    }.items():
+        worksheet[coordinate] = value
+    worksheet.add_table(Table(displayName="Sales", ref="B2:D5"))
     workbook.save(path)
     return path
 
@@ -367,6 +396,222 @@ def test_portfolio_resolves_relative_external_workbook_defined_names_privately(
     assert all("PrivateInputRange" not in value for value in rendered)
     assert all("PrivateInputAlias" not in value for value in rendered)
     assert all("DynamicInputRange" not in value for value in rendered)
+
+
+def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    source_path = _write_table_source_workbook(baseline / "inputs" / "source.xlsx")
+    consumer_path = _write_workbook(
+        baseline / "reports" / "summary.xlsx",
+        "Summary",
+        {
+            "D2": "=SUM('..\\inputs\\source.xlsx'!Sales[Amount])",
+            "E2": "=SUM('..\\inputs\\[source.xlsx]'!Sales[[#Data],[Amount]:[Rate]])",
+            "F2": "=SUM(DirectExternalTable)",
+            "G2": "=SUM(DirectExternalTableBridge)",
+            "H2": "=SUM('..\\inputs\\source.xlsx'!Sales[#Headers])",
+            "I2": "=SUM('..\\inputs\\source.xlsx'!Sales[@Amount])",
+            "J2": "=SUM('..\\inputs\\source.xlsx'!MissingTable[Amount])",
+            "K2": "=SUM('[source.xlsx]Data'!Sales[Amount])",
+            "L2": "=SUM('C:\\Private\\source.xlsx'!Sales[Amount])",
+            "M2": "=SUM(DirectExternalTableShadowed)",
+        },
+    )
+    consumer = load_workbook(consumer_path)
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalTable",
+            attr_text="'..\\inputs\\source.xlsx'!Sales[Amount]",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalTableBridge",
+            attr_text="=DirectExternalTable",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalTableShadowed",
+            attr_text="'..\\inputs\\source.xlsx'!Sales[Amount]",
+        )
+    )
+    consumer["Summary"].defined_names.add(
+        DefinedName(
+            "DirectExternalTableShadowed",
+            attr_text="Summary!$A$1",
+            localSheetId=0,
+        )
+    )
+    consumer.save(consumer_path)
+
+    source_snapshot = load_snapshot(source_path)
+    table_reference = ExternalWorkbookStructuredReference(
+        source_path="../inputs/source.xlsx",
+        table_name="Sales",
+        table_reference="Sales[Amount]",
+    )
+    assert [
+        (
+            reference.sheet,
+            reference.min_column,
+            reference.min_row,
+            reference.max_column,
+            reference.max_row,
+        )
+        for reference in _canonical_external_table_references(
+            source_snapshot,
+            table_reference,
+        )
+    ] == [("Data", 2, 3, 2, 5)]
+    for selector, expected_bounds in {
+        "Sales[#Headers]": [(2, 2, 4, 2)],
+        "Sales[#Data]": [(2, 3, 4, 5)],
+        "Sales[#All]": [(2, 2, 4, 5)],
+        "Sales[[#Data],[Amount]:[Rate]]": [(2, 3, 3, 5)],
+        "Sales[#Totals]": [],
+    }.items():
+        assert [
+            (
+                reference.min_column,
+                reference.min_row,
+                reference.max_column,
+                reference.max_row,
+            )
+            for reference in _canonical_external_table_references(
+                source_snapshot,
+                replace(table_reference, table_reference=selector),
+            )
+        ] == expected_bounds
+    sales = next(table for table in source_snapshot.tables.values() if table.name == "Sales")
+    ambiguous_snapshot = replace(
+        source_snapshot,
+        tables={
+            **source_snapshot.tables,
+            "case-collision": replace(sales, name="sales"),
+        },
+    )
+    assert _canonical_external_table_references(ambiguous_snapshot, table_reference) == ()
+
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs" / "source.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B3"], "value", 11),
+    )
+
+    report = compare_portfolios(
+        baseline,
+        candidate,
+        policy=parse_policy(
+            {"version": 1, "rules": {"no_cross_workbook_impacts": True}}
+        ),
+    )
+    source_entry = next(
+        entry for entry in report.workbooks if entry.path == "inputs/source.xlsx"
+    )
+    finding = next(
+        finding for finding in source_entry.findings if finding.rule_id == "FF079"
+    )
+    consumer_entry = next(
+        entry for entry in report.workbooks if entry.path == "reports/summary.xlsx"
+    )
+    assert consumer_entry.after is not None
+    report_rendered = (
+        as_json(report.to_dict()),
+        portfolio_to_markdown(report),
+        as_json(portfolio_to_sarif(report)),
+    )
+    profile_rendered = as_json(profile_snapshot(consumer_entry.after))
+
+    assert not report.incomplete
+    assert finding.location == ("Data", "B3")
+    assert finding.details["impacted_workbook_count"] == 1
+    assert finding.details["impacted_formula_count"] == 4
+    assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
+        "Summary!D2",
+        "Summary!E2",
+        "Summary!F2",
+        "Summary!G2",
+    ]
+    assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
+    snapshot_repr = repr(consumer_entry.after.external_workbook_structured_references)
+    for private_value in (
+        "..\\inputs\\source.xlsx",
+        "Sales[Amount]",
+        "Sales[[#Data],[Amount]:[Rate]]",
+        "Sales[@Amount]",
+        "MissingTable[Amount]",
+    ):
+        assert private_value not in snapshot_repr
+        assert all(private_value not in value for value in report_rendered)
+        assert private_value not in profile_rendered
+    for private_alias in (
+        "DirectExternalTable",
+        "DirectExternalTableBridge",
+        "DirectExternalTableShadowed",
+    ):
+        assert all(private_alias not in value for value in report_rendered)
+
+
+def test_portfolio_resolves_declared_package_indexed_external_tables_privately(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    _write_table_source_workbook(baseline / "inputs" / "source.xlsx")
+    _write_workbook(baseline / "decoy.xlsx", "Data", {"B3": 999})
+    make_indexed_external_workbook_name_link_model(
+        baseline / "reports" / "summary.xlsx",
+        target_paths=("../decoy.xlsx", "../inputs/source.xlsx"),
+        link_index=2,
+        external_reference="[2]!Sales[Amount]",
+        consumer_alias_name="PackageExternalTable",
+        consumer_formula_alias=True,
+    )
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs" / "source.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B3"], "value", 11),
+    )
+
+    report = compare_portfolios(
+        baseline,
+        candidate,
+        policy=parse_policy(
+            {"version": 1, "rules": {"no_cross_workbook_impacts": True}}
+        ),
+    )
+    source_entry = next(
+        entry for entry in report.workbooks if entry.path == "inputs/source.xlsx"
+    )
+    finding = next(
+        finding for finding in source_entry.findings if finding.rule_id == "FF079"
+    )
+    consumer_entry = next(
+        entry for entry in report.workbooks if entry.path == "reports/summary.xlsx"
+    )
+    assert consumer_entry.after is not None
+    report_rendered = (
+        as_json(report.to_dict()),
+        portfolio_to_markdown(report),
+        as_json(portfolio_to_sarif(report)),
+    )
+    profile_rendered = as_json(profile_snapshot(consumer_entry.after))
+
+    assert not report.incomplete
+    assert finding.details["impacted_workbook_count"] == 1
+    assert finding.details["impacted_formula_count"] == 2
+    assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
+        "Model!D2",
+        "Model!E2",
+    ]
+    assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
+    for private_value in ("Sales[Amount]", "../inputs/source.xlsx"):
+        assert all(private_value not in value for value in report_rendered)
+        assert private_value not in profile_rendered
+    assert all("PackageExternalTable" not in value for value in report_rendered)
+    assert "PackageExternalTable" in profile_rendered
 
 
 def test_portfolio_resolves_declared_package_indexed_external_names_privately(

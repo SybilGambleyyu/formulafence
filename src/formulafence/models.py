@@ -61,6 +61,22 @@ class ExternalWorkbookThreeDReference:
 
 
 @dataclass(frozen=True)
+class ExternalWorkbookStructuredReference:
+    """One static structured-table reference to another workbook.
+
+    An external workbook path, table identity, and selector can disclose a
+    model's private layout. They are therefore retained only as private lookup
+    data. Portfolio analysis may turn the selector into candidate-table cell
+    bounds only after its source path resolves to an already inspected
+    workbook with exactly one matching table.
+    """
+
+    source_path: str = field(repr=False)
+    table_name: str = field(repr=False)
+    table_reference: str = field(repr=False)
+
+
+@dataclass(frozen=True)
 class ExternalWorkbookDefinedNameReference:
     """One direct external defined-name reference to another workbook.
 
@@ -4411,6 +4427,12 @@ class WorkbookSnapshot:
     # order of an already inspected candidate source workbook.
     external_workbook_three_d_references: dict[
         CellKey, tuple[ExternalWorkbookThreeDReference, ...]
+    ] = field(default_factory=dict, repr=False)
+    # External table selectors are retained separately from A1 spans. Their
+    # private source/table identities are resolved only against an already
+    # inspected candidate table definition.
+    external_workbook_structured_references: dict[
+        CellKey, tuple[ExternalWorkbookStructuredReference, ...]
     ] = field(default_factory=dict, repr=False)
     # Direct external workbook-defined names are retained separately from
     # external A1 ranges. Both their source spelling and the name itself stay

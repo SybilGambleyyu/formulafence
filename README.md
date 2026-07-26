@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.93.0/formulafence-0.93.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.94.0/formulafence-0.94.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.93.0
+  uses: SybilGambleyyu/formulafence@v0.94.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -92,21 +92,24 @@ present on only one side emits high-severity `FF077`; enable
 guesses renames, so a move remains a visible removal plus addition.
 
 When a changed candidate cell is read through a direct static external A1
-reference or a static external 3-D A1 span such as
+reference, a static external 3-D A1 span such as
 `=[Inputs.xlsx]Jan:Mar!$B$2`, the documented workbook-scoped name form such as
 `=[Inputs.xlsx]InputRange`, the sheet-local name form such as
 `=[Inputs.xlsx]Data!LocalInput`, or Excel's package-indexed cell/range or name
 forms such as `=[1]Data!$B$2:$B$4`, `=[1]!InputRange`, and
 `=[1]Data!LocalInput` (including the indexed 3-D form
-`=[1]Jan:Mar!$B$2`), by a formula in another candidate workbook,
+`=[1]Jan:Mar!$B$2`), or an external structured-table selector such as
+`='..\\inputs\\source.xlsx'!Sales[Amount]` or `=[1]!Sales[#Data]`, by a
+formula in another candidate workbook,
 FormulaFence emits high-severity `FF079` with relative workbook/cell paths and
 deterministic shortest-path samples. Any supported form may be retained through
 a finite, acyclic chain of workbook-scoped consumer aliases. Its terminal may
-be a direct external A1 or workbook-scoped-name alias such as a defined name
-storing `'..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4` or
-`'..\\inputs\\[Inputs.xlsx]InputRange'`; every intermediate definition must
-be exactly one unqualified, non-A1 name identity, with or without its leading
-`=`.
+be a direct external A1, workbook-scoped-name, or selector-bearing table alias
+such as a defined name storing `'..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4`,
+`'..\\inputs\\[Inputs.xlsx]InputRange'`, or
+`'..\\inputs\\source.xlsx'!Sales[Amount]`; every intermediate definition
+must be exactly one unqualified, non-A1 name identity, with or without its
+leading `=`.
 An indexed form is eligible only when its one-based
 `externalReferences` declaration identifies exactly one `externalBook` and
 external `externalLinkPath` relationship whose target resolves to one exact
@@ -116,7 +119,11 @@ that source candidate has a complete raw OOXML tab catalog consistent with its
 inspected worksheet order; its endpoints must be exact, forward, ordinary
 worksheets. A source name must fully expand to static internal A1 destinations
 without evaluation; a sheet-local spelling uses only the matching source sheet's
-local scope, never a same-named global fallback. Enable
+local scope, never a same-named global fallback. An external table spelling is
+book-only (not source-sheet-qualified), must include an explicit selector, and
+is resolved only when its source candidate has exactly one case-insensitive
+matching table. FormulaFence then uses only its static `#All`, `#Data`,
+`#Headers`, `#Totals`, column, or contiguous-column bounds. Enable
 `no_cross_workbook_impacts` to make that evidence `FFP079`.
 
 This is deliberately a narrow local graph: it never opens or fetches a link
@@ -129,7 +136,8 @@ malformed/ambiguous package declarations, non-workbook package links,
 non-static package-A1 forms, sheet-scoped consumer aliases, and consumer
 formula wrappers, expressions, ranges, or cyclic/missing alias chains (and a
 sheet-local consumer name shadows a same-named workbook alias),
-missing/unknown/wrong-scope source locals, direct structured, dynamic, or
+missing/unknown/wrong-scope source locals, bare or sheet-qualified table names,
+`@`/`#This Row`, unsupported/missing/colliding source tables, dynamic or
 otherwise non-statically-expanded name forms, and 3-D spans with missing,
 reversed, non-worksheet, or inconsistent-tab-catalog endpoints remain ordinary
 external-link coverage rather than being approximated. A defined-name
@@ -2037,7 +2045,10 @@ Unknown endpoints and non-A1 constructs remain explicit coverage cases rather
 than invented dependencies. Exact static external 3-D A1 spans are separately
 eligible for the candidate-only portfolio graph when their source candidate has
 a complete consistent tab catalog; other external 3-D forms remain external-link
-hazards. This follows Excel's
+hazards. Exact external table selectors are separately eligible only after an
+exact source candidate yields one matching table and static source-cell bounds;
+row-relative and source-sheet-qualified table forms remain coverage gaps. This
+follows Excel's
 [3-D-reference behavior](https://support.microsoft.com/en-us/excel/create-a-3-d-reference-to-the-same-cell-range-on-multiple-worksheets).
 
 ## Development

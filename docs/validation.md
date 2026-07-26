@@ -5,6 +5,40 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Candidate-only external structured-table selectors — 2026-07-26
+
+Microsoft's [structured-reference grammar](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/089fbdef-ed49-4a14-9509-794c95651b17)
+defines a table identifier as a workbook prefix plus a table name, followed by
+the table selector; it does not add a source worksheet to that identifier. Its
+[structured-reference guidance](https://support.microsoft.com/en-US/Excel/using-structured-references-with-excel-tables)
+also documents the data/header/total selector semantics and external-workbook
+constraint. FormulaFence 0.94.0 therefore accepts only book-only,
+selector-bearing direct forms such as `='..\\inputs\\source.xlsx'!Table1[Column2]`
+and package-validated forms such as `=[1]!Table1[Column2]`. It resolves the
+selector only after finding exactly one case-insensitive matching table in the
+already inspected candidate source; it does not open, fetch, refresh, evaluate,
+or use cached external data.
+
+The independently maintained [XlsxWriter table comparison fixture](https://github.com/jmcnamara/XlsxWriter/blob/main/xlsxwriter/test/comparison/xlsx_files/table09.xlsx)
+was downloaded to a temporary directory outside this repository (SHA-256
+`bf30d9a6b8b94cd5f75c15316a41d54c4063a5745e32ff2f89eb39d252605a04`). It
+contains `Table1` over `Sheet1!B3:K6`. A disposable source copy was paired with
+a separate consumer using direct one-column and two-column `#Data` selectors,
+plus a direct workbook-name alias and one-hop alias. Source-sheet-qualified and
+`@` controls remained outside the graph. Changing only the copy's
+`Sheet1!C4` produced exactly four `FF079` impacts and `FFP079` at
+`Summary!D2`, `Summary!E2`, `Summary!F2`, and `Summary!G2`. JSON, Markdown,
+and SARIF omitted the raw selectors and controlled consumer aliases; the safe
+profile also omitted the selector text. The upstream artifact was never
+executed, refreshed, changed in place, or copied into this repository.
+
+The 0.94.0 source tree passed **624 tests in 82.34 seconds**, a clean Ruff
+check, and `git diff --check` before packaging. Fresh 0.94.0 source and wheel
+distributions passed `twine check`. An isolated environment installed the exact
+final wheel and reran the temporary public portfolio through its CLI; it
+returned policy exit `1` with `FF079` and `FFP079`, while the raw selectors and
+controlled aliases remained absent from its JSON output.
+
 ## Candidate-only external 3-D A1 spans — 2026-07-26
 
 Microsoft's [cell-reference grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/3c420ebb-6ef1-4b0d-959d-76e88c841c3e)

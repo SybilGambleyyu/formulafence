@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.93.0
+        uses: SybilGambleyyu/formulafence@v0.94.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -72,7 +72,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.93.0
+  uses: SybilGambleyyu/formulafence@v0.94.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -95,34 +95,40 @@ workbooks per directory. The Action also passes `max-link-impact` to the
 candidate-only static cross-workbook graph; its default is 100,000
 source-to-node states across the portfolio.
 
-When an exact relative external A1 link or 3-D span such as
+When an exact relative external A1 link, 3-D span such as
 `=[Inputs.xlsx]Jan:Mar!$B$2`, direct workbook-scoped name such as
 `=[Inputs.xlsx]InputRange`, direct sheet-local name such as
 `=[Inputs.xlsx]Data!LocalInput`, or package-indexed cell/range or name such as
-`=[1]Data!$B$2:$B$4`, `=[1]!InputRange`, or `=[1]Data!LocalInput` connects a
+`=[1]Data!$B$2:$B$4`, `=[1]!InputRange`, or `=[1]Data!LocalInput`, or a
+book-only structured-table selector such as
+`='..\\inputs\\source.xlsx'!Sales[Amount]` or `=[1]!Sales[#Data]` connects a
 changed source cell to a formula in another candidate workbook, the report
 emits `FF079` with safe relative workbook identities, logical cells, and
 shortest-path samples. An indexed form is eligible only when its document-order
 `externalReference` reaches exactly one external workbook part and external
 `externalLinkPath` relationship. Any supported form may be retained through a
 finite, acyclic chain of workbook-scoped consumer aliases. Its terminal is one
-exact direct external A1 or workbook-scoped-name definition (or the
-corresponding validated package form), and every intermediate definition is
-exactly one unqualified, non-A1 name identity with or without its leading `=`.
+exact direct external A1, workbook-scoped-name, or selector-bearing table
+definition (or the corresponding validated package form), and every
+intermediate definition is exactly one unqualified, non-A1 name identity with
+or without its leading `=`.
 The matched source candidate must expand a name completely to static internal A1
 destinations. An explicit source sheet uses only that sheet's local name scope,
 never a global fallback. An external 3-D span may use the matching indexed form
 `=[N]Jan:Mar!$B$2`; it is expanded only across exact forward ordinary-worksheet
 endpoints after the source candidate exposes a complete raw OOXML tab catalog
-consistent with its inspected worksheet order.
+consistent with its inspected worksheet order. A table reference is resolved
+only against exactly one case-insensitive table-name match in that inspected
+source candidate, using its static column/item bounds.
 `no_cross_workbook_impacts` converts this to `FFP079`. The Action never follows
 a link on disk or over the network, trusts package caches, evaluates a formula,
 or guesses a basename, rename, absolute path, URI, malformed/ambiguous package
 declaration, sheet-scoped consumer alias, formula wrapper/expression, cyclic
 or missing alias chain (or a workbook alias shadowed by a local consumer name),
-non-static package-A1/direct
-structured reference, 3-D span with missing/reversed/non-worksheet/inconsistent
-tab-catalog endpoints, wrong-scope source local, or other unresolved target.
+non-static package-A1 form, bare/source-sheet-qualified table name,
+`@`/`#This Row`, unsupported or missing/colliding source table, 3-D span with
+missing/reversed/non-worksheet/inconsistent tab-catalog endpoints, wrong-scope
+source local, or other unresolved target.
 If the global graph bound is reached, it emits critical `FF080`, marks the
 evidence incomplete, and preserves the report with exit code `2`.
 
@@ -157,7 +163,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.93.0/formulafence-0.93.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.94.0/formulafence-0.94.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

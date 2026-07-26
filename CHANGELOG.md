@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.94.0 — 2026-07-26
+
+- Extend the candidate-only `FF079` portfolio graph through exact static
+  external structured-table selectors: direct book-only spellings such as
+  `='..\\inputs\\source.xlsx'!Sales[Amount]` and validated package-indexed
+  spellings such as `=[1]!Sales[#Data]`. Finite, acyclic workbook-scoped
+  consumer alias chains may terminate in either table endpoint form.
+- Resolve a selector only after its private source spelling identifies an
+  already inspected relative candidate and that candidate has exactly one
+  case-insensitive matching table. Reuse FormulaFence's existing static table
+  bounds for columns, contiguous column ranges, and `#All`, `#Data`,
+  `#Headers`, or `#Totals`; source cells, not synthetic table nodes, remain
+  `FF079` roots.
+- Fail closed for bare table names (ambiguous with external names),
+  sheet-qualified table spellings, `@`/`#This Row`, unsupported selectors,
+  missing or colliding source tables, unsafe paths, local/shadowed consumer
+  aliases, formula wrappers, and every unresolved package declaration. Keep
+  raw source paths, table identities/selectors, and endpoint aliases private
+  in JSON, Markdown, and SARIF evidence. Add parser, selector-bound,
+  direct/package, alias-chain, collision, and redaction coverage.
+
 ## 0.93.0 — 2026-07-26
 
 - Extend the candidate-only `FF079` portfolio graph through exact static

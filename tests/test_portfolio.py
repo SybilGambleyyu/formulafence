@@ -611,6 +611,145 @@ def test_portfolio_resolves_static_external_sheet_local_names_privately(
     assert all("PrivateWrongScope" not in value for value in report_rendered)
 
 
+def test_portfolio_resolves_static_direct_external_aliases_privately(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    source_path = _write_workbook(
+        baseline / "inputs" / "source.xlsx",
+        "Data",
+        {"B2": 10, "B3": 20, "B4": 30},
+    )
+    source = load_workbook(source_path)
+    source.defined_names.add(
+        DefinedName("PrivateDirectSourceRange", attr_text="Data!$B$2:$B$4")
+    )
+    source.defined_names.add(
+        DefinedName(
+            "PrivateDirectSourceAlias",
+            attr_text="=PrivateDirectSourceRange",
+        )
+    )
+    source.save(source_path)
+
+    consumer_path = _write_workbook(
+        baseline / "reports" / "summary.xlsx",
+        "Summary",
+        {
+            "D2": "=SUM(DirectExternalCell)",
+            "E2": "=SUM(DirectExternalName)",
+            "F2": "=SUM(DirectExternalLeadingEqualsCell)",
+            "G2": "=SUM(DirectExternalFormulaAlias)",
+            "H2": "=SUM(DirectExternalLocalAlias)",
+            "I2": "=SUM(DirectExternalAbsoluteAlias)",
+            "J2": "=SUM(DirectExternalMalformedAlias)",
+            "K2": "=SUM(DirectExternalShadowed)",
+        },
+    )
+    consumer = load_workbook(consumer_path)
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalCell",
+            attr_text="'..\\inputs\\[SOURCE.XLSX]Data'!$B$2:$B$4",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalName",
+            attr_text="'..\\inputs\\[SOURCE.XLSX]PrivateDirectSourceAlias'",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalLeadingEqualsCell",
+            attr_text="='..\\inputs\\[SOURCE.XLSX]Data'!$B$2:$B$4",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalFormulaAlias",
+            attr_text="=DirectExternalCell",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalLocalAlias",
+            attr_text="'..\\inputs\\[SOURCE.XLSX]Data'!$B$2:$B$4",
+            localSheetId=0,
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalAbsoluteAlias",
+            attr_text="'C:\\Private\\[SOURCE.XLSX]Data'!$B$2:$B$4",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalMalformedAlias",
+            attr_text="=SUM('..\\inputs\\[SOURCE.XLSX]Data'!$B$2:$B$4)",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalShadowed",
+            attr_text="'..\\inputs\\[SOURCE.XLSX]Data'!$B$2:$B$4",
+        )
+    )
+    consumer["Summary"].defined_names.add(
+        DefinedName(
+            "DirectExternalShadowed",
+            attr_text="Summary!$A$1",
+            localSheetId=0,
+        )
+    )
+    consumer.save(consumer_path)
+
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs" / "source.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B3"], "value", 21),
+    )
+
+    report = compare_portfolios(
+        baseline,
+        candidate,
+        policy=parse_policy(
+            {"version": 1, "rules": {"no_cross_workbook_impacts": True}}
+        ),
+    )
+    source_entry = next(
+        entry for entry in report.workbooks if entry.path == "inputs/source.xlsx"
+    )
+    finding = next(
+        finding for finding in source_entry.findings if finding.rule_id == "FF079"
+    )
+    rendered = (
+        as_json(report.to_dict()),
+        portfolio_to_markdown(report),
+        as_json(portfolio_to_sarif(report)),
+    )
+
+    assert not report.incomplete
+    assert finding.details["impacted_workbook_count"] == 1
+    assert finding.details["impacted_formula_count"] == 3
+    assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
+    assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
+        "Summary!D2",
+        "Summary!E2",
+        "Summary!F2",
+    ]
+    for private_value in (
+        "PrivateDirectSourceRange",
+        "PrivateDirectSourceAlias",
+        "DirectExternalCell",
+        "DirectExternalName",
+        "SOURCE.XLSX",
+    ):
+        assert all(private_value not in value for value in rendered)
+
+
 def test_portfolio_fails_closed_for_dynamic_or_absolute_package_indexed_names(
     tmp_path: Path,
 ) -> None:

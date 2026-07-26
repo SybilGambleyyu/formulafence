@@ -589,6 +589,28 @@ def _parse_external_link_index(value: str) -> int | None:
     return index if index <= 2_147_483_647 else None
 
 
+def _unescape_external_reference_prefix(value: str) -> tuple[str, bool] | None:
+    """Unquote one Excel external-reference prefix without accepting noise."""
+    quoted = value.startswith("'")
+    if not quoted:
+        return (value, False) if "'" not in value else None
+    if len(value) < 2 or not value.endswith("'"):
+        return None
+    unescaped: list[str] = []
+    position = 1
+    while position < len(value) - 1:
+        character = value[position]
+        if character == "'":
+            if position + 1 < len(value) - 1 and value[position + 1] == "'":
+                unescaped.append("'")
+                position += 2
+                continue
+            return None
+        unescaped.append(character)
+        position += 1
+    return "".join(unescaped), True
+
+
 def _parse_external_link_indexed_sheet_prefix(
     value: str,
 ) -> tuple[int, str, str] | None:
@@ -605,26 +627,10 @@ def _parse_external_link_indexed_sheet_prefix(
     sheet_prefix, payload = _split_sheet_reference(token)
     if sheet_prefix is None:
         return None
-    prefix = sheet_prefix.strip()
-    quoted = prefix.startswith("'")
-    if quoted:
-        if len(prefix) < 2 or not prefix.endswith("'"):
-            return None
-        unescaped: list[str] = []
-        position = 1
-        while position < len(prefix) - 1:
-            character = prefix[position]
-            if character == "'":
-                if position + 1 < len(prefix) - 1 and prefix[position + 1] == "'":
-                    unescaped.append("'")
-                    position += 2
-                    continue
-                return None
-            unescaped.append(character)
-            position += 1
-        prefix = "".join(unescaped)
-    elif "'" in prefix:
+    unescaped_prefix = _unescape_external_reference_prefix(sheet_prefix.strip())
+    if unescaped_prefix is None:
         return None
+    prefix, quoted = unescaped_prefix
     if not prefix.startswith("["):
         return None
     closing = prefix.find("]", 1)
@@ -650,6 +656,85 @@ def _parse_external_link_indexed_sheet_prefix(
     return index, sheet, payload
 
 
+def _parse_direct_external_workbook_sheet_prefix(
+    value: str,
+) -> tuple[str, str, str] | None:
+    """Split one exact direct external ``[Book]Sheet!`` literal.
+
+    Defined-name OOXML commonly stores a static target with no leading
+    equals sign, while some producers retain one.  Accept both spellings, but
+    only after the remaining value is still exactly one quoted or unquoted
+    external literal.  The returned source path is private lookup data: its
+    later portfolio resolver decides whether it is a safe in-root relative
+    target.
+    """
+    token = value.strip()
+    had_leading_equals = token.startswith("=")
+    if had_leading_equals:
+        token = token[1:].strip()
+        # With an explicit formula marker, a static external literal begins
+        # with its external-book prefix (or its enclosing apostrophe).  This
+        # avoids treating e.g. ``=SUM(...)`` or unary-operator formulas as a
+        # direct named-range target.
+        if not token.startswith(("[", "'")):
+            return None
+    sheet_prefix, payload = _split_sheet_reference(token)
+    if sheet_prefix is None:
+        return None
+    unescaped_prefix = _unescape_external_reference_prefix(sheet_prefix.strip())
+    if unescaped_prefix is None:
+        return None
+    prefix, quoted = unescaped_prefix
+
+    opening = prefix.find("[")
+    closing = prefix.find("]", opening + 1)
+    if opening < 0 or closing < opening + 2:
+        return None
+    source_prefix = prefix[:opening]
+    workbook_name = prefix[opening + 1 : closing]
+    sheet = prefix[closing + 1 :]
+    if (
+        not workbook_name
+        or workbook_name != workbook_name.strip()
+        or not sheet
+        or "[" in source_prefix
+        or "]" in source_prefix
+        or any(character in "[]\\?*/:" for character in workbook_name)
+        or any(character in "[]\\?*/:" for character in sheet)
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in f"{source_prefix}{workbook_name}{sheet}"
+        )
+        # A path prefix is either absent or explicitly directory-like.  This
+        # prevents a formula operator immediately before ``[Book]`` from being
+        # reinterpreted as a filename prefix while retaining normal relative,
+        # absolute, UNC, and URI-like source spellings for the later resolver
+        # to reject or bound as appropriate.
+        or (source_prefix and not source_prefix.endswith(("/", "\\")))
+        or (
+            not quoted
+            and any(character in "'+-*/^&=<>%,;(){}!" for character in source_prefix)
+        )
+        or (
+            not quoted
+            and any(
+                character.isspace()
+                or character in "'+-*/^&=<>%,;(){}!"
+                for character in sheet
+            )
+        )
+        # A numeric ``[N]`` prefix is a package external-link index, never a
+        # direct filename. It must be resolved only after package validation.
+        or (
+            not source_prefix
+            and workbook_name.isascii()
+            and workbook_name.isdecimal()
+        )
+    ):
+        return None
+    return f"{source_prefix}{workbook_name}", sheet, payload
+
+
 def parse_external_workbook_reference(value: str) -> ExternalWorkbookReference | None:
     """Parse a direct external A1 token without resolving its filesystem path.
 
@@ -659,35 +744,16 @@ def parse_external_workbook_reference(value: str) -> ExternalWorkbookReference |
     resolver. External names, structured references, 3-D spans, and malformed
     A1 syntax return ``None`` rather than being approximated.
     """
-    sheet_prefix, address = _split_sheet_reference(value)
-    if sheet_prefix is None:
+    parsed_prefix = _parse_direct_external_workbook_sheet_prefix(value)
+    if parsed_prefix is None:
         return None
-    prefix = sheet_prefix.strip()
-    if len(prefix) >= 2 and prefix[0] == "'" and prefix[-1] == "'":
-        prefix = prefix[1:-1].replace("''", "'")
-    opening = prefix.find("[")
-    closing = prefix.find("]", opening + 1)
-    if opening < 0 or closing < 0:
-        return None
-    workbook_name = prefix[opening + 1 : closing].strip()
-    sheet = prefix[closing + 1 :].strip()
-    if not workbook_name or not sheet or ":" in sheet:
-        return None
-    if (
-        not prefix[:opening]
-        and workbook_name.isascii()
-        and workbook_name.isdecimal()
-    ):
-        # ``[N]Sheet!A1`` is an external-link collection index, not a file
-        # named ``N``. It needs validated package metadata before it can be
-        # retained as an external-workbook dependency.
-        return None
+    source_path, sheet, address = parsed_prefix
     try:
         min_column, min_row, max_column, max_row = range_boundaries(address)
     except ValueError:
         return None
     return ExternalWorkbookReference(
-        source_path=f"{prefix[:opening]}{workbook_name}",
+        source_path=source_path,
         sheet=sheet,
         min_column=min_column or 1,
         min_row=min_row or 1,
@@ -737,29 +803,50 @@ def parse_external_workbook_defined_name_reference(
     the static portfolio graph instead of being approximated.
     """
     token = value.strip()
+    had_leading_equals = token.startswith("=")
+    if had_leading_equals:
+        token = token[1:].strip()
+        if not token.startswith(("[", "'")):
+            return None
     if not token or _last_unquoted_bang(token) >= 0:
         return None
-    if len(token) >= 2 and token[0] == "'" and token[-1] == "'":
-        token = token[1:-1].replace("''", "'")
-    elif "'" in token:
+    unescaped_token = _unescape_external_reference_prefix(token)
+    if unescaped_token is None:
         return None
+    token, quoted = unescaped_token
 
     opening = token.find("[")
     closing = token.find("]", opening + 1)
-    if opening < 0 or closing < 0:
+    if opening < 0 or closing < opening + 2:
         return None
-    workbook_name = token[opening + 1 : closing].strip()
-    name = token[closing + 1 :].strip()
+    source_prefix = token[:opening]
+    workbook_name = token[opening + 1 : closing]
+    name = token[closing + 1 :]
     if (
         not workbook_name
         or not name
-        or name != token[closing + 1 :]
-        or any(character in name for character in "[]!'")
-        or any(ord(character) < 32 or ord(character) == 127 for character in name)
+        or workbook_name != workbook_name.strip()
+        or "[" in source_prefix
+        or "]" in source_prefix
+        or any(character in "[]\\?*/:" for character in workbook_name)
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in f"{source_prefix}{workbook_name}{name}"
+        )
+        or (source_prefix and not source_prefix.endswith(("/", "\\")))
+        or (
+            not quoted
+            and any(character in "'+-*/^&=<>%,;(){}!" for character in source_prefix)
+        )
+        or len(name) > 255
+        or name != name.strip()
+        or name.startswith("\\")
+        or not _is_external_link_name_identity(name)
+        or parse_reference_token(name) is not None
     ):
         return None
     return ExternalWorkbookDefinedNameReference(
-        source_path=f"{token[:opening]}{workbook_name}",
+        source_path=f"{source_prefix}{workbook_name}",
         name_key=reference_lookup_key(name),
     )
 
@@ -775,57 +862,12 @@ def parse_external_workbook_sheet_defined_name_reference(
     and a valid single sheet prefix.  Dynamic, 3-D, A1, structured, malformed,
     and package-indexed spellings stay outside this direct-path parser.
     """
-    token = value.strip()
-    if token.startswith("="):
-        token = token[1:].strip()
-    sheet_prefix, name = _split_sheet_reference(token)
-    if sheet_prefix is None:
+    parsed_prefix = _parse_direct_external_workbook_sheet_prefix(value)
+    if parsed_prefix is None:
         return None
-    prefix = sheet_prefix.strip()
-    quoted = prefix.startswith("'")
-    if quoted:
-        if len(prefix) < 2 or not prefix.endswith("'"):
-            return None
-        unescaped: list[str] = []
-        position = 1
-        while position < len(prefix) - 1:
-            character = prefix[position]
-            if character == "'":
-                if position + 1 < len(prefix) - 1 and prefix[position + 1] == "'":
-                    unescaped.append("'")
-                    position += 2
-                    continue
-                return None
-            unescaped.append(character)
-            position += 1
-        prefix = "".join(unescaped)
-    elif "'" in prefix:
-        return None
-    opening = prefix.find("[")
-    closing = prefix.find("]", opening + 1)
-    if opening < 0 or closing < 0:
-        return None
-    source_prefix = prefix[:opening]
-    workbook_name = prefix[opening + 1 : closing].strip()
-    sheet = prefix[closing + 1 :]
+    source_path, sheet, name = parsed_prefix
     if (
-        not workbook_name
-        or not sheet
-        or ":" in sheet
-        or any(character in "[]\\?*/:" for character in sheet)
-        or any(ord(character) < 32 or ord(character) == 127 for character in sheet)
-        or (
-            not quoted
-            and any(
-                character.isspace()
-                or character in "'+-*/^&=<>%,;(){}!"
-                for character in sheet
-            )
-        )
-        # A numeric ``[N]`` prefix is a package external-link index, never a
-        # direct filename. It must be resolved only after package validation.
-        or (not source_prefix and workbook_name.isascii() and workbook_name.isdecimal())
-        or not name
+        not name
         or len(name) > 255
         or name != name.strip()
         or name.startswith("\\")
@@ -835,7 +877,7 @@ def parse_external_workbook_sheet_defined_name_reference(
     ):
         return None
     return ExternalWorkbookDefinedNameReference(
-        source_path=f"{source_prefix}{workbook_name}",
+        source_path=source_path,
         name_key=reference_lookup_key(name),
         scope_sheet=sheet,
     )

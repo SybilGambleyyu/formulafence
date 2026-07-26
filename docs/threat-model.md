@@ -102,7 +102,9 @@ financial correctness or replace model review.
   document-order `externalReference`, `externalLink` part, `externalBook`, and
   external `externalLinkPath` relationship before that target may normalize to
   one exact relative candidate. A workbook-scoped consumer alias may use one
-  exact static indexed spelling or one direct sheet-local spelling;
+  exact static indexed spelling or one direct A1, workbook-scoped-name, or
+  sheet-local spelling; a same-named sheet-local consumer definition shadows
+  the workbook alias;
   sheet-scoped/formula consumer aliases, caches, non-static package A1 forms,
   and ambiguous package shapes are not expanded. A source name must also expand
   completely to static internal A1 destinations in that source candidate; an

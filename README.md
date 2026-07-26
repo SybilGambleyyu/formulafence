@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.90.0/formulafence-0.90.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.91.0/formulafence-0.91.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.90.0
+  uses: SybilGambleyyu/formulafence@v0.91.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -98,8 +98,11 @@ reference, the documented workbook-scoped name form such as
 forms such as `=[1]Data!$B$2:$B$4`, `=[1]!InputRange`, and
 `=[1]Data!LocalInput`, by a formula in another candidate workbook,
 FormulaFence emits high-severity `FF079` with relative workbook/cell paths and
-deterministic shortest-path samples. The direct sheet-local and package-indexed
-forms may each be retained through one direct workbook-scoped consumer alias.
+deterministic shortest-path samples. Any supported form may be retained through
+one exact workbook-scoped consumer alias; that includes direct external A1 and
+workbook-scoped-name aliases such as a defined name storing
+`'..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4` or
+`'..\\inputs\\[Inputs.xlsx]InputRange'`.
 An indexed form is eligible only when its one-based
 `externalReferences` declaration identifies exactly one `externalBook` and
 external `externalLinkPath` relationship whose target resolves to one exact
@@ -116,7 +119,8 @@ spellings stay private in portfolio evidence; ordinary source and consumer
 defined-name declarations remain normal defined-name review context. Absolute,
 URI, escaping,
 malformed/ambiguous package declarations, non-workbook package links,
-non-static package-A1 forms, sheet-scoped or formula-defined consumer aliases,
+non-static package-A1 forms, sheet-scoped or formula-defined consumer aliases
+(and a sheet-local consumer name shadows a same-named workbook alias),
 missing/unknown/wrong-scope source locals, direct structured, 3-D, dynamic, or
 otherwise non-statically-expanded name forms remain ordinary external-link
 coverage rather than being approximated. A defined-name declaration change

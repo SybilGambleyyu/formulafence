@@ -5,6 +5,40 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct external-alias portfolio boundary — 2026-07-26
+
+Microsoft's [cell-reference grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/e531ebe0-a152-4978-a876-28e2a68f746e)
+separate an external cell reference from an A1 reference, and its
+[name grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a469e5f5-a102-49bd-9642-8a8e8aaf1623)
+distinguish an external name. FormulaFence 0.91.0 therefore follows a
+workbook-scoped consumer alias only when its stored text is one exact static
+direct external A1 or workbook-scoped-name literal. It accepts the canonical
+optional leading `=` spelling only when the remaining text is still exactly
+that literal. Sheet-local consumer aliases and formula wrappers remain outside
+the graph; a sheet-local name with the same identity shadows the global alias.
+The source is still resolved only as an already-inspected relative candidate,
+and FormulaFence never opens, fetches, refreshes, caches, or evaluates a link.
+
+An independently maintained
+[MullinsLab external-data workbook](https://github.com/MullinsLab/excel-external-data/blob/5b4d55319c2eab3ad25408a85de025bdffa35e8b/external-data-blank.xlsx)
+was downloaded at commit `5b4d55319c2eab3ad25408a85de025bdffa35e8b` into a
+temporary directory outside this repository. A temporary source copy gained
+one controlled static workbook name, and a separate temporary consumer used
+direct A1, direct workbook-name, and leading-`=` A1 aliases to that source.
+Changing the original workbook's `External data!A1` in the candidate copy
+produced exactly three impacts with `FF079` and policy `FFP079`. JSON,
+Markdown, and SARIF omitted each controlled source/consumer alias identity,
+the upstream filename, and the repository identity. The upstream workbook was
+never executed, refreshed, changed in place, or copied into this repository.
+
+The release-versioned source tree passed **614 tests in 80.20 seconds**, a
+clean Ruff check, `git diff --check`, and GitHub Action shell syntax
+validation. Fresh 0.91.0 source and wheel distributions passed `twine check`.
+An isolated environment installed the exact final wheel and reran the same
+temporary portfolio both through the library and the CLI. The CLI returned
+policy exit `1` with `FF079` and `FFP079`; the controlled aliases, upstream
+filename, and repository identity remained absent from its JSON output.
+
 ## External sheet-local-name portfolio boundary — 2026-07-26
 
 Microsoft's [name grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a469e5f5-a102-49bd-9642-8a8e8aaf1623)

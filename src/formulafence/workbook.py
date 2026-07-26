@@ -38,6 +38,8 @@ from formulafence.formulas import (
     parse_external_link_indexed_defined_name_reference,
     parse_external_link_indexed_sheet_defined_name_reference,
     parse_external_link_indexed_workbook_reference,
+    parse_external_workbook_defined_name_reference,
+    parse_external_workbook_reference,
     parse_external_workbook_sheet_defined_name_reference,
     parse_reference_token,
     reference_lookup_key,
@@ -44052,6 +44054,31 @@ def _static_local_defined_name_references(
     return result
 
 
+def _local_defined_name_keys(workbook: object) -> dict[str, frozenset[str]]:
+    """Inventory local consumer keys so they shadow global external aliases.
+
+    Excel resolves a sheet-local name before a workbook-scoped name with the
+    same identity.  Keep even an unresolved local definition in this inventory:
+    failing closed is preferable to incorrectly following a global external
+    alias that the formula cannot actually select on that sheet.
+    """
+    result: dict[str, frozenset[str]] = {}
+    for worksheet in getattr(workbook, "worksheets", ()):
+        names = getattr(worksheet, "defined_names", {})
+        try:
+            items = names.items()
+        except AttributeError:
+            continue
+        keys = frozenset(
+            name_key
+            for name, _definition in items
+            if (name_key := reference_lookup_key(str(name)))
+        )
+        if keys:
+            result[worksheet.title.casefold()] = keys
+    return result
+
+
 def _package_indexed_external_name_references(
     workbook: object,
     indexed_external_workbook_paths: Mapping[int, str],
@@ -44160,6 +44187,63 @@ def _direct_external_sheet_defined_name_references(
         reference = parse_external_workbook_sheet_defined_name_reference(
             _definition_text(definition)
         )
+        if reference is None:
+            continue
+        name_key = reference_lookup_key(str(name))
+        if name_key:
+            result[name_key] = (reference,)
+    return result
+
+
+def _direct_external_workbook_defined_name_references(
+    workbook: object,
+) -> dict[str, tuple[ExternalWorkbookDefinedNameReference, ...]]:
+    """Keep exact workbook-scoped aliases for direct external global names.
+
+    A direct text spelling can be resolved only by the bounded portfolio-root
+    resolver later in the comparison.  Do not use a consumer-local name or a
+    formula-valued alias as a bridge: neither identifies one static source
+    dependency without evaluating workbook logic.
+    """
+    names = getattr(workbook, "defined_names", {})
+    try:
+        items = names.items()
+    except AttributeError:
+        return {}
+    result: dict[str, tuple[ExternalWorkbookDefinedNameReference, ...]] = {}
+    for name, definition in items:
+        if getattr(definition, "localSheetId", None) is not None:
+            continue
+        reference = parse_external_workbook_defined_name_reference(
+            _definition_text(definition)
+        )
+        if reference is None:
+            continue
+        name_key = reference_lookup_key(str(name))
+        if name_key:
+            result[name_key] = (reference,)
+    return result
+
+
+def _direct_external_workbook_references(
+    workbook: object,
+) -> dict[str, tuple[ExternalWorkbookReference, ...]]:
+    """Keep exact workbook-scoped aliases for direct external A1 ranges.
+
+    This mirrors the package-indexed alias bridge without consulting the
+    filesystem.  Only the existing portfolio resolver may bind the retained
+    private path to an inspected in-root workbook.
+    """
+    names = getattr(workbook, "defined_names", {})
+    try:
+        items = names.items()
+    except AttributeError:
+        return {}
+    result: dict[str, tuple[ExternalWorkbookReference, ...]] = {}
+    for name, definition in items:
+        if getattr(definition, "localSheetId", None) is not None:
+            continue
+        reference = parse_external_workbook_reference(_definition_text(definition))
         if reference is None:
             continue
         name_key = reference_lookup_key(str(name))
@@ -44665,6 +44749,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     static_local_defined_name_references = _static_local_defined_name_references(
         local_named_references
     )
+    local_defined_name_keys = _local_defined_name_keys(workbook)
     indexed_external_workbook_paths = dict(
         external_data_metadata.indexed_external_workbook_paths
     )
@@ -44683,9 +44768,13 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     direct_external_sheet_defined_name_references = (
         _direct_external_sheet_defined_name_references(workbook)
     )
+    direct_external_workbook_defined_name_references = (
+        _direct_external_workbook_defined_name_references(workbook)
+    )
     named_external_workbook_defined_name_references = {
         **package_indexed_external_name_references,
         **package_indexed_external_sheet_defined_name_references,
+        **direct_external_workbook_defined_name_references,
         **direct_external_sheet_defined_name_references,
     }
     package_indexed_external_workbook_references = (
@@ -44694,8 +44783,26 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             indexed_external_workbook_paths,
         )
     )
+    direct_external_workbook_references = _direct_external_workbook_references(workbook)
+    named_external_workbook_references = {
+        **package_indexed_external_workbook_references,
+        **direct_external_workbook_references,
+    }
 
     for worksheet in workbook.worksheets:
+        shadowing_local_names = local_defined_name_keys.get(
+            worksheet.title.casefold(), frozenset()
+        )
+        visible_named_external_workbook_defined_name_references = {
+            name_key: references
+            for name_key, references in named_external_workbook_defined_name_references.items()
+            if name_key not in shadowing_local_names
+        }
+        visible_named_external_workbook_references = {
+            name_key: references
+            for name_key, references in named_external_workbook_references.items()
+            if name_key not in shadowing_local_names
+        }
         named_references = {
             **global_named_references,
             **local_named_references.get(worksheet.title.casefold(), {}),
@@ -44869,11 +44976,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 snapshot.formula,
                 named_references=named_references,
                 named_external_workbook_defined_name_references=(
-                    named_external_workbook_defined_name_references
+                    visible_named_external_workbook_defined_name_references
                 ),
                 indexed_external_workbook_paths=indexed_external_workbook_paths,
                 named_external_workbook_references=(
-                    package_indexed_external_workbook_references
+                    visible_named_external_workbook_references
                 ),
                 structured_tables=structured_tables,
                 origin=snapshot.location,

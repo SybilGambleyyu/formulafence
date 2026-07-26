@@ -52,6 +52,9 @@ def test_external_workbook_a1_references_keep_private_source_spelling_for_portfo
     direct = parse_external_workbook_reference("[Inputs.xlsx]Data!$B$2:$B$4")
     relative = parse_external_workbook_reference("'..\\shared\\[Inputs.xlsx]Data Sheet'!A1")
     absolute = parse_external_workbook_reference("'C:\\Reports\\[Inputs.xlsx]Data'!A1")
+    leading_equals = parse_external_workbook_reference(
+        "='..\\shared\\[Inputs.xlsx]Data Sheet'!A1"
+    )
 
     assert direct is not None
     assert direct.source_path == "Inputs.xlsx"
@@ -67,8 +70,20 @@ def test_external_workbook_a1_references_keep_private_source_spelling_for_portfo
     assert relative.sheet == "Data Sheet"
     assert absolute is not None
     assert absolute.source_path == "C:\\Reports\\Inputs.xlsx"
+    assert leading_equals is not None
+    assert leading_equals.source_path == "..\\shared\\Inputs.xlsx"
     assert parse_external_workbook_reference("[Inputs.xlsx]ExternalName") is None
     assert parse_external_workbook_reference("[Inputs.xlsx]Jan:Mar!A1") is None
+    assert parse_external_workbook_reference("=+[Inputs.xlsx]Data!A1") is None
+    assert parse_external_workbook_reference("=SUM([Inputs.xlsx]Data!A1)") is None
+    assert (
+        parse_external_workbook_reference("SUM(../inputs/[Inputs.xlsx]Data!A1")
+        is None
+    )
+    assert (
+        parse_external_workbook_reference("'..\\O'Brien\\[Inputs.xlsx]Data'!A1")
+        is None
+    )
     whole_column = parse_external_workbook_reference("[Inputs.xlsx]Data!A:A")
     whole_row = parse_external_workbook_reference("[Inputs.xlsx]Data!2:2")
     assert whole_column is not None
@@ -106,6 +121,9 @@ def test_external_workbook_defined_name_references_keep_private_lookup_data() ->
     absolute = parse_external_workbook_defined_name_reference(
         "'C:\\Reports\\[Inputs.xlsx]InputRange'"
     )
+    leading_equals = parse_external_workbook_defined_name_reference(
+        "='..\\shared\\[Inputs.xlsx]InputRange'"
+    )
 
     assert direct is not None
     assert direct.source_path == "Inputs.xlsx"
@@ -116,6 +134,9 @@ def test_external_workbook_defined_name_references_keep_private_lookup_data() ->
     assert absolute is not None
     assert absolute.source_path == "C:\\Reports\\Inputs.xlsx"
     assert absolute.name_key == "inputrange"
+    assert leading_equals is not None
+    assert leading_equals.source_path == "..\\shared\\Inputs.xlsx"
+    assert leading_equals.name_key == "inputrange"
     assert parse_external_workbook_defined_name_reference(
         "[Inputs.xlsx]Data!InputRange"
     ) is None
@@ -123,6 +144,24 @@ def test_external_workbook_defined_name_references_keep_private_lookup_data() ->
         "[Inputs.xlsx]InputRange[Column]"
     ) is None
     assert parse_external_workbook_defined_name_reference("[Inputs.xlsx]Jan:Mar!A1") is None
+    assert parse_external_workbook_defined_name_reference("=[Inputs.xlsx]A1") is None
+    assert parse_external_workbook_defined_name_reference("=+[Inputs.xlsx]InputRange") is None
+    assert (
+        parse_external_workbook_defined_name_reference("=SUM([Inputs.xlsx]InputRange)")
+        is None
+    )
+    assert (
+        parse_external_workbook_defined_name_reference(
+            "SUM(../inputs/[Inputs.xlsx]InputRange"
+        )
+        is None
+    )
+    assert (
+        parse_external_workbook_defined_name_reference(
+            "'..\\O'Brien\\[Inputs.xlsx]InputRange'"
+        )
+        is None
+    )
 
     inspection = inspect_formula(
         "=SUM([Inputs.xlsx]InputRange)+'..\\shared\\[Other.xlsx]Margin'"

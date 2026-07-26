@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.91.0 — 2026-07-26
+
+- Extend the candidate-only `FF079` portfolio graph through exact,
+  workbook-scoped consumer aliases whose stored definition is a direct external
+  A1 cell/range or direct workbook-scoped external name, for example
+  `'..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4` or
+  `'..\\inputs\\[Inputs.xlsx]InputRange'`. Canonical literal forms with one
+  leading `=` are handled too. Direct formulas and the existing package-indexed
+  and sheet-local paths retain their previous behavior.
+- Preserve Excel name scope: any sheet-local consumer name shadows a
+  same-named workbook alias, including aliases backed by an external package
+  link. Formula-valued and sheet-local aliases never become an inferred
+  cross-workbook edge.
+- Tighten direct external literal parsing and fail closed for formula wrappers
+  and operators, malformed quoting, invalid A1/name payloads, numeric package
+  indexes presented as filenames, unsafe paths, and every unresolved target.
+  Add parser, alias, scope-shadowing, and JSON/Markdown/SARIF-redaction
+  coverage, plus an independently maintained external-workbook validation.
+
 ## 0.90.0 — 2026-07-26
 
 - Extend the candidate-only `FF079` portfolio graph to static external

@@ -5,6 +5,49 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel Table Style controls — 2026-07-26
+
+FormulaFence 0.60.0 was checked against the SpreadsheetML `TableStyles`,
+`TableStyleInfo`, and `TableColumn` definitions and two independently maintained
+LibreOffice regression workbooks at commit
+[`a85bae573eeb9e1548176760c0bdb01509ec7c42`](https://github.com/LibreOffice/core/tree/a85bae573eeb9e1548176760c0bdb01509ec7c42):
+[`Book1_custom.xlsx`](https://github.com/LibreOffice/core/blob/a85bae573eeb9e1548176760c0bdb01509ec7c42/sc/qa/unit/data/xlsx/Book1_custom.xlsx)
+(SHA-256 `04fab5c43604fc59a084c240960bc16b35b23357ced56047944559ab44273747`)
+and
+[`tableStyleInnerBorders.xlsx`](https://github.com/LibreOffice/core/blob/a85bae573eeb9e1548176760c0bdb01509ec7c42/sc/qa/unit/data/xlsx/tableStyleInnerBorders.xlsx)
+(SHA-256 `69cc43ed1761bf5e17ca93d5baea2192a75ba8afa7343e538682b6322dca1d46`).
+Each contains one applied custom Table Style with seven applicable style
+elements and a writer-generated `xr9:uid`; both profiles reported one style
+binding, one styled table, one custom style, seven custom style elements, and
+no Table Style coverage warning. `tableStyleInnerBorders.xlsx` also reported
+one direct TableColumn Dxf assignment, confirming that table-local formatting
+is not collapsed into the ordinary cell-style boundary.
+
+A controlled raw-OOXML pair used an applied private custom Table Style backed
+by three Dxf records, plus a direct TableColumn Dxf and named-cell-style
+reference. The candidate changed only the TableColumn Dxf binding; both
+archives had the same member set and only `xl/tables/table1.xml` differed in
+uncompressed bytes. The baseline and candidate SHA-256 values were respectively
+`81eabf8e5664eba1f5d70dbad042af676c3287047c292ee8474ae7a764dc1abf` and
+`735ed1ca07c877defc43433339d590da9f23ddea1b915ae02baed0f1b0922086`.
+The ordinary table inventory stayed equal, while the report emitted exactly one
+`table_style_controls_changed` change with `FF061`; private table/style names
+stayed absent from JSON, Markdown, and SARIF. The suite separately validates
+custom Dxf-definition changes, Table Style toggles, Dxf reordering with
+coordinated ID rewrites, `xr9:uid` changes, Strict SpreadsheetML raw parts,
+malformed references with reader isolation, redaction, and `FFP061` policy
+enforcement. FormulaFence compares declarations only: it does not render Excel's
+final Table appearance, resolve themes, calculate values, apply conditional
+formatting, or cover PivotTable-only style regions.
+
+A clean Python virtual environment installed the staged 0.60.0 wheel with its
+declared dependencies and returned `FormulaFence 0.60.0`. Its installed CLI
+profiled the controlled baseline, emitted the high-severity
+`table_style_controls_changed` change and `FF061`, and its generated starter
+policy exited `1` with `FFP061`. The JSON profile and both reports were checked
+to confirm that the private custom-style names, named-cell-style name, and Dxf
+colour values remained absent.
+
 ## Legacy Excel Custom Views — 2026-07-26
 
 FormulaFence 0.59.0 was checked against Microsoft's documented

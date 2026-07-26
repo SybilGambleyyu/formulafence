@@ -86,7 +86,10 @@ from .helpers import (
     change_slicer_timeline_filter_material,
     change_strict_worksheet_display_controls,
     change_strict_worksheet_print_layout_controls,
+    change_table_direct_dxf_assignment,
     change_table_filter_visibility_criterion,
+    change_table_style_control,
+    change_table_style_definition,
     change_threaded_comment_person_identity,
     change_threaded_comment_reply,
     change_vba_project_signature_payload,
@@ -142,6 +145,7 @@ from .helpers import (
     corrupt_rich_text_run,
     corrupt_scenario_manager_input,
     corrupt_slicer_timeline_cache_root,
+    corrupt_table_style_control,
     corrupt_threaded_comment_root,
     corrupt_what_if_data_table_input,
     corrupt_workbook_theme_root,
@@ -217,6 +221,7 @@ from .helpers import (
     make_spill_model,
     make_strict_border_model,
     make_strict_custom_workbook_view_model,
+    make_strict_table_style_control_model,
     make_strict_workbook_theme_image_model,
     make_strict_worksheet_dimension_model,
     make_strict_worksheet_display_model,
@@ -224,6 +229,7 @@ from .helpers import (
     make_strict_worksheet_image_model,
     make_strict_worksheet_print_layout_model,
     make_table_model,
+    make_table_style_control_model,
     make_threaded_comment_model,
     make_three_d_model,
     make_what_if_data_table_model,
@@ -263,6 +269,7 @@ from .helpers import (
     normalize_rich_data_relationship_ids,
     normalize_rich_text_run_property_spelling,
     normalize_scenario_manager_reference_spelling,
+    normalize_table_style_control_writer_noise,
     normalize_what_if_data_table_reference_spelling,
     normalize_workbook_theme_relationship_identifiers,
     normalize_worksheet_dimension_control_spelling,
@@ -9029,6 +9036,189 @@ def test_custom_workbook_view_free_workbook_has_no_inventory(tmp_path) -> None:
     assert snapshot.custom_workbook_views.present is False
     assert snapshot.custom_workbook_views.custom_workbook_view_count == 0
     assert not any("Custom View" in warning for warning in snapshot.parser_warnings)
+
+
+def test_table_style_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_table_style_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_table_style_control_model(tmp_path / "candidate.xlsx")
+    change_table_style_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "table_style_controls_changed"
+    )
+
+    assert baseline_snapshot.summary()["table_style_info_count"] == 1
+    assert baseline_snapshot.summary()["custom_table_style_count"] == 1
+    assert baseline_snapshot.summary()["has_table_style_controls"] is True
+    assert profile["table_style_controls"] == {
+        "present": True,
+        "table_style_info_count": 1,
+        "styled_table_count": 1,
+        "custom_table_style_count": 1,
+        "custom_table_style_element_count": 3,
+        "custom_style_applied_table_count": 1,
+        "table_direct_dxf_assignment_count": 1,
+        "table_direct_dxf_table_count": 1,
+        "table_named_cell_style_assignment_count": 1,
+        "row_striped_table_count": 1,
+        "column_striped_table_count": 0,
+        "emphasized_column_table_count": 1,
+        "unrecognized_table_style_count": 0,
+    }
+    assert baseline_snapshot.parser_warnings == ()
+    assert baseline_snapshot.tables == candidate_snapshot.tables
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Excel Table Style Controls" in markdown
+    assert change.details["table_style_definition_material_changed"] is True
+    assert "FF061" in {finding.rule_id for finding in report.findings}
+    assert "FF013" not in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-FINANCE-TABLE-STYLE",
+        "PRIVATE-FINANCE-DATA-STYLE",
+        "FF113355",
+        "FF557799",
+        "FF99BBDD",
+        "FFCC8844",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_table_style_control_toggles_are_detected_without_table_ref_noise(
+    tmp_path,
+) -> None:
+    baseline = make_table_style_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_table_style_control_model(tmp_path / "candidate.xlsx")
+    change_table_style_control(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "table_style_controls_changed"
+    )
+
+    assert baseline_snapshot.tables == candidate_snapshot.tables
+    assert change.details["before"]["row_striped_table_count"] == 1
+    assert change.details["after"]["row_striped_table_count"] == 0
+    assert change.details["after"]["column_striped_table_count"] == 1
+    assert "FF061" in {finding.rule_id for finding in report.findings}
+    assert "FF013" not in {finding.rule_id for finding in report.findings}
+
+
+def test_table_direct_dxf_format_changes_are_detected_without_cell_edits(
+    tmp_path,
+) -> None:
+    baseline = make_table_style_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_table_style_control_model(tmp_path / "candidate.xlsx")
+    change_table_direct_dxf_assignment(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert baseline_snapshot.tables == candidate_snapshot.tables
+    assert (
+        baseline_snapshot.table_style_controls.table_direct_dxf_assignment_count
+        == 1
+    )
+    assert (
+        candidate_snapshot.table_style_controls.table_direct_dxf_assignment_count
+        == 1
+    )
+    assert "table_style_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF061" in {finding.rule_id for finding in report.findings}
+    assert "FF013" not in {finding.rule_id for finding in report.findings}
+
+
+def test_table_style_control_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_table_style_control_model(tmp_path / "baseline.xlsx")
+    equivalent = make_table_style_control_model(tmp_path / "equivalent.xlsx")
+    normalize_table_style_control_writer_noise(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+    assert "table_style_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF061" not in {finding.rule_id for finding in report.findings}
+
+
+def test_table_style_controls_support_strict_spreadsheetml(tmp_path) -> None:
+    baseline = make_table_style_control_model(tmp_path / "baseline.xlsx")
+    strict = make_strict_table_style_control_model(tmp_path / "strict.xlsx")
+
+    baseline_snapshot = load_snapshot(baseline)
+    strict_snapshot = load_snapshot(strict)
+    report = compare_snapshots(baseline_snapshot, strict_snapshot)
+
+    assert strict_snapshot.table_style_controls.to_dict() == (
+        baseline_snapshot.table_style_controls.to_dict()
+    )
+    assert strict_snapshot.table_style_controls.unrecognized_table_style_count == 0
+    assert not any("Table Style" in warning for warning in strict_snapshot.parser_warnings)
+    assert "table_style_controls_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF061" not in {finding.rule_id for finding in report.findings}
+
+
+def test_malformed_table_style_control_fails_closed_and_is_redacted(tmp_path) -> None:
+    baseline = make_table_style_control_model(tmp_path / "baseline.xlsx")
+    malformed = make_table_style_control_model(tmp_path / "malformed.xlsx")
+    corrupt_table_style_control(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.table_style_controls.unrecognized_table_style_count >= 1
+    assert any("Table Style" in warning for warning in malformed_snapshot.parser_warnings)
+    assert {"FF010", "FF061"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-FINANCE-TABLE-STYLE",
+        "PRIVATE-TABLE-STYLE-CONTROL",
+        "4294967296",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_table_style_free_table_has_no_control_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_table_model(tmp_path / "ordinary-table.xlsx"))
+
+    assert snapshot.table_style_controls.present is False
+    assert snapshot.table_style_controls.table_style_info_count == 0
+    assert snapshot.table_style_controls.custom_table_style_count == 0
+    assert not any("Table Style" in warning for warning in snapshot.parser_warnings)
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

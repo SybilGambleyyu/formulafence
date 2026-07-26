@@ -87,6 +87,7 @@ from formulafence.models import (
     SheetSnapshot,
     SlicerTimelineCacheSnapshot,
     TableSnapshot,
+    TableStyleControlsSnapshot,
     ThreadedCommentSnapshot,
     WhatIfDataTableSnapshot,
     WorkbookLoadError,
@@ -137,6 +138,7 @@ _OFFICE_2010_AC_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/a
 _OFFICE_2013_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"
 _OFFICE_2014_REVISION_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
 _OFFICE_2015_REVISION2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2015/revision2"
+_OFFICE_2016_REVISION9_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision9"
 _EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
 _NAMED_SHEET_VIEW_NS = "http://schemas.microsoft.com/office/spreadsheetml/2019/namedsheetviews"
 _DATA_MASHUP_NS = "http://schemas.microsoft.com/DataMashup"
@@ -162,6 +164,7 @@ _XML_NAMESPACE_PREFIXES = {
     _OFFICE_2013_SPREADSHEET_NS: "x15:",
     _OFFICE_2014_REVISION_NS: "xr:",
     _OFFICE_2015_REVISION2_NS: "xr2:",
+    _OFFICE_2016_REVISION9_NS: "xr9:",
     _EXCEL_2006_MAIN_NS: "xm:",
     _NAMED_SHEET_VIEW_NS: "nsv:",
 }
@@ -840,6 +843,14 @@ class _CustomWorkbookViewMetadata:
     """Raw legacy Custom View evidence retained before reader normalization."""
 
     views: CustomWorkbookViewSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _TableStyleControlsMetadata:
+    """Raw Excel Table Style evidence retained before reader normalization."""
+
+    controls: TableStyleControlsSnapshot
     warnings: tuple[str, ...]
 
 
@@ -2083,6 +2094,80 @@ _CUSTOM_WORKBOOK_VIEW_COMMENTS_VALUES = frozenset(
 )
 _CUSTOM_WORKBOOK_VIEW_OBJECT_VALUES = frozenset(
     {"all", "placeholders", "none"}
+)
+_TABLE_STYLE_MAX_STYLES_PART_BYTES = 16 * 1024 * 1024
+_TABLE_STYLE_MAX_TABLE_PART_BYTES = 16 * 1024 * 1024
+_TABLE_STYLE_TOTAL_MAX_BYTES = 64 * 1024 * 1024
+_TABLE_STYLE_TOTAL_MAX_COUNT = 512
+_TABLE_STYLE_ELEMENT_TYPES = frozenset(
+    {
+        "wholeTable",
+        "headerRow",
+        "totalRow",
+        "firstColumn",
+        "lastColumn",
+        "firstRowStripe",
+        "secondRowStripe",
+        "firstColumnStripe",
+        "secondColumnStripe",
+        "firstHeaderCell",
+        "lastHeaderCell",
+        "firstTotalCell",
+        "lastTotalCell",
+        "firstSubtotalColumn",
+        "secondSubtotalColumn",
+        "thirdSubtotalColumn",
+        "firstSubtotalRow",
+        "secondSubtotalRow",
+        "thirdSubtotalRow",
+        "blankRow",
+        "firstColumnSubheading",
+        "secondColumnSubheading",
+        "thirdColumnSubheading",
+        "firstRowSubheading",
+        "secondRowSubheading",
+        "thirdRowSubheading",
+        "pageFieldLabels",
+        "pageFieldValues",
+    }
+)
+_TABLE_STYLE_TABLE_ELEMENT_TYPES = frozenset(
+    {
+        "wholeTable",
+        "headerRow",
+        "totalRow",
+        "firstColumn",
+        "lastColumn",
+        "firstRowStripe",
+        "secondRowStripe",
+        "firstColumnStripe",
+        "secondColumnStripe",
+        "firstHeaderCell",
+        "lastHeaderCell",
+        "firstTotalCell",
+        "lastTotalCell",
+    }
+)
+_TABLE_DIRECT_DXF_TABLE_ATTRIBUTES = frozenset(
+    {
+        "headerRowDxfId",
+        "dataDxfId",
+        "totalsRowDxfId",
+        "headerRowBorderDxfId",
+        "tableBorderDxfId",
+        "totalsRowBorderDxfId",
+    }
+)
+_TABLE_DIRECT_DXF_COLUMN_ATTRIBUTES = frozenset(
+    {"headerRowDxfId", "dataDxfId", "totalsRowDxfId"}
+)
+_TABLE_NAMED_CELL_STYLE_ATTRIBUTES = frozenset(
+    {"headerRowCellStyle", "dataCellStyle", "totalsRowCellStyle"}
+)
+_TABLE_STYLE_BUILT_IN_NAME = re.compile(
+    r"^TableStyle(?:Light(?:[1-9]|1[0-9]|2[0-1])|"
+    r"Medium(?:[1-9]|1[0-9]|2[0-8])|Dark(?:[1-9]|1[0-1]))$",
+    re.IGNORECASE,
 )
 _FILTER_VISIBILITY_AUTO_FILTER_UID_NAMESPACES = frozenset(
     {_OFFICE_2014_REVISION_NS, _OFFICE_2015_REVISION2_NS}
@@ -12020,6 +12105,132 @@ def _custom_workbook_view_reader_replacements(
     return replacements, tuple(sorted(reader_warnings))
 
 
+def _table_style_control_reader_replacements(
+    path: Path,
+    prior_replacements: Mapping[str, bytes] | None = None,
+) -> tuple[dict[str, bytes], tuple[str, ...]]:
+    """Keep presentation-only Table Style XML out of the ordinary reader copy.
+
+    The raw scanner has already retained a private semantic inventory of these
+    controls. ``openpyxl`` does not need custom Table Style definitions, a
+    table's presentation selection, or its table-local format references to
+    audit cells, tables, and formulas. Removing them prevents malformed
+    presentation-only records from blocking that ordinary audit.
+    """
+    replacements: dict[str, bytes] = {}
+    reader_warnings: set[str] = set()
+    prior_replacements = prior_replacements or {}
+    try:
+        with ZipFile(path) as archive:
+            def reader_xml_root(member: str) -> ElementTree.Element:
+                """Read an earlier safe overlay before falling back to the package."""
+                if (payload := prior_replacements.get(member)) is not None:
+                    return _xml_root_from_payload(payload)
+                return _xml_root(archive, member)
+
+            try:
+                styles = reader_xml_root("xl/styles.xml")
+            except KeyError:
+                styles = None
+            except (
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                styles = None
+                reader_warnings.add(
+                    "FormulaFence could not isolate Excel Table Style definitions "
+                    f"from the underlying workbook reader ({type(error).__name__})."
+                )
+            if styles is not None:
+                style_containers = [
+                    child
+                    for child in styles
+                    if _xml_local_name(child.tag) == "tableStyles"
+                ]
+                # Openpyxl writes an empty default ``tableStyles`` container
+                # into ordinary workbooks. It is benign and common, so keep it
+                # in place; only non-empty custom/unknown declarations need
+                # isolating before the ordinary reader runs.
+                style_containers_to_remove = [
+                    container
+                    for container in style_containers
+                    if list(container) or (container.text and container.text.strip())
+                ]
+                if style_containers_to_remove:
+                    for container in style_containers_to_remove:
+                        styles.remove(container)
+                    replacements["xl/styles.xml"] = ElementTree.tostring(
+                        styles,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+
+            for member in archive.namelist():
+                if not (
+                    member.startswith("xl/tables/")
+                    and member.endswith(".xml")
+                    and "/_rels/" not in member
+                ):
+                    continue
+                try:
+                    table = reader_xml_root(member)
+                except (
+                    KeyError,
+                    ElementTree.ParseError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    reader_warnings.add(
+                        "FormulaFence could not isolate Excel Table Style metadata "
+                        f"from the underlying workbook reader ({type(error).__name__})."
+                    )
+                    continue
+                changed = False
+                style_infos = [
+                    child
+                    for child in table
+                    if _xml_local_name(child.tag) == "tableStyleInfo"
+                ]
+                for style_info in style_infos:
+                    table.remove(style_info)
+                    changed = True
+                for attribute in (
+                    _TABLE_DIRECT_DXF_TABLE_ATTRIBUTES
+                    | _TABLE_NAMED_CELL_STYLE_ATTRIBUTES
+                ):
+                    if attribute in table.attrib:
+                        table.attrib.pop(attribute)
+                        changed = True
+                for table_columns in table:
+                    if _xml_local_name(table_columns.tag) != "tableColumns":
+                        continue
+                    for column in table_columns:
+                        if _xml_local_name(column.tag) != "tableColumn":
+                            continue
+                        for attribute in (
+                            _TABLE_DIRECT_DXF_COLUMN_ATTRIBUTES
+                            | _TABLE_NAMED_CELL_STYLE_ATTRIBUTES
+                        ):
+                            if attribute in column.attrib:
+                                column.attrib.pop(attribute)
+                                changed = True
+                if changed:
+                    replacements[member] = ElementTree.tostring(
+                        table,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        reader_warnings.add(
+            "FormulaFence could not prepare an Excel Table Style-safe workbook reader "
+            f"copy ({type(error).__name__})."
+        )
+    return replacements, tuple(sorted(reader_warnings))
+
+
 def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...]]:
     """Return a temporary source that limits unsafe ordinary-reader behavior."""
     replacements, reader_warnings = _pivot_reader_cache_record_replacements(path)
@@ -12051,11 +12262,19 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
     custom_workbook_view_replacements, custom_workbook_view_reader_warnings = (
         _custom_workbook_view_reader_replacements(path, prior_replacements)
     )
+    prior_replacements = {
+        **prior_replacements,
+        **custom_workbook_view_replacements,
+    }
+    table_style_control_replacements, table_style_control_reader_warnings = (
+        _table_style_control_reader_replacements(path, prior_replacements)
+    )
     replacements.update(legacy_replacements)
     replacements.update(cell_hyperlink_replacements)
     replacements.update(worksheet_sparkline_replacements)
     replacements.update(worksheet_dimension_replacements)
     replacements.update(custom_workbook_view_replacements)
+    replacements.update(table_style_control_replacements)
     reader_warnings = tuple(
         sorted(
             {
@@ -12065,6 +12284,7 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
                 *worksheet_sparkline_reader_warnings,
                 *worksheet_dimension_reader_warnings,
                 *custom_workbook_view_reader_warnings,
+                *table_style_control_reader_warnings,
             }
         )
     )
@@ -12090,7 +12310,7 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
         warnings_for_reader.add(
-            "FormulaFence could not isolate PivotTable cache records before the "
+            "FormulaFence could not prepare a safe workbook reader copy before the "
             f"underlying workbook reader ran ({type(error).__name__})."
         )
         return path, None, tuple(sorted(warnings_for_reader))
@@ -18046,6 +18266,685 @@ def _custom_workbook_view_metadata(path: Path) -> _CustomWorkbookViewMetadata:
         ),
     )
     return _CustomWorkbookViewMetadata(snapshot, tuple(sorted(warnings)))
+
+
+def _table_style_control_boolean(value: str | None, default: bool) -> bool | None:
+    """Read one Table Style Boolean without treating malformed XML as a default."""
+    return _number_format_boolean(value, default)
+
+
+def _table_style_control_unsigned(value: str | None) -> int | None:
+    """Read one bounded Table Style unsigned integer."""
+    return _custom_workbook_view_unsigned(value)
+
+
+def _table_style_control_fragment_signature(element: ElementTree.Element) -> str:
+    """Keep differential-style material private while resolving ID rewrites."""
+    return _private_external_data_signature(
+        (("table-style-differential", repr(_xml_fragment(element, normalise_formulas=True))),)
+    ) or ""
+
+
+def _table_style_control_unknown_signature(
+    element: ElementTree.Element,
+) -> tuple[str, str, str]:
+    """Fingerprint unsupported Table Style XML without serializing it publicly."""
+    return (
+        "unknown",
+        _xml_display_name(element.tag),
+        _custom_workbook_view_generic_signature(element),
+    )
+
+
+def _table_style_control_is_builtin(name: str) -> bool:
+    """Return whether a style name is one of Excel's standard table styles."""
+    return name.casefold() == "tablestylenone" or bool(
+        _TABLE_STYLE_BUILT_IN_NAME.fullmatch(name)
+    )
+
+
+def _table_style_controls_metadata(path: Path) -> _TableStyleControlsMetadata:
+    """Inspect applied Excel Table Styles directly from raw OOXML.
+
+    Table definitions select a style through ``tableStyleInfo`` while custom
+    style definitions and their differential formats live in ``styles.xml``.
+    The reader sees only a flattened representation, so this preflight keeps
+    the complete presentation declaration private and compares stable semantic
+    signatures instead of volatile ``dxfId`` indexes.
+    """
+    default = TableStyleControlsSnapshot()
+    warnings: set[str] = set()
+    issues: dict[str, str] = {}
+    definition_entries: list[tuple[str, str]] = []
+    custom_style_records: list[tuple[str, tuple[object, ...]]] = []
+    custom_style_definitions: dict[str, tuple[object, ...]] = {}
+    differential_signatures: tuple[str, ...] = ()
+    table_style_info_count = 0
+    styled_table_count = 0
+    custom_table_style_count = 0
+    custom_table_style_element_count = 0
+    custom_style_applied_table_count = 0
+    table_direct_dxf_assignment_count = 0
+    table_direct_dxf_table_indexes: set[int] = set()
+    table_named_cell_style_assignment_count = 0
+    row_striped_table_count = 0
+    column_striped_table_count = 0
+    emphasized_column_table_count = 0
+    has_table_style_surface = False
+    styles_unavailable = False
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    def compatible(element: ElementTree.Element) -> ElementTree.Element:
+        return _custom_workbook_view_compatibility_element(element)
+
+    def parse_boolean_attribute(
+        element: ElementTree.Element,
+        name: str,
+        *,
+        default_value: bool,
+        context: str,
+    ) -> bool:
+        parsed = _table_style_control_boolean(element.get(name), default_value)
+        if parsed is None:
+            note_issue(f"{context}:invalid-{name}", element.get(name))
+            return default_value
+        return parsed
+
+    def record_direct_table_format_attributes(
+        element: ElementTree.Element,
+        *,
+        dxf_attributes: frozenset[str],
+        context: str,
+        table_identity: str,
+        table_index: int,
+        target: str,
+    ) -> None:
+        """Retain private semantic references for table-local format controls."""
+        nonlocal has_table_style_surface
+        nonlocal table_direct_dxf_assignment_count
+        nonlocal table_named_cell_style_assignment_count
+
+        for attribute, value in element.attrib.items():
+            if (
+                _xml_namespace(attribute) is not None
+                and _xml_local_name(attribute)
+                in (dxf_attributes | _TABLE_NAMED_CELL_STYLE_ATTRIBUTES)
+            ):
+                note_issue(
+                    f"{context}:namespaced-presentation-attribute",
+                    (attribute, value),
+                )
+
+        for attribute in sorted(dxf_attributes):
+            raw_dxf_id = element.get(attribute)
+            if raw_dxf_id is None:
+                continue
+            has_table_style_surface = True
+            table_direct_dxf_assignment_count += 1
+            table_direct_dxf_table_indexes.add(table_index)
+            dxf_id = _table_style_control_unsigned(raw_dxf_id)
+            if dxf_id is None or dxf_id >= len(differential_signatures):
+                note_issue(f"{context}:unresolved-{attribute}", raw_dxf_id)
+                dxf_signature = f"unresolved:{raw_dxf_id}"
+            else:
+                dxf_signature = differential_signatures[dxf_id]
+            definition_entries.append(
+                (
+                    f"table-direct-dxf:{table_identity}:{target}:{attribute}",
+                    repr(("tableDirectDxf", attribute, dxf_signature)),
+                )
+            )
+
+        for attribute in sorted(_TABLE_NAMED_CELL_STYLE_ATTRIBUTES):
+            raw_style_name = element.get(attribute)
+            if raw_style_name is None:
+                continue
+            has_table_style_surface = True
+            table_named_cell_style_assignment_count += 1
+            definition_entries.append(
+                (
+                    f"table-named-cell-style:{table_identity}:{target}:{attribute}",
+                    repr(
+                        (
+                            "tableNamedCellStyle",
+                            attribute,
+                            raw_style_name.casefold(),
+                        )
+                    ),
+                )
+            )
+
+    try:
+        with ZipFile(path) as archive:
+            total_bytes = 0
+            styles_root: ElementTree.Element | None = None
+            try:
+                styles_info = archive.getinfo("xl/styles.xml")
+            except KeyError:
+                styles_unavailable = True
+            else:
+                if styles_info.file_size > _TABLE_STYLE_MAX_STYLES_PART_BYTES:
+                    styles_unavailable = True
+                elif styles_info.file_size > _TABLE_STYLE_TOTAL_MAX_BYTES:
+                    styles_unavailable = True
+                else:
+                    total_bytes += styles_info.file_size
+                    try:
+                        styles_root = compatible(_xml_root(archive, "xl/styles.xml"))
+                    except (
+                        ElementTree.ParseError,
+                        KeyError,
+                        OSError,
+                        RuntimeError,
+                        ValueError,
+                    ):
+                        styles_unavailable = True
+
+            if styles_root is not None:
+                if (
+                    _xml_namespace(styles_root.tag) != _SPREADSHEETML_NS
+                    or _xml_local_name(styles_root.tag) != "styleSheet"
+                ):
+                    styles_unavailable = True
+                else:
+                    dxfs = styles_root.find(f"{{{_SPREADSHEETML_NS}}}dxfs")
+                    if dxfs is not None:
+                        differential_signatures = tuple(
+                            _table_style_control_fragment_signature(dxf)
+                            for dxf in dxfs
+                            if (
+                                _xml_namespace(dxf.tag) == _SPREADSHEETML_NS
+                                and _xml_local_name(dxf.tag) == "dxf"
+                            )
+                        )
+
+                    table_style_containers = [
+                        child
+                        for child in styles_root
+                        if _xml_local_name(child.tag) == "tableStyles"
+                    ]
+                    if table_style_containers:
+                        has_table_style_surface = True
+                    if len(table_style_containers) > 1:
+                        note_issue(
+                            "styles:multiple-table-styles-containers",
+                            len(table_style_containers),
+                        )
+                    for container_index, original_container in enumerate(
+                        table_style_containers
+                    ):
+                        container_context = f"styles:table-styles:{container_index}"
+                        if _xml_namespace(original_container.tag) not in {
+                            _SPREADSHEETML_NS,
+                            _STRICT_SPREADSHEETML_NS,
+                        }:
+                            note_issue(
+                                f"{container_context}:unsupported-namespace",
+                                original_container.tag,
+                            )
+                            continue
+                        container = compatible(original_container)
+                        unexpected_attributes = tuple(
+                            sorted(
+                                (_xml_display_name(attribute), value)
+                                for attribute, value in container.attrib.items()
+                                if _xml_local_name(attribute)
+                                not in {"count", "defaultTableStyle", "defaultPivotStyle"}
+                                or _xml_namespace(attribute) is not None
+                            )
+                        )
+                        if unexpected_attributes:
+                            note_issue(
+                                f"{container_context}:unexpected-attributes",
+                                unexpected_attributes,
+                            )
+                        # ``defaultTableStyle`` applies when a user creates a
+                        # new table. Existing tables identify their own style
+                        # with ``tableStyleInfo`` and are the review surface
+                        # guarded here.
+                        for style_index, style in enumerate(container):
+                            style_context = f"{container_context}:style:{style_index}"
+                            if (
+                                _xml_namespace(style.tag) != _SPREADSHEETML_NS
+                                or _xml_local_name(style.tag) != "tableStyle"
+                            ):
+                                note_issue(
+                                    f"{style_context}:unsupported-child",
+                                    _table_style_control_unknown_signature(style),
+                                )
+                                continue
+                            table_enabled = parse_boolean_attribute(
+                                style,
+                                "table",
+                                default_value=True,
+                                context=style_context,
+                            )
+                            if not table_enabled:
+                                # Pivot-only definitions stay within the existing
+                                # PivotTable boundary rather than creating Table
+                                # Style noise for ordinary worksheet tables.
+                                continue
+                            has_table_style_surface = True
+                            style_name = style.get("name")
+                            if not style_name:
+                                note_issue(
+                                    f"{style_context}:missing-style-name",
+                                    _table_style_control_unknown_signature(style),
+                                )
+                                style_key = f"invalid:{style_index}"
+                            else:
+                                style_key = style_name.casefold()
+                            unexpected_style_attributes = tuple(
+                                sorted(
+                                    (_xml_display_name(attribute), value)
+                                    for attribute, value in style.attrib.items()
+                                    if not (
+                                        (
+                                            _xml_namespace(attribute) is None
+                                            and _xml_local_name(attribute)
+                                            in {"name", "pivot", "table", "count"}
+                                        )
+                                        # Excel emits this revision identifier for
+                                        # custom styles. It is package provenance,
+                                        # not a presentation declaration, and may
+                                        # change on a no-op writer round trip.
+                                        or (
+                                            _xml_namespace(attribute)
+                                            == _OFFICE_2016_REVISION9_NS
+                                            and _xml_local_name(attribute) == "uid"
+                                        )
+                                    )
+                                )
+                            )
+                            if unexpected_style_attributes:
+                                note_issue(
+                                    f"{style_context}:unexpected-attributes",
+                                    unexpected_style_attributes,
+                                )
+                            if style.text and style.text.strip():
+                                note_issue(
+                                    f"{style_context}:unexpected-text",
+                                    _table_style_control_unknown_signature(style),
+                                )
+                            element_records: list[tuple[object, ...]] = []
+                            seen_element_types: set[str] = set()
+                            for element_index, element in enumerate(style):
+                                element_context = f"{style_context}:element:{element_index}"
+                                if (
+                                    _xml_namespace(element.tag) != _SPREADSHEETML_NS
+                                    or _xml_local_name(element.tag)
+                                    != "tableStyleElement"
+                                ):
+                                    note_issue(
+                                        f"{element_context}:unsupported-child",
+                                        _table_style_control_unknown_signature(element),
+                                    )
+                                    continue
+                                element_type = element.get("type")
+                                if element_type not in _TABLE_STYLE_ELEMENT_TYPES:
+                                    note_issue(
+                                        f"{element_context}:invalid-type",
+                                        element_type,
+                                    )
+                                    continue
+                                if element_type not in _TABLE_STYLE_TABLE_ELEMENT_TYPES:
+                                    # This element only affects a PivotTable view,
+                                    # so retain no Table Style signature for it.
+                                    continue
+                                if element_type in seen_element_types:
+                                    note_issue(
+                                        f"{style_context}:duplicate-element-type",
+                                        element_type,
+                                    )
+                                seen_element_types.add(element_type)
+                                size = _table_style_control_unsigned(element.get("size"))
+                                if size is None:
+                                    if element.get("size") is not None:
+                                        note_issue(
+                                            f"{element_context}:invalid-size",
+                                            element.get("size"),
+                                        )
+                                    size = 1
+                                dxf_signature: str | None = None
+                                if (raw_dxf_id := element.get("dxfId")) is not None:
+                                    dxf_id = _table_style_control_unsigned(raw_dxf_id)
+                                    if (
+                                        dxf_id is None
+                                        or dxf_id >= len(differential_signatures)
+                                    ):
+                                        note_issue(
+                                            f"{element_context}:unresolved-dxf",
+                                            raw_dxf_id,
+                                        )
+                                        dxf_signature = f"unresolved:{raw_dxf_id}"
+                                    else:
+                                        dxf_signature = differential_signatures[dxf_id]
+                                unexpected_element_attributes = tuple(
+                                    sorted(
+                                        (_xml_display_name(attribute), value)
+                                        for attribute, value in element.attrib.items()
+                                        if _xml_local_name(attribute)
+                                        not in {"type", "size", "dxfId"}
+                                        or _xml_namespace(attribute) is not None
+                                    )
+                                )
+                                if unexpected_element_attributes:
+                                    note_issue(
+                                        f"{element_context}:unexpected-attributes",
+                                        unexpected_element_attributes,
+                                    )
+                                if list(element) or (element.text and element.text.strip()):
+                                    note_issue(
+                                        f"{element_context}:unexpected-content",
+                                        _table_style_control_unknown_signature(element),
+                                    )
+                                element_records.append(
+                                    (element_type, str(size), dxf_signature)
+                                )
+                            custom_table_style_count += 1
+                            custom_table_style_element_count += len(element_records)
+                            custom_style_records.append(
+                                (
+                                    style_key,
+                                    (
+                                        "customTableStyle",
+                                        style_key,
+                                        tuple(sorted(element_records)),
+                                    ),
+                                )
+                            )
+
+            records_by_name: dict[str, list[tuple[object, ...]]] = defaultdict(list)
+            for style_key, signature in custom_style_records:
+                records_by_name[style_key].append(signature)
+            for style_key, signatures in records_by_name.items():
+                if len(signatures) == 1:
+                    custom_style_definitions[style_key] = signatures[0]
+                else:
+                    note_issue(
+                        "styles:duplicate-custom-table-style-name",
+                        (style_key, tuple(signatures)),
+                    )
+            for index, (style_key, signature) in enumerate(
+                sorted(custom_style_records, key=lambda item: (item[0], repr(item[1])))
+            ):
+                definition_entries.append(
+                    (f"custom-table-style:{style_key}:{index}", repr(signature))
+                )
+
+            table_members_raw = [
+                member
+                for member in archive.namelist()
+                if (
+                    member.startswith("xl/tables/")
+                    and member.endswith(".xml")
+                    and "/_rels/" not in member
+                )
+            ]
+            table_members = sorted(set(table_members_raw), key=str.casefold)
+            if len(table_members_raw) != len(table_members):
+                has_table_style_surface = True
+                note_issue(
+                    "tables:duplicate-package-members",
+                    tuple(sorted(table_members_raw)),
+                )
+            if len(table_members) > _TABLE_STYLE_TOTAL_MAX_COUNT:
+                has_table_style_surface = True
+                note_issue(
+                    "tables:part-count-limit",
+                    len(table_members),
+                )
+            for member_index, member in enumerate(table_members):
+                if member_index >= _TABLE_STYLE_TOTAL_MAX_COUNT:
+                    break
+                table_context = f"table-part:{member_index}"
+                try:
+                    info = archive.getinfo(member)
+                except KeyError:
+                    has_table_style_surface = True
+                    note_issue(f"{table_context}:missing-part", member)
+                    continue
+                if info.file_size > _TABLE_STYLE_MAX_TABLE_PART_BYTES:
+                    has_table_style_surface = True
+                    note_issue(f"{table_context}:oversized-part", info.file_size)
+                    continue
+                if total_bytes + info.file_size > _TABLE_STYLE_TOTAL_MAX_BYTES:
+                    has_table_style_surface = True
+                    note_issue(f"{table_context}:total-size-limit", info.file_size)
+                    continue
+                total_bytes += info.file_size
+                try:
+                    table = compatible(_xml_root(archive, member))
+                except (
+                    ElementTree.ParseError,
+                    KeyError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ) as error:
+                    has_table_style_surface = True
+                    note_issue(f"{table_context}:unreadable-part", type(error).__name__)
+                    continue
+                if (
+                    _xml_namespace(table.tag) != _SPREADSHEETML_NS
+                    or _xml_local_name(table.tag) != "table"
+                ):
+                    has_table_style_surface = True
+                    note_issue(f"{table_context}:unsupported-root", table.tag)
+                    continue
+                style_infos = [
+                    child
+                    for child in table
+                    if _xml_local_name(child.tag) == "tableStyleInfo"
+                ]
+                table_name = table.get("displayName") or table.get("name")
+                if table_name:
+                    table_identity = table_name.casefold()
+                else:
+                    # The package-part position is stable enough for this raw
+                    # inventory and avoids putting mutable raw table XML into
+                    # the identity hash when a malformed table lacks a name.
+                    table_identity = f"anonymous:{member_index}"
+
+                direct_dxf_before = table_direct_dxf_assignment_count
+                named_style_before = table_named_cell_style_assignment_count
+                record_direct_table_format_attributes(
+                    table,
+                    dxf_attributes=_TABLE_DIRECT_DXF_TABLE_ATTRIBUTES,
+                    context=f"{table_context}:table",
+                    table_identity=table_identity,
+                    table_index=member_index,
+                    target="table",
+                )
+                column_index = 0
+                for table_columns in table:
+                    if (
+                        _xml_namespace(table_columns.tag) != _SPREADSHEETML_NS
+                        or _xml_local_name(table_columns.tag) != "tableColumns"
+                    ):
+                        continue
+                    for column in table_columns:
+                        if (
+                            _xml_namespace(column.tag) != _SPREADSHEETML_NS
+                            or _xml_local_name(column.tag) != "tableColumn"
+                        ):
+                            continue
+                        record_direct_table_format_attributes(
+                            column,
+                            dxf_attributes=_TABLE_DIRECT_DXF_COLUMN_ATTRIBUTES,
+                            context=f"{table_context}:column:{column_index}",
+                            table_identity=table_identity,
+                            table_index=member_index,
+                            target=f"column:{column_index}",
+                        )
+                        column_index += 1
+
+                if (
+                    table_name is None
+                    and (
+                        style_infos
+                        or table_direct_dxf_assignment_count != direct_dxf_before
+                        or table_named_cell_style_assignment_count != named_style_before
+                    )
+                ):
+                    note_issue(
+                        f"{table_context}:missing-table-identity",
+                        _table_style_control_unknown_signature(table),
+                    )
+
+                if not style_infos:
+                    continue
+                has_table_style_surface = True
+                if len(style_infos) > 1:
+                    note_issue(
+                        f"{table_context}:multiple-style-info-containers",
+                        len(style_infos),
+                    )
+                for style_index, original_style_info in enumerate(style_infos):
+                    style_context = f"{table_context}:style-info:{style_index}"
+                    if _xml_namespace(original_style_info.tag) not in {
+                        _SPREADSHEETML_NS,
+                        _STRICT_SPREADSHEETML_NS,
+                    }:
+                        note_issue(
+                            f"{style_context}:unsupported-namespace",
+                            original_style_info.tag,
+                        )
+                        continue
+                    style_info = compatible(original_style_info)
+                    table_style_info_count += 1
+                    unexpected_attributes = tuple(
+                        sorted(
+                            (_xml_display_name(attribute), value)
+                            for attribute, value in style_info.attrib.items()
+                            if _xml_local_name(attribute)
+                            not in {
+                                "name",
+                                "showFirstColumn",
+                                "showLastColumn",
+                                "showRowStripes",
+                                "showColumnStripes",
+                            }
+                            or _xml_namespace(attribute) is not None
+                        )
+                    )
+                    if unexpected_attributes:
+                        note_issue(
+                            f"{style_context}:unexpected-attributes",
+                            unexpected_attributes,
+                        )
+                    if list(style_info) or (
+                        style_info.text and style_info.text.strip()
+                    ):
+                        note_issue(
+                            f"{style_context}:unexpected-content",
+                            _table_style_control_unknown_signature(style_info),
+                        )
+                    raw_name = style_info.get("name")
+                    style_key = (
+                        raw_name.casefold() if raw_name not in {None, ""} else None
+                    )
+                    if style_key is not None:
+                        styled_table_count += 1
+                        if style_key in custom_style_definitions:
+                            custom_style_applied_table_count += 1
+                        elif not _table_style_control_is_builtin(raw_name or ""):
+                            note_issue(
+                                f"{style_context}:unresolved-style-name",
+                                raw_name,
+                            )
+                    show_first_column = parse_boolean_attribute(
+                        style_info,
+                        "showFirstColumn",
+                        default_value=False,
+                        context=style_context,
+                    )
+                    show_last_column = parse_boolean_attribute(
+                        style_info,
+                        "showLastColumn",
+                        default_value=False,
+                        context=style_context,
+                    )
+                    show_row_stripes = parse_boolean_attribute(
+                        style_info,
+                        "showRowStripes",
+                        default_value=False,
+                        context=style_context,
+                    )
+                    show_column_stripes = parse_boolean_attribute(
+                        style_info,
+                        "showColumnStripes",
+                        default_value=False,
+                        context=style_context,
+                    )
+                    row_striped_table_count += int(show_row_stripes)
+                    column_striped_table_count += int(show_column_stripes)
+                    emphasized_column_table_count += int(
+                        show_first_column or show_last_column
+                    )
+                    signature = (
+                        "tableStyleInfo",
+                        style_key,
+                        show_first_column,
+                        show_last_column,
+                        show_row_stripes,
+                        show_column_stripes,
+                    )
+                    definition_entries.append(
+                        (
+                            f"table-style-binding:{table_identity}:{style_index}",
+                            repr(signature),
+                        )
+                    )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _TableStyleControlsMetadata(
+            default,
+            (
+                "FormulaFence could not inspect Excel Table Style OOXML "
+                f"({type(error).__name__}); table presentation controls were not "
+                "compared.",
+            ),
+        )
+
+    if has_table_style_surface and styles_unavailable:
+        note_issue("styles:unavailable", "styles.xml")
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed, unsupported, unresolved, or bounded Excel "
+            "Table Style metadata; affected table presentation controls have a coverage "
+            "gap."
+        )
+    issue_entries = tuple(
+        (f"table-style-issue:{context}", detail)
+        for context, detail in sorted(issues.items())
+    )
+    snapshot = TableStyleControlsSnapshot(
+        table_style_info_count=table_style_info_count,
+        styled_table_count=styled_table_count,
+        custom_table_style_count=custom_table_style_count,
+        custom_table_style_element_count=custom_table_style_element_count,
+        custom_style_applied_table_count=custom_style_applied_table_count,
+        table_direct_dxf_assignment_count=table_direct_dxf_assignment_count,
+        table_direct_dxf_table_count=len(table_direct_dxf_table_indexes),
+        table_named_cell_style_assignment_count=(
+            table_named_cell_style_assignment_count
+        ),
+        row_striped_table_count=row_striped_table_count,
+        column_striped_table_count=column_striped_table_count,
+        emphasized_column_table_count=emphasized_column_table_count,
+        unrecognized_table_style_count=len(issues),
+        definition_signature=(
+            _private_external_data_signature(tuple(sorted(definition_entries)))
+            if definition_entries
+            else None
+        ),
+        unrecognized_signature=(
+            _private_external_data_signature(issue_entries) if issue_entries else None
+        ),
+    )
+    return _TableStyleControlsMetadata(snapshot, tuple(sorted(warnings)))
 
 
 _NUMBER_FORMAT_BUILT_IN_MAXIMUM = 163
@@ -37057,6 +37956,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     ignored_error_metadata = _ignored_error_metadata(source)
     named_sheet_view_metadata = _named_sheet_view_metadata(source)
     custom_workbook_view_metadata = _custom_workbook_view_metadata(source)
+    table_style_controls_metadata = _table_style_controls_metadata(source)
     number_format_metadata = _number_format_metadata(source)
     font_metadata = _font_metadata(source)
     fill_metadata = _fill_metadata(source)
@@ -37116,6 +38016,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(ignored_error_metadata.warnings)
     parser_warnings.update(named_sheet_view_metadata.warnings)
     parser_warnings.update(custom_workbook_view_metadata.warnings)
+    parser_warnings.update(table_style_controls_metadata.warnings)
     parser_warnings.update(number_format_metadata.warnings)
     parser_warnings.update(font_metadata.warnings)
     parser_warnings.update(fill_metadata.warnings)
@@ -37359,6 +38260,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         ignored_error_controls=ignored_error_metadata.controls,
         named_sheet_views=named_sheet_view_metadata.views,
         custom_workbook_views=custom_workbook_view_metadata.views,
+        table_style_controls=table_style_controls_metadata.controls,
         number_format_controls=number_format_metadata.controls,
         font_controls=font_metadata.controls,
         fill_controls=fill_metadata.controls,
@@ -37455,6 +38357,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "ignored_error_controls": snapshot.ignored_error_controls.profile_dict(),
         "named_sheet_views": snapshot.named_sheet_views.profile_dict(),
         "custom_workbook_views": snapshot.custom_workbook_views.profile_dict(),
+        "table_style_controls": snapshot.table_style_controls.profile_dict(),
         "number_format_controls": snapshot.number_format_controls.profile_dict(),
         "font_controls": snapshot.font_controls.profile_dict(),
         "fill_controls": snapshot.fill_controls.profile_dict(),
@@ -37509,6 +38412,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_ignored_error_controls": snapshot.ignored_error_controls.present,
             "has_named_sheet_views": snapshot.named_sheet_views.present,
             "has_custom_workbook_views": snapshot.custom_workbook_views.present,
+            "has_table_style_controls": snapshot.table_style_controls.present,
             "has_number_format_controls": snapshot.number_format_controls.present,
             "has_font_controls": snapshot.font_controls.present,
             "has_fill_controls": snapshot.fill_controls.present,

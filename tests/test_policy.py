@@ -36,6 +36,7 @@ from .helpers import (
     change_rich_text_run_color,
     change_scenario_manager_input_value,
     change_slicer_timeline_filter_material,
+    change_table_style_control,
     change_threaded_comment_reply,
     change_what_if_data_table_input,
     change_workbook_theme_colour,
@@ -83,6 +84,7 @@ from .helpers import (
     make_scenario_manager_model,
     make_slicer_timeline_cache_model,
     make_table_model,
+    make_table_style_control_model,
     make_threaded_comment_model,
     make_three_d_model,
     make_what_if_data_table_model,
@@ -524,6 +526,21 @@ def test_policy_can_block_custom_workbook_view_changes(tmp_path) -> None:
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
         "FFP060"
+    }
+
+
+def test_policy_can_block_table_style_control_changes(tmp_path) -> None:
+    baseline = make_table_style_control_model(tmp_path / "baseline.xlsx")
+    candidate = make_table_style_control_model(tmp_path / "candidate.xlsx")
+    change_table_style_control(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_table_style_control_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP061"
     }
 
 

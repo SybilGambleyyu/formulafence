@@ -1673,6 +1673,73 @@ class CustomWorkbookViewSnapshot:
 
 
 @dataclass(frozen=True)
+class TableStyleControlsSnapshot:
+    """Safe aggregate of applied Excel Table Style presentation controls.
+
+    A table's ``tableStyleInfo`` can change its visible headers, totals,
+    banding, and emphasized columns while leaving every ordinary cell and
+    structured reference intact. Workbook-local custom style definitions can
+    likewise alter the presentation of every table that selects them. Style
+    names, table identities, differential formats, colours, and raw XML remain
+    in private signatures; public evidence is intentionally structural only.
+    """
+
+    table_style_info_count: int = 0
+    styled_table_count: int = 0
+    custom_table_style_count: int = 0
+    custom_table_style_element_count: int = 0
+    custom_style_applied_table_count: int = 0
+    table_direct_dxf_assignment_count: int = 0
+    table_direct_dxf_table_count: int = 0
+    table_named_cell_style_assignment_count: int = 0
+    row_striped_table_count: int = 0
+    column_striped_table_count: int = 0
+    emphasized_column_table_count: int = 0
+    unrecognized_table_style_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+    unrecognized_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.table_style_info_count
+            or self.custom_table_style_count
+            or self.table_direct_dxf_assignment_count
+            or self.table_named_cell_style_assignment_count
+            or self.unrecognized_table_style_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural Table Style evidence without private formatting."""
+        return {
+            "present": self.present,
+            "table_style_info_count": self.table_style_info_count,
+            "styled_table_count": self.styled_table_count,
+            "custom_table_style_count": self.custom_table_style_count,
+            "custom_table_style_element_count": (
+                self.custom_table_style_element_count
+            ),
+            "custom_style_applied_table_count": (
+                self.custom_style_applied_table_count
+            ),
+            "table_direct_dxf_assignment_count": (
+                self.table_direct_dxf_assignment_count
+            ),
+            "table_direct_dxf_table_count": self.table_direct_dxf_table_count,
+            "table_named_cell_style_assignment_count": (
+                self.table_named_cell_style_assignment_count
+            ),
+            "row_striped_table_count": self.row_striped_table_count,
+            "column_striped_table_count": self.column_striped_table_count,
+            "emphasized_column_table_count": self.emphasized_column_table_count,
+            "unrecognized_table_style_count": self.unrecognized_table_style_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class NumberFormatSnapshot:
     """Safe aggregate of cell, row, and column number-format controls.
 
@@ -3384,6 +3451,9 @@ class WorkbookSnapshot:
     custom_workbook_views: CustomWorkbookViewSnapshot = field(
         default_factory=CustomWorkbookViewSnapshot
     )
+    table_style_controls: TableStyleControlsSnapshot = field(
+        default_factory=TableStyleControlsSnapshot
+    )
     number_format_controls: NumberFormatSnapshot = field(
         default_factory=NumberFormatSnapshot
     )
@@ -3608,6 +3678,19 @@ class WorkbookSnapshot:
                 self.custom_workbook_views.custom_view_sheet_count
             ),
             "has_custom_workbook_views": self.custom_workbook_views.present,
+            "table_style_info_count": (
+                self.table_style_controls.table_style_info_count
+            ),
+            "custom_table_style_count": (
+                self.table_style_controls.custom_table_style_count
+            ),
+            "table_direct_dxf_assignment_count": (
+                self.table_style_controls.table_direct_dxf_assignment_count
+            ),
+            "table_named_cell_style_assignment_count": (
+                self.table_style_controls.table_named_cell_style_assignment_count
+            ),
+            "has_table_style_controls": self.table_style_controls.present,
             "number_format_assignment_count": (
                 self.number_format_controls.default_format_override_count
                 + self.number_format_controls.cell_format_assignment_count

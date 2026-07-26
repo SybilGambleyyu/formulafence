@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.59.0/formulafence-0.59.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.60.0/formulafence-0.60.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,6 +75,7 @@ rules:
   no_ignored_error_changes: true
   no_named_sheet_view_changes: true
   no_custom_workbook_view_changes: true
+  no_table_style_control_changes: true
   no_number_format_changes: true
   no_cell_font_changes: true
   no_cell_fill_changes: true
@@ -643,6 +644,39 @@ Microsoft's [`customWorkbookView`](https://learn.microsoft.com/en-us/dotnet/api/
 and [`customSheetView`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.customsheetview?view=openxml-3.0.1)
 definitions.
 
+FormulaFence also inventories **Excel Table Style controls**. A table can change
+its visible headers, totals, banding, emphasized columns, data-area format, or
+borders without changing a cell value, formula, table reference, or structured
+formula. FormulaFence reads raw table `tableStyleInfo` bindings and toggles,
+custom workbook `tableStyle` / `tableStyleElement` definitions, their resolved
+`dxf` formatting material, and direct Table/TableColumn Dxf and named-cell-style
+references. A material presentation declaration or coverage change emits
+`FF061`; enable `no_table_style_control_changes` for `FFP061` in CI.
+
+Profiles expose only structural counts for style declarations, styled tables,
+custom styles/elements, direct Dxf and named-cell-style assignments, banding,
+emphasized columns, and unrecognized controls. Table names, custom style names,
+cell-style names, Dxf formatting, colours, IDs, and raw XML never enter
+profiles, Markdown control sections, `FF061` details, or SARIF. Equivalent
+Boolean/default spelling, case-only style names, `xr9:uid` revision provenance,
+and coordinated Dxf reordering/ID rewriting normalize. Transitional and Strict
+SpreadsheetML parts are read directly; presentation-only Table Style XML is
+isolated from the ordinary reader after raw evidence is captured. Missing,
+duplicate, malformed, unresolved, unsupported, oversized, or over-budget
+records become explicit coverage warnings.
+
+FormulaFence compares stored declarations rather than rendering Excel's final
+appearance: it does not resolve themes, calculate values, evaluate conditional
+formatting, apply a style to cells, interpret future extensions, or cover
+PivotTable-only Table Style regions. `defaultTableStyle` is a preference for
+newly created tables rather than a binding on an existing table, so it is not a
+review-surface control. Named cell-style references are compared privately, but
+their same-name underlying style definitions remain outside this Table Style
+boundary. The boundary follows Microsoft's [`TableStyles`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.tablestyles?view=openxml-3.0.1),
+[`TableStyleInfo`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.tablestyleinfo?view=openxml-3.0.1),
+and [`TableColumn`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.tablecolumn?view=openxml-3.0.1)
+definitions.
+
 FormulaFence also inventories **cell number-format controls**. A number format
 can make an unchanged value appear blank (for example, Excel's custom `;;;`
 format), scale it with commas, or render it as a percentage, date, text, or a
@@ -662,8 +696,9 @@ definitions, invalid style references, invalid/out-of-range targets, conflicting
 definitions, and bounded-parser failures become visible coverage warnings rather
 than silent omissions. FormulaFence compares declarations only: it does not
 render locale-specific output, validate a format code, calculate a value, model
-width/overflow, compose number formats with font/fill/alignment/border controls,
-or cover quote prefixes, table styles, or arbitrary visual formatting. A
+width/overflow, compose number formats with font/fill/alignment/border or
+separately inventoried Table Style controls, or cover quote prefixes or
+arbitrary visual formatting. A
 column `style` is recorded as
 the OOXML column default for unallocated/new cells; FormulaFence does not claim
 to apply that default retroactively to existing allocated cells. The boundary
@@ -695,8 +730,8 @@ failures become visible coverage warnings rather than silent omissions.
 FormulaFence compares declarations only: it does not render or resolve theme
 colours, decide whether a font is visible against a fill, calculate
 text/background contrast, compose font rendering with fill/border/alignment or
-other display controls, rich-text run rendering, table styles, or arbitrary
-visual formatting.
+other display controls, rich-text run rendering, separately inventoried Table
+Style controls, or arbitrary visual formatting.
 A column `style` is recorded as the
 OOXML default for unallocated/new cells;
 FormulaFence does not claim to apply that default retroactively to existing
@@ -724,9 +759,10 @@ Missing or malformed fill/style definitions, invalid IDs/indexes/targets, and
 bounded-parser failures become visible coverage warnings rather than silent
 omissions. FormulaFence compares declarations only: it does not resolve theme
 colours, render patterns or gradients, calculate text/background contrast,
-evaluate conditional-format differential styles, apply table styles, calculate
-values, compose fill rendering with border/alignment or other display controls,
-rich-text run rendering, width/overflow, or arbitrary visual formatting. A
+evaluate conditional-format differential styles, apply separately inventoried
+Table Style controls, calculate values, compose fill rendering with
+border/alignment or other display controls, rich-text run rendering,
+width/overflow, or arbitrary visual formatting. A
 column `style` is recorded as the OOXML default for
 unallocated/new cells; FormulaFence does not claim to apply that default
 retroactively to existing allocated cells. The boundary follows OOXML's

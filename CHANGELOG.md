@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.60.0 — 2026-07-26
+
+- Inspect Excel Table presentation controls directly from raw OOXML: applied
+  `tableStyleInfo` bindings/toggles, applicable custom `tableStyle` /
+  `tableStyleElement` definitions, semantic Dxf material, and direct
+  Table/TableColumn Dxf and named-cell-style references. Profiles, Markdown,
+  JSON, and SARIF retain only structural counts; table/style names, formatting,
+  colours, identifiers, and XML remain private.
+- Emit `FF061` for a material Table Style control or coverage change and add
+  the fail-closed `no_table_style_control_changes` policy rule (`FFP061`).
+  Boolean/default spelling, case-only style names, Excel `xr9:uid` revision
+  provenance, and coordinated Dxf reordering/ID rewrites normalize without
+  suppressing a material presentation change.
+- Isolate Table Style XML and direct table-local presentation references from
+  the ordinary reader only after collecting raw evidence. Transitional and
+  Strict SpreadsheetML are supported; missing, duplicate, malformed,
+  unresolved, unsupported, oversized, or over-budget controls become explicit
+  coverage evidence. FormulaFence does not render final Table appearance,
+  resolve themes, apply conditional formatting, or cover PivotTable-only style
+  regions; `defaultTableStyle` remains a new-table preference rather than an
+  existing-table binding.
+
 ## 0.59.0 — 2026-07-26
 
 - Inspect legacy Excel Custom Views directly from raw workbook and sheet OOXML:

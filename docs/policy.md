@@ -25,6 +25,7 @@ rules:
   no_ignored_error_changes: true
   no_named_sheet_view_changes: true
   no_custom_workbook_view_changes: true
+  no_table_style_control_changes: true
   no_number_format_changes: true
   no_cell_font_changes: true
   no_cell_fill_changes: true
@@ -112,6 +113,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_ignored_error_changes` | boolean | A standard or Office 2010 extension ignored-error declaration changes a per-range suppression of Excel evaluation, formula-consistency, range-omission, unlocked-formula, empty-reference, list-validation, calculated-column, text-number, or two-digit-year warnings. Targets and exact suppressions are compared privately. |
 | `no_named_sheet_view_changes` | boolean | A relationship-backed Excel Named Sheet View, alternate AutoFilter criterion, sort rule, or reconciled base-filter binding changes. View names, IDs, criteria, ranges, table bindings, and sort keys are compared privately. |
 | `no_custom_workbook_view_changes` | boolean | A legacy Excel Custom View's workbook declaration, GUID-linked per-sheet alternate display/filter/print state, or recognized sheet binding changes. View names, GUIDs, sheet bindings, ranges, filters, pane locations, print settings, and raw XML are compared privately. |
+| `no_table_style_control_changes` | boolean | An Excel Table Style binding/toggle, applicable custom Table Style definition or resolved Dxf material, or direct Table/TableColumn Dxf or named-cell-style reference changes. Table/style names, formatting, colours, IDs, and raw XML are compared privately. |
 | `no_number_format_changes` | boolean | An effective default, direct-cell, row, or column number-format control changes. Format codes, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_font_changes` | boolean | An effective default, direct-cell, row, or column font control changes. Font names, colours, effects, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
@@ -539,6 +541,29 @@ does not activate/render a Custom View, calculate an alternate filtered result,
 determine final print output, interpret future extensions, or support Custom
 Views on other sheet types.
 
+Excel Tables can carry a presentation declaration independently of the table
+reference and cell contents. `tableStyleInfo` selects a built-in or custom
+style and turns headers, totals, row/column banding, or first/last-column
+emphasis on or off. Custom `<tableStyle>` records resolve their Dxf material
+through `styles.xml`; Tables and TableColumns can also directly select a Dxf
+for data/header/total/border regions or a named cell style. FormulaFence reads
+those declarations before the ordinary reader flattens them. A material change
+emits `FF061`; `no_table_style_control_changes` makes it `FFP061` in CI.
+
+Profiles and `FF061` details expose only structural counts: declarations,
+styled tables, custom styles/elements, direct Dxf/named-cell-style assignments,
+banding/emphasis, and unrecognized metadata. Table names, style names,
+formatting, colours, IDs, and raw XML remain private. Boolean/default spelling,
+case-only style names, Excel's `xr9:uid` style revision provenance, and
+coordinated Dxf reordering/ID rewriting normalize. Transitional and Strict
+SpreadsheetML are supported. Missing, duplicate, malformed, unresolved,
+unsupported, oversized, or over-budget controls are explicit coverage warnings.
+FormulaFence does not render the resulting Table, resolve themes, apply
+conditional formatting, or cover PivotTable-only style regions.
+`defaultTableStyle` is a new-table preference rather than an existing-table
+binding, and a same-name named cell-style definition is not resolved under this
+Table Style rule.
+
 Excel number formats can hide or materially reinterpret a value without changing
 its stored value or formula: `;;;` can make it appear blank, while custom
 sections, scaling commas, dates, percentages, literals, and text placeholders
@@ -579,8 +604,8 @@ normalized. Missing or malformed definitions, invalid IDs/indexes/targets, and
 bounded parser failures are explicit coverage warnings. FormulaFence does not
 render or resolve theme colours, decide whether a font is visible against a
 fill, calculate text/background contrast or values, compose alignment with
-other display controls, track borders/rich-text run rendering/table styles, or
-claim arbitrary visual-style coverage. A raw column `style` is
+other display controls, track borders/rich-text run rendering or separately
+inventoried Table Style controls, or claim arbitrary visual-style coverage. A raw column `style` is
 compared as a declaration/default for unallocated/new cells; it is not treated
 as a renderer that restyles allocated cells.
 
@@ -602,9 +627,8 @@ no-fill/solid-background declarations, and effective column-range splitting are
 normalized. Missing or malformed definitions, invalid IDs/indexes/targets, and
 bounded parser failures are explicit coverage warnings. FormulaFence does not
 resolve theme colours, render patterns or gradients, calculate text/background
-contrast, evaluate conditional-format differential styles, apply table styles,
-calculate values, or claim arbitrary visual-style coverage. A raw column `style`
-is compared as a declaration/default for unallocated/new cells; it is not
+contrast, evaluate conditional-format differential styles, apply separately
+inventoried Table Style controls, calculate values, or claim arbitrary visual-style coverage. A raw column `style` is compared as a declaration/default for unallocated/new cells; it is not
 treated as a renderer that restyles allocated cells.
 
 Cell-alignment controls can reposition, rotate, wrap, shrink, or indent an

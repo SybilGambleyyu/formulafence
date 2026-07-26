@@ -247,6 +247,22 @@ review prompt, not proof of an error.
   is visible coverage evidence. FormulaFence does not activate/render a Custom
   View, calculate an alternate filtered result, determine final print output,
   interpret future extensions, or support Custom Views on other sheet types.
+- Excel Tables can change a report's review surface through `tableStyleInfo`
+  bindings/toggles, custom Table Style definitions, resolved Dxf material, and
+  Table/TableColumn direct Dxf or named-cell-style references even when cell
+  values, formulas, and table references remain fixed. FormulaFence compares
+  those raw declarations privately and emits `FF061`; the
+  `no_table_style_control_changes` rule can block it as `FFP061`. Profiles and
+  `FF061` details expose only structural counts for declarations, styled/custom
+  styles, Dxf/named-style assignments, banding/emphasis, and unrecognized
+  metadata—never table/style names, formatting, colours, IDs, or raw XML.
+  Boolean/default spelling, case-only names, `xr9:uid` revision provenance, and
+  coordinated Dxf ID rewrites normalize. Missing, duplicate, malformed,
+  unresolved, unsupported, oversized, or over-budget material remains visible
+  coverage evidence. FormulaFence does not render resulting tables, resolve
+  themes, calculate values, apply conditional formatting, cover PivotTable-only
+  style regions, treat `defaultTableStyle` as an existing-table binding, or
+  resolve a same-name named cell-style definition.
 - Excel number formats can hide or materially reinterpret an unchanged stored
   value: `;;;` can display it as blank, while custom sections, scaling commas,
   dates, percentages, literals, and text placeholders can change the review
@@ -263,8 +279,8 @@ review prompt, not proof of an error.
   definitions, and bounded parser failures remain coverage warnings. FormulaFence
   does not render locale-specific output, validate format syntax, calculate
   values, model width/overflow, or compose number formats with separately
-  inventoried font/fill/alignment/border controls, quote prefixes, table
-  styles, or arbitrary visual formatting. Column styles
+  inventoried font/fill/alignment/border or Table Style controls, quote
+  prefixes, or arbitrary visual formatting. Column styles
   are compared only as OOXML defaults for unallocated/new cells, not as a claim
   to restyle allocated cells.
 - Excel cell fonts can make an unchanged value or warning less visible, such as
@@ -282,7 +298,8 @@ review prompt, not proof of an error.
   does not render or resolve theme colours, decide whether a font is visible
   against a fill, calculate text/background contrast or values, compose font
   rendering with fill/border/alignment or other display controls, rich-text run
-  rendering, table styles, width/overflow, or arbitrary visual formatting. Column
+  rendering, separately inventoried Table Style controls, width/overflow, or
+  arbitrary visual formatting. Column
   styles are compared only as OOXML defaults for unallocated/new cells, not as a
   claim to restyle allocated cells.
 - Excel cell fills can make unchanged text, warnings, or input/output cues less
@@ -300,7 +317,8 @@ review prompt, not proof of an error.
   invalid IDs/indexes/targets, and bounded parser failures remain visible
   coverage warnings. FormulaFence does not resolve theme colours, render fills,
   calculate text/background contrast, evaluate conditional-format differential
-  styles, apply table styles, or claim arbitrary visual-style coverage. Column
+  styles, apply separately inventoried Table Style controls, or claim arbitrary
+  visual-style coverage. Column
   styles are compared only as OOXML defaults for unallocated/new cells, not as a
   claim to restyle allocated cells.
 - Cell alignment can reposition, rotate, wrap, shrink, or indent an unchanged

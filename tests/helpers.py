@@ -61,6 +61,7 @@ _OFFICE_2010_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml
 _OFFICE_2010_AC_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
 _OFFICE_2013_SPREADSHEET_NS = "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"
 _OFFICE_2014_REVISION_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+_OFFICE_2016_REVISION9_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision9"
 _OFFICE_2016_REVISION10_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision10"
 _EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
 _NAMED_SHEET_VIEW_NS = "http://schemas.microsoft.com/office/spreadsheetml/2019/namedsheetviews"
@@ -2511,6 +2512,336 @@ def make_table_model(path: Path) -> Path:
     report["B5"] = "=COUNTA(Sales[[#Headers],[#Data],[Rate]])"
     workbook.save(path)
     return path
+
+
+def _table_style_control_table_member(contents: dict[str, bytes]) -> str:
+    """Return the one ordinary table part used by the Table Style fixture."""
+    members = sorted(
+        member
+        for member in contents
+        if member.startswith("xl/tables/") and member.endswith(".xml")
+    )
+    if len(members) != 1:
+        raise ValueError("Fixture needs exactly one table package part")
+    return members[0]
+
+
+def _table_style_control_style_container(
+    styles: ElementTree.Element,
+) -> ElementTree.Element:
+    """Return the fixture's ``tableStyles`` container."""
+    container = styles.find(f"{{{_SPREADSHEETML_NS}}}tableStyles")
+    if container is None:
+        raise ValueError("Fixture styles XML does not contain tableStyles")
+    return container
+
+
+def _table_style_control_dxfs(styles: ElementTree.Element) -> ElementTree.Element:
+    """Return or create the fixture's differential-format container."""
+    dxfs = styles.find(f"{{{_SPREADSHEETML_NS}}}dxfs")
+    if dxfs is not None:
+        return dxfs
+    dxfs = ElementTree.Element(f"{{{_SPREADSHEETML_NS}}}dxfs", {"count": "0"})
+    table_styles = _table_style_control_style_container(styles)
+    styles.insert(list(styles).index(table_styles), dxfs)
+    return dxfs
+
+
+def make_table_style_control_model(path: Path) -> Path:
+    """Create an applied private custom Table Style backed by three Dxfs."""
+    make_table_model(path)
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_fill_dxf(dxfs: ElementTree.Element, color: str) -> None:
+        dxf = ElementTree.SubElement(dxfs, f"{{{_SPREADSHEETML_NS}}}dxf")
+        fill = ElementTree.SubElement(dxf, f"{{{_SPREADSHEETML_NS}}}fill")
+        pattern = ElementTree.SubElement(
+            fill,
+            f"{{{_SPREADSHEETML_NS}}}patternFill",
+            {"patternType": "solid"},
+        )
+        ElementTree.SubElement(
+            pattern,
+            f"{{{_SPREADSHEETML_NS}}}fgColor",
+            {"rgb": color},
+        )
+        ElementTree.SubElement(
+            pattern,
+            f"{{{_SPREADSHEETML_NS}}}bgColor",
+            {"indexed": "64"},
+        )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        dxfs = _table_style_control_dxfs(styles)
+        add_fill_dxf(dxfs, "FF113355")
+        add_fill_dxf(dxfs, "FF557799")
+        add_fill_dxf(dxfs, "FF99BBDD")
+        dxfs.set("count", str(len(dxfs)))
+
+        table_styles = _table_style_control_style_container(styles)
+        table_styles.set("count", "1")
+        custom_style = ElementTree.SubElement(
+            table_styles,
+            f"{{{_SPREADSHEETML_NS}}}tableStyle",
+            {
+                "name": "PRIVATE-FINANCE-TABLE-STYLE",
+                "pivot": "false",
+                "table": "true",
+                f"{{{_OFFICE_2016_REVISION9_NS}}}uid": (
+                    "{01234567-89AB-CDEF-0123-456789ABCDEF}"
+                ),
+            },
+        )
+        ElementTree.SubElement(
+            custom_style,
+            f"{{{_SPREADSHEETML_NS}}}tableStyleElement",
+            {"type": "wholeTable", "dxfId": "0"},
+        )
+        ElementTree.SubElement(
+            custom_style,
+            f"{{{_SPREADSHEETML_NS}}}tableStyleElement",
+            {"type": "headerRow", "dxfId": "1"},
+        )
+        ElementTree.SubElement(
+            custom_style,
+            f"{{{_SPREADSHEETML_NS}}}tableStyleElement",
+            {"type": "firstRowStripe", "size": "1", "dxfId": "2"},
+        )
+        # A Pivot-only region is intentionally present to verify the ordinary
+        # worksheet Table Style inventory does not absorb PivotTable controls.
+        ElementTree.SubElement(
+            custom_style,
+            f"{{{_SPREADSHEETML_NS}}}tableStyleElement",
+            {"type": "firstSubtotalRow", "dxfId": "0"},
+        )
+        contents["xl/styles.xml"] = serialize(styles)
+
+        table_member = _table_style_control_table_member(contents)
+        table = ElementTree.fromstring(contents[table_member])
+        table_columns = table.find(f"{{{_SPREADSHEETML_NS}}}tableColumns")
+        if table_columns is None:
+            raise ValueError("Fixture table does not contain tableColumns")
+        first_column = table_columns.find(f"{{{_SPREADSHEETML_NS}}}tableColumn")
+        if first_column is None:
+            raise ValueError("Fixture table does not contain a table column")
+        first_column.set("dataDxfId", "2")
+        first_column.set("dataCellStyle", "PRIVATE-FINANCE-DATA-STYLE")
+        ElementTree.SubElement(
+            table,
+            f"{{{_SPREADSHEETML_NS}}}tableStyleInfo",
+            {
+                "name": "PRIVATE-FINANCE-TABLE-STYLE",
+                "showFirstColumn": "false",
+                "showLastColumn": "true",
+                "showRowStripes": "true",
+                "showColumnStripes": "false",
+            },
+        )
+        contents[table_member] = serialize(table)
+
+    return _rewrite_archive(path, mutate, ".table-style-controls.tmp.xlsx")
+
+
+def change_table_style_control(path: Path) -> Path:
+    """Change an applied Table Style toggle without modifying a table range."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        table_member = _table_style_control_table_member(contents)
+        table = ElementTree.fromstring(contents[table_member])
+        style_info = table.find(f"{{{_SPREADSHEETML_NS}}}tableStyleInfo")
+        if style_info is None:
+            raise ValueError("Fixture table does not contain tableStyleInfo")
+        style_info.set("showRowStripes", "0")
+        style_info.set("showColumnStripes", "1")
+        contents[table_member] = ElementTree.tostring(
+            table,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".table-style-toggle.tmp.xlsx")
+
+
+def change_table_style_definition(path: Path) -> Path:
+    """Change a custom Table Style Dxf without modifying table cells or refs."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        colors = list(styles.iter(f"{{{_SPREADSHEETML_NS}}}fgColor"))
+        if len(colors) < 2:
+            raise ValueError("Fixture styles XML does not contain custom Table Style Dxfs")
+        colors[1].set("rgb", "FFCC8844")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".table-style-definition.tmp.xlsx")
+
+
+def change_table_direct_dxf_assignment(path: Path) -> Path:
+    """Change a table-column Dxf binding without changing any table content."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        table_member = _table_style_control_table_member(contents)
+        table = ElementTree.fromstring(contents[table_member])
+        column = table.find(
+            f"{{{_SPREADSHEETML_NS}}}tableColumns/"
+            f"{{{_SPREADSHEETML_NS}}}tableColumn"
+        )
+        if column is None:
+            raise ValueError("Fixture table does not contain a table column")
+        column.set("dataDxfId", "1")
+        contents[table_member] = ElementTree.tostring(
+            table,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".table-direct-dxf.tmp.xlsx")
+
+
+def normalize_table_style_control_writer_noise(path: Path) -> Path:
+    """Rewrite equivalent Table Style spelling and Dxf indexes."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        dxfs = _table_style_control_dxfs(styles)
+        original_dxfs = list(dxfs)
+        if len(original_dxfs) != 3:
+            raise ValueError("Fixture styles XML needs exactly three custom Table Style Dxfs")
+        # Writer A may reorder differential formats while consistently changing
+        # every corresponding dxfId. The semantic style is unchanged.
+        reorder = (2, 0, 1)
+        old_to_new = {old: new for new, old in enumerate(reorder)}
+        for child in original_dxfs:
+            dxfs.remove(child)
+        for old_index in reorder:
+            dxfs.append(original_dxfs[old_index])
+        for element in styles.iter(f"{{{_SPREADSHEETML_NS}}}tableStyleElement"):
+            raw_dxf_id = element.get("dxfId")
+            if raw_dxf_id is not None:
+                element.set("dxfId", str(old_to_new[int(raw_dxf_id)]))
+        style = next(styles.iter(f"{{{_SPREADSHEETML_NS}}}tableStyle"))
+        style.set("name", "private-finance-table-style")
+        style.set("pivot", "0")
+        style.set("table", "1")
+        style.set(
+            f"{{{_OFFICE_2016_REVISION9_NS}}}uid",
+            "{11111111-2222-3333-4444-555555555555}",
+        )
+        stripe = next(
+            element
+            for element in styles.iter(f"{{{_SPREADSHEETML_NS}}}tableStyleElement")
+            if element.get("type") == "firstRowStripe"
+        )
+        stripe.set("size", "01")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        table_member = _table_style_control_table_member(contents)
+        table = ElementTree.fromstring(contents[table_member])
+        style_info = table.find(f"{{{_SPREADSHEETML_NS}}}tableStyleInfo")
+        if style_info is None:
+            raise ValueError("Fixture table does not contain tableStyleInfo")
+        style_info.set("name", "private-finance-table-style")
+        style_info.set("showFirstColumn", "0")
+        style_info.set("showLastColumn", "1")
+        style_info.set("showRowStripes", "1")
+        style_info.attrib.pop("showColumnStripes", None)
+        for element in table.iter():
+            for attribute in (
+                "headerRowDxfId",
+                "dataDxfId",
+                "totalsRowDxfId",
+                "headerRowBorderDxfId",
+                "tableBorderDxfId",
+                "totalsRowBorderDxfId",
+            ):
+                raw_dxf_id = element.get(attribute)
+                if raw_dxf_id is not None:
+                    element.set(attribute, str(old_to_new[int(raw_dxf_id)]))
+        column = table.find(
+            f"{{{_SPREADSHEETML_NS}}}tableColumns/"
+            f"{{{_SPREADSHEETML_NS}}}tableColumn"
+        )
+        if column is None:
+            raise ValueError("Fixture table does not contain a table column")
+        column.set("dataCellStyle", "private-finance-data-style")
+        contents[table_member] = ElementTree.tostring(
+            table,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".table-style-noise.tmp.xlsx")
+
+
+def make_strict_table_style_control_model(path: Path) -> Path:
+    """Create a Strict SpreadsheetML Table Style fixture."""
+    make_table_style_control_model(path)
+
+    def strict_name(name: str) -> str:
+        prefix = f"{{{_SPREADSHEETML_NS}}}"
+        if name.startswith(prefix):
+            return f"{{{_STRICT_SPREADSHEETML_NS}}}{name[len(prefix):]}"
+        return name
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        for member in (
+            "xl/styles.xml",
+            _table_style_control_table_member(contents),
+        ):
+            root = ElementTree.fromstring(contents[member])
+            for element in root.iter():
+                element.tag = strict_name(element.tag)
+            contents[member] = ElementTree.tostring(
+                root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+    return _rewrite_archive(path, mutate, ".strict-table-style-controls.tmp.xlsx")
+
+
+def corrupt_table_style_control(path: Path) -> Path:
+    """Inject malformed private Table Style metadata for fail-closed coverage."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        styles = ElementTree.fromstring(contents["xl/styles.xml"])
+        style_element = next(
+            styles.iter(f"{{{_SPREADSHEETML_NS}}}tableStyleElement")
+        )
+        style_element.set("dxfId", "4294967296")
+        style_element.set("privateControl", "PRIVATE-TABLE-STYLE-CONTROL")
+        contents["xl/styles.xml"] = ElementTree.tostring(
+            styles,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        table_member = _table_style_control_table_member(contents)
+        table = ElementTree.fromstring(contents[table_member])
+        column = table.find(
+            f"{{{_SPREADSHEETML_NS}}}tableColumns/"
+            f"{{{_SPREADSHEETML_NS}}}tableColumn"
+        )
+        if column is None:
+            raise ValueError("Fixture table does not contain a table column")
+        column.set("dataDxfId", "4294967296")
+        contents[table_member] = ElementTree.tostring(
+            table,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".table-style-corrupt.tmp.xlsx")
 
 
 def _xml_mapping_table_member(contents: dict[str, bytes]) -> str:

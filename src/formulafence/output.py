@@ -1405,6 +1405,47 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "View names, GUIDs, sheet bindings, ranges, filters, print settings, and raw "
             "Custom View XML are compared privately and intentionally omitted."
         )
+    table_style_controls = profile["table_style_controls"]
+    if table_style_controls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Excel Table Style Controls",
+                "",
+                (
+                    "- **Style declarations / styled tables / custom styles / custom "
+                    "style elements:** "
+                    f"{table_style_controls['table_style_info_count']} / "
+                    f"{table_style_controls['styled_table_count']} / "
+                    f"{table_style_controls['custom_table_style_count']} / "
+                    f"{table_style_controls['custom_table_style_element_count']}"
+                ),
+                (
+                    "- **Tables using custom styles / row stripes / column stripes / "
+                    "emphasized columns:** "
+                    f"{table_style_controls['custom_style_applied_table_count']} / "
+                    f"{table_style_controls['row_striped_table_count']} / "
+                    f"{table_style_controls['column_striped_table_count']} / "
+                    f"{table_style_controls['emphasized_column_table_count']}"
+                ),
+                (
+                    "- **Tables with direct Dxf formats / direct Dxf assignments / "
+                    "named cell-style assignments:** "
+                    f"{table_style_controls['table_direct_dxf_table_count']} / "
+                    f"{table_style_controls['table_direct_dxf_assignment_count']} / "
+                    f"{table_style_controls['table_named_cell_style_assignment_count']}"
+                ),
+            ]
+        )
+        if table_style_controls["unrecognized_table_style_count"]:
+            lines.append(
+                "- **Unrecognized, malformed, or unresolved Table Style controls:** "
+                f"{table_style_controls['unrecognized_table_style_count']}"
+            )
+        lines.append(
+            "Table names, custom and named cell-style names, differential formats, "
+            "colours, and raw XML are compared privately and intentionally omitted."
+        )
     number_format_controls = profile["number_format_controls"]
     if number_format_controls["present"]:
         lines.extend(

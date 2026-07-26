@@ -49,6 +49,7 @@ from formulafence.models import (
     RichTextRunSnapshot,
     ScenarioManagerSnapshot,
     SlicerTimelineCacheSnapshot,
+    TableStyleControlsSnapshot,
     ThreadedCommentSnapshot,
     WhatIfDataTableSnapshot,
     WorkbookSnapshot,
@@ -1480,6 +1481,34 @@ def _workbook_control_changes(
                 "high",
                 "Legacy Excel Custom Views changed; saved alternate display, visibility, "
                 "filter, or print settings may show a different workbook.",
+                details=details,
+            )
+        )
+    if before.table_style_controls != after.table_style_controls:
+        old_controls: TableStyleControlsSnapshot = before.table_style_controls
+        new_controls: TableStyleControlsSnapshot = after.table_style_controls
+        details: dict[str, object] = {
+            "before": old_controls.to_dict(),
+            "after": new_controls.to_dict(),
+        }
+        if old_controls.definition_signature != new_controls.definition_signature:
+            details["table_style_definition_material_changed"] = True
+        if old_controls.unrecognized_signature != new_controls.unrecognized_signature:
+            details["unrecognized_table_style_metadata_changed"] = True
+        changes.append(
+            Change(
+                "table_style_controls_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF061",
+                "high",
+                "Excel Table Style controls changed; headers, totals, data areas, borders, "
+                "banding, or emphasized columns may present a different review surface.",
                 details=details,
             )
         )

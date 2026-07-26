@@ -354,6 +354,7 @@ def test_portfolio_resolves_relative_external_workbook_defined_names_privately(
             "D3": "=SUM('..\\inputs\\[SOURCE.XLSX]dynamicinputrange')",
             "D4": "=SUM(ExternalNameFormula)",
             "D5": "=SUM(ExternalNameDynamicFormula)",
+            "D6": "=SUM(ExternalNameLambda(7))",
         },
     )
     consumer = load_workbook(consumer_path)
@@ -367,6 +368,12 @@ def test_portfolio_resolves_relative_external_workbook_defined_names_privately(
         DefinedName(
             "ExternalNameDynamicFormula",
             attr_text="=OFFSET('..\\inputs\\[SOURCE.XLSX]privateinputalias',0,0,1,1)",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "ExternalNameLambda",
+            attr_text="=LAMBDA(value,SUM(value,ExternalNameFormula))",
         )
     )
     consumer.save(consumer_path)
@@ -399,17 +406,174 @@ def test_portfolio_resolves_relative_external_workbook_defined_names_privately(
     rendered = (*report_rendered, profile_rendered)
 
     assert finding.details["impacted_workbook_count"] == 1
-    assert finding.details["impacted_formula_count"] == 2
+    assert finding.details["impacted_formula_count"] == 3
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
     assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
         "Summary!D2",
         "Summary!D4",
+        "Summary!D6",
     ]
     assert all("PrivateInputRange" not in value for value in rendered)
     assert all("PrivateInputAlias" not in value for value in rendered)
     assert all("DynamicInputRange" not in value for value in rendered)
     assert all("ExternalNameFormula" not in value for value in report_rendered)
     assert all("ExternalNameDynamicFormula" not in value for value in report_rendered)
+    assert all("ExternalNameLambda" not in value for value in report_rendered)
+
+
+def test_portfolio_resolves_static_external_named_lambdas_privately(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    _write_workbook(
+        baseline / "inputs" / "source.xlsx",
+        "Data",
+        {"B3": 20},
+    )
+    consumer_path = _write_workbook(
+        baseline / "reports" / "summary.xlsx",
+        "Summary",
+        {
+            "D2": "=SUM(ExternalLambda(7))",
+            "E2": "=SUM(ExternalLambdaSecond(7))",
+            "F2": "=SUM(ExternalLambdaDynamic(7))",
+            "G2": "=SUM(ExternalLambdaRelative(7))",
+            "H2": "=SUM(ExternalLambdaLocal(7))",
+            "I2": "=SUM(ExternalLambdaShadowed(7))",
+            "J2": "=SUM(ExternalFormulaUsesLambda)",
+            "K2": "=SUM(ExternalLambda)",
+            "L2": "=SUM(ExternalFormulaWithInternalInput)",
+        },
+    )
+    consumer = load_workbook(consumer_path)
+    consumer.create_sheet("Inputs")["B2"] = 5
+    consumer.defined_names.add(
+        DefinedName(
+            "ExternalLambda",
+            attr_text=(
+                "=LAMBDA(value,SUM(value,Inputs!$B$2,"
+                "'..\\inputs\\[SOURCE.XLSX]Data'!$B$3))"
+            ),
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "ExternalLambdaSecond",
+            attr_text="=LAMBDA(value,ExternalLambda(value))",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "ExternalFormulaUsesLambda",
+            attr_text="=SUM(ExternalLambda(7))",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "ExternalFormulaWithInternalInput",
+            attr_text="=SUM(ExternalLambda(7),Inputs!$B$2)",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "ExternalLambdaDynamic",
+            attr_text=(
+                "=LAMBDA(value,SUM(value,Inputs!$B$2,"
+                "OFFSET('..\\inputs\\[SOURCE.XLSX]Data'!$B$3,0,0,1,1)))"
+            ),
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "ExternalLambdaRelative",
+            attr_text="=LAMBDA(value,SUM(value,Inputs!$B$2,A1))",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "ExternalLambdaShadowed",
+            attr_text=(
+                "=LAMBDA(value,SUM(value,'..\\inputs\\[SOURCE.XLSX]Data'!$B$3))"
+            ),
+        )
+    )
+    consumer["Summary"].defined_names.add(
+        DefinedName(
+            "ExternalLambdaLocal",
+            attr_text=(
+                "=LAMBDA(value,SUM(value,'..\\inputs\\[SOURCE.XLSX]Data'!$B$3))"
+            ),
+            localSheetId=0,
+        )
+    )
+    consumer["Summary"].defined_names.add(
+        DefinedName(
+            "ExternalLambdaShadowed",
+            attr_text="=LAMBDA(value,value)",
+            localSheetId=0,
+        )
+    )
+    consumer.save(consumer_path)
+    consumer_snapshot = load_snapshot(consumer_path)
+    assert consumer_snapshot.direct_dependents(("Inputs", "B2")) == {
+        ("Summary", "D2"),
+        ("Summary", "E2"),
+        ("Summary", "J2"),
+        ("Summary", "L2"),
+    }
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs" / "source.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B3"], "value", 21),
+    )
+
+    report = compare_portfolios(
+        baseline,
+        candidate,
+        policy=parse_policy(
+            {"version": 1, "rules": {"no_cross_workbook_impacts": True}}
+        ),
+    )
+    source_entry = next(
+        entry for entry in report.workbooks if entry.path == "inputs/source.xlsx"
+    )
+    finding = next(
+        finding for finding in source_entry.findings if finding.rule_id == "FF079"
+    )
+    consumer_entry = next(
+        entry for entry in report.workbooks if entry.path == "reports/summary.xlsx"
+    )
+    assert consumer_entry.after is not None
+    report_rendered = (
+        as_json(report.to_dict()),
+        portfolio_to_markdown(report),
+        as_json(portfolio_to_sarif(report)),
+    )
+    profile_rendered = as_json(profile_snapshot(consumer_entry.after))
+
+    assert finding.details["impacted_workbook_count"] == 1
+    assert finding.details["impacted_formula_count"] == 4
+    assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
+    assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
+        "Summary!D2",
+        "Summary!E2",
+        "Summary!J2",
+        "Summary!L2",
+    ]
+    for private_value in (
+        "ExternalLambda",
+        "ExternalLambdaSecond",
+        "ExternalFormulaUsesLambda",
+        "ExternalFormulaWithInternalInput",
+        "ExternalLambdaDynamic",
+        "ExternalLambdaRelative",
+        "ExternalLambdaLocal",
+        "ExternalLambdaShadowed",
+        "..\\inputs\\[SOURCE.XLSX]Data",
+    ):
+        assert all(private_value not in value for value in report_rendered)
+    assert "ExternalLambda" in profile_rendered
 
 
 def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> None:
@@ -434,6 +598,9 @@ def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> 
             "O2": "=SUM(DirectExternalTableDynamicFormula)",
             "P2": "=SUM(DirectExternalTableLocalFormula)",
             "Q2": "=SUM(DirectExternalTableRelativeFormula)",
+            "R2": "=SUM(DirectExternalTableLambda(7))",
+            "S2": "=SUM(DirectExternalTableMixedFormula)",
+            "T2": "=SUM(DirectExternalTableMixedLambda(7))",
         },
     )
     consumer = load_workbook(consumer_path)
@@ -465,6 +632,29 @@ def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> 
         DefinedName(
             "DirectExternalTableRelativeFormula",
             attr_text="=SUM(DirectExternalTable,A1)",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalTableLambda",
+            attr_text="=LAMBDA(value,SUM(value,DirectExternalTableBridge))",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalTableMixedFormula",
+            attr_text=(
+                "=SUM(DirectExternalTable,'..\\inputs\\[source.xlsx]Data'!$C$3)"
+            ),
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalTableMixedLambda",
+            attr_text=(
+                "=LAMBDA(value,SUM(value,DirectExternalTable,"
+                "'..\\inputs\\[source.xlsx]Data'!$C$3))"
+            ),
         )
     )
     consumer.defined_names.add(
@@ -570,13 +760,16 @@ def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> 
     assert not report.incomplete
     assert finding.location == ("Data", "B3")
     assert finding.details["impacted_workbook_count"] == 1
-    assert finding.details["impacted_formula_count"] == 5
+    assert finding.details["impacted_formula_count"] == 8
     assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
         "Summary!D2",
         "Summary!E2",
         "Summary!F2",
         "Summary!G2",
         "Summary!N2",
+        "Summary!R2",
+        "Summary!S2",
+        "Summary!T2",
     ]
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
     snapshot_repr = repr(consumer_entry.after.external_workbook_structured_references)
@@ -597,6 +790,9 @@ def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> 
         "DirectExternalTableDynamicFormula",
         "DirectExternalTableLocalFormula",
         "DirectExternalTableRelativeFormula",
+        "DirectExternalTableLambda",
+        "DirectExternalTableMixedFormula",
+        "DirectExternalTableMixedLambda",
         "DirectExternalTableShadowed",
     ):
         assert all(private_alias not in value for value in report_rendered)
@@ -617,6 +813,7 @@ def test_portfolio_resolves_declared_package_indexed_external_tables_privately(
         consumer_alias_name="PackageExternalTable",
         consumer_formula_alias=True,
         consumer_static_formula_name="PackageExternalTableFormula",
+        consumer_static_lambda_name="PackageExternalTableLambda",
     )
     shutil.copytree(baseline, candidate)
     rewrite(
@@ -650,11 +847,12 @@ def test_portfolio_resolves_declared_package_indexed_external_tables_privately(
 
     assert not report.incomplete
     assert finding.details["impacted_workbook_count"] == 1
-    assert finding.details["impacted_formula_count"] == 3
+    assert finding.details["impacted_formula_count"] == 4
     assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
         "Model!D2",
         "Model!E2",
         "Model!F2",
+        "Model!G2",
     ]
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
     for private_value in ("Sales[Amount]", "../inputs/source.xlsx"):
@@ -664,6 +862,8 @@ def test_portfolio_resolves_declared_package_indexed_external_tables_privately(
     assert "PackageExternalTable" in profile_rendered
     assert all("PackageExternalTableFormula" not in value for value in report_rendered)
     assert "PackageExternalTableFormula" in profile_rendered
+    assert all("PackageExternalTableLambda" not in value for value in report_rendered)
+    assert "PackageExternalTableLambda" in profile_rendered
 
 
 def test_portfolio_resolves_declared_package_indexed_external_names_privately(
@@ -693,6 +893,7 @@ def test_portfolio_resolves_declared_package_indexed_external_names_privately(
         target_paths=("../decoy.xlsx", "../inputs/source.xlsx"),
         source_name="PrivatePackageSourceAlias",
         link_index=2,
+        consumer_static_lambda_name="PackageExternalInputLambda",
     )
     shutil.copytree(baseline, candidate)
     rewrite(
@@ -727,16 +928,21 @@ def test_portfolio_resolves_declared_package_indexed_external_names_privately(
 
     assert not report.incomplete
     assert finding.details["impacted_workbook_count"] == 1
-    assert finding.details["impacted_formula_count"] == 2
+    assert finding.details["impacted_formula_count"] == 3
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
     assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
         "Model!D2",
         "Model!E2",
+        "Model!G2",
     ]
     assert all("PrivatePackageSourceRange" not in value for value in rendered)
     assert all("PrivatePackageSourceAlias" not in value for value in rendered)
     assert all("PackageExternalInput" not in value for value in report_rendered)
     assert "PackageExternalInput" in profile_rendered
+    assert all(
+        "PackageExternalInputLambda" not in value for value in report_rendered
+    )
+    assert "PackageExternalInputLambda" in profile_rendered
 
 
 def test_portfolio_resolves_declared_package_indexed_external_a1_links_privately(
@@ -1334,6 +1540,7 @@ def test_portfolio_resolves_static_external_three_d_a1_spans_privately(
             "I2": "=SUM(DirectExternalThreeDLocal)",
             "J2": "=SUM('..\\inputs\\[SOURCE.XLSX]Jan:Missing'!$B$2:$B$4)",
             "K2": "=SUM(DirectExternalThreeDFormula)",
+            "L2": "=SUM(DirectExternalThreeDLambda(7))",
         },
     )
     direct = load_workbook(direct_path)
@@ -1353,6 +1560,12 @@ def test_portfolio_resolves_static_external_three_d_a1_spans_privately(
         DefinedName(
             "DirectExternalThreeDFormula",
             attr_text="=SUM(DirectExternalThreeDBridge)",
+        )
+    )
+    direct.defined_names.add(
+        DefinedName(
+            "DirectExternalThreeDLambda",
+            attr_text="=LAMBDA(value,SUM(value,DirectExternalThreeDBridge))",
         )
     )
     direct.defined_names.add(
@@ -1424,7 +1637,7 @@ def test_portfolio_resolves_static_external_three_d_a1_spans_privately(
 
     assert not report.incomplete
     assert finding.details["impacted_workbook_count"] == 2
-    assert finding.details["impacted_formula_count"] == 6
+    assert finding.details["impacted_formula_count"] == 7
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
     assert {
         (impact["workbook"], impact["location"])
@@ -1434,6 +1647,7 @@ def test_portfolio_resolves_static_external_three_d_a1_spans_privately(
         ("reports/direct.xlsx", "Summary!E2"),
         ("reports/direct.xlsx", "Summary!F2"),
         ("reports/direct.xlsx", "Summary!K2"),
+        ("reports/direct.xlsx", "Summary!L2"),
         ("reports/package.xlsx", "Model!D2"),
         ("reports/package.xlsx", "Model!E2"),
     }
@@ -1454,6 +1668,7 @@ def test_portfolio_resolves_static_external_three_d_a1_spans_privately(
         "DirectExternalThreeD",
         "DirectExternalThreeDBridge",
         "DirectExternalThreeDFormula",
+        "DirectExternalThreeDLambda",
         "DirectExternalThreeDLeadingEquals",
         "DirectExternalThreeDReverse",
         "DirectExternalThreeDShadowed",

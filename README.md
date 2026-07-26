@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.95.0/formulafence-0.95.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.96.0/formulafence-0.96.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.95.0
+  uses: SybilGambleyyu/formulafence@v0.96.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -109,17 +109,19 @@ such as a defined name storing `'..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4`,
 `'..\\inputs\\[Inputs.xlsx]InputRange'`, or
 `'..\\inputs\\source.xlsx'!Sales[Amount]`; every intermediate definition
 must be exactly one unqualified, non-A1 name identity, with or without its
-leading `=`. It may also be reached through an eligible workbook-scoped,
-non-`LAMBDA` formula-defined name, for example
-`=SUM(ExternalInput)` or `=SUM('..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4)`.
-FormulaFence does not calculate that expression: it retains its input endpoint
-only when every external token is one already parsed static direct or
-package-validated endpoint, every remaining reference is static, and the
-definition has no broken reference, unresolved token, tokenizer failure,
-dynamic-reference function, relative internal A1 reference, local 3-D form,
-spill reference, or explicit implicit intersection. Eligible formula names can
-call another eligible workbook-scoped formula name; local names and named
-`LAMBDA`s never enter this bridge.
+leading `=`. It may also be reached through an eligible workbook-scoped
+formula-defined name, for example `=SUM(ExternalInput)`,
+`=SUM('..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4)`, or a named
+`LAMBDA` such as `=LAMBDA(value,SUM(value,Inputs!$B$2,ExternalInput))`.
+FormulaFence does not calculate either expression: it retains every static
+endpoint and fixed internal input only when every external token is one already
+parsed static direct or package-validated endpoint, every remaining reference
+is static, and the definition has no broken reference, unresolved token,
+tokenizer failure, dynamic-reference function, relative internal A1 reference,
+local 3-D form, spill reference, or explicit implicit intersection. A named
+LAMBDA carries those edges only at an actual function call, never through a
+bare name. Eligible global formula names and named LAMBDAs can call each other;
+local or locally shadowed definitions never enter this bridge.
 An indexed form is eligible only when its one-based
 `externalReferences` declaration identifies exactly one `externalBook` and
 external `externalLinkPath` relationship whose target resolves to one exact
@@ -2037,11 +2039,14 @@ function's static internal dependencies; nested named-LAMBDA calls and
 formula-defined names that call a named LAMBDA are resolved the same way. It
 recognizes both human-authored formulas and the `_xlfn.LAMBDA` / `_xlpm.` /
 `_xlop.` OOXML spelling produced by Excel-compatible writers. Definition scope
-and worksheet-local precedence are preserved. Relative, cyclic, external,
-dynamic, 3-D, tokenizer-unsupported, or otherwise non-static LAMBDAs remain a
-visible unresolved reference at each call site. Spill extents and blockers,
-plus arbitrary VBA, add-in, or other custom functions, remain coverage limits
-rather than inferred dependencies.
+and worksheet-local precedence are preserved. Relative, cyclic, dynamic, 3-D,
+tokenizer-unsupported, or otherwise non-static LAMBDAs remain a visible
+unresolved reference at each call site. In portfolio mode, the narrow global
+named-LAMBDA external-endpoint bridge described above is the exception: it
+retains only fully static endpoint and internal-input edges at a real function
+call, never through a bare name. Spill extents and blockers, plus arbitrary
+VBA, add-in, or other custom functions, remain coverage limits rather than
+inferred dependencies.
 
 If the underlying formula tokenizer cannot inspect a formula at all,
 FormulaFence records the affected cell in the profile and reports `FF016` when

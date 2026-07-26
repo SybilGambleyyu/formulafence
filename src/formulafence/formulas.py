@@ -2748,6 +2748,18 @@ def inspect_formula(
     named_function_references: (
         Mapping[str, Sequence[ParsedReference] | None] | None
     ) = None,
+    named_function_external_workbook_defined_name_references: (
+        Mapping[str, Sequence[ExternalWorkbookDefinedNameReference]] | None
+    ) = None,
+    named_function_external_workbook_references: (
+        Mapping[str, Sequence[ExternalWorkbookReference]] | None
+    ) = None,
+    named_function_external_workbook_three_d_references: (
+        Mapping[str, Sequence[ExternalWorkbookThreeDReference]] | None
+    ) = None,
+    named_function_external_workbook_structured_references: (
+        Mapping[str, Sequence[ExternalWorkbookStructuredReference]] | None
+    ) = None,
     named_custom_function_candidates: Mapping[str, Sequence[str]] | None = None,
     named_function_custom_function_candidates: (
         Mapping[str, Sequence[str]] | None
@@ -2871,6 +2883,18 @@ def inspect_formula(
         named_external_workbook_structured_references or {}
     )
     resolved_named_functions = named_function_references or {}
+    resolved_named_function_external_workbook_defined_names = (
+        named_function_external_workbook_defined_name_references or {}
+    )
+    resolved_named_function_external_workbooks = (
+        named_function_external_workbook_references or {}
+    )
+    resolved_named_function_external_workbook_three_d_references = (
+        named_function_external_workbook_three_d_references or {}
+    )
+    resolved_named_function_external_workbook_structured_references = (
+        named_function_external_workbook_structured_references or {}
+    )
     resolved_named_custom_functions = named_custom_function_candidates or {}
     resolved_named_function_custom_functions = (
         named_function_custom_function_candidates or {}
@@ -2979,6 +3003,45 @@ def inspect_formula(
                 formula_environment_information_implicit_sheets_reference_count += 1
             else:
                 formula_environment_information_functions.append(signal)
+
+    def extend_named_external_endpoints(
+        raw: str,
+        *,
+        workbook_references: Sequence[ExternalWorkbookReference] = (),
+        three_d_references: Sequence[ExternalWorkbookThreeDReference] = (),
+        structured_references: Sequence[ExternalWorkbookStructuredReference] = (),
+        defined_name_references: Sequence[ExternalWorkbookDefinedNameReference] = (),
+    ) -> bool:
+        """Add every private endpoint retained by one resolved name or function.
+
+        Formula-defined names may have multiple endpoint kinds, such as a
+        static external A1 range and a table selector. Keep all of them rather
+        than stopping at the first matching map; this remains dependency
+        extraction, not evaluation.
+        """
+        if not (
+            workbook_references
+            or three_d_references
+            or structured_references
+            or defined_name_references
+        ):
+            return False
+        references.append(
+            ParsedReference(
+                None,
+                None,
+                None,
+                None,
+                None,
+                raw,
+                is_external=True,
+            )
+        )
+        external_workbook_references.extend(workbook_references)
+        external_workbook_three_d_references.extend(three_d_references)
+        external_workbook_structured_references.extend(structured_references)
+        external_workbook_defined_name_references.extend(defined_name_references)
+        return True
 
     for position, token in enumerate(tokens):
         if token.type == "OPERAND" and token.subtype == "RANGE":
@@ -3227,92 +3290,25 @@ def inspect_formula(
                 three_d_reference_tokens.append(token.value)
                 continue
             named_key = reference_lookup_key(token.value)
-            if named_external_workbook_references := (
-                resolved_named_external_workbooks.get(named_key)
-            ):
-                # A direct workbook-scoped alias can retain the same indexed
-                # external A1 syntax in its OOXML definition.  It reaches this
-                # map only after the package index and target were separately
-                # validated; never infer either from the consumer name.
-                references.append(
-                    ParsedReference(
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        token.value,
-                        is_external=True,
+            has_named_external_endpoints = extend_named_external_endpoints(
+                token.value,
+                workbook_references=resolved_named_external_workbooks.get(
+                    named_key, ()
+                ),
+                three_d_references=(
+                    resolved_named_external_workbook_three_d_references.get(
+                        named_key, ()
                     )
-                )
-                external_workbook_references.extend(named_external_workbook_references)
-                continue
-            if named_external_workbook_three_d_references := (
-                resolved_named_external_workbook_three_d_references.get(named_key)
-            ):
-                # Workbook-scoped aliases are expanded only from a previously
-                # validated direct or package endpoint. The private path and
-                # tab span never come from the consumer formula itself.
-                references.append(
-                    ParsedReference(
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        token.value,
-                        is_external=True,
+                ),
+                structured_references=(
+                    resolved_named_external_workbook_structured_references.get(
+                        named_key, ()
                     )
-                )
-                external_workbook_three_d_references.extend(
-                    named_external_workbook_three_d_references
-                )
-                continue
-            if named_external_workbook_structured_references := (
-                resolved_named_external_workbook_structured_references.get(named_key)
-            ):
-                # Workbook-scoped aliases are expanded only from an exact
-                # direct or package endpoint. The selector and source path
-                # stay private and are resolved later against candidate table
-                # metadata, never against a live external workbook.
-                references.append(
-                    ParsedReference(
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        token.value,
-                        is_external=True,
-                    )
-                )
-                external_workbook_structured_references.extend(
-                    named_external_workbook_structured_references
-                )
-                continue
-            if named_external_references := (
-                resolved_named_external_workbook_defined_names.get(named_key)
-            ):
-                # A workbook-scoped local name can be the package's indirection
-                # layer for an external defined name.  It is intentionally
-                # resolved only when raw OOXML already established the exact
-                # link index and target; formula inspection itself never tries
-                # to infer a source path from a name.
-                references.append(
-                    ParsedReference(
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        token.value,
-                        is_external=True,
-                    )
-                )
-                external_workbook_defined_name_references.extend(
-                    named_external_references
-                )
-                continue
+                ),
+                defined_name_references=(
+                    resolved_named_external_workbook_defined_names.get(named_key, ())
+                ),
+            )
             if named_key in resolved_names:
                 references.extend(resolved_names[named_key])
                 external_action_functions.extend(
@@ -3354,6 +3350,8 @@ def inspect_formula(
                         named_key, ()
                     )
                 )
+                continue
+            if has_named_external_endpoints:
                 continue
             named_formula_dde_links = resolved_named_formula_dde_links.get(
                 named_key, ()
@@ -3442,8 +3440,36 @@ def inspect_formula(
                             function_key, ()
                         )
                     )
+                    has_named_function_external_endpoints = (
+                        extend_named_external_endpoints(
+                            raw_function_name,
+                            workbook_references=(
+                                resolved_named_function_external_workbooks.get(
+                                    function_key, ()
+                                )
+                            ),
+                            three_d_references=(
+                                resolved_named_function_external_workbook_three_d_references.get(
+                                    function_key, ()
+                                )
+                            ),
+                            structured_references=(
+                                resolved_named_function_external_workbook_structured_references.get(
+                                    function_key, ()
+                                )
+                            ),
+                            defined_name_references=(
+                                resolved_named_function_external_workbook_defined_names.get(
+                                    function_key, ()
+                                )
+                            ),
+                        )
+                    )
                     if function_references is None:
-                        if not named_function_dde_links:
+                        if (
+                            not named_function_dde_links
+                            and not has_named_function_external_endpoints
+                        ):
                             unresolved_range_tokens.append(
                                 token.value.rstrip("(").strip()
                             )

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.96.0 — 2026-07-26
+
+- Extend the candidate-only `FF079` portfolio graph through safely eligible,
+  workbook-scoped named `LAMBDA` definitions. A caller such as
+  `=ExternalMetric(7)` can retain each static direct or package-validated
+  external A1, 3-D, workbook/sheet-local-name, or book-only table-selector
+  endpoint in that LAMBDA body. The bridge also supports a nested eligible
+  named LAMBDA and an eligible global formula-defined name that calls one.
+- Preserve all fixed internal input edges alongside those private endpoint
+  models. A definition such as
+  `=LAMBDA(value,SUM(value,Inputs!$B$2,ExternalInput))` now makes a real
+  invocation depend on both `Inputs!$B$2` and the validated external input;
+  the same preservation fixes an eligible non-`LAMBDA` formula-defined wrapper
+  that combines static internal and external inputs. Multiple endpoint kinds in
+  one definition are retained rather than silently stopping at the first kind.
+- Treat named-LAMBDA handling as static input-edge extraction, not evaluation:
+  retain a LAMBDA endpoint only at a function call, never at a bare name. Keep
+  dynamic, relative, recursive, local/shadowed, broken, unresolved, local-3-D,
+  spill, explicit-intersection, tokenizer-failed, and unsupported definitions
+  outside the graph. Keep names, paths, source identities/selectors, and
+  consumer bridge identities private in `FF079` evidence. Add direct/package,
+  nested/wrapper, mixed-endpoint, local-input, unsafe-form, scope, and
+  JSON/Markdown/SARIF-redaction regression coverage.
+
 ## 0.95.0 — 2026-07-26
 
 - Extend the candidate-only `FF079` portfolio graph through safely eligible,

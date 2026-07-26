@@ -108,16 +108,18 @@ financial correctness or replace model review.
   sheet-local, or selector-bearing table spelling. It may reach that terminal
   through a finite, acyclic chain whose intermediate definitions are each one
   unqualified non-A1 name identity; a same-named sheet-local consumer
-  definition shadows the workbook alias. A workbook-scoped non-`LAMBDA`
+  definition shadows the workbook alias. An eligible workbook-scoped
   formula-defined name may also retain static endpoint inputs, such as
-  `=SUM(ExternalInput)` or
-  `=SUM('..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4)`. This extracts input
+  `=SUM(ExternalInput)`, `=SUM('..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4)`,
+  or a named `LAMBDA` such as
+  `=LAMBDA(value,SUM(value,Inputs!$B$2,ExternalInput))`. This extracts input
   edges rather than calculating a name: every external token must already be
   a direct/package-validated endpoint, every other reference must be static,
-  and broken, unresolved, tokenizer-failed, dynamic, relative, local-3-D,
-  spilled, explicitly intersected, local, and named-`LAMBDA` definitions stay
-  outside the bridge. Eligible global formula names may call another eligible
-  global formula name. A 3-D span is expanded only when its
+  and broken, unresolved, tokenizer-failed, dynamic, relative, recursive,
+  local-3-D, spilled, explicitly intersected, local, and locally shadowed
+  definitions stay outside the bridge. A named LAMBDA retains its endpoint and
+  fixed internal inputs only at a function call, never through a bare name.
+  Eligible global formula names and named LAMBDAs may call each other. A 3-D span is expanded only when its
   source candidate has a complete raw OOXML tab catalog consistent with the
   inspected ordinary-worksheet order, and only from exact forward endpoints.
   Sheet-scoped aliases, formula-defined bridges with broken, unresolved,
@@ -1351,7 +1353,10 @@ formula will produce.
   site, preserving name scope and explicit argument edges. FormulaFence accepts
   standard and `_xlfn.LAMBDA`/`_xlpm.`/`_xlop.` OOXML spellings. Recursive or
   non-static named LAMBDAs and arbitrary custom functions remain outside this
-  subset and stay visible as coverage gaps.
+  subset and stay visible as coverage gaps. In candidate portfolio mode, the
+  separately described global named-LAMBDA bridge may retain fully static
+  external endpoints and fixed internal inputs only at an actual function call;
+  a bare LAMBDA name never creates an edge.
 - Static internal 3-D A1 references such as `Jan:Mar!B2:B10` are expanded over
   every worksheet in the endpoint tab span. FormulaFence compares the resolved
   span when the same 3-D formula survives a workbook change, because moving,

@@ -1639,6 +1639,49 @@ def test_formula_inspection_expands_named_lambda_calls_without_shadowing_locals(
     assert serialized_let.unresolved_range_tokens == ()
 
 
+def test_formula_inspection_propagates_all_external_endpoints_from_names_and_lambdas() -> None:
+    workbook_reference = ExternalWorkbookReference(
+        source_path="..\\inputs\\source.xlsx",
+        sheet="Data",
+        min_column=2,
+        min_row=3,
+        max_column=2,
+        max_row=3,
+    )
+    structured_reference = ExternalWorkbookStructuredReference(
+        source_path="..\\inputs\\source.xlsx",
+        table_name="Sales",
+        table_reference="Sales[Amount]",
+    )
+    named_formula = inspect_formula(
+        "=SUM(ExternalFormula)",
+        named_external_workbook_references={
+            "externalformula": (workbook_reference,)
+        },
+        named_external_workbook_structured_references={
+            "externalformula": (structured_reference,)
+        },
+    )
+    named_lambda = inspect_formula(
+        "=SUM(ExternalLambda(A1))",
+        named_function_references={"externallambda": None},
+        named_function_external_workbook_references={
+            "externallambda": (workbook_reference,)
+        },
+        named_function_external_workbook_structured_references={
+            "externallambda": (structured_reference,)
+        },
+    )
+
+    for inspection in (named_formula, named_lambda):
+        assert inspection.unresolved_range_tokens == ()
+        assert inspection.external_workbook_references == (workbook_reference,)
+        assert inspection.external_workbook_structured_references == (
+            structured_reference,
+        )
+        assert sum(reference.is_external for reference in inspection.references) == 1
+
+
 def test_formula_inspection_never_treats_a_cell_reference_as_a_local_variable() -> None:
     inspection = inspect_formula("=LET(A1,Inputs!B2,A1)")
 

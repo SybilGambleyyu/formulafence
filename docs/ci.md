@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.95.0
+        uses: SybilGambleyyu/formulafence@v0.96.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -72,7 +72,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.95.0
+  uses: SybilGambleyyu/formulafence@v0.96.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -111,15 +111,18 @@ finite, acyclic chain of workbook-scoped consumer aliases. Its terminal is one
 exact direct external A1, workbook-scoped-name, or selector-bearing table
 definition (or the corresponding validated package form), and every
 intermediate definition is exactly one unqualified, non-A1 name identity with
-or without its leading `=`. A workbook-scoped non-`LAMBDA` formula-defined
-name can also retain one or more of those endpoints, for example
-`=SUM(ExternalInput)` or `=SUM('..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4)`.
-FormulaFence extracts only the static input edges: every external token must
-be an existing direct or package-validated endpoint, and the definition must
-have no broken/unresolved/tokenizer-failed, dynamic, relative, local-3-D,
-spill, or explicit-intersection reference. Eligible global formula names may
-call another eligible global formula name; local names and named `LAMBDA`s do
-not enter this portfolio bridge.
+or without its leading `=`. An eligible workbook-scoped formula-defined name
+can also retain one or more of those endpoints, for example
+`=SUM(ExternalInput)`, `=SUM('..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4)`, or a
+named `LAMBDA` such as `=LAMBDA(value,SUM(value,Inputs!$B$2,ExternalInput))`.
+FormulaFence extracts only static input edges: every external token must be an
+existing direct or package-validated endpoint, every remaining reference must
+be static, and the definition must have no broken/unresolved/tokenizer-failed,
+dynamic, relative, recursive, local-3-D, spill, or explicit-intersection
+reference. A named LAMBDA retains its endpoint and fixed internal inputs only
+at a real function call, never through a bare name. Eligible global formula
+names and named LAMBDAs may call each other; local or locally shadowed
+definitions do not enter this portfolio bridge.
 The matched source candidate must expand a name completely to static internal A1
 destinations. An explicit source sheet uses only that sheet's local name scope,
 never a global fallback. An external 3-D span may use the matching indexed form
@@ -173,7 +176,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.95.0/formulafence-0.95.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.96.0/formulafence-0.96.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

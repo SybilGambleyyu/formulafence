@@ -44223,32 +44223,32 @@ def _expand_workbook_scoped_external_aliases(
 
 def _workbook_scoped_formula_defined_name_formulas(
     workbook: object,
-) -> dict[str, str]:
-    """Return non-LAMBDA workbook name formulas keyed by private identity.
+) -> tuple[dict[str, str], frozenset[str]]:
+    """Return global name formulas plus the keys that are named LAMBDAs.
 
     Excel permits a defined name to contain a complete formula around a
-    workbook link, such as ``=SUM([Budget.xlsx]Annual!C10:C25)``. Retain only
-    global, non-LAMBDA definitions here. A local name can be selected
-    differently by each worksheet, and a LAMBDA has argument semantics that
-    this static portfolio bridge deliberately does not model.
+    workbook link, such as ``=SUM([Budget.xlsx]Annual!C10:C25)``. A global
+    named LAMBDA can likewise retain a static input endpoint in its body. A
+    local name is intentionally excluded because its scope is selected by the
+    invoking worksheet.
     """
     names = getattr(workbook, "defined_names", {})
     try:
         items = names.items()
     except AttributeError:
-        return {}
+        return {}, frozenset()
     result: dict[str, str] = {}
+    lambda_keys: set[str] = set()
     for name, definition in items:
         if getattr(definition, "localSheetId", None) is not None:
             continue
         formula_definition = _formula_defined_name(str(name), definition, None)
-        if (
-            formula_definition is None
-            or lambda_parameter_count(formula_definition.formula) is not None
-        ):
+        if formula_definition is None:
             continue
         result[formula_definition.key] = formula_definition.formula
-    return result
+        if lambda_parameter_count(formula_definition.formula) is not None:
+            lambda_keys.add(formula_definition.key)
+    return result, frozenset(lambda_keys)
 
 
 def _formula_defined_name_external_references(
@@ -44277,19 +44277,23 @@ def _formula_defined_name_external_references(
     dict[str, tuple[ExternalWorkbookThreeDReference, ...]],
     dict[str, tuple[ExternalWorkbookStructuredReference, ...]],
     dict[str, tuple[ExternalWorkbookDefinedNameReference, ...]],
+    dict[str, tuple[ParsedReference, ...]],
 ]:
-    """Expand strictly static global name formulas to private link endpoints.
+    """Expand strictly static global name definitions to private endpoints.
 
     This is deliberately an input-edge bridge, not formula evaluation. It
     accepts a name formula only when every visible reference is static and any
     external token has already become one of the validated direct or
-    package-indexed endpoint models. A dependency worklist lets one such name
-    call another without repeatedly rescanning unrelated definitions, while
-    cycles, unrecognized external syntax, dynamic
+    package-indexed endpoint models. A named LAMBDA follows the same static
+    rule for its body, and its endpoint is retained only at a call site. A
+    dependency worklist lets one such name call another without repeatedly
+    rescanning unrelated definitions, while cycles, unrecognized external syntax, dynamic
     functions, relative references, and scope-sensitive forms remain outside
     the candidate graph.
     """
-    formulas = _workbook_scoped_formula_defined_name_formulas(workbook)
+    formulas, named_lambda_keys = _workbook_scoped_formula_defined_name_formulas(
+        workbook
+    )
     formula_workbook_references: dict[
         str, tuple[ExternalWorkbookReference, ...]
     ] = {}
@@ -44302,6 +44306,7 @@ def _formula_defined_name_external_references(
     formula_defined_name_references: dict[
         str, tuple[ExternalWorkbookDefinedNameReference, ...]
     ] = {}
+    formula_static_references: dict[str, tuple[ParsedReference, ...]] = {}
 
     def expanded_endpoint_maps() -> tuple[
         dict[str, tuple[ExternalWorkbookReference, ...]],
@@ -44400,6 +44405,104 @@ def _formula_defined_name_external_references(
             in indexed_external_workbook_paths
         )
 
+    def named_lambda_endpoint_maps(
+        endpoint_maps: tuple[
+            Mapping[str, tuple[ExternalWorkbookReference, ...]],
+            Mapping[str, tuple[ExternalWorkbookThreeDReference, ...]],
+            Mapping[str, tuple[ExternalWorkbookStructuredReference, ...]],
+            Mapping[str, tuple[ExternalWorkbookDefinedNameReference, ...]],
+        ],
+    ) -> tuple[
+        dict[str, tuple[ExternalWorkbookReference, ...]],
+        dict[str, tuple[ExternalWorkbookThreeDReference, ...]],
+        dict[str, tuple[ExternalWorkbookStructuredReference, ...]],
+        dict[str, tuple[ExternalWorkbookDefinedNameReference, ...]],
+    ]:
+        """Expose endpoint maps only for callable global named LAMBDAs."""
+        workbook_references, three_d_references, structured_references, defined_names = (
+            endpoint_maps
+        )
+        return (
+            {
+                name_key: references
+                for name_key, references in workbook_references.items()
+                if name_key in named_lambda_keys
+            },
+            {
+                name_key: references
+                for name_key, references in three_d_references.items()
+                if name_key in named_lambda_keys
+            },
+            {
+                name_key: references
+                for name_key, references in structured_references.items()
+                if name_key in named_lambda_keys
+            },
+            {
+                name_key: references
+                for name_key, references in defined_names.items()
+                if name_key in named_lambda_keys
+            },
+        )
+
+    def non_lambda_endpoint_maps(
+        endpoint_maps: tuple[
+            Mapping[str, tuple[ExternalWorkbookReference, ...]],
+            Mapping[str, tuple[ExternalWorkbookThreeDReference, ...]],
+            Mapping[str, tuple[ExternalWorkbookStructuredReference, ...]],
+            Mapping[str, tuple[ExternalWorkbookDefinedNameReference, ...]],
+        ],
+    ) -> tuple[
+        dict[str, tuple[ExternalWorkbookReference, ...]],
+        dict[str, tuple[ExternalWorkbookThreeDReference, ...]],
+        dict[str, tuple[ExternalWorkbookStructuredReference, ...]],
+        dict[str, tuple[ExternalWorkbookDefinedNameReference, ...]],
+    ]:
+        """Keep callable LAMBDA endpoints out of ordinary name references."""
+        workbook_references, three_d_references, structured_references, defined_names = (
+            endpoint_maps
+        )
+        return (
+            {
+                name_key: references
+                for name_key, references in workbook_references.items()
+                if name_key not in named_lambda_keys
+            },
+            {
+                name_key: references
+                for name_key, references in three_d_references.items()
+                if name_key not in named_lambda_keys
+            },
+            {
+                name_key: references
+                for name_key, references in structured_references.items()
+                if name_key not in named_lambda_keys
+            },
+            {
+                name_key: references
+                for name_key, references in defined_names.items()
+                if name_key not in named_lambda_keys
+            },
+        )
+
+    def static_name_reference_maps() -> tuple[
+        dict[str, tuple[ParsedReference, ...]],
+        dict[str, tuple[ParsedReference, ...]],
+    ]:
+        """Split proven static formula-name inputs by invocation syntax."""
+        return (
+            {
+                name_key: references
+                for name_key, references in formula_static_references.items()
+                if name_key not in named_lambda_keys
+            },
+            {
+                name_key: references
+                for name_key, references in formula_static_references.items()
+                if name_key in named_lambda_keys
+            },
+        )
+
     waiting_formula_names: defaultdict[str, set[str]] = defaultdict(set)
     for name_key, formula in formulas.items():
         unresolved = inspect_formula(
@@ -44424,10 +44527,20 @@ def _formula_defined_name_external_references(
             named_three_d_references,
             named_structured_references,
             named_defined_name_references,
-        ) = endpoint_maps
+        ) = non_lambda_endpoint_maps(endpoint_maps)
+        (
+            named_lambda_workbook_references,
+            named_lambda_three_d_references,
+            named_lambda_structured_references,
+            named_lambda_defined_name_references,
+        ) = named_lambda_endpoint_maps(endpoint_maps)
+        (
+            named_static_references,
+            named_lambda_static_references,
+        ) = static_name_reference_maps()
         inspection = inspect_formula(
             formula,
-            named_references=named_references,
+            named_references={**named_references, **named_static_references},
             named_external_workbook_defined_name_references=(
                 named_defined_name_references
             ),
@@ -44439,7 +44552,22 @@ def _formula_defined_name_external_references(
             ),
             structured_tables=structured_tables,
             sheet_order=sheet_order,
-            named_function_references=named_functions,
+            named_function_references={
+                **named_functions,
+                **named_lambda_static_references,
+            },
+            named_function_external_workbook_defined_name_references=(
+                named_lambda_defined_name_references
+            ),
+            named_function_external_workbook_references=(
+                named_lambda_workbook_references
+            ),
+            named_function_external_workbook_three_d_references=(
+                named_lambda_three_d_references
+            ),
+            named_function_external_workbook_structured_references=(
+                named_lambda_structured_references
+            ),
         )
         workbook_references = tuple(
             dict.fromkeys(inspection.external_workbook_references)
@@ -44465,6 +44593,13 @@ def _formula_defined_name_external_references(
         external_references = tuple(
             reference for reference in inspection.references if reference.is_external
         )
+        static_references = tuple(
+            dict.fromkeys(
+                reference
+                for reference in inspection.references
+                if not reference.is_external
+            )
+        )
         has_relative_internal_reference = any(
             not reference.is_external and reference.sheet is None
             for reference in inspection.references
@@ -44487,6 +44622,7 @@ def _formula_defined_name_external_references(
         ):
             continue
 
+        previous_static_references = dict(formula_static_references)
         changed = False
         for resolved, destination in (
             (workbook_references, formula_workbook_references),
@@ -44497,6 +44633,9 @@ def _formula_defined_name_external_references(
             if resolved and destination.get(name_key) != resolved:
                 destination[name_key] = resolved
                 changed = True
+        if formula_static_references.get(name_key) != static_references:
+            formula_static_references[name_key] = static_references
+            changed = True
         if not changed:
             continue
 
@@ -44510,6 +44649,14 @@ def _formula_defined_name_external_references(
             for candidate in set(previous) | set(current)
             if previous.get(candidate) != current.get(candidate)
         }
+        changed_name_keys.update(
+            candidate
+            for candidate in (
+                set(previous_static_references) | set(formula_static_references)
+            )
+            if previous_static_references.get(candidate)
+            != formula_static_references.get(candidate)
+        )
         for changed_name_key in sorted(changed_name_keys, reverse=True):
             for dependent_key in sorted(
                 waiting_formula_names.get(changed_name_key, ()), reverse=True
@@ -44518,7 +44665,7 @@ def _formula_defined_name_external_references(
                     pending.append(dependent_key)
                     pending_keys.add(dependent_key)
 
-    return endpoint_maps
+    return (*endpoint_maps, formula_static_references)
 
 
 def _package_indexed_external_name_references(
@@ -45402,6 +45549,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         named_external_workbook_three_d_references,
         named_external_workbook_structured_references,
         named_external_workbook_defined_name_references,
+        named_external_static_references,
     ) = _formula_defined_name_external_references(
         workbook,
         named_references=global_named_references,
@@ -45437,29 +45585,78 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         visible_named_external_workbook_defined_name_references = {
             name_key: references
             for name_key, references in named_external_workbook_defined_name_references.items()
-            if name_key not in shadowing_local_names
+            if (
+                name_key not in shadowing_local_names
+                and name_key not in global_named_functions
+            )
         }
         visible_named_external_workbook_references = {
             name_key: references
             for name_key, references in named_external_workbook_references.items()
-            if name_key not in shadowing_local_names
+            if (
+                name_key not in shadowing_local_names
+                and name_key not in global_named_functions
+            )
         }
         visible_named_external_workbook_three_d_references = {
             name_key: references
             for name_key, references in named_external_workbook_three_d_references.items()
-            if name_key not in shadowing_local_names
+            if (
+                name_key not in shadowing_local_names
+                and name_key not in global_named_functions
+            )
         }
         visible_named_external_workbook_structured_references = {
             name_key: references
             for name_key, references in named_external_workbook_structured_references.items()
-            if name_key not in shadowing_local_names
+            if (
+                name_key not in shadowing_local_names
+                and name_key not in global_named_functions
+            )
+        }
+        visible_named_function_external_workbook_defined_name_references = {
+            name_key: references
+            for name_key, references in (
+                named_external_workbook_defined_name_references.items()
+            )
+            if name_key not in shadowing_local_names and name_key in global_named_functions
+        }
+        visible_named_function_external_workbook_references = {
+            name_key: references
+            for name_key, references in named_external_workbook_references.items()
+            if name_key not in shadowing_local_names and name_key in global_named_functions
+        }
+        visible_named_function_external_workbook_three_d_references = {
+            name_key: references
+            for name_key, references in named_external_workbook_three_d_references.items()
+            if name_key not in shadowing_local_names and name_key in global_named_functions
+        }
+        visible_named_function_external_workbook_structured_references = {
+            name_key: references
+            for name_key, references in named_external_workbook_structured_references.items()
+            if name_key not in shadowing_local_names and name_key in global_named_functions
+        }
+        visible_named_external_static_references = {
+            name_key: references
+            for name_key, references in named_external_static_references.items()
+            if (
+                name_key not in shadowing_local_names
+                and name_key not in global_named_functions
+            )
+        }
+        visible_named_function_external_static_references = {
+            name_key: references
+            for name_key, references in named_external_static_references.items()
+            if name_key not in shadowing_local_names and name_key in global_named_functions
         }
         named_references = {
             **global_named_references,
+            **visible_named_external_static_references,
             **local_named_references.get(worksheet.title.casefold(), {}),
         }
         named_functions = {
             **global_named_functions,
+            **visible_named_function_external_static_references,
             **local_named_functions.get(worksheet.title.casefold(), {}),
         }
         named_formula_external_action_functions = {
@@ -45643,6 +45840,18 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 origin=snapshot.location,
                 sheet_order=sheet_order,
                 named_function_references=named_functions,
+                named_function_external_workbook_defined_name_references=(
+                    visible_named_function_external_workbook_defined_name_references
+                ),
+                named_function_external_workbook_references=(
+                    visible_named_function_external_workbook_references
+                ),
+                named_function_external_workbook_three_d_references=(
+                    visible_named_function_external_workbook_three_d_references
+                ),
+                named_function_external_workbook_structured_references=(
+                    visible_named_function_external_workbook_structured_references
+                ),
                 named_formula_external_action_functions=(
                     named_formula_external_action_functions
                 ),

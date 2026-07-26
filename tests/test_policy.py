@@ -28,6 +28,7 @@ from .helpers import (
     change_ignored_error_target,
     change_legacy_comment_text,
     change_legacy_vml_control_controls,
+    change_named_formula_external_action_definition,
     change_named_office_custom_function_definition,
     change_named_sheet_view_criterion,
     change_named_worksheet_code_resource_registration_definition,
@@ -88,6 +89,7 @@ from .helpers import (
     make_legacy_comment_model,
     make_legacy_vml_control_model,
     make_model,
+    make_named_formula_external_action_model,
     make_named_office_custom_function_model,
     make_named_sheet_view_model,
     make_named_worksheet_code_resource_registration_model,
@@ -389,6 +391,19 @@ def test_policy_can_block_formula_external_action_static_input_changes(tmp_path)
     baseline = make_formula_external_action_model(tmp_path / "baseline.xlsx")
     candidate = make_formula_external_action_model(tmp_path / "candidate.xlsx")
     change_formula_external_action_input(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_formula_external_action_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP064"}
+
+
+def test_policy_can_block_named_formula_external_action_changes(tmp_path) -> None:
+    baseline = make_named_formula_external_action_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_formula_external_action_model(tmp_path / "candidate.xlsx")
+    change_named_formula_external_action_definition(candidate)
 
     report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
     policy = parse_policy(

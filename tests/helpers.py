@@ -212,6 +212,65 @@ def change_formula_external_action_input(path: Path) -> Path:
     return path
 
 
+def make_named_formula_external_action_model(path: Path) -> Path:
+    """Create action calls reached through names and named LAMBDA bodies."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Named formula external-action controls"
+    inputs["A9"] = "https://private.example.test/PRIVATE-NAMED-ACTION-INPUT-BASELINE"
+    inputs["B2"] = "=FENCE.WRAPPER(A9)"
+    inputs["B3"] = "=FENCE.DIRECT"
+    inputs["B4"] = "=FENCE.CHAIN(A9)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.WRAPPER",
+            attr_text=(
+                '=LAMBDA(value,HYPERLINK(value,"PRIVATE-NAMED-ACTION-LABEL-BASELINE"))'
+            ),
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.CHAIN",
+            attr_text="=LAMBDA(value,FENCE.WRAPPER(value))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.DIRECT",
+            attr_text="=WEBSERVICE(Inputs!$A$9)",
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_named_formula_external_action_definition(path: Path) -> Path:
+    """Rewrite a private action definition without changing its callers."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.WRAPPER"]
+    if definition.attr_text != (
+        '=LAMBDA(value,HYPERLINK(value,"PRIVATE-NAMED-ACTION-LABEL-BASELINE"))'
+    ):
+        raise ValueError("Fixture does not contain the expected named action")
+    definition.attr_text = (
+        '=LAMBDA(value,HYPERLINK(value,"PRIVATE-NAMED-ACTION-LABEL-CANDIDATE"))'
+    )
+    workbook.save(path)
+    return path
+
+
+def change_named_formula_external_action_input(path: Path) -> Path:
+    """Change an input used through named formula-action definitions."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = (
+        "https://private.example.test/PRIVATE-NAMED-ACTION-INPUT-CANDIDATE"
+    )
+    workbook.save(path)
+    return path
+
+
 def make_office_custom_function_model(path: Path) -> Path:
     """Create formula calls shaped like documented Office Add-in functions.
 

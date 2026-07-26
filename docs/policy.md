@@ -158,7 +158,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_external_data_connection_changes` | boolean | A workbook-wide external-data refresh flag, connection, linked query-table refresh control, or pivot-cache source/refresh control changes. |
 | `no_external_link_package_changes` | boolean | An external-workbook, DDE, or OLE `externalLink` package definition, source binding, cached material, item behavior, or retained extension fragment changes. |
 | `no_external_relationship_changes` | boolean | Any root or part-level OPC relationship with an external target changes, including an opaque relationship that no feature-specific scanner recognizes. Source parts, types, IDs, targets, unknown metadata, and raw XML are compared privately. |
-| `no_formula_external_action_changes` | boolean | A stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, or `RTD` formula call, argument, call location, function inventory, or statically visible input changes. FormulaFence uses private signatures and static dependency paths; it never evaluates a formula, resolves a destination, requests content, or starts a provider. |
+| `no_formula_external_action_changes` | boolean | A stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, or `RTD` formula call in a cell, formula-defined name, or named `LAMBDA`; its private inventory; relevant name-definition material; or a statically visible input changes. FormulaFence uses private signatures and static dependency paths; it never evaluates a formula, resolves a destination, requests content, or starts a provider. |
 | `no_python_in_excel_changes` | boolean | Stored Python-in-Excel package code/environment/XML, a `PY` formula binding, function inventory, or a statically visible input changes. Python source, environment IDs, script indexes, formula arguments, locations, and raw XML are compared privately; FormulaFence never parses or runs Python, evaluates `PY`, or contacts the Microsoft Cloud runtime. |
 | `no_office_custom_function_changes` | boolean | A namespaced Office custom-function call candidate, its private formula/call inventory, or a statically visible input changes. A candidate is not proof that an add-in is installed: FormulaFence does not load the add-in manifest or code, execute a formula, or contact a custom-function runtime. Names, namespaces, cells, formulas, and arguments are compared privately. |
 | `no_worksheet_code_resource_registration_changes` | boolean | A stored worksheet or formula-defined `REGISTER.ID` call, relevant formula-defined-name chain, private call inventory, or statically visible input changes. Module paths, procedure names, type strings, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates a formula, resolves a path, loads a DLL/XLL, or determines whether registration succeeds. |
@@ -322,11 +322,11 @@ trust any target; it bounds relationship XML to 16 MiB per part, 64 MiB per
 workbook, and 512 parts.
 
 FormulaFence separately inventories stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`,
-and `RTD` formula calls (including `_xlfn.` compatibility spellings) as formula
-external-action surfaces. This is intentionally broader than proven remote
-access: a `HYPERLINK` destination may be in the current workbook and a function
-argument may be calculated. Microsoft documents a HYPERLINK destination as a
-text string or cell reference in its
+and `RTD` formula calls (including `_xlfn.` compatibility spellings) in cells,
+formula-defined names, and named `LAMBDA` bodies. This is intentionally broader
+than proven remote access: a `HYPERLINK` destination may be in the current
+workbook and a function argument may be calculated. Microsoft documents a
+HYPERLINK destination as a text string or cell reference in its
 [link guidance](https://support.microsoft.com/en-US/Excel/work-with-links-in-excel),
 while `WEBSERVICE` calls a URL,
 [`IMAGE`](https://support.microsoft.com/en-us/excel/functions/image-function)
@@ -334,10 +334,11 @@ uses an HTTPS source, and
 [`RTD`](https://support.microsoft.com/en-us/excel/functions/rtd-function)
 uses a COM-automation data provider.
 
-The public profile and `FF064` details contain only action-cell and function
-counts; formulas, arguments, destinations, provider names, results, and cell
-locations stay in private comparison signatures. A destination-only change can
-therefore emit `FF064` when every public count is unchanged.
+The public profile and `FF064` details contain only action-cell,
+formula-defined-name, and function counts; formulas, name identities,
+arguments, destinations, provider names, results, and cell locations stay in
+private comparison signatures. A destination-only or named-definition-only
+change can therefore emit `FF064` when every public count is unchanged.
 FormulaFence also emits `FF064` when a normal cell change reaches one of these
 formula cells through its static dependency graph, covering a source such as
 `=HYPERLINK(A1, ...)` without reading or evaluating an effective URL. Dynamic

@@ -41395,6 +41395,11 @@ def _named_reference_maps(
     dict[str, dict[str, tuple[str, ...]]],
     dict[str, tuple[str, ...]],
     dict[str, dict[str, tuple[str, ...]]],
+    tuple[tuple[str, str], ...],
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
     dict[str, tuple[str, ...]],
     dict[str, dict[str, tuple[str, ...]]],
     dict[str, tuple[str, ...]],
@@ -41406,10 +41411,11 @@ def _named_reference_maps(
     Formula-valued names are expanded only when every dependency is statically
     visible and internal. Relative references, dynamic functions, unresolved
     tokens, recursive LAMBDAs, external links, and 3-D spans remain unresolved
-    at a use site instead of producing a guessed graph edge. Namespaced custom
-    function candidates and worksheet ``REGISTER.ID`` calls are propagated
-    separately through those definitions so a named LAMBDA cannot hide either
-    stored boundary from the formula-cell ledgers.
+    at a use site instead of producing a guessed graph edge. Formula external
+    actions, namespaced custom-function candidates, and worksheet
+    ``REGISTER.ID`` calls are propagated separately through those definitions
+    so a named LAMBDA cannot hide a stored boundary from the formula-cell
+    ledgers.
     """
     workbook_names = getattr(workbook, "defined_names", {})
     global_references: dict[str, tuple[ParsedReference, ...]] = {}
@@ -41639,6 +41645,10 @@ def _named_reference_maps(
     definition_indexes = {
         identity: index for index, identity in enumerate(definition_identities)
     }
+    external_action_markers = {
+        identity: f"FORMULAFENCE_EXTERNAL_ACTION_MARKER_{index}"
+        for index, identity in enumerate(definition_identities)
+    }
     custom_function_markers = {
         identity: f"FORMULAFENCE_OFFICE_CUSTOM_MARKER_{index}"
         for index, identity in enumerate(definition_identities)
@@ -41650,6 +41660,7 @@ def _named_reference_maps(
     identities_by_marker = {
         marker: identity
         for markers in (
+            external_action_markers,
             custom_function_markers,
             code_resource_registration_markers,
         )
@@ -41692,6 +41703,9 @@ def _named_reference_maps(
                 markers[key] = (markers_by_definition[identity_for(definition)],)
         return markers
 
+    direct_external_action_functions: dict[
+        tuple[str | None, str], tuple[str, ...]
+    ] = {}
     direct_custom_function_candidates: dict[tuple[str | None, str], tuple[str, ...]] = {}
     direct_code_resource_registration_functions: dict[
         tuple[str | None, str], tuple[str, ...]
@@ -41706,6 +41720,14 @@ def _named_reference_maps(
             structured_tables=structured_tables,
             sheet_order=sheet_order,
             named_function_references=visible_named_functions(definition.scope),
+            named_formula_external_action_functions=visible_named_markers(
+                definition.scope, external_action_markers
+            ),
+            named_function_formula_external_action_functions=(
+                visible_named_function_markers(
+                    definition.scope, external_action_markers
+                )
+            ),
             named_custom_function_candidates=visible_named_markers(
                 definition.scope, custom_function_markers
             ),
@@ -41724,6 +41746,11 @@ def _named_reference_maps(
             ),
         )
         identity = identity_for(definition)
+        direct_external_action_functions[identity] = tuple(
+            function
+            for function in inspection.external_action_functions
+            if function not in identities_by_marker
+        )
         direct_custom_function_candidates[identity] = tuple(
             candidate
             for candidate in inspection.office_custom_function_candidates
@@ -41738,7 +41765,8 @@ def _named_reference_maps(
             dict.fromkeys(
                 identities_by_marker[marker]
                 for marker in (
-                    inspection.office_custom_function_candidates
+                    inspection.external_action_functions
+                    + inspection.office_custom_function_candidates
                     + inspection.worksheet_code_resource_registration_functions
                 )
                 if marker in identities_by_marker
@@ -41794,11 +41822,17 @@ def _named_reference_maps(
         components.append(tuple(sorted(members, key=definition_indexes.__getitem__)))
 
     component_dependencies: dict[int, tuple[int, ...]] = {}
+    component_direct_external_action_functions: dict[int, tuple[str, ...]] = {}
     component_direct_candidates: dict[int, tuple[str, ...]] = {}
     component_direct_code_resource_registration_functions: dict[
         int, tuple[str, ...]
     ] = {}
     for component, members in enumerate(components):
+        component_direct_external_action_functions[component] = tuple(
+            function
+            for identity in members
+            for function in direct_external_action_functions[identity]
+        )
         component_direct_candidates[component] = tuple(
             candidate
             for identity in members
@@ -41831,10 +41865,19 @@ def _named_reference_maps(
         for component, dependencies in remaining_component_dependencies.items()
         if not dependencies
     )
+    component_external_action_functions: dict[int, tuple[str, ...]] = {}
     component_custom_function_candidates: dict[int, tuple[str, ...]] = {}
     component_code_resource_registration_functions: dict[int, tuple[str, ...]] = {}
     while ready_components:
         component = ready_components.pop(0)
+        component_external_action_functions[component] = (
+            component_direct_external_action_functions[component]
+            + tuple(
+                function
+                for dependency in component_dependencies[component]
+                for function in component_external_action_functions[dependency]
+            )
+        )
         component_custom_function_candidates[component] = (
             component_direct_candidates[component]
             + tuple(
@@ -41859,6 +41902,10 @@ def _named_reference_maps(
 
     custom_function_candidates_by_definition = {
         identity: component_custom_function_candidates[component]
+        for identity, component in component_by_definition.items()
+    }
+    external_action_functions_by_definition = {
+        identity: component_external_action_functions[component]
         for identity, component in component_by_definition.items()
     }
     code_resource_registration_functions_by_definition = {
@@ -41912,6 +41959,62 @@ def _named_reference_maps(
         }
         if functions:
             local_function_result[scope] = functions
+
+    global_external_action_result: dict[str, tuple[str, ...]] = {
+        key: external_action_functions_by_definition[identity_for(definition)]
+        for key, definition in global_formulas.items()
+    }
+    for scope, definitions in local_formulas.items():
+        for key, definition in definitions.items():
+            global_external_action_result[_qualified_name_key(sheet_titles[scope], key)] = (
+                external_action_functions_by_definition[identity_for(definition)]
+            )
+
+    local_external_action_result: dict[str, dict[str, tuple[str, ...]]] = {}
+    for scope, definitions in local_formulas.items():
+        functions = {
+            key: external_action_functions_by_definition[identity_for(definition)]
+            for key, definition in definitions.items()
+        }
+        if functions:
+            local_external_action_result[scope] = functions
+
+    global_function_external_action_result: dict[str, tuple[str, ...]] = {
+        key: external_action_functions_by_definition[identity_for(definition)]
+        for key, definition in global_lambdas.items()
+    }
+    for scope, definitions in local_lambdas.items():
+        for key, definition in definitions.items():
+            global_function_external_action_result[
+                _qualified_name_key(sheet_titles[scope], key)
+            ] = external_action_functions_by_definition[identity_for(definition)]
+
+    local_function_external_action_result: dict[
+        str, dict[str, tuple[str, ...]]
+    ] = {}
+    for scope, definitions in local_lambdas.items():
+        functions = {
+            key: external_action_functions_by_definition[identity_for(definition)]
+            for key, definition in definitions.items()
+        }
+        if functions:
+            local_function_external_action_result[scope] = functions
+
+    external_action_definition_entries = tuple(
+        sorted(
+            (
+                repr((definition.scope, definition.key)),
+                repr(
+                    (
+                        external_action_functions_by_definition[identity_for(definition)],
+                        definition.formula,
+                    )
+                ),
+            )
+            for definition in all_definitions
+            if external_action_functions_by_definition[identity_for(definition)]
+        )
+    )
 
     global_custom_result: dict[str, tuple[str, ...]] = {
         key: custom_function_candidates_by_definition[identity_for(definition)]
@@ -42028,6 +42131,11 @@ def _named_reference_maps(
         local_result,
         global_function_result,
         local_function_result,
+        global_external_action_result,
+        local_external_action_result,
+        global_function_external_action_result,
+        local_function_external_action_result,
+        external_action_definition_entries,
         global_custom_result,
         local_custom_result,
         global_function_custom_result,
@@ -42386,6 +42494,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         local_named_references,
         global_named_functions,
         local_named_functions,
+        global_named_formula_external_action_functions,
+        local_named_formula_external_action_functions,
+        global_named_function_formula_external_action_functions,
+        local_named_function_formula_external_action_functions,
+        formula_external_action_definition_entries,
         global_named_custom_function_candidates,
         local_named_custom_function_candidates,
         global_named_function_custom_function_candidates,
@@ -42405,6 +42518,18 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         named_functions = {
             **global_named_functions,
             **local_named_functions.get(worksheet.title.casefold(), {}),
+        }
+        named_formula_external_action_functions = {
+            **global_named_formula_external_action_functions,
+            **local_named_formula_external_action_functions.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
+        named_function_formula_external_action_functions = {
+            **global_named_function_formula_external_action_functions,
+            **local_named_function_formula_external_action_functions.get(
+                worksheet.title.casefold(), {}
+            ),
         }
         named_custom_function_candidates = {
             **global_named_custom_function_candidates,
@@ -42466,6 +42591,12 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 origin=snapshot.location,
                 sheet_order=sheet_order,
                 named_function_references=named_functions,
+                named_formula_external_action_functions=(
+                    named_formula_external_action_functions
+                ),
+                named_function_formula_external_action_functions=(
+                    named_function_formula_external_action_functions
+                ),
                 named_custom_function_candidates=named_custom_function_candidates,
                 named_function_custom_function_candidates=(
                     named_function_custom_function_candidates
@@ -42707,12 +42838,16 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         external_relationships=external_relationship_metadata.relationships,
         formula_external_actions=FormulaExternalActionSnapshot(
             formula_external_action_cell_count=len(formula_external_action_cells),
+            action_defined_name_count=len(formula_external_action_definition_entries),
             hyperlink_function_count=formula_external_action_counts["HYPERLINK"],
             webservice_function_count=formula_external_action_counts["WEBSERVICE"],
             image_function_count=formula_external_action_counts["IMAGE"],
             rtd_function_count=formula_external_action_counts["RTD"],
             action_signature=_private_external_data_signature(
                 tuple(sorted(formula_external_action_entries))
+            ),
+            definition_signature=_private_external_data_signature(
+                formula_external_action_definition_entries
             ),
             action_cells=frozenset(formula_external_action_cells),
         ),

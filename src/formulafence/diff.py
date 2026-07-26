@@ -2258,6 +2258,8 @@ def _formula_external_action_changes(
     }
     if old_actions.action_signature != new_actions.action_signature:
         details["formula_external_action_material_changed"] = True
+    if old_actions.definition_signature != new_actions.definition_signature:
+        details["formula_external_action_definition_material_changed"] = True
     if static_input_change_locations:
         details["formula_external_action_static_input_changed"] = True
         details["formula_external_action_static_input_change_count"] = len(
@@ -2273,9 +2275,9 @@ def _formula_external_action_changes(
         "FF064",
         "high",
         (
-            "Formula external-action functions or a statically visible input changed; "
-            "a formula may now redirect a reviewer, request content, or invoke a "
-            "real-time data provider."
+            "Formula external-action functions, a relevant formula-defined name, or a "
+            "statically visible input changed; a formula may now redirect a reviewer, "
+            "request content, or invoke a real-time data provider."
         ),
         details=details,
     )

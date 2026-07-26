@@ -5,6 +5,49 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Formula-defined external-action propagation — 2026-07-26
+
+FormulaFence 0.71.0 extends the existing `FF064` boundary through
+formula-defined names and named `LAMBDA` bodies. The scope remains grounded in
+Microsoft's documented formula semantics for
+[`HYPERLINK`](https://support.microsoft.com/en-US/Excel/work-with-links-in-excel),
+[`WEBSERVICE`](https://support.microsoft.com/en-US/Excel/functions/webservice-function),
+[`IMAGE`](https://support.microsoft.com/en-us/excel/functions/image-function),
+and [`RTD`](https://support.microsoft.com/en-us/excel/functions/rtd-function):
+the workbook can retain an action call even when a worksheet formula reaches it
+through a stored name rather than spelling the call directly.
+
+Three fresh controlled `.xlsx` artifacts were generated without opening Excel.
+The baseline (SHA-256
+`49cc5bd488e79e8e9372ab680c39e982e9f529d462db089c7eacb03821824de4`)
+uses a direct formula-defined value, a named `LAMBDA`, and a nested named
+`LAMBDA` to reach `HYPERLINK` and `WEBSERVICE`. Its public ledger reports three
+formula cells, three relevant formula-defined names, two HYPERLINK calls, and
+one WEBSERVICE call. Changing only private content inside the inner named
+definition (SHA-256
+`87c9a3f46af4499ef8f59bc923055fe4150474c119cc9e1e07ca0f9094274538`)
+kept all public counts fixed while emitting `FF064` with the private
+name-definition-material flag. Changing only the shared input (SHA-256
+`6ff7dfd59a7fe9d4cc4616a431f83b8a5b6034008094dea6ca6a96a11752ee76`)
+kept the action snapshot equal and emitted `FF064` with a static-input count of
+one. The suite separately covers uninvoked stored names and cycle-safe
+recursive named `LAMBDA`s.
+
+The existing `no_formula_external_action_changes` policy emitted `FFP064` for
+the named-definition candidate. Profile output and the dedicated `FF064` SARIF
+result excluded all test name identities, labels, and endpoint strings. The
+ordinary semantic diff intentionally remains separate reviewer context. No
+formula was evaluated and no endpoint, image, link, or RTD provider was opened,
+fetched, followed, or executed during validation.
+
+The staged `formulafence-0.71.0-py3-none-any.whl` (SHA-256
+`f3c66783da0b6517faa4083cb4b7b1e60f8d56fdf7aba9c1d3e02020ec8a324c`)
+was installed into a fresh virtual environment with its declared dependencies.
+Its CLI returned `FormulaFence 0.71.0`; the generated starter policy retained
+`no_formula_external_action_changes: true`, and the packaged check emitted both
+`FF064` and `FFP064` for the controlled named-definition candidate. The
+packaged profile and dedicated SARIF result remained redacted.
+
 ## Worksheet code-resource registration boundary — 2026-07-26
 
 FormulaFence 0.70.0 was checked against Microsoft's current

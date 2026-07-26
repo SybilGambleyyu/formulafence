@@ -546,11 +546,13 @@ review prompt, not proof of an error.
   request data from an intranet or Internet service, render a URL-sourced image,
   or bind a real-time provider. FormulaFence inventories stored `HYPERLINK`,
   `WEBSERVICE`, `IMAGE`, and `RTD` calls (including `_xlfn.` compatibility
-  spellings) and privately fingerprints the cell, function inventory, and
-  formula material. Public profiles and `FF064` details expose only action-cell
-  and per-function counts, so an argument-only or same-count retarget remains
-  reviewable without disclosing an endpoint, provider, formula, or location.
-  A normal cell change that reaches an action cell through FormulaFence's static
+  spellings) in cells, formula-defined names, and named `LAMBDA` bodies. It
+  privately fingerprints cell, function-inventory, and relevant named-definition
+  material. Public profiles and `FF064` details expose only action-cell,
+  formula-defined-name, and per-function counts, so an argument-only,
+  name-definition-only, or same-count retarget remains reviewable without
+  disclosing an endpoint, provider, formula, or location. A normal cell change
+  that reaches an invoking action formula through FormulaFence's static
   dependency graph also emits `FF064`, covering a static source such as
   `HYPERLINK(A1, ...)` without reading `A1` as an endpoint. Dynamic or
   unresolved sources remain explicit formula-coverage limits.

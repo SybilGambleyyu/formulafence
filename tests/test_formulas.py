@@ -73,6 +73,30 @@ def test_formula_inspection_inventories_external_action_functions_without_evalua
     )
 
 
+def test_formula_inspection_propagates_external_actions_from_named_definitions() -> None:
+    named_lambda = inspect_formula(
+        "=FENCE.WRAPPER(A1)",
+        named_function_references={"fence.wrapper": ()},
+        named_function_formula_external_action_functions={
+            "fence.wrapper": ("HYPERLINK",),
+        },
+    )
+    named_formula = inspect_formula(
+        "=FENCE.DIRECT",
+        named_references={"fence.direct": ()},
+        named_formula_external_action_functions={
+            "fence.direct": ("WEBSERVICE",),
+        },
+    )
+
+    assert named_lambda.external_action_functions == ("HYPERLINK",)
+    assert named_lambda.references == (
+        ParsedReference(None, 1, 1, 1, 1, raw="A1"),
+    )
+    assert named_formula.external_action_functions == ("WEBSERVICE",)
+    assert named_formula.unresolved_range_tokens == ()
+
+
 def test_formula_inspection_inventories_python_in_excel_function_spellings() -> None:
     inspection = inspect_formula(
         "=_xlfn._xlws.PY(0,0,A1)+_xlws.PY(1,1,A2)+PY(2,0,A3)",

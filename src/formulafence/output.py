@@ -891,9 +891,10 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 "## Formula external-action surfaces",
                 "",
                 (
-                    "- **Formula cells / function calls:** "
+                    "- **Formula cells / function calls / formula-defined names:** "
                     f"{formula_external_actions['formula_external_action_cell_count']} / "
-                    f"{formula_external_action_call_count}"
+                    f"{formula_external_action_call_count} / "
+                    f"{formula_external_actions['action_defined_name_count']}"
                 ),
                 (
                     "- **HYPERLINK / WEBSERVICE / IMAGE / RTD:** "
@@ -903,9 +904,10 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     f"{formula_external_actions['rtd_function_count']}"
                 ),
                 (
-                    "FormulaFence inventories stored function calls only. Formula cells, "
-                    "arguments, destinations, provider names, and results are compared "
-                    "privately and intentionally omitted; no formula is evaluated or action taken."
+                    "FormulaFence inventories stored calls in cells, formula-defined names, "
+                    "and named LAMBDAs. Formula cells, name identities, arguments, destinations, "
+                    "provider names, and results are compared privately and intentionally omitted; "
+                    "no formula is evaluated or action taken."
                 ),
             ]
         )

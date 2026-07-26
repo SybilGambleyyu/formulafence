@@ -70,6 +70,8 @@ from .helpers import (
     change_legacy_placeholder_author_context,
     change_legacy_vml_control_controls,
     change_legacy_vml_note,
+    change_named_formula_external_action_definition,
+    change_named_formula_external_action_input,
     change_named_office_custom_function_definition,
     change_named_office_custom_function_input,
     change_named_sheet_view_criterion,
@@ -244,6 +246,7 @@ from .helpers import (
     make_legacy_vml_note_model,
     make_let_model,
     make_model,
+    make_named_formula_external_action_model,
     make_named_formula_model,
     make_named_lambda_model,
     make_named_office_custom_function_model,
@@ -1987,6 +1990,7 @@ def test_formula_external_actions_are_profiled_diffed_and_redacted(tmp_path) -> 
     expected_actions = {
         "present": True,
         "formula_external_action_cell_count": 8,
+        "action_defined_name_count": 0,
         "hyperlink_function_count": 5,
         "webservice_function_count": 1,
         "image_function_count": 2,
@@ -1994,6 +1998,7 @@ def test_formula_external_actions_are_profiled_diffed_and_redacted(tmp_path) -> 
     }
     assert baseline_snapshot.formula_external_actions.to_dict() == expected_actions
     assert baseline_snapshot.summary()["formula_external_action_cell_count"] == 8
+    assert baseline_snapshot.summary()["formula_external_action_defined_name_count"] == 0
     assert baseline_snapshot.summary()["formula_hyperlink_function_count"] == 5
     assert baseline_snapshot.summary()["formula_webservice_function_count"] == 1
     assert baseline_snapshot.summary()["formula_image_function_count"] == 2
@@ -2001,7 +2006,7 @@ def test_formula_external_actions_are_profiled_diffed_and_redacted(tmp_path) -> 
     assert baseline_snapshot.summary()["has_formula_external_actions"] is True
     assert profile["formula_external_actions"] == expected_actions
     assert "## Formula external-action surfaces" in markdown
-    assert "**Formula cells / function calls:** 8 / 9" in markdown
+    assert "**Formula cells / function calls / formula-defined names:** 8 / 9 / 0" in markdown
     assert "**HYPERLINK / WEBSERVICE / IMAGE / RTD:** 5 / 1 / 2 / 1" in markdown
 
     report = compare_snapshots(baseline_snapshot, candidate_snapshot)
@@ -2077,6 +2082,151 @@ def test_formula_external_action_static_inputs_are_guarded(tmp_path) -> None:
         "PRIVATE-REFERENCED-LINK-CANDIDATE",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_named_formula_external_actions_are_propagated_diffed_and_private(tmp_path) -> None:
+    baseline = make_named_formula_external_action_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_formula_external_action_model(tmp_path / "candidate.xlsx")
+    change_named_formula_external_action_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_actions = {
+        "present": True,
+        "formula_external_action_cell_count": 3,
+        "action_defined_name_count": 3,
+        "hyperlink_function_count": 2,
+        "webservice_function_count": 1,
+        "image_function_count": 0,
+        "rtd_function_count": 0,
+    }
+    assert baseline_snapshot.formula_external_actions.to_dict() == expected_actions
+    assert baseline_snapshot.formula_external_actions.action_cells == frozenset(
+        {("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")}
+    )
+    assert profile["formula_external_actions"] == expected_actions
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    action_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_external_actions_changed"
+    )
+    action_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF064"
+    )
+    assert action_change.details["before"] == expected_actions
+    assert action_change.details["after"] == expected_actions
+    assert action_change.details["formula_external_action_definition_material_changed"] is True
+    assert action_finding.details == action_change.details
+
+    ff064_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF064"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["formula_external_actions"]),
+        profile_to_markdown(profile),
+        json.dumps(action_change.details),
+        json.dumps(action_finding.to_dict()),
+        json.dumps(ff064_sarif_result),
+    )
+    for sensitive_value in (
+        "FENCE",
+        "PRIVATE-NAMED-ACTION-LABEL-BASELINE",
+        "PRIVATE-NAMED-ACTION-LABEL-CANDIDATE",
+        "PRIVATE-NAMED-ACTION-INPUT-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_named_formula_external_action_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_named_formula_external_action_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_formula_external_action_model(tmp_path / "candidate.xlsx")
+    change_named_formula_external_action_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.formula_external_actions == candidate_snapshot.formula_external_actions
+    assert {("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")} <= set(
+        baseline_snapshot.reverse_dependencies[("Inputs", "A9")]
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    action_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_external_actions_changed"
+    )
+    assert action_change.details["formula_external_action_static_input_changed"] is True
+    assert action_change.details["formula_external_action_static_input_change_count"] == 1
+    assert "formula_external_action_material_changed" not in action_change.details
+    assert "formula_external_action_definition_material_changed" not in action_change.details
+    assert "FF064" in {finding.rule_id for finding in report.findings}
+
+
+def test_uninvoked_formula_defined_external_action_is_profiled(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "stored-name.xlsx")
+
+    def add_stored_action(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.STORED.ACTION",
+                attr_text=(
+                    '=HYPERLINK("https://private.example.test/PRIVATE-STORED-NAMED-ACTION",'
+                    '"Open")'
+                ),
+            )
+        )
+
+    rewrite(workbook_path, add_stored_action)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_external_actions.to_dict() == {
+        "present": True,
+        "formula_external_action_cell_count": 0,
+        "action_defined_name_count": 1,
+        "hyperlink_function_count": 0,
+        "webservice_function_count": 0,
+        "image_function_count": 0,
+        "rtd_function_count": 0,
+    }
+    assert snapshot.formula_external_actions.action_cells == frozenset()
+
+
+def test_recursive_named_formula_external_actions_are_cycle_safe(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "recursive.xlsx")
+
+    def add_recursive_action(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.LOOP",
+                attr_text=(
+                    '=LAMBDA(value,HYPERLINK(value,"PRIVATE-RECURSIVE-ACTION")'
+                    "+FENCE.LOOP(value))"
+                ),
+            )
+        )
+        workbook["Model"]["D2"] = "=FENCE.LOOP(Inputs!B2)"
+
+    rewrite(workbook_path, add_recursive_action)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_external_actions.to_dict() == {
+        "present": True,
+        "formula_external_action_cell_count": 1,
+        "action_defined_name_count": 1,
+        "hyperlink_function_count": 1,
+        "webservice_function_count": 0,
+        "image_function_count": 0,
+        "rtd_function_count": 0,
+    }
+    assert snapshot.formula_external_actions.action_cells == frozenset(
+        {("Model", "D2")}
+    )
+    assert snapshot.unresolved_reference_tokens[("Model", "D2")] == ("FENCE.LOOP",)
 
 
 def test_python_in_excel_code_is_profiled_diffed_and_redacted(tmp_path) -> None:

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.70.0/formulafence-0.70.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.71.0/formulafence-0.71.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -142,7 +142,7 @@ allowed_changes:
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function call candidates, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
-| Formula external-action surfaces | Material stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, or `RTD` call changes, including same-count destination/provider swaps, without evaluating formulas or exposing their arguments in the action ledger |
+| Formula external-action surfaces | Material stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, or `RTD` call changes in cells, formula-defined names, or named `LAMBDA`s, including same-count destination/provider swaps, without evaluating formulas or exposing their arguments in the action ledger |
 | Python in Excel boundary | Stored Python code/environment, `PY` formula bindings, and statically visible inputs, without loading Python code, executing it, or contacting its cloud runtime |
 | Namespaced Office custom-function boundary | Material namespaced formula-call candidates and statically visible inputs, without loading an add-in, executing a formula, or exposing names and arguments in the private ledger |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
@@ -338,8 +338,9 @@ metadata remains explicit coverage evidence rather than silently disappearing.
 
 FormulaFence also keeps a private **formula external-action ledger** for stored
 `HYPERLINK`, `WEBSERVICE`, `IMAGE`, and `RTD` calls, including their `_xlfn.`
-compatibility spelling. Microsoft documents that `HYPERLINK` can use a text
-link location or a cell reference, that
+compatibility spelling and calls held in formula-defined names or named
+`LAMBDA` bodies. Microsoft documents that `HYPERLINK` can use a text link
+location or a cell reference, that
 [`WEBSERVICE`](https://support.microsoft.com/en-US/Excel/functions/webservice-function)
 calls a web-service URL, that
 [`IMAGE`](https://support.microsoft.com/en-us/excel/functions/image-function)
@@ -349,11 +350,12 @@ retrieves data through a COM-automation provider. `HYPERLINK` calls are all
 inventoried—including known in-workbook links—because their destination can be
 computed dynamically and a later formula edit can retarget a reviewer.
 
-Profiles and `FF064`/`FFP064` details expose only formula-cell and per-function
-counts. Private signatures retain the stored formula and cell identity so a
-destination, provider, argument, or call-location change stays visible even
-when public counts do not move. FormulaFence also raises `FF064` when an
-ordinary cell edit can reach an action formula through its static dependency
+Profiles and `FF064`/`FFP064` details expose only formula-cell,
+formula-defined-name, and per-function counts. Private signatures retain the
+stored cell and relevant name-definition material so a destination, provider,
+argument, call-location, or name-definition change stays visible even when
+public counts do not move. FormulaFence also raises `FF064` when an ordinary
+cell edit can reach an invoking action formula through its static dependency
 graph, catching `=HYPERLINK(A1, ...)`-style input retargeting without evaluating
 `A1`. Dynamic or unresolvable arguments remain explicit parser-coverage limits.
 The ordinary semantic cell diff intentionally continues to show changed

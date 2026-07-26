@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.71.0 — 2026-07-26
+
+- Extend the existing `FF064` formula external-action boundary through
+  formula-defined names and named `LAMBDA` bodies. Stored `HYPERLINK`,
+  `WEBSERVICE`, `IMAGE`, and `RTD` calls can no longer be hidden behind a
+  formula name or nested named function.
+- Track relevant named definitions in a separate private signature, including
+  an uninvoked stored definition. Same-count name-definition changes and
+  ordinary cell edits that statically reach an invoking action formula emit
+  `FF064`; profiles expose only formula-cell, call, function, and
+  formula-defined-name counts.
+- `no_formula_external_action_changes` continues to make this fail closed as
+  `FFP064`. FormulaFence does not evaluate a formula, resolve a destination,
+  fetch content, follow a link, or start an RTD provider.
+
 ## 0.70.0 — 2026-07-26
 
 - Add `FF067`, a private ledger for stored worksheet and formula-defined

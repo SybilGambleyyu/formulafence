@@ -1362,6 +1362,12 @@ def inspect_formula(
     named_function_custom_function_candidates: (
         Mapping[str, Sequence[str]] | None
     ) = None,
+    named_formula_external_action_functions: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
+    named_function_formula_external_action_functions: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
     named_worksheet_code_resource_registration_functions: (
         Mapping[str, Sequence[str]] | None
     ) = None,
@@ -1398,6 +1404,12 @@ def inspect_formula(
     resolved_named_custom_functions = named_custom_function_candidates or {}
     resolved_named_function_custom_functions = (
         named_function_custom_function_candidates or {}
+    )
+    resolved_named_formula_external_actions = (
+        named_formula_external_action_functions or {}
+    )
+    resolved_named_function_formula_external_actions = (
+        named_function_formula_external_action_functions or {}
     )
     resolved_named_worksheet_code_resource_registrations = (
         named_worksheet_code_resource_registration_functions or {}
@@ -1441,6 +1453,9 @@ def inspect_formula(
             named_key = reference_lookup_key(token.value)
             if named_key in resolved_names:
                 references.extend(resolved_names[named_key])
+                external_action_functions.extend(
+                    resolved_named_formula_external_actions.get(named_key, ())
+                )
                 office_custom_function_candidates.extend(
                     resolved_named_custom_functions.get(named_key, ())
                 )
@@ -1450,6 +1465,10 @@ def inspect_formula(
                     )
                 )
                 continue
+            if named_external_actions := resolved_named_formula_external_actions.get(
+                named_key
+            ):
+                external_action_functions.extend(named_external_actions)
             if named_custom_functions := resolved_named_custom_functions.get(named_key):
                 office_custom_function_candidates.extend(named_custom_functions)
             if (
@@ -1477,6 +1496,11 @@ def inspect_formula(
                         unresolved_range_tokens.append(token.value.rstrip("(").strip())
                     else:
                         references.extend(function_references)
+                    external_action_functions.extend(
+                        resolved_named_function_formula_external_actions.get(
+                            function_key, ()
+                        )
+                    )
                     office_custom_function_candidates.extend(
                         resolved_named_function_custom_functions.get(function_key, ())
                     )
@@ -1514,6 +1538,8 @@ def inspect_formula(
                 dynamic_reference_functions.append(function_name)
             if (
                 position not in local_variable_indexes
+                and function_key not in resolved_names
+                and function_key not in resolved_named_functions
                 and function_name in _EXTERNAL_ACTION_FUNCTIONS
             ):
                 external_action_functions.append(function_name)

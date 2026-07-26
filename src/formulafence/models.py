@@ -924,28 +924,35 @@ class FormulaExternalActionSnapshot:
     ``RTD`` can use dynamic expressions or host-side providers.  FormulaFence
     inventories the known action functions without evaluating an argument,
     resolving a destination, requesting content, or starting an automation
-    server. Private signatures retain cell and formula material so same-count
-    endpoint or provider changes remain visible without exposing them. Private
+    server. Formula-defined names and named LAMBDAs can hold those calls too,
+    so their relevant definitions are retained in a separate private signature.
+    Private signatures retain cell and formula material so same-count endpoint
+    or provider changes remain visible without exposing them. Private
     action-cell identities allow the diff to guard statically visible inputs.
     """
 
     formula_external_action_cell_count: int = 0
+    action_defined_name_count: int = 0
     hyperlink_function_count: int = 0
     webservice_function_count: int = 0
     image_function_count: int = 0
     rtd_function_count: int = 0
     action_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
     action_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
 
     @property
     def present(self) -> bool:
-        return bool(self.formula_external_action_cell_count)
+        return bool(
+            self.formula_external_action_cell_count or self.action_defined_name_count
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Return function counts without formulas, locations, or arguments."""
         return {
             "present": self.present,
             "formula_external_action_cell_count": self.formula_external_action_cell_count,
+            "action_defined_name_count": self.action_defined_name_count,
             "hyperlink_function_count": self.hyperlink_function_count,
             "webservice_function_count": self.webservice_function_count,
             "image_function_count": self.image_function_count,
@@ -4223,6 +4230,9 @@ class WorkbookSnapshot:
             "has_external_relationships": self.external_relationships.present,
             "formula_external_action_cell_count": (
                 self.formula_external_actions.formula_external_action_cell_count
+            ),
+            "formula_external_action_defined_name_count": (
+                self.formula_external_actions.action_defined_name_count
             ),
             "formula_hyperlink_function_count": (
                 self.formula_external_actions.hyperlink_function_count

@@ -25,6 +25,85 @@ _EXTERNAL_ACTION_FUNCTIONS = {"HYPERLINK", "WEBSERVICE", "IMAGE", "RTD"}
 # stores its executable code in a workbook-level Python part, so callers need a
 # dedicated code boundary that can fingerprint both the formula and that part.
 _PYTHON_FUNCTIONS = {"PY"}
+# Excel's native function catalog includes a small but important set of dotted
+# names.  A namespace separator is also how Office Add-in custom functions are
+# displayed (for example, ``CONTOSO.ADD``), so keep these known native names out
+# of the custom-function candidate ledger.  This is deliberately a local,
+# stable list instead of depending on a version-specific third-party catalog.
+_EXCEL_DOTTED_FUNCTIONS = {
+    "BETA.DIST",
+    "BETA.INV",
+    "BINOM.DIST",
+    "BINOM.DIST.RANGE",
+    "BINOM.INV",
+    "CEILING.MATH",
+    "CEILING.PRECISE",
+    "CHISQ.DIST",
+    "CHISQ.DIST.RT",
+    "CHISQ.INV",
+    "CHISQ.INV.RT",
+    "CHISQ.TEST",
+    "CONFIDENCE.NORM",
+    "CONFIDENCE.T",
+    "COVARIANCE.P",
+    "COVARIANCE.S",
+    "ECMA.CEILING",
+    "ERF.PRECISE",
+    "ERFC.PRECISE",
+    "ERROR.TYPE",
+    "EXPON.DIST",
+    "F.DIST",
+    "F.DIST.RT",
+    "F.INV",
+    "F.INV.RT",
+    "F.TEST",
+    "FLOOR.MATH",
+    "FLOOR.PRECISE",
+    "FORECAST.ETS",
+    "FORECAST.ETS.CONFINT",
+    "FORECAST.ETS.SEASONALITY",
+    "FORECAST.ETS.STAT",
+    "FORECAST.LINEAR",
+    "GAMMA.DIST",
+    "GAMMA.INV",
+    "GAMMALN.PRECISE",
+    "HYPGEOM.DIST",
+    "ISO.CEILING",
+    "LOGNORM.DIST",
+    "LOGNORM.INV",
+    "MODE.MULT",
+    "MODE.SNGL",
+    "NEGBINOM.DIST",
+    "NETWORKDAYS.INTL",
+    "NORM.DIST",
+    "NORM.INV",
+    "NORM.S.DIST",
+    "NORM.S.INV",
+    "PERCENTILE.EXC",
+    "PERCENTILE.INC",
+    "PERCENTRANK.EXC",
+    "PERCENTRANK.INC",
+    "POISSON.DIST",
+    "QUARTILE.EXC",
+    "QUARTILE.INC",
+    "RANK.AVG",
+    "RANK.EQ",
+    "REGISTER.ID",
+    "SKEW.P",
+    "STDEV.P",
+    "STDEV.S",
+    "T.DIST",
+    "T.DIST.2T",
+    "T.DIST.RT",
+    "T.INV",
+    "T.INV.2T",
+    "T.TEST",
+    "VAR.P",
+    "VAR.S",
+    "WEIBULL.DIST",
+    "WORKDAY.INTL",
+    "Z.TEST",
+}
 
 _CELL_REFERENCE = re.compile(
     r"(?<![A-Z0-9_])(?P<column_absolute>\$?)(?P<column>[A-Z]{1,3})"
@@ -99,6 +178,7 @@ class FormulaInspection:
     dynamic_reference_functions: tuple[str, ...]
     external_action_functions: tuple[str, ...] = ()
     python_functions: tuple[str, ...] = ()
+    office_custom_function_candidates: tuple[str, ...] = ()
     three_d_reference_tokens: tuple[str, ...] = ()
     tokenization_failed: bool = False
     spill_reference_tokens: tuple[str, ...] = ()
@@ -943,6 +1023,44 @@ def _function_lookup_key(token: object) -> str:
     return reference_lookup_key(str(getattr(token, "value", "")).rstrip("(").strip())
 
 
+def _office_custom_function_candidate(token: object) -> str | None:
+    """Return a normalized namespaced custom-function candidate, if safe.
+
+    Office Add-in custom functions are displayed as a namespace followed by a
+    function name, but their manifest and JavaScript runtime are not embedded
+    in a normal workbook.  This intentionally recognizes only the documented
+    namespaced spelling, excludes OOXML compatibility prefixes and native
+    dotted functions, and leaves every other UDF shape out of this boundary.
+    """
+    raw_name = str(getattr(token, "value", "")).rstrip("(").strip()
+    candidate = raw_name.removeprefix("@")
+    upper_candidate = candidate.upper()
+    if (
+        not candidate
+        or upper_candidate.startswith(("_XLFN.", "_XLWS."))
+        or candidate.startswith("_")
+        or "." not in candidate
+        or any(character in candidate for character in "![]'")
+        or any(character.isspace() for character in candidate)
+        or upper_candidate in _EXCEL_DOTTED_FUNCTIONS
+    ):
+        return None
+    namespace, function_name = candidate.split(".", 1)
+    if (
+        not namespace
+        or not function_name
+        or not namespace[0].isalpha()
+        or not function_name[0].isalpha()
+        or any(not segment for segment in candidate.split("."))
+        or any(
+            not (character.isalnum() or character in "_.")
+            for character in candidate
+        )
+    ):
+        return None
+    return upper_candidate
+
+
 def _fingerprint_token_value(token: object) -> str:
     """Normalize OOXML spellings of the two dynamic-array compatibility functions."""
     if (
@@ -1215,6 +1333,10 @@ def inspect_formula(
     named_function_references: (
         Mapping[str, Sequence[ParsedReference] | None] | None
     ) = None,
+    named_custom_function_candidates: Mapping[str, Sequence[str]] | None = None,
+    named_function_custom_function_candidates: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
 ) -> FormulaInspection:
     """Inspect static reference coverage while resolving known named ranges.
 
@@ -1242,12 +1364,17 @@ def inspect_formula(
         )
     resolved_names = named_references or {}
     resolved_named_functions = named_function_references or {}
+    resolved_named_custom_functions = named_custom_function_candidates or {}
+    resolved_named_function_custom_functions = (
+        named_function_custom_function_candidates or {}
+    )
     resolved_tables = structured_tables or {}
     references: list[ParsedReference] = []
     unresolved_range_tokens: list[str] = []
     dynamic_reference_functions: list[str] = []
     external_action_functions: list[str] = []
     python_functions: list[str] = []
+    office_custom_function_candidates: list[str] = []
     three_d_reference_tokens: list[str] = []
     spill_reference_tokens: list[str] = list(literal_spill_tokens)
     implicit_intersection_tokens: list[str] = list(literal_implicit_intersection_tokens)
@@ -1276,7 +1403,12 @@ def inspect_formula(
             named_key = reference_lookup_key(token.value)
             if named_key in resolved_names:
                 references.extend(resolved_names[named_key])
+                office_custom_function_candidates.extend(
+                    resolved_named_custom_functions.get(named_key, ())
+                )
                 continue
+            if named_custom_functions := resolved_named_custom_functions.get(named_key):
+                office_custom_function_candidates.extend(named_custom_functions)
             table_reference = resolve_structured_reference(
                 token.value, resolved_tables, origin
             )
@@ -1294,6 +1426,20 @@ def inspect_formula(
                         unresolved_range_tokens.append(token.value.rstrip("(").strip())
                     else:
                         references.extend(function_references)
+                    office_custom_function_candidates.extend(
+                        resolved_named_function_custom_functions.get(function_key, ())
+                    )
+                if (
+                    function_key not in resolved_names
+                    and function_key not in resolved_named_functions
+                    and (
+                        custom_function_candidate := _office_custom_function_candidate(
+                            token
+                        )
+                    )
+                    is not None
+                ):
+                    office_custom_function_candidates.append(custom_function_candidate)
             function_name = _function_name(token)
             if function_name in _DYNAMIC_REFERENCE_FUNCTIONS:
                 dynamic_reference_functions.append(function_name)
@@ -1319,6 +1465,7 @@ def inspect_formula(
         dynamic_reference_functions=tuple(dict.fromkeys(dynamic_reference_functions)),
         external_action_functions=tuple(external_action_functions),
         python_functions=tuple(python_functions),
+        office_custom_function_candidates=tuple(office_custom_function_candidates),
         three_d_reference_tokens=tuple(dict.fromkeys(three_d_reference_tokens)),
         spill_reference_tokens=tuple(dict.fromkeys(spill_reference_tokens)),
         implicit_intersection_tokens=tuple(dict.fromkeys(implicit_intersection_tokens)),

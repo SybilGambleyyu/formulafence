@@ -70,9 +70,13 @@ from .helpers import (
     change_legacy_placeholder_author_context,
     change_legacy_vml_control_controls,
     change_legacy_vml_note,
+    change_named_office_custom_function_definition,
+    change_named_office_custom_function_input,
     change_named_sheet_view_criterion,
     change_number_format_code,
     change_number_format_default_style,
+    change_office_custom_function_call,
+    change_office_custom_function_input,
     change_office_web_addin_auto_show,
     change_office_web_addin_controls,
     change_office_web_addin_worksheet_binding,
@@ -238,8 +242,10 @@ from .helpers import (
     make_model,
     make_named_formula_model,
     make_named_lambda_model,
+    make_named_office_custom_function_model,
     make_named_sheet_view_model,
     make_number_format_model,
+    make_office_custom_function_model,
     make_office_web_addin_model,
     make_pivot_table_definition_model,
     make_power_pivot_data_model,
@@ -2178,6 +2184,256 @@ def test_python_in_excel_formula_bindings_are_guarded_separately(tmp_path) -> No
     assert "python_in_excel_definition_changed" not in python_change.details
     assert "FF065" in {finding.rule_id for finding in report.findings}
     assert "FF064" not in {finding.rule_id for finding in report.findings}
+
+
+def test_office_custom_function_calls_are_profiled_diffed_and_private(tmp_path) -> None:
+    baseline = make_office_custom_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_custom_function_model(tmp_path / "candidate.xlsx")
+    change_office_custom_function_call(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    expected_functions = {
+        "present": True,
+        "namespaced_custom_function_formula_cell_count": 4,
+        "namespaced_custom_function_call_count": 5,
+        "namespaced_custom_function_namespace_count": 2,
+    }
+    assert baseline_snapshot.office_custom_functions.to_dict() == expected_functions
+    assert (
+        baseline_snapshot.summary()["namespaced_custom_function_formula_cell_count"]
+        == 4
+    )
+    assert baseline_snapshot.summary()["namespaced_custom_function_call_count"] == 5
+    assert (
+        baseline_snapshot.summary()["namespaced_custom_function_namespace_count"]
+        == 2
+    )
+    assert baseline_snapshot.summary()["has_namespaced_custom_function_calls"] is True
+    assert profile["office_custom_functions"] == expected_functions
+    assert profile["features"]["has_namespaced_custom_function_calls"] is True
+    assert "## Namespaced custom-function calls" in markdown
+    assert "**Formula cells / calls / namespaces:** 4 / 5 / 2" in markdown
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    function_change = next(
+        change
+        for change in report.changes
+        if change.kind == "office_custom_functions_changed"
+    )
+    function_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF066"
+    )
+    assert function_change.details["before"] == expected_functions
+    assert function_change.details["after"] == expected_functions
+    assert function_change.details["office_custom_function_material_changed"] is True
+    assert function_finding.details == function_change.details
+    assert "FF064" not in {finding.rule_id for finding in report.findings}
+    assert "FF065" not in {finding.rule_id for finding in report.findings}
+
+    # Formula edits remain in the ordinary semantic report by design. The
+    # candidate ledger and its policy-facing finding keep function names,
+    # formula arguments, and source values private.
+    rendered_ledger_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(function_change.details),
+        json.dumps(function_finding.to_dict()),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "CONTOSO",
+        "FENCE",
+        "GETMARKETDATA",
+        "GETRISKDATA",
+        "PRIVATE-CUSTOM-FUNCTION-QUERY-BASELINE",
+        "PRIVATE-CUSTOM-FUNCTION-RISK-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_office_custom_function_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_office_custom_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_custom_function_model(tmp_path / "candidate.xlsx")
+    change_office_custom_function_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.office_custom_functions == candidate_snapshot.office_custom_functions
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    function_change = next(
+        change
+        for change in report.changes
+        if change.kind == "office_custom_functions_changed"
+    )
+    assert function_change.details["office_custom_function_static_input_changed"] is True
+    assert function_change.details["office_custom_function_static_input_change_count"] == 1
+    assert "office_custom_function_material_changed" not in function_change.details
+    assert "FF066" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(function_change.details),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-CUSTOM-FUNCTION-INPUT-BASELINE",
+        "PRIVATE-CUSTOM-FUNCTION-INPUT-CANDIDATE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_named_custom_function_calls_are_propagated_diffed_and_private(tmp_path) -> None:
+    baseline = make_named_office_custom_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_office_custom_function_model(tmp_path / "candidate.xlsx")
+    change_named_office_custom_function_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_functions = {
+        "present": True,
+        "namespaced_custom_function_formula_cell_count": 3,
+        "namespaced_custom_function_call_count": 5,
+        "namespaced_custom_function_namespace_count": 1,
+    }
+    assert baseline_snapshot.office_custom_functions.to_dict() == expected_functions
+    assert baseline_snapshot.office_custom_functions.call_cells == frozenset(
+        {("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")}
+    )
+    assert profile["office_custom_functions"] == expected_functions
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    function_change = next(
+        change
+        for change in report.changes
+        if change.kind == "office_custom_functions_changed"
+    )
+    function_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF066"
+    )
+    assert function_change.details["before"] == expected_functions
+    assert function_change.details["after"] == expected_functions
+    assert function_change.details["office_custom_function_material_changed"] is True
+    assert function_finding.details == function_change.details
+
+    ff066_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF066"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["office_custom_functions"]),
+        profile_to_markdown(profile),
+        json.dumps(function_change.details),
+        json.dumps(function_finding.to_dict()),
+        json.dumps(ff066_sarif_result),
+    )
+    for sensitive_value in (
+        "CONTOSO",
+        "FENCE",
+        "GETDATA",
+        "GETRISK",
+        "PRIVATE-NAMED-CUSTOM-FUNCTION-INPUT-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+    # The ordinary profile preserves defined-name labels and FF008 preserves a
+    # changed definition for general workbook review. The dedicated FF066
+    # ledger/result above is the intentionally redacted custom-call boundary.
+    rendered_profile = json.dumps(profile)
+    for sensitive_value in (
+        "CONTOSO",
+        "GETDATA",
+        "GETRISK",
+        "PRIVATE-NAMED-CUSTOM-FUNCTION-INPUT-BASELINE",
+    ):
+        assert sensitive_value not in rendered_profile
+
+
+def test_named_custom_function_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_named_office_custom_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_office_custom_function_model(tmp_path / "candidate.xlsx")
+    change_named_office_custom_function_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.office_custom_functions == candidate_snapshot.office_custom_functions
+    assert {("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")} <= set(
+        baseline_snapshot.reverse_dependencies[("Inputs", "A9")]
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    function_change = next(
+        change
+        for change in report.changes
+        if change.kind == "office_custom_functions_changed"
+    )
+    assert function_change.details["office_custom_function_static_input_changed"] is True
+    assert function_change.details["office_custom_function_static_input_change_count"] == 1
+    assert "office_custom_function_material_changed" not in function_change.details
+    assert "FF066" in {finding.rule_id for finding in report.findings}
+
+
+def test_recursive_named_custom_function_candidates_are_cycle_safe(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "recursive.xlsx")
+
+    def add_recursive_custom_function(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.LOOP",
+                attr_text=(
+                    "=LAMBDA(value,CONTOSO.GETDATA(value)+FENCE.LOOP(value))"
+                ),
+            )
+        )
+        workbook["Model"]["D2"] = "=FENCE.LOOP(Inputs!B2)"
+
+    rewrite(workbook_path, add_recursive_custom_function)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.office_custom_functions.to_dict() == {
+        "present": True,
+        "namespaced_custom_function_formula_cell_count": 1,
+        "namespaced_custom_function_call_count": 1,
+        "namespaced_custom_function_namespace_count": 1,
+    }
+    assert snapshot.office_custom_functions.call_cells == frozenset({("Model", "D2")})
+    assert snapshot.unresolved_reference_tokens[("Model", "D2")] == ("FENCE.LOOP",)
+
+
+def test_scoped_named_custom_function_candidates_follow_local_precedence(tmp_path) -> None:
+    workbook_path = make_scoped_named_lambda_model(tmp_path / "scoped.xlsx")
+    workbook = load_workbook(workbook_path)
+    model = workbook["Model"]
+    report = workbook["Report"]
+    model["C2"] = "=FENCE.LOCAL(A2)"
+    report["C2"] = "=Model!FENCE.LOCAL(A2)"
+    model.defined_names.add(
+        DefinedName(
+            "FENCE.LOCAL",
+            attr_text="=LAMBDA(value,CONTOSO.GETDATA(value))",
+            localSheetId=1,
+        )
+    )
+    workbook.save(workbook_path)
+
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.office_custom_functions.to_dict() == {
+        "present": True,
+        "namespaced_custom_function_formula_cell_count": 2,
+        "namespaced_custom_function_call_count": 2,
+        "namespaced_custom_function_namespace_count": 1,
+    }
+    assert snapshot.office_custom_functions.call_cells == frozenset(
+        {("Model", "C2"), ("Report", "C2")}
+    )
+    assert snapshot.unresolved_reference_tokens == {}
 
 
 def test_python_in_excel_relationship_identifier_rewrites_are_ignored(tmp_path) -> None:

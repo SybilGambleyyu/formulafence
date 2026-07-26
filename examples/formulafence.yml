@@ -34,6 +34,7 @@ rules:
   no_external_link_package_changes: true
   no_external_relationship_changes: true
   no_formula_external_action_changes: true
+  no_office_custom_function_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 5

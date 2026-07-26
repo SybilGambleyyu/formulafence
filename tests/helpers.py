@@ -212,6 +212,119 @@ def change_formula_external_action_input(path: Path) -> Path:
     return path
 
 
+def make_office_custom_function_model(path: Path) -> Path:
+    """Create formula calls shaped like documented Office Add-in functions.
+
+    The add-in manifest and JavaScript runtime intentionally remain outside this
+    controlled workbook: FormulaFence can only inventory the stored namespaced
+    calls. Native dotted formulas and a workbook-defined LAMBDA verify that the
+    candidate scope does not treat every dotted callable as an Office Add-in.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Namespaced custom-function controls"
+    inputs["A9"] = "PRIVATE-CUSTOM-FUNCTION-INPUT-BASELINE"
+    inputs["A10"] = 45_000
+    inputs["B2"] = (
+        '=CONTOSO.GETMARKETDATA(A9,"PRIVATE-CUSTOM-FUNCTION-QUERY-BASELINE")'
+    )
+    inputs["B3"] = "=CONTOSO.ADD(A9,200)"
+    inputs["B4"] = '=FENCE.GETRISK(A9,"PRIVATE-CUSTOM-FUNCTION-RISK-BASELINE")'
+    inputs["B5"] = (
+        '=CONTOSO.GETMARKETDATA(A9,"PRIVATE-CUSTOM-FUNCTION-SECOND-BASELINE")'
+        "+CONTOSO.ADD(A9,1)"
+    )
+    inputs["B6"] = "=ECMA.CEILING(4.1,1)"
+    inputs["B7"] = "=WORKDAY.INTL(A10,1)"
+    inputs["B8"] = "=LOCAL.RATE(A9)"
+    workbook.defined_names.add(
+        DefinedName("LOCAL.RATE", attr_text="=LAMBDA(value,value)")
+    )
+    workbook.save(path)
+    return path
+
+
+def change_office_custom_function_call(path: Path) -> Path:
+    """Change one custom-function call without moving public candidate counts."""
+    workbook = load_workbook(path)
+    formula = workbook["Inputs"]["B2"].value
+    if not isinstance(formula, str) or "GETMARKETDATA" not in formula:
+        raise ValueError("Fixture does not contain the expected custom-function call")
+    workbook["Inputs"]["B2"] = formula.replace("GETMARKETDATA", "GETRISKDATA")
+    workbook.save(path)
+    return path
+
+
+def change_office_custom_function_input(path: Path) -> Path:
+    """Change a static source cell without rewriting a namespaced call."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-CUSTOM-FUNCTION-INPUT-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
+def make_named_office_custom_function_model(path: Path) -> Path:
+    """Create custom calls reached through names and named LAMBDA bodies.
+
+    The chain deliberately exercises both forms of indirection. ``FENCE.CHAIN``
+    requires fixed-point propagation through one named LAMBDA to reach the
+    stored ``CONTOSO`` call, while ``FENCE.DIRECT`` is a formula-defined name
+    with a statically resolvable source cell.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Named custom-function controls"
+    inputs["A9"] = "PRIVATE-NAMED-CUSTOM-FUNCTION-INPUT-BASELINE"
+    inputs["B2"] = "=FENCE.WRAPPER(A9)"
+    inputs["B3"] = "=FENCE.DIRECT"
+    inputs["B4"] = "=FENCE.CHAIN(A9)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.WRAPPER",
+            attr_text="=LAMBDA(value,CONTOSO.GETDATA(value)+CONTOSO.GETDATA(value))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.CHAIN",
+            attr_text="=LAMBDA(value,FENCE.WRAPPER(value))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.DIRECT",
+            attr_text="=CONTOSO.GETDATA(Inputs!$A$9)",
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_named_office_custom_function_definition(path: Path) -> Path:
+    """Rewrite a hidden named-LAMBDA callable without changing its callers."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.WRAPPER"]
+    if definition.attr_text != (
+        "=LAMBDA(value,CONTOSO.GETDATA(value)+CONTOSO.GETDATA(value))"
+    ):
+        raise ValueError("Fixture does not contain the expected named custom call")
+    definition.attr_text = (
+        "=LAMBDA(value,CONTOSO.GETRISK(value)+CONTOSO.GETRISK(value))"
+    )
+    workbook.save(path)
+    return path
+
+
+def change_named_office_custom_function_input(path: Path) -> Path:
+    """Change an input used through a named custom-function definition."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-NAMED-CUSTOM-FUNCTION-INPUT-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_python_in_excel_model(path: Path) -> Path:
     """Create a workbook with stored Python-in-Excel package code.
 

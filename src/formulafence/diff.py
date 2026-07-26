@@ -37,6 +37,7 @@ from formulafence.models import (
     LegacyCommentSnapshot,
     NamedSheetViewSnapshot,
     NumberFormatSnapshot,
+    OfficeCustomFunctionSnapshot,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
@@ -2330,6 +2331,53 @@ def _python_in_excel_changes(
     return [change], [finding]
 
 
+def _office_custom_function_changes(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+    static_input_change_locations: set[CellKey],
+) -> tuple[list[Change], list[Finding]]:
+    """Flag namespaced custom-function candidates and static input changes.
+
+    The workbook alone does not carry an Office Add-in's manifest or JavaScript
+    runtime. FormulaFence therefore guards only a stored, namespaced callable
+    candidate and normal cell edits that can reach one through its static graph;
+    it never resolves a candidate to an add-in, loads an add-in, evaluates a
+    formula, or makes a web request.
+    """
+    old_functions: OfficeCustomFunctionSnapshot = before.office_custom_functions
+    new_functions: OfficeCustomFunctionSnapshot = after.office_custom_functions
+    if old_functions == new_functions and not static_input_change_locations:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_functions.to_dict(),
+        "after": new_functions.to_dict(),
+    }
+    if old_functions.call_signature != new_functions.call_signature:
+        details["office_custom_function_material_changed"] = True
+    if static_input_change_locations:
+        details["office_custom_function_static_input_changed"] = True
+        details["office_custom_function_static_input_change_count"] = len(
+            static_input_change_locations
+        )
+    change = Change(
+        "office_custom_functions_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF066",
+        "high",
+        (
+            "A namespaced custom-function call or a statically visible input changed; "
+            "a formula may now invoke a different Office Add-in runtime."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _rich_text_run_entry_map(
     snapshot: RichTextRunSnapshot,
 ) -> dict[CellKey, RichTextRunEntry]:
@@ -2994,12 +3042,17 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     semantic_cell_changes: list[Change] = []
     formula_external_action_static_input_changes: set[CellKey] = set()
     python_in_excel_static_input_changes: set[CellKey] = set()
+    office_custom_function_static_input_changes: set[CellKey] = set()
     formula_external_action_cells = (
         before.formula_external_actions.action_cells
         | after.formula_external_actions.action_cells
     )
     python_in_excel_cells = (
         before.python_in_excel.python_cells | after.python_in_excel.python_cells
+    )
+    office_custom_function_cells = (
+        before.office_custom_functions.call_cells
+        | after.office_custom_functions.call_cells
     )
 
     all_locations = sorted(set(before.cells) | set(after.cells), key=_location_sort_key)
@@ -3036,6 +3089,8 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
             formula_external_action_static_input_changes.add(location)
         if python_in_excel_cells & impact:
             python_in_excel_static_input_changes.add(location)
+        if office_custom_function_cells & impact:
+            office_custom_function_static_input_changes.add(location)
         if new_cell is not None and new_cell.is_formula:
             formula_changed_locations.add(location)
         if old_cell is not None and old_cell.is_formula:
@@ -3090,6 +3145,16 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(python_in_excel_changes)
     findings.extend(python_in_excel_findings)
+
+    office_custom_function_changes, office_custom_function_findings = (
+        _office_custom_function_changes(
+            before,
+            after,
+            office_custom_function_static_input_changes,
+        )
+    )
+    changes.extend(office_custom_function_changes)
+    findings.extend(office_custom_function_findings)
 
     rich_text_run_changes, rich_text_run_findings = _rich_text_run_controls_changed(
         before,

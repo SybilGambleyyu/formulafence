@@ -28,8 +28,11 @@ from .helpers import (
     change_ignored_error_target,
     change_legacy_comment_text,
     change_legacy_vml_control_controls,
+    change_named_office_custom_function_definition,
     change_named_sheet_view_criterion,
     change_number_format_code,
+    change_office_custom_function_call,
+    change_office_custom_function_input,
     change_office_web_addin_auto_show,
     change_package_signature_reference,
     change_pivot_table_definition_material,
@@ -83,8 +86,10 @@ from .helpers import (
     make_legacy_comment_model,
     make_legacy_vml_control_model,
     make_model,
+    make_named_office_custom_function_model,
     make_named_sheet_view_model,
     make_number_format_model,
+    make_office_custom_function_model,
     make_office_web_addin_model,
     make_pivot_table_definition_model,
     make_power_pivot_data_model,
@@ -413,6 +418,45 @@ def test_policy_can_block_python_in_excel_static_input_changes(tmp_path) -> None
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP065"}
+
+
+def test_policy_can_block_office_custom_function_changes(tmp_path) -> None:
+    baseline = make_office_custom_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_custom_function_model(tmp_path / "candidate.xlsx")
+    change_office_custom_function_call(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_office_custom_function_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP066"}
+
+
+def test_policy_can_block_office_custom_function_static_input_changes(tmp_path) -> None:
+    baseline = make_office_custom_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_custom_function_model(tmp_path / "candidate.xlsx")
+    change_office_custom_function_input(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_office_custom_function_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP066"}
+
+
+def test_policy_can_block_named_office_custom_function_changes(tmp_path) -> None:
+    baseline = make_named_office_custom_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_office_custom_function_model(tmp_path / "candidate.xlsx")
+    change_named_office_custom_function_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_office_custom_function_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP066"}
 
 
 def test_policy_can_block_xlm_macro_sheet_changes(tmp_path) -> None:

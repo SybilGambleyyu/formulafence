@@ -1008,6 +1008,48 @@ class PythonInExcelSnapshot:
 
 
 @dataclass(frozen=True)
+class OfficeCustomFunctionSnapshot:
+    """Safe aggregate of namespaced Office custom-function call candidates.
+
+    An Office Add-in custom function is surfaced in Excel as a namespaced
+    formula call, but its manifest, JavaScript, and remote runtime are not
+    stored in the normal workbook package.  FormulaFence keeps only a private
+    signature and cell identities for candidate calls, so the public model
+    never reveals function names, namespaces, cells, formulas, or arguments.
+    A candidate is a review signal rather than proof that an Office Add-in is
+    installed or runnable.
+    """
+
+    namespaced_custom_function_formula_cell_count: int = 0
+    namespaced_custom_function_call_count: int = 0
+    namespaced_custom_function_namespace_count: int = 0
+    call_signature: str | None = field(default=None, repr=False)
+    call_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(self.namespaced_custom_function_formula_cell_count)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate candidate counts without formula material."""
+        return {
+            "present": self.present,
+            "namespaced_custom_function_formula_cell_count": (
+                self.namespaced_custom_function_formula_cell_count
+            ),
+            "namespaced_custom_function_call_count": (
+                self.namespaced_custom_function_call_count
+            ),
+            "namespaced_custom_function_namespace_count": (
+                self.namespaced_custom_function_namespace_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class XlmMacroSheetSnapshot:
     """Safe aggregate of raw Excel 4.0 / XLM macro-sheet package parts.
 
@@ -3689,6 +3731,9 @@ class WorkbookSnapshot:
     python_in_excel: PythonInExcelSnapshot = field(
         default_factory=PythonInExcelSnapshot
     )
+    office_custom_functions: OfficeCustomFunctionSnapshot = field(
+        default_factory=OfficeCustomFunctionSnapshot
+    )
     xlm_macro_sheets: XlmMacroSheetSnapshot = field(
         default_factory=XlmMacroSheetSnapshot
     )
@@ -4164,6 +4209,18 @@ class WorkbookSnapshot:
                 self.python_in_excel.python_initialization_count
             ),
             "has_python_in_excel": self.python_in_excel.present,
+            "namespaced_custom_function_formula_cell_count": (
+                self.office_custom_functions.namespaced_custom_function_formula_cell_count
+            ),
+            "namespaced_custom_function_call_count": (
+                self.office_custom_functions.namespaced_custom_function_call_count
+            ),
+            "namespaced_custom_function_namespace_count": (
+                self.office_custom_functions.namespaced_custom_function_namespace_count
+            ),
+            "has_namespaced_custom_function_calls": (
+                self.office_custom_functions.present
+            ),
             "xlm_macro_sheet_count": self.xlm_macro_sheets.macro_sheet_count,
             "xlm_macro_formula_cell_count": self.xlm_macro_sheets.formula_cell_count,
             "xlm_related_part_payload_count": (

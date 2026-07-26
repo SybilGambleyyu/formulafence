@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.69.0 — 2026-07-26
+
+- Add `FF066`, a private ledger for namespaced Office custom-function call
+  candidates, such as the documented `CONTOSO.ADD` form. The public profile and
+  finding details expose only formula-cell, call, and namespace counts; call
+  names, namespaces, locations, formulas, and arguments remain private.
+- Flag same-count callable or argument changes and ordinary cell edits that
+  statically reach a candidate formula. The ledger excludes known native dotted
+  Excel functions, direct workbook-defined callables, and `_xlfn.` / `_xlws.`
+  compatibility forms. Candidates stored in formula-defined names and named
+  `LAMBDA` bodies are instead propagated to their invoking worksheet formulas.
+  It deliberately does not classify unqualified VBA, COM, or XLL UDFs, and a
+  candidate is not treated as proof that an Office Add-in is installed or runnable.
+- Add the fail-closed `no_office_custom_function_changes` policy rule
+  (`FFP066`). FormulaFence does not resolve a candidate to an add-in, read a
+  manifest, load or execute an add-in, evaluate a formula, or contact a
+  custom-function runtime.
+
 ## 0.68.0 — 2026-07-26
 
 - Add `FF065`, a private Python-in-Excel ledger for the documented workbook

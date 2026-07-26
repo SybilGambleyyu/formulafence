@@ -5,6 +5,78 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Namespaced Office custom-function boundary — 2026-07-26
+
+FormulaFence 0.69.0 was checked against Microsoft's [custom-functions
+overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview),
+which documents JavaScript/TypeScript functions and manifest-configured
+namespaces, its [custom-functions tutorial](https://learn.microsoft.com/en-us/office/dev/add-ins/tutorials/excel-tutorial-create-custom-functions),
+which uses `=CONTOSO.ADD(10,200)`, and its [web-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs),
+which documents fetch, HTTP, WebSockets, and streaming functions. Those
+references establish both the formula shape and the boundary: the workbook can
+store a call while the manifest, code, and runtime live elsewhere.
+
+An independently maintained [OfficeDev Excel Custom Functions sample at commit
+`6143f4e326f45c186a891cc923e6e2cdb2136298`](https://github.com/OfficeDev/Excel-Custom-Functions/tree/6143f4e326f45c186a891cc923e6e2cdb2136298)
+was examined through its immutable manifest and function source. Its manifest
+uses `CustomFunctionsRuntime`, declares a `Namespace`, and points to separate
+script/metadata/page URLs; the namespace resource is `CONTOSO`. The immutable
+manifest blob is `128cad2cf3d262384a5dedbd3d3e4caf19d232fa` and its function
+source blob is `5d327dd94481a298c70d9bbf47d0d0cd05b1460a`. No sample code,
+manifest, URL, or runtime was placed in FormulaFence's test artifact or loaded
+by FormulaFence.
+
+The dotted-native exclusion list was also compared with the dotted entries in
+Microsoft's current [alphabetical Excel function catalog](https://support.microsoft.com/en-US/Excel/excel-functions-alphabetical).
+The implementation additionally excludes `ECMA.CEILING`, which Microsoft
+exposes through the [Excel JavaScript function API](https://learn.microsoft.com/en-us/javascript/api/excel/excel.functions?view=excel-js-preview)
+even though it is not listed in that alphabetical worksheet catalog.
+
+A controlled `.xlsx` pair used the documented namespaced call shape alongside
+native dotted formulas and a workbook-defined dotted `LAMBDA`. The baseline
+(SHA-256 `b36f463ff29b031395728bc71b51a8547bd8c639bce2472a3cd27bc679b42e4d`)
+reported four candidate formula cells, five candidate calls, and two namespaces.
+Native `ECMA.CEILING` and `WORKDAY.INTL` calls plus the defined-name
+`LOCAL.RATE` call were excluded by the direct-call classifier. Changing only
+one same-count candidate callable produced
+SHA-256 `65062d406ee8e1dd4bb5c41b7a76919025631ed4bee8e9ab2284dc05fabac8e6`
+and emitted `office_custom_functions_changed` with `FF066` and the private
+material flag. Changing only a static input used by unchanged candidates
+produced SHA-256
+`9006dc4a21961b5b1bb9012697baff7089f55a5286a8c6c4b10087abac3c96b8` and
+emitted `FF066` with a static-input count of one.
+
+A second controlled workbook used a formula-defined value plus a named
+`LAMBDA` wrapper and a nested named `LAMBDA`, each reaching a stored namespaced
+call. Its baseline (SHA-256
+`1fa3d678b772ea1e9ed6d6661d3310a84fc8b809399ca61cbcafda59615dc308`)
+reported three candidate formula cells, five candidate calls, and one namespace:
+repeated callable tokens remained counted, the nested wrapper propagated to its
+caller, and the formula-defined value remained an ordinary static dependency.
+Rewriting only the inner named `LAMBDA` (SHA-256
+`4d9c0040c4ed357046fb1d544dc16631979bccb8ad0a4acf503c98ac2bd617b2`)
+emitted the private material flag without changing its callers; changing the
+shared input (SHA-256
+`4d052ebaa472b8d3ca4ca5d776f6838ba84801ec050338bf7da7e8b2cd136516`)
+emitted the static-input flag. The suite also verifies worksheet-local name
+precedence and treats a recursive named `LAMBDA` as a visible dependency
+coverage gap while recording its one directly stored candidate without an
+unbounded expansion.
+
+The staged wheel
+`formulafence-0.69.0-py3-none-any.whl` (SHA-256
+`e23977a1e7b989de0dbe32d2ff4a106db3fbe0d13afa9af99bd3e38fb99eb353`) was
+installed in a fresh virtual environment with its declared dependencies. The
+installed CLI returned `FormulaFence 0.69.0`; its starter policy exited `1`
+with `FFP066` for both candidates. The profile and the dedicated `FF066` SARIF
+result were checked for the controlled namespace, function names, and private
+input/query values and contained none. The ordinary semantic diff intentionally
+retains changed formulas and formula-defined names for reviewer context, so the
+privacy assertion is limited to the candidate ledger and policy-facing result.
+No formula was evaluated, no
+manifest or add-in was loaded, and no network request or custom-function
+runtime was contacted during validation.
+
 ## Python in Excel code boundary — 2026-07-26
 
 FormulaFence 0.68.0 was checked against Microsoft's [Python in Excel

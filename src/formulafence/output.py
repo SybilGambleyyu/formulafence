@@ -120,6 +120,12 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['python_in_excel_formula_cell_count']} / "
             f"{workbook['python_in_excel_script_count']}"
         ),
+        (
+            "- **Namespaced custom-function formula cells / calls / namespaces:** "
+            f"{workbook['namespaced_custom_function_formula_cell_count']} / "
+            f"{workbook['namespaced_custom_function_call_count']} / "
+            f"{workbook['namespaced_custom_function_namespace_count']}"
+        ),
         f"- **XLM macro-sheet parts:** {workbook['xlm_macro_sheet_count']}",
         (
             "- **XLM macro-sheet formula cells:** "
@@ -567,6 +573,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     external_relationships = profile["external_relationships"]
     formula_external_actions = profile["formula_external_actions"]
     python_in_excel = profile["python_in_excel"]
+    office_custom_functions = profile["office_custom_functions"]
     formula_external_action_call_count = sum(
         (
             formula_external_actions["hyperlink_function_count"],
@@ -929,6 +936,33 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "compared privately and intentionally omitted. Ordinary semantic diffs retain "
             "changed PY formulas and values by design; no code is loaded or run and no "
             "cloud runtime is contacted."
+        )
+    if office_custom_functions["present"]:
+        lines.extend(
+            [
+                "",
+                "## Namespaced custom-function calls",
+                "",
+                (
+                    "- **Formula cells / calls / namespaces:** "
+                    f"{office_custom_functions['namespaced_custom_function_formula_cell_count']} / "
+                    f"{office_custom_functions['namespaced_custom_function_call_count']} / "
+                    f"{office_custom_functions['namespaced_custom_function_namespace_count']}"
+                ),
+                (
+                    "FormulaFence inventories direct namespaced callable candidates that are "
+                    "not known native Excel functions or workbook-defined names, then "
+                    "propagates candidates in formula-defined names and named LAMBDAs. "
+                    "Function names, cells, formulas, and arguments are compared privately "
+                    "and intentionally omitted; no formula is evaluated, add-in loaded, or "
+                    "network request made."
+                ),
+                (
+                    "A matching call is not proof that an Office Add-in is installed or "
+                    "runnable: its manifest, code, and runtime are outside the workbook. "
+                    "Unqualified VBA, COM, and XLL UDF calls are outside this boundary."
+                ),
+            ]
         )
     xlm_macro_sheets = profile["xlm_macro_sheets"]
     if xlm_macro_sheets["present"]:

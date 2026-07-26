@@ -69,6 +69,7 @@ from formulafence.models import (
     LegacyCommentSnapshot,
     NamedSheetViewSnapshot,
     NumberFormatSnapshot,
+    OfficeCustomFunctionSnapshot,
     OfficeWebAddinSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
@@ -41389,13 +41390,20 @@ def _named_reference_maps(
     dict[str, dict[str, tuple[ParsedReference, ...]]],
     dict[str, tuple[ParsedReference, ...] | None],
     dict[str, dict[str, tuple[ParsedReference, ...] | None]],
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
 ]:
-    """Build direct, formula-defined, and callable named-LAMBDA maps.
+    """Build dependency and custom-call maps for formula-defined names.
 
     Formula-valued names are expanded only when every dependency is statically
     visible and internal. Relative references, dynamic functions, unresolved
     tokens, recursive LAMBDAs, external links, and 3-D spans remain unresolved
-    at a use site instead of producing a guessed graph edge.
+    at a use site instead of producing a guessed graph edge. Namespaced custom
+    function candidates are propagated separately through those definitions so
+    a named LAMBDA cannot hide a stored custom-function invocation from the
+    formula-cell ledger.
     """
     workbook_names = getattr(workbook, "defined_names", {})
     global_references: dict[str, tuple[ParsedReference, ...]] = {}
@@ -41610,6 +41618,193 @@ def _named_reference_maps(
         for definition in definitions.values():
             resolve_definition(definition)
 
+    all_formula_definitions = tuple(global_formulas.values()) + tuple(
+        definition
+        for definitions in local_formulas.values()
+        for definition in definitions.values()
+    )
+    all_lambda_definitions = tuple(global_lambdas.values()) + tuple(
+        definition
+        for definitions in local_lambdas.values()
+        for definition in definitions.values()
+    )
+    all_definitions = all_formula_definitions + all_lambda_definitions
+    definition_identities = tuple(identity_for(definition) for definition in all_definitions)
+    definition_indexes = {
+        identity: index for index, identity in enumerate(definition_identities)
+    }
+    candidate_markers = {
+        identity: f"FORMULAFENCE_OFFICE_CUSTOM_MARKER_{index}"
+        for index, identity in enumerate(definition_identities)
+    }
+    identities_by_marker = {
+        marker: identity for identity, marker in candidate_markers.items()
+    }
+
+    def visible_named_custom_function_markers(
+        scope: str | None,
+    ) -> dict[str, tuple[str, ...]]:
+        markers = {
+            key: (candidate_markers[identity_for(definition)],)
+            for key, definition in global_formulas.items()
+        }
+        for local_scope, definitions in local_formulas.items():
+            for key, definition in definitions.items():
+                markers[_qualified_name_key(sheet_titles[local_scope], key)] = (
+                    candidate_markers[identity_for(definition)],
+                )
+        if scope is not None:
+            for key, definition in local_formulas.get(scope, {}).items():
+                markers[key] = (candidate_markers[identity_for(definition)],)
+        return markers
+
+    def visible_named_function_custom_function_markers(
+        scope: str | None,
+    ) -> dict[str, tuple[str, ...]]:
+        markers = {
+            key: (candidate_markers[identity_for(definition)],)
+            for key, definition in global_lambdas.items()
+        }
+        for local_scope, definitions in local_lambdas.items():
+            for key, definition in definitions.items():
+                markers[_qualified_name_key(sheet_titles[local_scope], key)] = (
+                    candidate_markers[identity_for(definition)],
+                )
+        if scope is not None:
+            for key, definition in local_lambdas.get(scope, {}).items():
+                markers[key] = (candidate_markers[identity_for(definition)],)
+        return markers
+
+    direct_custom_function_candidates: dict[tuple[str | None, str], tuple[str, ...]] = {}
+    definition_dependencies: dict[
+        tuple[str | None, str], tuple[tuple[str | None, str], ...]
+    ] = {}
+    for definition in all_definitions:
+        inspection = inspect_formula(
+            definition.formula,
+            named_references=visible_references(definition.scope),
+            structured_tables=structured_tables,
+            sheet_order=sheet_order,
+            named_function_references=visible_named_functions(definition.scope),
+            named_custom_function_candidates=visible_named_custom_function_markers(
+                definition.scope
+            ),
+            named_function_custom_function_candidates=(
+                visible_named_function_custom_function_markers(definition.scope)
+            ),
+        )
+        identity = identity_for(definition)
+        direct_custom_function_candidates[identity] = tuple(
+            candidate
+            for candidate in inspection.office_custom_function_candidates
+            if candidate not in identities_by_marker
+        )
+        definition_dependencies[identity] = tuple(
+            identities_by_marker[candidate]
+            for candidate in inspection.office_custom_function_candidates
+            if candidate in identities_by_marker
+        )
+
+    # Collapse recursive definition groups before expanding their candidates.
+    # That preserves repeated calls in ordinary acyclic definitions while a
+    # recursive named LAMBDA contributes each stored callable once instead of
+    # growing an unbounded synthetic inventory.
+    reverse_dependencies: dict[
+        tuple[str | None, str], list[tuple[str | None, str]]
+    ] = {identity: [] for identity in definition_identities}
+    for identity, dependencies in definition_dependencies.items():
+        for dependency in dependencies:
+            reverse_dependencies[dependency].append(identity)
+
+    visited: set[tuple[str | None, str]] = set()
+    finish_order: list[tuple[str | None, str]] = []
+    for root in definition_identities:
+        if root in visited:
+            continue
+        visited.add(root)
+        traversal: list[tuple[tuple[str | None, str], int]] = [(root, 0)]
+        while traversal:
+            identity, next_dependency = traversal[-1]
+            dependencies = definition_dependencies[identity]
+            if next_dependency < len(dependencies):
+                dependency = dependencies[next_dependency]
+                traversal[-1] = (identity, next_dependency + 1)
+                if dependency not in visited:
+                    visited.add(dependency)
+                    traversal.append((dependency, 0))
+                continue
+            finish_order.append(identity)
+            traversal.pop()
+
+    components: list[tuple[tuple[str | None, str], ...]] = []
+    component_by_definition: dict[tuple[str | None, str], int] = {}
+    for root in reversed(finish_order):
+        if root in component_by_definition:
+            continue
+        members: list[tuple[str | None, str]] = []
+        traversal = [root]
+        component_by_definition[root] = len(components)
+        while traversal:
+            identity = traversal.pop()
+            members.append(identity)
+            for dependency in reverse_dependencies[identity]:
+                if dependency not in component_by_definition:
+                    component_by_definition[dependency] = len(components)
+                    traversal.append(dependency)
+        components.append(tuple(sorted(members, key=definition_indexes.__getitem__)))
+
+    component_dependencies: dict[int, tuple[int, ...]] = {}
+    component_direct_candidates: dict[int, tuple[str, ...]] = {}
+    for component, members in enumerate(components):
+        component_direct_candidates[component] = tuple(
+            candidate
+            for identity in members
+            for candidate in direct_custom_function_candidates[identity]
+        )
+        component_dependencies[component] = tuple(
+            dependency_component
+            for identity in members
+            for dependency in definition_dependencies[identity]
+            if (dependency_component := component_by_definition[dependency]) != component
+        )
+
+    component_dependents: dict[int, set[int]] = {
+        component: set() for component in component_dependencies
+    }
+    remaining_component_dependencies = {
+        component: set(dependencies)
+        for component, dependencies in component_dependencies.items()
+    }
+    for component, dependencies in remaining_component_dependencies.items():
+        for dependency in dependencies:
+            component_dependents[dependency].add(component)
+    ready_components = sorted(
+        component
+        for component, dependencies in remaining_component_dependencies.items()
+        if not dependencies
+    )
+    component_custom_function_candidates: dict[int, tuple[str, ...]] = {}
+    while ready_components:
+        component = ready_components.pop(0)
+        component_custom_function_candidates[component] = (
+            component_direct_candidates[component]
+            + tuple(
+                candidate
+                for dependency in component_dependencies[component]
+                for candidate in component_custom_function_candidates[dependency]
+            )
+        )
+        for dependent in sorted(component_dependents[component]):
+            remaining_component_dependencies[dependent].remove(component)
+            if not remaining_component_dependencies[dependent]:
+                ready_components.append(dependent)
+        ready_components.sort()
+
+    custom_function_candidates_by_definition = {
+        identity: component_custom_function_candidates[component]
+        for identity, component in component_by_definition.items()
+    }
+
     global_result = dict(global_references)
     for key, definition in global_formulas.items():
         if cached := cached_references(definition):
@@ -41656,7 +41851,55 @@ def _named_reference_maps(
         }
         if functions:
             local_function_result[scope] = functions
-    return global_result, local_result, global_function_result, local_function_result
+
+    global_custom_result: dict[str, tuple[str, ...]] = {
+        key: custom_function_candidates_by_definition[identity_for(definition)]
+        for key, definition in global_formulas.items()
+    }
+    for scope, definitions in local_formulas.items():
+        for key, definition in definitions.items():
+            global_custom_result[_qualified_name_key(sheet_titles[scope], key)] = (
+                custom_function_candidates_by_definition[identity_for(definition)]
+            )
+
+    local_custom_result: dict[str, dict[str, tuple[str, ...]]] = {}
+    for scope, definitions in local_formulas.items():
+        candidates = {
+            key: custom_function_candidates_by_definition[identity_for(definition)]
+            for key, definition in definitions.items()
+        }
+        if candidates:
+            local_custom_result[scope] = candidates
+
+    global_function_custom_result: dict[str, tuple[str, ...]] = {
+        key: custom_function_candidates_by_definition[identity_for(definition)]
+        for key, definition in global_lambdas.items()
+    }
+    for scope, definitions in local_lambdas.items():
+        for key, definition in definitions.items():
+            global_function_custom_result[_qualified_name_key(sheet_titles[scope], key)] = (
+                custom_function_candidates_by_definition[identity_for(definition)]
+            )
+
+    local_function_custom_result: dict[str, dict[str, tuple[str, ...]]] = {}
+    for scope, definitions in local_lambdas.items():
+        candidates = {
+            key: custom_function_candidates_by_definition[identity_for(definition)]
+            for key, definition in definitions.items()
+        }
+        if candidates:
+            local_function_custom_result[scope] = candidates
+
+    return (
+        global_result,
+        local_result,
+        global_function_result,
+        local_function_result,
+        global_custom_result,
+        local_custom_result,
+        global_function_custom_result,
+        local_function_custom_result,
+    )
 
 
 def _table_columns(
@@ -41982,6 +42225,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     python_in_excel_cells: set[CellKey] = set()
     python_in_excel_function_counts: Counter[str] = Counter()
     python_in_excel_formula_entries: list[tuple[str, str]] = []
+    office_custom_function_cells: set[CellKey] = set()
+    office_custom_function_call_count = 0
+    office_custom_function_namespaces: set[str] = set()
+    office_custom_function_formula_entries: list[tuple[str, str]] = []
     broken_references: set[CellKey] = set()
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = {}
@@ -41998,6 +42245,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         local_named_references,
         global_named_functions,
         local_named_functions,
+        global_named_custom_function_candidates,
+        local_named_custom_function_candidates,
+        global_named_function_custom_function_candidates,
+        local_named_function_custom_function_candidates,
     ) = _named_reference_maps(workbook, structured_tables, sheet_order)
 
     for worksheet in workbook.worksheets:
@@ -42008,6 +42259,18 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         named_functions = {
             **global_named_functions,
             **local_named_functions.get(worksheet.title.casefold(), {}),
+        }
+        named_custom_function_candidates = {
+            **global_named_custom_function_candidates,
+            **local_named_custom_function_candidates.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
+        named_function_custom_function_candidates = {
+            **global_named_function_custom_function_candidates,
+            **local_named_function_custom_function_candidates.get(
+                worksheet.title.casefold(), {}
+            ),
         }
         nonempty_cells = 0
         formula_cells = 0
@@ -42045,6 +42308,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 origin=snapshot.location,
                 sheet_order=sheet_order,
                 named_function_references=named_functions,
+                named_custom_function_candidates=named_custom_function_candidates,
+                named_function_custom_function_candidates=(
+                    named_function_custom_function_candidates
+                ),
             )
             if inspection.unresolved_range_tokens:
                 unresolved_reference_tokens[snapshot.location] = inspection.unresolved_range_tokens
@@ -42070,6 +42337,26 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                     (
                         f"{snapshot.location[0]}!{snapshot.location[1]}",
                         repr((inspection.python_functions, snapshot.formula)),
+                    )
+                )
+            if inspection.office_custom_function_candidates:
+                office_custom_function_cells.add(snapshot.location)
+                office_custom_function_call_count += len(
+                    inspection.office_custom_function_candidates
+                )
+                office_custom_function_namespaces.update(
+                    candidate.partition(".")[0]
+                    for candidate in inspection.office_custom_function_candidates
+                )
+                office_custom_function_formula_entries.append(
+                    (
+                        f"{snapshot.location[0]}!{snapshot.location[1]}",
+                        repr(
+                            (
+                                inspection.office_custom_function_candidates,
+                                snapshot.formula,
+                            )
+                        ),
                     )
                 )
             if inspection.three_d_reference_tokens:
@@ -42171,6 +42458,16 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             ),
         )
 
+    office_custom_functions = OfficeCustomFunctionSnapshot(
+        namespaced_custom_function_formula_cell_count=len(office_custom_function_cells),
+        namespaced_custom_function_call_count=office_custom_function_call_count,
+        namespaced_custom_function_namespace_count=len(office_custom_function_namespaces),
+        call_signature=_private_external_data_signature(
+            tuple(sorted(office_custom_function_formula_entries))
+        ),
+        call_cells=frozenset(office_custom_function_cells),
+    )
+
     return WorkbookSnapshot(
         path=source,
         sha256=sha256_file(source),
@@ -42220,6 +42517,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             action_cells=frozenset(formula_external_action_cells),
         ),
         python_in_excel=python_in_excel,
+        office_custom_functions=office_custom_functions,
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
@@ -42321,6 +42619,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "external_relationships": snapshot.external_relationships.profile_dict(),
         "formula_external_actions": snapshot.formula_external_actions.profile_dict(),
         "python_in_excel": snapshot.python_in_excel.profile_dict(),
+        "office_custom_functions": snapshot.office_custom_functions.profile_dict(),
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
@@ -42383,6 +42682,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_external_relationships": snapshot.external_relationships.present,
             "has_formula_external_actions": snapshot.formula_external_actions.present,
             "has_python_in_excel": snapshot.python_in_excel.present,
+            "has_namespaced_custom_function_calls": (
+                snapshot.office_custom_functions.present
+            ),
             "has_ribbon_customization": snapshot.ribbon_customization.present,
             "has_office_web_addins": snapshot.office_web_addins.present,
             "has_pivot_table_definitions": snapshot.pivot_table_definitions.present,

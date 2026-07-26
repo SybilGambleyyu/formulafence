@@ -66,6 +66,7 @@ rules:
   no_external_relationship_changes: true
   no_formula_external_action_changes: true
   no_python_in_excel_changes: true
+  no_office_custom_function_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
@@ -158,6 +159,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_external_relationship_changes` | boolean | Any root or part-level OPC relationship with an external target changes, including an opaque relationship that no feature-specific scanner recognizes. Source parts, types, IDs, targets, unknown metadata, and raw XML are compared privately. |
 | `no_formula_external_action_changes` | boolean | A stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, or `RTD` formula call, argument, call location, function inventory, or statically visible input changes. FormulaFence uses private signatures and static dependency paths; it never evaluates a formula, resolves a destination, requests content, or starts a provider. |
 | `no_python_in_excel_changes` | boolean | Stored Python-in-Excel package code/environment/XML, a `PY` formula binding, function inventory, or a statically visible input changes. Python source, environment IDs, script indexes, formula arguments, locations, and raw XML are compared privately; FormulaFence never parses or runs Python, evaluates `PY`, or contacts the Microsoft Cloud runtime. |
+| `no_office_custom_function_changes` | boolean | A namespaced Office custom-function call candidate, its private formula/call inventory, or a statically visible input changes. A candidate is not proof that an add-in is installed: FormulaFence does not load the add-in manifest or code, execute a formula, or contact a custom-function runtime. Names, namespaces, cells, formulas, and arguments are compared privately. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
@@ -369,6 +371,37 @@ ordinary semantic diff still displays changed PY formulas and values for review,
 so it is not a redacted code archive. This boundary follows Microsoft's
 [Python in Excel introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel)
 and the OOXML [Python part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/151e4bcd-90a0-4d82-8b98-f16bf273e4ff).
+
+## Namespaced Office custom-function candidates
+
+Office Add-in custom functions are registered from a manifest and exposed in
+Excel as namespaced formulas such as `=CONTOSO.ADD(10,200)`. They can request
+or stream web data, but the manifest, JavaScript/TypeScript code, and runtime
+are outside a normal workbook. FormulaFence therefore keeps a private ledger
+of a conservative formula candidate, not a claim that a particular add-in is
+present or executable.
+
+The direct-call classifier admits only namespaced callable tokens that are not
+known native dotted Excel functions or workbook-defined names. It excludes
+`_xlfn.` and `_xlws.` compatibility names and does not classify unqualified
+VBA, COM, or XLL UDFs. A candidate found in a formula-defined name or named
+`LAMBDA` body is propagated to its invoking worksheet formulas instead.
+Public profiles and `FF066` contain only formula-cell, call, and namespace
+counts; names, namespaces, locations, formulas, and arguments stay private. A
+same-count callable or argument change is consequently visible via
+a private signature, and a normal cell edit that statically reaches a candidate
+call emits `FF066` too. Dynamic and unresolved formula inputs remain coverage
+limits.
+
+`no_office_custom_function_changes` turns `FF066` into `FFP066`. FormulaFence
+does not evaluate a formula, resolve a candidate to an add-in, read an external
+manifest, install or load an add-in, execute JavaScript, or make a network
+request. The ordinary semantic diff still retains changed formulas and
+formula-defined names for review, so it is not a redacted candidate ledger.
+This boundary follows Microsoft's
+[custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview),
+[custom-functions tutorial](https://learn.microsoft.com/en-us/office/dev/add-ins/tutorials/excel-tutorial-create-custom-functions),
+and [web-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).
 
 Excel 4.0 / XLM macro sheets are separate from the VBA binary: their executable
 commands live in Macro Sheet XML package parts, typically under

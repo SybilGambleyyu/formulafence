@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.68.0/formulafence-0.68.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.69.0/formulafence-0.69.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -116,6 +116,7 @@ rules:
   no_external_relationship_changes: true
   no_formula_external_action_changes: true
   no_python_in_excel_changes: true
+  no_office_custom_function_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -138,10 +139,11 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function call candidates, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Formula external-action surfaces | Material stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, or `RTD` call changes, including same-count destination/provider swaps, without evaluating formulas or exposing their arguments in the action ledger |
 | Python in Excel boundary | Stored Python code/environment, `PY` formula bindings, and statically visible inputs, without loading Python code, executing it, or contacting its cloud runtime |
+| Namespaced Office custom-function boundary | Material namespaced formula-call candidates and statically visible inputs, without loading an add-in, executing a formula, or exposing names and arguments in the private ledger |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
 | CI output | Deterministic JSON, reviewer-friendly Markdown, and SARIF |
@@ -390,6 +392,36 @@ review; its general payload is not a redacted code vault. Enable
 Microsoft's [Python in Excel introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel)
 and the [Python part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/151e4bcd-90a0-4d82-8b98-f16bf273e4ff)
 definition.
+
+FormulaFence also inventories **namespaced Office custom-function call
+candidates**. Microsoft documents Office Add-in custom functions as JavaScript
+or TypeScript functions surfaced in Excel with a manifest namespace—for example
+`=CONTOSO.ADD(10,200)`—and documents that they can request or stream data from
+the web. A formula alone does not embed that add-in's manifest, code, identity,
+or runtime, so FormulaFence intentionally treats the formula shape as a review
+candidate rather than proof that an add-in is installed or runnable.
+
+The direct-call classifier accepts only a namespaced callable that is not a
+known native dotted Excel function or a workbook-defined name. It excludes
+OOXML `_xlfn.` / `_xlws.` compatibility forms and does not try to classify
+unqualified VBA, COM, or XLL UDF calls. FormulaFence separately propagates a
+candidate stored inside a formula-defined name or named `LAMBDA` body to the
+worksheet formulas that invoke that definition. Profiles and `FF066`/`FFP066`
+details show only formula-cell, call, and namespace counts. Candidate names,
+namespaces, cells, formulas, and arguments remain private, so a same-count
+call or argument change stays reviewable without publishing the add-in surface.
+
+FormulaFence also emits `FF066` when an ordinary cell edit reaches a candidate
+call through its static dependency graph. That catches a stored source such as
+`=CONTOSO.GETDATA(A1)` without interpreting `A1`, evaluating the call, resolving
+the candidate to an add-in, loading a manifest, or contacting a runtime.
+Dynamic or unresolved inputs remain explicit coverage limits. The ordinary
+semantic diff, including changed formula-defined names, deliberately keeps
+reviewer context; it is not a redacted add-in ledger. Enable
+`no_office_custom_function_changes` to block this boundary in CI. This scope
+follows Microsoft's [custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview),
+[tutorial](https://learn.microsoft.com/en-us/office/dev/add-ins/tutorials/excel-tutorial-create-custom-functions),
+and [external-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).
 
 FormulaFence separately inventories **Excel 4.0 / XLM macro sheets**. Unlike
 VBA, this executable automation is stored in raw macro-sheet XML parts (usually

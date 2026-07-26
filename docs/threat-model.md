@@ -11,8 +11,8 @@ financial correctness or replace model review.
 - It loads formulas as text with `data_only=False`; it does not calculate them.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
-  Add-in code, or worksheet ActiveX/OLE code; it does not contact a Python in
-  Excel Microsoft Cloud runtime.
+  Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not
+  contact a Python-in-Excel Microsoft Cloud or custom-function runtime.
 - VBA payloads, XLM macro-sheet source material, RibbonX control/callback
   material, Office Web Add-in task-pane/worksheet/in-content material, and worksheet control/OLE
   material are compared through private fingerprints only.
@@ -23,6 +23,12 @@ financial correctness or replace model review.
   formula arguments and locations, and raw XML are compared through private
   fingerprints only. Public output retains aggregate package, formula-call,
   script, environment, initialization, and coverage counts.
+- The dedicated namespaced custom-function ledger compares candidate names,
+  namespaces, cells, formulas, and arguments through private signatures only.
+  Its public inventory retains aggregate formula-cell, call, and namespace
+  counts; ordinary defined-name and semantic-diff output retains its normal
+  reviewer context and is not a redacted ledger. A matching formula is not
+  evidence that an Office Add-in is installed, trusted, or runnable.
 - What-If Data Table output ranges, input-cell references, and raw formula
   metadata are compared through a private signature only. Cached scenario-output
   cells remain under the normal cell-diff boundary.
@@ -577,6 +583,26 @@ review prompt, not proof of an error.
   This boundary follows Microsoft's [Python in Excel introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel)
   and the OOXML [Python part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/151e4bcd-90a0-4d82-8b98-f16bf273e4ff)
   definition.
+- Office Add-in custom functions are defined in JavaScript or TypeScript and
+  exposed to Excel through a manifest namespace. They can request and stream
+  external data, but a normal workbook stores only the call text—not the
+  manifest, code, or runtime identity. FormulaFence therefore inventories only
+  a conservative namespaced-call candidate: the direct-call classifier excludes
+  known native dotted Excel functions, workbook-defined names, and `_xlfn.` /
+  `_xlws.` compatibility names, and it does not classify unqualified VBA, COM,
+  or XLL UDFs. Candidates inside formula-defined names and named `LAMBDA` bodies
+  are propagated to their invoking worksheet formulas. A candidate call or a
+  normal edit that statically reaches one emits `FF066`; enable
+  `no_office_custom_function_changes` for `FFP066`. The public profile exposes
+  only formula-cell, call, and namespace counts; names, formulas, arguments,
+  and locations stay private. FormulaFence does not evaluate a call, resolve a
+  candidate to an add-in, load a manifest or add-in, execute JavaScript, or
+  request a service.
+  It makes no claim that a candidate maps to a particular add-in or can run.
+  Dynamic or unresolved inputs remain static-coverage limits. This boundary
+  follows Microsoft's [custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview),
+  [tutorial](https://learn.microsoft.com/en-us/office/dev/add-ins/tutorials/excel-tutorial-create-custom-functions),
+  and [web-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).
 - Office 2010 worksheet sparklines live in `x14:sparklineGroups` worksheet
   extensions, outside ordinary cell values. A group can be retargeted, moved,
   or have its type, axes, display, marker, line-weight, or colour controls

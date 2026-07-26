@@ -87,6 +87,54 @@ def test_formula_inspection_inventories_python_in_excel_function_spellings() -> 
     )
 
 
+def test_formula_inspection_inventories_namespaced_custom_function_candidates() -> None:
+    inspection = inspect_formula(
+        "=CONTOSO.ADD(A1)+CONTOSO.GETPRICE(A2)+MYFUNCTION.SPHEREVOLUME(A3)"
+        "+ECMA.CEILING(A4,1)+ERF.PRECISE(A5)+WORKDAY.INTL(A6,1)"
+        "+_xlfn._xlws.PY(0,0,A7)"
+    )
+    named_lambda = inspect_formula(
+        "=LOCAL.RATE(A1)",
+        named_function_references={"local.rate": ()},
+    )
+    named_formula = inspect_formula(
+        "=MODEL.RATE(A1)",
+        named_references={"model.rate": ()},
+    )
+
+    assert inspection.office_custom_function_candidates == (
+        "CONTOSO.ADD",
+        "CONTOSO.GETPRICE",
+        "MYFUNCTION.SPHEREVOLUME",
+    )
+    assert named_lambda.office_custom_function_candidates == ()
+    assert named_formula.office_custom_function_candidates == ()
+
+
+def test_formula_inspection_propagates_candidates_from_named_definitions() -> None:
+    named_lambda = inspect_formula(
+        "=FENCE.WRAPPER(A1)",
+        named_function_references={"fence.wrapper": ()},
+        named_function_custom_function_candidates={
+            "fence.wrapper": ("CONTOSO.GETDATA",),
+        },
+    )
+    named_formula = inspect_formula(
+        "=FENCE.DIRECT",
+        named_references={"fence.direct": ()},
+        named_custom_function_candidates={
+            "fence.direct": ("CONTOSO.GETDATA",),
+        },
+    )
+
+    assert named_lambda.office_custom_function_candidates == ("CONTOSO.GETDATA",)
+    assert named_lambda.references == (
+        ParsedReference(None, 1, 1, 1, 1, raw="A1"),
+    )
+    assert named_formula.office_custom_function_candidates == ("CONTOSO.GETDATA",)
+    assert named_formula.unresolved_range_tokens == ()
+
+
 def test_formula_inspection_recognises_a_known_named_constant() -> None:
     inspection = inspect_formula("=StaticRate", {"staticrate": ()})
 

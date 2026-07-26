@@ -1979,6 +1979,59 @@ worksheet-scoped Web Add-in markup. The fixture shape follows Microsoft's
 [Web Extension](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/56fe5a64-dd6d-422c-beac-19d72dd10ade),
 and [automatic task-pane sample](https://learn.microsoft.com/en-us/samples/officedev/office-add-in-samples/excel-add-in-create-spreadsheet-from-web-page/).
 
+## Office Web Add-in worksheet and in-content controls — 2026-07-26
+
+FormulaFence 0.65.0 extends that bounded boundary to the two Excel-hosted forms
+that do not need a task pane. Microsoft's [Worksheet
+definition](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/07d607af-5618-4ca2-b683-6a78dc0d9627)
+documents the `{F7C9EE02-42E1-4005-9D12-6889AFFD525C}` worksheet extension
+containing `x15:webExtensions`; the [CT_WebExtension
+definition](https://learn.microsoft.com/en-nz/openspecs/office_standards/ms-xlsx/386851b6-b7b6-42b8-8cf1-d94bab7b0731)
+links each local `appRef` to a definition binding. FormulaFence fingerprints
+that relationship and its private range formula, but emits only worksheet and
+binding counts. A controlled raw-OOXML fixture changed only the local formula:
+ordinary cells were unchanged, `FF028` carried
+`worksheet_binding_material_changed`, and the appRef and both formulas were
+absent from JSON, Markdown, SARIF, and policy output. Missing appRefs and a
+deliberately lowered 16 MiB XML-part cap remained explicit coverage warnings.
+The temporary ordinary-reader copy removes the already-recorded supported
+extension, preventing `openpyxl`'s lossy unsupported-extension warning without
+weakening raw-package coverage.
+
+For in-content frames, the immutable Open XML SDK fixtures
+[`Bing.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/O15Conformance/XL/WebExtension/Bing.xlsx)
+(SHA-256 `a00b0b906a3b1300e1e0892ddbaafa3d8804e23b29d8e14adcb2b5a383eb64f9`)
+and
+[`Youtube.xlsx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/O15Conformance/XL/WebExtension/Youtube.xlsx)
+(SHA-256 `f794e20899fed3af919e52a5cf1352019f27c6828b54c53c1ae0d37f89210cb8`)
+at commit
+[`cd2b359ef824737edb93f1c6157c19551aae1e52`](https://github.com/dotnet/Open-XML-SDK/tree/cd2b359ef824737edb93f1c6157c19551aae1e52)
+each contain a worksheet DrawingML `mc:AlternateContent` choice with an active
+`a:graphicData` Web Extension frame, a direct `webextension1.xml` relationship,
+and a static native-picture fallback. FormulaFence profiled each with one
+definition part, one in-content drawing part, one in-content reference, one
+in-content definition, zero unrecognized add-in parts, and no parser warning.
+It skipped the inactive fallback as a duplicate shape but retained it as one
+bounded native worksheet image, so static preview-byte changes remain covered
+by `FF059` rather than disappearing from review.
+
+The controlled suite also changes only an active-frame anchor (emitting `FF028`
+with `in_content_drawing_binding_changed`), proves stable frame/relationship-ID
+renumbering produces no finding, and fails closed for a missing frame
+relationship ID. Task-pane and definition XML reads retain their 16 MiB per
+part, 32 MiB per-workbook, 64-part limits. Worksheet-binding and in-content
+DrawingML reads are separately bounded to 16 MiB per part, 64 MiB per workbook,
+and 512 parts. This validates static stored-package comparison, branch
+selection, relationship normalization, and data minimisation—not manifest
+retrieval, Office.js execution, add-in activation/rendering, source trust, or
+unrecognized worksheet extension and graphic-frame forms.
+
+The staged `formulafence-0.65.0-py3-none-any.whl` archive passed `unzip -t`
+(SHA-256 `98ba721d995a0e4fc5eae7a366de363955ff975c2a2a49a99e15f6784e517cfe`).
+A clean virtual environment installed that wheel, returned `FormulaFence
+0.65.0`, and reproduced the one-definition/one-drawing/one-reference/
+one-in-content-definition, zero-unrecognized result for both public fixtures.
+
 ## Office RibbonX custom UI controls and redaction — 2026-07-24
 
 FormulaFence 0.22.0 was validated with controlled raw-OOXML `.xlsx` packages

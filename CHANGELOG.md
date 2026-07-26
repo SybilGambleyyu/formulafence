@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.65.0 — 2026-07-26
+
+- Extend the existing `FF028` Office Web Add-in boundary beyond document task
+  panes to documented worksheet `x15:webExtensions` bindings and in-content
+  DrawingML `we:webextensionref` frames. FormulaFence validates worksheet
+  `appRef` values against direct web-extension definition bindings, privately
+  fingerprints local formulas, and follows active `mc:Choice` frame
+  relationships while exposing only safe structural counts.
+- Handle the native-picture fallback of an in-content frame as a normal bounded
+  worksheet image (`FF059`) rather than double-counting it as a shape or
+  silently dropping its preview bytes. Stable nonvisual and relationship-ID
+  rewrites normalize; material worksheet-binding or active-frame changes emit
+  `FF028` and remain subject to `no_office_web_addin_changes` (`FFP028`).
+- Keep supported worksheet binding extensions out of the ordinary reader only
+  after raw evidence is collected, avoiding its lossy unsupported-extension
+  warning. Missing, malformed, unbound, duplicate, unsafe, oversized, or
+  over-budget metadata remains explicit coverage evidence. Worksheet-binding
+  and in-content DrawingML scans are bounded to 16 MiB per part, 64 MiB per
+  workbook, and 512 parts; FormulaFence does not install, fetch, execute, or
+  render an add-in or follow external targets.
+
 ## 0.64.0 — 2026-07-26
 
 - Extend the existing `FF044` Worksheet DrawingML SmartArt boundary to

@@ -13,7 +13,7 @@ financial correctness or replace model review.
   links, Power Query, Power Pivot/DAX, Office Web Add-in code, or worksheet
   ActiveX/OLE code.
 - VBA payloads, XLM macro-sheet source material, RibbonX control/callback
-  material, Office Web Add-in task-pane material, and worksheet control/OLE
+  material, Office Web Add-in task-pane/worksheet/in-content material, and worksheet control/OLE
   material are compared through private fingerprints only.
 - Embedded Power Pivot/Data Model declarations and bounded raw model payloads
   are compared through private fingerprints only; table names, relationships,
@@ -835,22 +835,27 @@ review prompt, not proof of an error.
   otherwise unrecognized parts remain visible parser-coverage warnings.
   Custom-UI XML reads are bounded to 16 MiB per part, 32 MiB per workbook, and
   eight parts.
-- Office Web Add-in task panes are read directly from the documented workbook
-  task-pane relationship, `taskpanes.xml` parts, their direct
-  task-pane-to-extension bindings, and direct `webextension*.xml` definitions
-  before the workbook reader can omit them. FormulaFence privately fingerprints
-  task-pane configuration, add-in references, auto-show properties, bindings,
-  snapshots, and direct relationship semantics while reporting only safe
-  structural counts. Add-in identities, store references, property/binding
-  values, XML, snapshots, and relationship targets remain private. A material
-  change emits `FF028` and can be blocked with
+- Office Web Add-ins are read directly from the documented workbook task-pane
+  relationship, `taskpanes.xml` parts, direct task-pane-to-extension bindings,
+  worksheet `x15:webExtensions` entries, and active in-content DrawingML
+  `we:webextensionref` frames before the workbook reader can omit them.
+  FormulaFence validates worksheet `appRef` entries against definition
+  bindings, skips inactive `mc:Fallback` frame branches, and leaves an active
+  frame's native-picture fallback to the worksheet-image boundary. It privately
+  fingerprints task-pane configuration, add-in references, auto-show
+  properties, bindings, worksheet formulas, snapshots, frame placement/XML,
+  and direct relationship semantics while reporting only safe structural
+  counts. Add-in identities, store references, property/binding values,
+  formulas, XML, snapshots, and relationship targets remain private. A
+  material change emits `FF028` and can be blocked with
   `no_office_web_addin_changes`. FormulaFence does **not** install, load,
   execute, or fetch an add-in or manifest, and it never follows external
   relationships. Missing, oversized, malformed, unbound, or over-budget parts
   remain visible parser-coverage warnings. Task-pane and web-extension XML
-  reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts.
-  Worksheet-scoped web-extension markup outside this task-pane chain is not
-  yet modeled.
+  reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts;
+  worksheet-binding and in-content DrawingML reads are each bounded to 16 MiB
+  per part, 64 MiB per workbook, and 512 parts. Other unrecognized extension
+  or graphic-frame forms remain outside this boundary.
 - PivotTable packages are followed through the bounded workbook cache and
   worksheet PivotTable relationship graph, then privately fingerprinted as
   view layout, cache-schema, shared-item, normalized relationship, and bounded
@@ -1022,8 +1027,8 @@ review prompt, not proof of an error.
   SmartArt component-side relationship targets other than bounded direct
   Diagram Data Image payloads; chart-to-cell impact; Ribbon image payloads;
   general VML/drawing-control
-  layout beyond supported Note shapes; embedded OLE/package formats;
-  worksheet-scoped Web Add-in markup; Power Query runtime behavior or returned
+  layout beyond supported Note shapes; embedded OLE/package formats; unsupported
+  worksheet Web Add-in extension or graphic-frame forms; Power Query runtime behavior or returned
   data; ordinary styles beyond direct protection assignments; complete Excel
   style-cascade results; or every OOXML part.
 - The tool preserves Excel formula text and uses a limited A1-reference

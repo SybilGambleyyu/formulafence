@@ -382,6 +382,13 @@ _WEB_EXTENSION_TASKPANES_RELATIONSHIP = (
 _WEB_EXTENSION_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2011/relationships/webextension"
 )
+_WORKSHEET_WEB_EXTENSION_MAX_XML_BYTES = 16 * 1024 * 1024
+_WORKSHEET_WEB_EXTENSION_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_WORKSHEET_WEB_EXTENSION_TOTAL_XML_MAX_COUNT = 512
+_IN_CONTENT_WEB_EXTENSION_MAX_XML_BYTES = 16 * 1024 * 1024
+_IN_CONTENT_WEB_EXTENSION_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
+_IN_CONTENT_WEB_EXTENSION_TOTAL_XML_MAX_COUNT = 512
+_WORKSHEET_WEB_EXTENSION_EXTENSION_URI = "{F7C9EE02-42E1-4005-9D12-6889AFFD525C}"
 _WORKSHEET_EMBEDDED_CONTROL_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_COUNT = 512
@@ -1421,6 +1428,22 @@ class _OfficeWebAddinBudget:
 
 
 @dataclass
+class _WorksheetWebExtensionBudget:
+    """Bound raw worksheet XML reads for Office Web Add-in bindings."""
+
+    remaining_bytes: int = _WORKSHEET_WEB_EXTENSION_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _WORKSHEET_WEB_EXTENSION_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _InContentWebExtensionBudget:
+    """Bound DrawingML XML reads for in-content Office Web Add-in frames."""
+
+    remaining_bytes: int = _IN_CONTENT_WEB_EXTENSION_TOTAL_XML_MAX_BYTES
+    remaining_parts: int = _IN_CONTENT_WEB_EXTENSION_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
 class _ChartXmlBudget:
     """Bound chart, drawing, and overlay XML bytes in one package scan."""
 
@@ -1616,9 +1639,49 @@ class _OfficeWebAddinExtensionInspection:
     related_relationship_count: int = 0
     external_relationship_count: int = 0
     unresolved_snapshot_reference_count: int = 0
+    binding_apprefs: tuple[str, ...] = ()
+    unresolved_binding_count: int = 0
     inspected: bool = False
     definition_signature: str | None = None
     relationship_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class _WorksheetWebExtensionInspection:
+    """Private worksheet-scoped Office Web Add-in binding material."""
+
+    member: str
+    binding_count: int = 0
+    binding_apprefs: tuple[str, ...] = ()
+    unrecognized_count: int = 0
+    definition_signature: str | None = None
+
+    @property
+    def present(self) -> bool:
+        return bool(self.binding_count or self.unrecognized_count)
+
+
+@dataclass(frozen=True)
+class _InContentWebExtensionDrawingInspection:
+    """Private Office Web Add-in references hosted in one DrawingML part."""
+
+    member: str
+    reference_count: int = 0
+    declared_web_extension_members: tuple[str, ...] = ()
+    unresolved_binding_count: int = 0
+    unrecognized_count: int = 0
+    related_relationship_count: int = 0
+    external_relationship_count: int = 0
+    definition_signature: str | None = None
+    relationship_signature: str | None = None
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.reference_count
+            or self.unresolved_binding_count
+            or self.unrecognized_count
+        )
 
 
 @dataclass(frozen=True)
@@ -8017,6 +8080,19 @@ def _office_web_addin_extension_inspection(
             )
             unresolved_snapshot_reference_count += 1
 
+    binding_apprefs: list[str] = []
+    unresolved_binding_count = 0
+    for binding in root.iter(binding_tag):
+        appref = binding.get("appref")
+        if appref is None or not appref.strip():
+            warnings.add(
+                "FormulaFence found an Office Web Add-in definition binding without an "
+                "appref; affected worksheet bindings have a coverage gap."
+            )
+            unresolved_binding_count += 1
+            continue
+        binding_apprefs.append(appref)
+
     try:
         definition_signature = _private_external_data_signature(
             (
@@ -8045,7 +8121,7 @@ def _office_web_addin_extension_inspection(
             for child in container
             if child.tag in alternate_reference_tags
         ),
-        binding_count=sum(1 for _ in root.iter(binding_tag)),
+        binding_count=len(binding_apprefs) + unresolved_binding_count,
         snapshot_reference_count=snapshot_reference_count,
         related_relationship_count=len(relationships),
         external_relationship_count=sum(
@@ -8053,9 +8129,646 @@ def _office_web_addin_extension_inspection(
             for relationship in relationships
         ),
         unresolved_snapshot_reference_count=unresolved_snapshot_reference_count,
+        binding_apprefs=tuple(sorted(binding_apprefs)),
+        unresolved_binding_count=unresolved_binding_count,
         inspected=inspected,
         definition_signature=definition_signature,
         relationship_signature=_office_web_addin_relationship_signature(relationships),
+    )
+
+
+def _office_web_addin_bounded_xml_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _WorksheetWebExtensionBudget | _InContentWebExtensionBudget,
+    *,
+    maximum_part_bytes: int,
+    context: str,
+) -> tuple[bytes | None, str | None]:
+    """Read a related Office Web Add-in XML part under fixed scan budgets."""
+    if budget.remaining_parts <= 0:
+        warnings.add(
+            "FormulaFence reached its bounded Office Web Add-in XML part count budget; "
+            f"affected {context} controls have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("office-web-addin-part-count-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        warnings.add(
+            "FormulaFence could not locate an Office Web Add-in "
+            f"{context} XML part; affected controls were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("missing-office-web-addin-member", member),)
+        )
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > maximum_part_bytes:
+        warnings.add(
+            "FormulaFence did not fully read an oversized Office Web Add-in "
+            f"{context} XML part; affected controls have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("oversized-office-web-addin-member", metadata),)
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded Office Web Add-in XML read budget; "
+            f"affected {context} controls have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("office-web-addin-read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not read an Office Web Add-in "
+            f"{context} XML part ({type(error).__name__}); affected controls were not "
+            "compared."
+        )
+        return None, _private_external_data_signature(
+            (("unreadable-office-web-addin-member", metadata),)
+        )
+
+
+def _worksheet_web_extension_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _WorksheetWebExtensionBudget,
+) -> _WorksheetWebExtensionInspection:
+    """Inspect one worksheet's x15 Office Web Add-in bindings privately."""
+    payload, fallback_signature = _office_web_addin_bounded_xml_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        maximum_part_bytes=_WORKSHEET_WEB_EXTENSION_MAX_XML_BYTES,
+        context="worksheet binding",
+    )
+    if payload is None:
+        return _WorksheetWebExtensionInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+        )
+    try:
+        worksheet = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect worksheet XML for Office Web Add-in "
+            f"bindings ({type(error).__name__}); affected controls were not compared."
+        )
+        return _WorksheetWebExtensionInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    worksheet_namespace = _xml_namespace(worksheet.tag)
+    if (
+        worksheet_namespace not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+        or _xml_local_name(worksheet.tag) != "worksheet"
+    ):
+        warnings.add(
+            "FormulaFence found a worksheet part with an unexpected root while "
+            "inspecting Office Web Add-in bindings; affected controls were not compared."
+        )
+        return _WorksheetWebExtensionInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    extension_list_tag = f"{{{worksheet_namespace}}}extLst"
+    extension_tag = f"{{{worksheet_namespace}}}ext"
+    container_tag = f"{{{_OFFICE_2013_SPREADSHEET_NS}}}webExtensions"
+    binding_tag = f"{{{_OFFICE_2013_SPREADSHEET_NS}}}webExtension"
+    formula_tag = f"{{{_EXCEL_2006_MAIN_NS}}}f"
+    issues: list[tuple[str, str]] = []
+    accepted_containers: list[ElementTree.Element] = []
+    accepted_container_ids: set[int] = set()
+    extension_lists = [child for child in worksheet if child.tag == extension_list_tag]
+    if len(extension_lists) > 1:
+        issues.append(("multiple-worksheet-extension-lists", str(len(extension_lists))))
+    for extension_list_index, extension_list in enumerate(extension_lists):
+        if extension_list.attrib or (
+            extension_list.text is not None and extension_list.text.strip()
+        ):
+            issues.append(
+                (
+                    "malformed-worksheet-extension-list",
+                    repr((member, extension_list_index)),
+                )
+            )
+        for extension_index, extension in enumerate(extension_list):
+            if (
+                extension.tag != extension_tag
+                or extension.get("uri", "").casefold()
+                != _WORKSHEET_WEB_EXTENSION_EXTENSION_URI.casefold()
+            ):
+                continue
+            context = (member, extension_list_index, extension_index)
+            if set(extension.attrib) != {"uri"} or (
+                extension.text is not None and extension.text.strip()
+            ):
+                issues.append(("malformed-worksheet-web-extension", repr(context)))
+            containers = [child for child in extension if child.tag == container_tag]
+            if len(containers) != 1:
+                issues.append(
+                    (
+                        "invalid-worksheet-web-extension-container-count",
+                        repr((context, len(containers))),
+                    )
+                )
+            for child_index, child in enumerate(extension):
+                if child.tag != container_tag:
+                    issues.append(
+                        (
+                            "unexpected-worksheet-web-extension-child",
+                            repr((context, child_index, _xml_display_name(child.tag))),
+                        )
+                    )
+            accepted_containers.extend(containers)
+            accepted_container_ids.update(id(container) for container in containers)
+
+    for container in worksheet.iter(container_tag):
+        if id(container) not in accepted_container_ids:
+            issues.append(
+                (
+                    "out-of-container-worksheet-web-extensions",
+                    _private_payload_signature(
+                        ElementTree.tostring(container, encoding="utf-8")
+                    ),
+                )
+            )
+
+    if not accepted_containers and not issues:
+        return _WorksheetWebExtensionInspection(member=member)
+
+    binding_count = 0
+    apprefs: list[str] = []
+    definition_entries: list[tuple[str, str]] = []
+    for container_index, container in enumerate(accepted_containers):
+        container_context = (member, container_index)
+        if container.attrib or (
+            container.text is not None and container.text.strip()
+        ):
+            issues.append(
+                (
+                    "malformed-worksheet-web-extensions-container",
+                    repr(container_context),
+                )
+            )
+        bindings: list[ElementTree.Element] = []
+        for child_index, child in enumerate(container):
+            if child.tag != binding_tag:
+                issues.append(
+                    (
+                        "unexpected-worksheet-web-extensions-binding-child",
+                        repr((container_context, child_index, _xml_display_name(child.tag))),
+                    )
+                )
+                continue
+            bindings.append(child)
+        if not bindings:
+            issues.append(("empty-worksheet-web-extensions", repr(container_context)))
+        for binding_index, binding in enumerate(bindings):
+            binding_count += 1
+            binding_context = (*container_context, binding_index)
+            appref = binding.get("appRef")
+            if appref is None or not appref.strip():
+                issues.append(("missing-worksheet-web-extension-appref", repr(binding_context)))
+            else:
+                apprefs.append(appref)
+            if set(binding.attrib) != {"appRef"}:
+                issues.append(
+                    (
+                        "malformed-worksheet-web-extension-binding-attributes",
+                        repr(binding_context),
+                    )
+                )
+            formulas = [child for child in binding if child.tag == formula_tag]
+            if len(formulas) != 1:
+                issues.append(
+                    (
+                        "invalid-worksheet-web-extension-formula-count",
+                        repr((binding_context, len(formulas))),
+                    )
+                )
+            for child_index, child in enumerate(binding):
+                if child.tag != formula_tag:
+                    issues.append(
+                        (
+                            "unexpected-worksheet-web-extension-binding-child",
+                            repr((binding_context, child_index, _xml_display_name(child.tag))),
+                        )
+                    )
+            for formula in formulas:
+                if formula.attrib or list(formula) or not (formula.text or "").strip():
+                    issues.append(
+                        (
+                            "malformed-worksheet-web-extension-formula",
+                            repr(binding_context),
+                        )
+                    )
+        try:
+            fragment = _office_web_addin_fragment(container, {})
+        except RecursionError:
+            issues.append(
+                (
+                    "nested-worksheet-web-extensions-container",
+                    repr(container_context),
+                )
+            )
+            fragment = _private_payload_signature(
+                ElementTree.tostring(container, encoding="utf-8")
+            )
+        definition_entries.append(
+            ("worksheet-web-extensions", repr((member, fragment)))
+        )
+
+    definition_entries.extend(issues)
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported worksheet Office Web Add-in "
+            "metadata; affected controls have a coverage gap."
+        )
+    return _WorksheetWebExtensionInspection(
+        member=member,
+        binding_count=binding_count,
+        binding_apprefs=tuple(sorted(apprefs)),
+        unrecognized_count=len(issues),
+        definition_signature=_private_external_data_signature(
+            tuple(sorted(definition_entries))
+        ),
+    )
+
+
+def _office_web_addin_in_content_graphic_data(
+    frame: ElementTree.Element,
+) -> ElementTree.Element | None:
+    """Return one Office Web Add-in graphicData container, if structurally clear."""
+    if (
+        _xml_namespace(frame.tag)
+        not in {_DRAWINGML_SPREADSHEET_NS, _DRAWINGML_STRICT_SPREADSHEET_NS}
+        or _xml_local_name(frame.tag) != "graphicFrame"
+    ):
+        return None
+    graphics = [
+        child
+        for child in frame
+        if (
+            _xml_namespace(child.tag) in {_DRAWINGML_MAIN_NS, _DRAWINGML_STRICT_MAIN_NS}
+            and _xml_local_name(child.tag) == "graphic"
+        )
+    ]
+    if len(graphics) != 1:
+        return None
+    graphic_data = [
+        child
+        for child in graphics[0]
+        if (
+            _xml_namespace(child.tag) in {_DRAWINGML_MAIN_NS, _DRAWINGML_STRICT_MAIN_NS}
+            and _xml_local_name(child.tag) == "graphicData"
+        )
+    ]
+    if len(graphic_data) != 1 or graphic_data[0].get("uri") != _WEB_EXTENSION_NS:
+        return None
+    return graphic_data[0]
+
+
+def _office_web_addin_in_content_frames(
+    root: ElementTree.Element,
+) -> tuple[tuple[ElementTree.Element | None, ElementTree.Element], ...]:
+    """Return active DrawingML frames that host Office Web Add-ins.
+
+    Fallback branches are deliberately skipped: they are image-only previews for
+    clients that cannot load the active Office Web Add-in branch and are handled
+    by the native worksheet-image scanner.
+    """
+    frames: list[tuple[ElementTree.Element | None, ElementTree.Element]] = []
+    anchor_names = {"twoCellAnchor", "oneCellAnchor", "absoluteAnchor"}
+
+    def visit(
+        element: ElementTree.Element,
+        anchor: ElementTree.Element | None,
+    ) -> None:
+        if (
+            _xml_namespace(element.tag)
+            in {_DRAWINGML_SPREADSHEET_NS, _DRAWINGML_STRICT_SPREADSHEET_NS}
+            and _xml_local_name(element.tag) in anchor_names
+        ):
+            anchor = element
+        if (
+            _xml_namespace(element.tag) == _MARKUP_COMPATIBILITY_NS
+            and _xml_local_name(element.tag) == "AlternateContent"
+        ):
+            for child in element:
+                if (
+                    _xml_namespace(child.tag) == _MARKUP_COMPATIBILITY_NS
+                    and _xml_local_name(child.tag) == "Fallback"
+                ):
+                    continue
+                visit(child, anchor)
+            return
+        if _office_web_addin_in_content_graphic_data(element) is not None:
+            frames.append((anchor, element))
+            return
+        for child in element:
+            visit(child, anchor)
+
+    visit(root, None)
+    return tuple(frames)
+
+
+def _office_web_addin_in_content_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[str, str, str]],
+) -> tuple[object, ...]:
+    """Canonicalize private in-content frame XML without object-ID churn."""
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if (
+            _xml_namespace(element.tag)
+            in {_DRAWINGML_SPREADSHEET_NS, _DRAWINGML_STRICT_SPREADSHEET_NS}
+            and _xml_local_name(element.tag) == "cNvPr"
+            and _xml_local_name(attribute) == "id"
+        ):
+            continue
+        if attribute in {
+            f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
+            f"{{{_STRICT_DOCUMENT_RELATIONSHIP_NS}}}id",
+        }:
+            relationship = relationship_semantics.get(value)
+            resolved = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            attributes.append((_xml_display_name(attribute), repr(resolved)))
+            continue
+        attributes.append((_xml_display_name(attribute), value))
+    children = tuple(
+        _office_web_addin_in_content_fragment(child, relationship_semantics)
+        for child in element
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+    )
+
+
+def _office_web_addin_in_content_anchor_material(
+    anchor: ElementTree.Element | None,
+) -> tuple[object, ...]:
+    """Retain a frame's private placement without serialising fallback previews."""
+    if anchor is None:
+        return ("unanchored",)
+    return (
+        _xml_display_name(anchor.tag),
+        tuple(
+            sorted(
+                (_xml_display_name(attribute), value)
+                for attribute, value in anchor.attrib.items()
+            )
+        ),
+        tuple(
+            _office_web_addin_in_content_fragment(child, {})
+            for child in anchor
+            if (
+                _xml_namespace(child.tag)
+                in {_DRAWINGML_SPREADSHEET_NS, _DRAWINGML_STRICT_SPREADSHEET_NS}
+                and _xml_local_name(child.tag) in {"from", "to", "pos", "ext"}
+            )
+        ),
+    )
+
+
+def _office_web_addin_in_content_drawing_inspection(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _InContentWebExtensionBudget,
+) -> _InContentWebExtensionDrawingInspection:
+    """Follow bounded DrawingML Office Web Add-in frame relationships."""
+    payload, fallback_signature = _office_web_addin_bounded_xml_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        maximum_part_bytes=_IN_CONTENT_WEB_EXTENSION_MAX_XML_BYTES,
+        context="in-content DrawingML",
+    )
+    if payload is None:
+        return _InContentWebExtensionDrawingInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=fallback_signature,
+        )
+    try:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not inspect Office Web Add-in in-content DrawingML "
+            f"({type(error).__name__}); affected controls were not compared."
+        )
+        return _InContentWebExtensionDrawingInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+    if (
+        _xml_namespace(root.tag)
+        not in {_DRAWINGML_SPREADSHEET_NS, _DRAWINGML_STRICT_SPREADSHEET_NS}
+        or _xml_local_name(root.tag) != "wsDr"
+    ):
+        warnings.add(
+            "FormulaFence found an Office Web Add-in in-content DrawingML part with an "
+            "unexpected root; affected controls were not compared."
+        )
+        return _InContentWebExtensionDrawingInspection(
+            member=member,
+            unrecognized_count=1,
+            definition_signature=_private_payload_signature(payload),
+        )
+
+    frames = _office_web_addin_in_content_frames(root)
+    if not frames:
+        return _InContentWebExtensionDrawingInspection(member=member)
+    relationships = _office_web_addin_raw_relationships(
+        archive,
+        member,
+        warnings,
+        context="in-content DrawingML",
+    )
+    relationship_semantics = _office_web_addin_relationship_semantics(
+        relationships,
+        warnings,
+        context="in-content DrawingML",
+    )
+    relationships_by_id: dict[str, list[_OfficeWebAddinRawRelationship]] = defaultdict(
+        list
+    )
+    for relationship in relationships:
+        if relationship.relationship_id:
+            relationships_by_id[relationship.relationship_id].append(relationship)
+
+    declared_members: set[str] = set()
+    selected_relationships: list[_OfficeWebAddinRawRelationship] = []
+    issues: list[tuple[str, str]] = []
+    unresolved_binding_count = 0
+    definition_entries: list[tuple[str, str]] = []
+    reference_count = 0
+    for frame_index, (anchor, frame) in enumerate(frames):
+        graphic_data = _office_web_addin_in_content_graphic_data(frame)
+        assert graphic_data is not None
+        context = (member, frame_index)
+        if set(graphic_data.attrib) != {"uri"} or (
+            graphic_data.text is not None and graphic_data.text.strip()
+        ):
+            issues.append(("malformed-in-content-web-extension-graphic-data", repr(context)))
+        references = [
+            element
+            for element in graphic_data
+            if (
+                _xml_namespace(element.tag) == _WEB_EXTENSION_NS
+                and _xml_local_name(element.tag) == "webextensionref"
+            )
+        ]
+        for child_index, child in enumerate(graphic_data):
+            if child in references:
+                continue
+            issues.append(
+                (
+                    "unexpected-in-content-web-extension-graphic-data-child",
+                    repr((context, child_index, _xml_display_name(child.tag))),
+                )
+            )
+        if len(references) != 1:
+            issues.append(("invalid-in-content-web-extension-reference-count", repr(context)))
+        for reference_index, reference in enumerate(references):
+            reference_count += 1
+            reference_context = (*context, reference_index)
+            permitted_relationship_attributes = {
+                f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
+                f"{{{_STRICT_DOCUMENT_RELATIONSHIP_NS}}}id",
+            }
+            if (
+                len(reference.attrib) != 1
+                or next(iter(reference.attrib), None)
+                not in permitted_relationship_attributes
+                or list(reference)
+                or (reference.text is not None and reference.text.strip())
+            ):
+                issues.append(
+                    (
+                        "malformed-in-content-web-extension-reference",
+                        repr(reference_context),
+                    )
+                )
+                unresolved_binding_count += 1
+            relationship_ids = [
+                value
+                for attribute, value in reference.attrib.items()
+                if (
+                    attribute in permitted_relationship_attributes
+                    and value
+                )
+            ]
+            if len(relationship_ids) != 1:
+                issues.append(
+                    (
+                        "invalid-in-content-web-extension-relationship-id",
+                        repr(reference_context),
+                    )
+                )
+                unresolved_binding_count += 1
+                continue
+            relationship_id = relationship_ids[0]
+            matches = relationships_by_id.get(relationship_id, [])
+            if len(matches) != 1:
+                issues.append(
+                    (
+                        "invalid-in-content-web-extension-relationship-binding",
+                        repr(reference_context),
+                    )
+                )
+                unresolved_binding_count += 1
+                continue
+            relationship = matches[0]
+            selected_relationships.append(relationship)
+            if (
+                relationship.relationship_type != _WEB_EXTENSION_RELATIONSHIP
+                or relationship.target_mode.casefold() != "internal"
+                or relationship.safe_target is None
+            ):
+                issues.append(
+                    (
+                        "unsafe-in-content-web-extension-target",
+                        repr((reference_context, relationship.semantic_key())),
+                    )
+                )
+                unresolved_binding_count += 1
+                continue
+            declared_members.add(relationship.safe_target)
+        try:
+            frame_fragment = _office_web_addin_in_content_fragment(
+                frame,
+                relationship_semantics,
+            )
+        except RecursionError:
+            issues.append(("nested-in-content-web-extension-frame", repr(context)))
+            frame_fragment = _private_payload_signature(
+                ElementTree.tostring(frame, encoding="utf-8")
+            )
+        definition_entries.append(
+            (
+                "in-content-web-extension-frame",
+                repr(
+                    (
+                        member,
+                        _office_web_addin_in_content_anchor_material(anchor),
+                        frame_fragment,
+                    )
+                ),
+            )
+        )
+
+    definition_entries.extend(issues)
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed or unsupported Office Web Add-in "
+            "in-content DrawingML metadata; affected controls have a coverage gap."
+        )
+    return _InContentWebExtensionDrawingInspection(
+        member=member,
+        reference_count=reference_count,
+        declared_web_extension_members=tuple(sorted(declared_members, key=str.casefold)),
+        unresolved_binding_count=unresolved_binding_count,
+        unrecognized_count=len(issues),
+        related_relationship_count=len(selected_relationships),
+        external_relationship_count=sum(
+            relationship.target_mode.casefold() != "internal"
+            for relationship in selected_relationships
+        ),
+        definition_signature=_private_external_data_signature(
+            tuple(sorted(definition_entries))
+        ),
+        relationship_signature=_office_web_addin_relationship_signature(
+            tuple(selected_relationships)
+        ),
     )
 
 
@@ -8125,12 +8838,13 @@ def _office_web_addin_metadata(path: Path) -> _OfficeWebAddinMetadata:
             unrecognized_members: set[str] = set()
             unresolved_binding_count = unresolved_declaration_count
             candidate_web_extension_members: dict[str, set[str]] = defaultdict(set)
-            declared_web_extension_members: set[str] = set()
             for member in sorted(candidate_taskpane_members, key=str.casefold):
                 sources = candidate_taskpane_members[member]
                 declaration_entries.append(
                     ("taskpane-part", repr((member, tuple(sorted(sources)))))
                 )
+                if not sources:
+                    unrecognized_members.add(member)
                 inspection = _office_web_addin_taskpane_inspection(
                     archive,
                     member,
@@ -8143,8 +8857,76 @@ def _office_web_addin_metadata(path: Path) -> _OfficeWebAddinMetadata:
                     continue
                 unresolved_binding_count += inspection.unresolved_binding_count
                 for web_extension_member in inspection.declared_web_extension_members:
-                    candidate_web_extension_members[web_extension_member].add(member)
-                    declared_web_extension_members.add(web_extension_member)
+                    candidate_web_extension_members[web_extension_member].add(
+                        f"taskpane:{member}"
+                    )
+
+            try:
+                worksheet_members = _worksheet_display_xml_paths(archive)
+            except (
+                KeyError,
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                warnings.add(
+                    "FormulaFence could not inspect worksheet OOXML declarations for "
+                    f"Office Web Add-ins ({type(error).__name__}); affected controls were "
+                    "not compared."
+                )
+                worksheet_members = ()
+                unresolved_binding_count += 1
+
+            drawing_sources: dict[str, set[str]] = defaultdict(set)
+            drawing_relationship_types = {
+                _WORKSHEET_DRAWING_RELATIONSHIP.casefold(),
+                _WORKSHEET_STRICT_DRAWING_RELATIONSHIP.casefold(),
+            }
+            for worksheet_member in worksheet_members:
+                relationships = _office_web_addin_raw_relationships(
+                    archive,
+                    worksheet_member,
+                    warnings,
+                    context="worksheet",
+                )
+                for relationship in relationships:
+                    if (
+                        relationship.relationship_type.casefold()
+                        not in drawing_relationship_types
+                        or relationship.target_mode.casefold() != "internal"
+                        or relationship.safe_target is None
+                    ):
+                        continue
+                    drawing_sources[relationship.safe_target].add(worksheet_member)
+
+            in_content_inspections: list[_InContentWebExtensionDrawingInspection] = []
+            in_content_declaration_entries: list[tuple[str, str]] = []
+            in_content_budget = _InContentWebExtensionBudget()
+            for drawing_member in sorted(drawing_sources, key=str.casefold):
+                sources = tuple(sorted(drawing_sources[drawing_member], key=str.casefold))
+                inspection = _office_web_addin_in_content_drawing_inspection(
+                    archive,
+                    drawing_member,
+                    warnings,
+                    in_content_budget,
+                )
+                in_content_inspections.append(inspection)
+                if inspection.present:
+                    in_content_declaration_entries.append(
+                        (
+                            "in-content-drawing-part",
+                            repr((drawing_member, sources)),
+                        )
+                    )
+                unresolved_binding_count += max(
+                    inspection.unresolved_binding_count,
+                    inspection.unrecognized_count,
+                )
+                for web_extension_member in inspection.declared_web_extension_members:
+                    candidate_web_extension_members[web_extension_member].add(
+                        f"drawing:{drawing_member}"
+                    )
 
             discovered_web_extension_members = {
                 entry.filename
@@ -8153,18 +8935,31 @@ def _office_web_addin_metadata(path: Path) -> _OfficeWebAddinMetadata:
             }
             for member in discovered_web_extension_members:
                 candidate_web_extension_members.setdefault(member, set())
-                if member not in declared_web_extension_members:
+                if not candidate_web_extension_members[member]:
                     warnings.add(
                         "FormulaFence found an Office Web Add-in definition package part not "
-                        "declared by a task pane; affected controls have a coverage gap."
+                        "declared by a task pane or in-content frame; affected controls have "
+                        "a coverage gap."
                     )
+                    unrecognized_members.add(member)
 
             extension_inspections: list[_OfficeWebAddinExtensionInspection] = []
             for member in sorted(candidate_web_extension_members, key=str.casefold):
                 sources = candidate_web_extension_members[member]
-                declaration_entries.append(
-                    ("web-extension-part", repr((member, tuple(sorted(sources)))))
+                taskpane_sources = tuple(
+                    sorted(
+                        source
+                        for source in sources
+                        if source.startswith("taskpane:")
+                    )
                 )
+                if taskpane_sources:
+                    declaration_entries.append(
+                        (
+                            "web-extension-taskpane-part",
+                            repr((member, taskpane_sources)),
+                        )
+                    )
                 inspection = _office_web_addin_extension_inspection(
                     archive,
                     member,
@@ -8175,7 +8970,48 @@ def _office_web_addin_metadata(path: Path) -> _OfficeWebAddinMetadata:
                 if not inspection.inspected:
                     unrecognized_members.add(member)
                     continue
-                unresolved_binding_count += inspection.unresolved_snapshot_reference_count
+                unresolved_binding_count += (
+                    inspection.unresolved_snapshot_reference_count
+                    + inspection.unresolved_binding_count
+                )
+
+            worksheet_inspections: list[_WorksheetWebExtensionInspection] = []
+            worksheet_budget = _WorksheetWebExtensionBudget()
+            for worksheet_member in sorted(set(worksheet_members), key=str.casefold):
+                worksheet_inspections.append(
+                    _worksheet_web_extension_inspection(
+                        archive,
+                        worksheet_member,
+                        warnings,
+                        worksheet_budget,
+                    )
+                )
+
+            appref_sources: dict[str, list[str]] = defaultdict(list)
+            for inspection in extension_inspections:
+                if not inspection.inspected:
+                    continue
+                for appref in inspection.binding_apprefs:
+                    appref_sources[appref].append(inspection.member)
+            for sources in appref_sources.values():
+                if len(sources) <= 1:
+                    continue
+                warnings.add(
+                    "FormulaFence found one Office Web Add-in binding appref in multiple "
+                    "definition parts; affected worksheet bindings have a coverage gap."
+                )
+                unresolved_binding_count += 1
+            for inspection in worksheet_inspections:
+                unresolved_binding_count += inspection.unrecognized_count
+                for appref in inspection.binding_apprefs:
+                    if len(appref_sources.get(appref, [])) == 1:
+                        continue
+                    warnings.add(
+                        "FormulaFence found a worksheet Office Web Add-in binding without "
+                        "one matching definition binding; affected controls have a coverage "
+                        "gap."
+                    )
+                    unresolved_binding_count += 1
 
             def aggregate_signature(
                 inspections: list[object], attribute: str
@@ -8191,6 +9027,18 @@ def _office_web_addin_metadata(path: Path) -> _OfficeWebAddinMetadata:
             all_inspections: list[object] = [
                 *taskpane_inspections,
                 *extension_inspections,
+                *in_content_inspections,
+            ]
+            in_content_members = {
+                member
+                for member, sources in candidate_web_extension_members.items()
+                if any(source.startswith("drawing:") for source in sources)
+            }
+            present_worksheet_inspections = [
+                inspection for inspection in worksheet_inspections if inspection.present
+            ]
+            present_in_content_inspections = [
+                inspection for inspection in in_content_inspections if inspection.present
             ]
             snapshot = OfficeWebAddinSnapshot(
                 declared_taskpane_part_count=len(taskpane_relationships),
@@ -8236,6 +9084,15 @@ def _office_web_addin_metadata(path: Path) -> _OfficeWebAddinMetadata:
                 external_relationship_count=sum(
                     inspection.external_relationship_count for inspection in all_inspections
                 ),
+                worksheet_binding_sheet_count=len(present_worksheet_inspections),
+                worksheet_binding_count=sum(
+                    inspection.binding_count for inspection in worksheet_inspections
+                ),
+                in_content_drawing_part_count=len(present_in_content_inspections),
+                in_content_web_extension_reference_count=sum(
+                    inspection.reference_count for inspection in in_content_inspections
+                ),
+                in_content_web_extension_part_count=len(in_content_members),
                 declaration_signature=_private_external_data_signature(
                     tuple(declaration_entries)
                 ),
@@ -8248,12 +9105,30 @@ def _office_web_addin_metadata(path: Path) -> _OfficeWebAddinMetadata:
                 relationship_signature=aggregate_signature(
                     all_inspections, "relationship_signature"
                 ),
+                worksheet_binding_signature=aggregate_signature(
+                    worksheet_inspections, "definition_signature"
+                ),
+                in_content_signature=_private_external_data_signature(
+                    tuple(
+                        sorted(
+                            [
+                                *in_content_declaration_entries,
+                                *[
+                                    ("in-content-frame", repr((inspection.member, value)))
+                                    for inspection in in_content_inspections
+                                    if (value := inspection.definition_signature)
+                                    is not None
+                                ],
+                            ]
+                        )
+                    )
+                ),
             )
     except (BadZipFile, OSError, RuntimeError, ValueError) as error:
         return _OfficeWebAddinMetadata(
             default,
             (
-                "FormulaFence could not inspect Office Web Add-in task-pane OOXML "
+                "FormulaFence could not inspect Office Web Add-in OOXML "
                 f"({type(error).__name__}); affected controls were not compared.",
             ),
         )
@@ -12315,6 +13190,79 @@ def _worksheet_sparkline_reader_replacements(
     return replacements, tuple(sorted(reader_warnings))
 
 
+def _worksheet_web_extension_reader_replacements(
+    path: Path,
+    prior_replacements: Mapping[str, bytes] | None = None,
+) -> tuple[dict[str, bytes], tuple[str, ...]]:
+    """Keep supported worksheet add-in bindings out of the ordinary reader.
+
+    FormulaFence reads the original x15 worksheet binding extension before this
+    temporary copy is made.  ``openpyxl`` warns that these Web Extension
+    declarations are unsupported and may discard them, even though its normal
+    cell reader has no use for them.  Removing just the documented extension
+    URI avoids that noisy, lossy path while leaving malformed raw metadata
+    covered by the dedicated add-in scanner.
+    """
+    replacements: dict[str, bytes] = {}
+    reader_warnings: set[str] = set()
+    prior_replacements = prior_replacements or {}
+    try:
+        with ZipFile(path) as archive:
+            def reader_xml_root(member: str) -> ElementTree.Element:
+                """Read an earlier safe overlay before falling back to the package."""
+                if (payload := prior_replacements.get(member)) is not None:
+                    return _xml_root_from_payload(payload)
+                return _xml_root(archive, member)
+
+            for _sheet, (member, sheet_kind) in _sheet_xml_parts(archive).items():
+                if sheet_kind != "worksheet":
+                    continue
+                try:
+                    worksheet = reader_xml_root(member)
+                except (
+                    KeyError,
+                    ElementTree.ParseError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                ):
+                    continue
+                namespace = _xml_namespace(worksheet.tag)
+                if (
+                    namespace not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+                    or _xml_local_name(worksheet.tag) != "worksheet"
+                ):
+                    continue
+                extension_list_tag = f"{{{namespace}}}extLst"
+                extension_tag = f"{{{namespace}}}ext"
+                changed_worksheet = False
+                for extension_list in list(worksheet.findall(extension_list_tag)):
+                    for extension in list(extension_list):
+                        if (
+                            extension.tag == extension_tag
+                            and extension.get("uri", "").casefold()
+                            == _WORKSHEET_WEB_EXTENSION_EXTENSION_URI.casefold()
+                        ):
+                            extension_list.remove(extension)
+                            changed_worksheet = True
+                    if not list(extension_list):
+                        worksheet.remove(extension_list)
+                        changed_worksheet = True
+                if changed_worksheet:
+                    replacements[member] = ElementTree.tostring(
+                        worksheet,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        reader_warnings.add(
+            "FormulaFence could not isolate worksheet Office Web Add-in bindings before "
+            f"the underlying workbook reader ran ({type(error).__name__}); raw add-in "
+            "metadata remains fail-closed."
+        )
+    return replacements, tuple(sorted(reader_warnings))
+
+
 def _worksheet_dimension_reader_replacements(
     path: Path,
     prior_replacements: Mapping[str, bytes] | None = None,
@@ -12721,6 +13669,13 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
         **prior_replacements,
         **worksheet_sparkline_replacements,
     }
+    worksheet_web_extension_replacements, worksheet_web_extension_reader_warnings = (
+        _worksheet_web_extension_reader_replacements(path, prior_replacements)
+    )
+    prior_replacements = {
+        **prior_replacements,
+        **worksheet_web_extension_replacements,
+    }
     worksheet_dimension_replacements, worksheet_dimension_reader_warnings = (
         _worksheet_dimension_reader_replacements(path, prior_replacements)
     )
@@ -12741,6 +13696,7 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
     replacements.update(legacy_replacements)
     replacements.update(cell_hyperlink_replacements)
     replacements.update(worksheet_sparkline_replacements)
+    replacements.update(worksheet_web_extension_replacements)
     replacements.update(worksheet_dimension_replacements)
     replacements.update(custom_workbook_view_replacements)
     replacements.update(table_style_control_replacements)
@@ -12751,6 +13707,7 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
                 *legacy_reader_warnings,
                 *cell_hyperlink_reader_warnings,
                 *worksheet_sparkline_reader_warnings,
+                *worksheet_web_extension_reader_warnings,
                 *worksheet_dimension_reader_warnings,
                 *custom_workbook_view_reader_warnings,
                 *table_style_control_reader_warnings,
@@ -36052,6 +37009,7 @@ _WORKSHEET_DRAWING_GRAPHIC_DATA_CHART_EX_URIS = frozenset(
 _WORKSHEET_DRAWING_GRAPHIC_DATA_DIAGRAM_URIS = frozenset(
     {_DRAWINGML_DIAGRAM_NS, _DRAWINGML_STRICT_DIAGRAM_NS}
 )
+_WORKSHEET_DRAWING_GRAPHIC_DATA_WEB_EXTENSION_URIS = frozenset({_WEB_EXTENSION_NS})
 _WORKSHEET_DRAWING_DIAGRAM_COMPONENT_ROOTS = {
     "data": frozenset(
         (namespace, "dataModel")
@@ -36109,6 +37067,8 @@ def _worksheet_drawing_shape_graphic_frame_kind(
         return "chart-ex"
     if uri in _WORKSHEET_DRAWING_GRAPHIC_DATA_DIAGRAM_URIS:
         return "diagram"
+    if uri in _WORKSHEET_DRAWING_GRAPHIC_DATA_WEB_EXTENSION_URIS:
+        return "web-extension"
     return "other" if uri else None
 
 
@@ -36123,7 +37083,8 @@ def _worksheet_drawing_shape_supported_container(
         return False
     return (
         local_name != "graphicFrame"
-        or _worksheet_drawing_shape_graphic_frame_kind(element) not in {"chart", "chart-ex"}
+        or _worksheet_drawing_shape_graphic_frame_kind(element)
+        not in {"chart", "chart-ex", "web-extension"}
     )
 
 
@@ -36143,6 +37104,32 @@ def _worksheet_drawing_shape_is_chart_ex_alternate_content(
         and any(
             _worksheet_drawing_shape_graphic_frame_kind(child) == "chart-ex"
             for child in element.iter()
+        )
+    )
+
+
+def _worksheet_drawing_shape_is_in_content_web_extension_alternate_content(
+    element: ElementTree.Element,
+) -> bool:
+    """Return whether a markup-compatibility branch hosts an add-in frame.
+
+    In-content Office Web Add-ins use a DrawingML graphic frame in the active
+    ``mc:Choice`` branch and commonly carry a native-picture fallback.  The
+    Office Web Add-in scanner owns the active frame while the worksheet-image
+    scanner owns that fallback; the ordinary shape scanner must not count
+    either as a generic graphic-frame control.
+    """
+    return (
+        _xml_namespace(element.tag) == _MARKUP_COMPATIBILITY_NS
+        and _xml_local_name(element.tag) == "AlternateContent"
+        and any(
+            _worksheet_drawing_shape_graphic_frame_kind(descendant) == "web-extension"
+            for child in element
+            if not (
+                _xml_namespace(child.tag) == _MARKUP_COMPATIBILITY_NS
+                and _xml_local_name(child.tag) == "Fallback"
+            )
+            for descendant in child.iter()
         )
     )
 
@@ -36414,12 +37401,12 @@ def _worksheet_drawing_shape_xml_fragment(
             )
             for child in element
             if (
-                    _xml_namespace(child.tag) in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
-                    and _xml_local_name(child.tag) in _WORKSHEET_DRAWING_GROUP_CHILDREN
-                    and (
-                        _xml_local_name(child.tag) != "graphicFrame"
+                _xml_namespace(child.tag) in _WORKSHEET_DRAWING_SHAPE_DRAWING_NAMESPACES
+                and _xml_local_name(child.tag) in _WORKSHEET_DRAWING_GROUP_CHILDREN
+                and (
+                    _xml_local_name(child.tag) != "graphicFrame"
                     or _worksheet_drawing_shape_graphic_frame_kind(child)
-                    not in {"chart", "chart-ex"}
+                    not in {"chart", "chart-ex", "web-extension"}
                 )
             )
         )
@@ -36468,7 +37455,7 @@ def _worksheet_drawing_shape_anchor_fragment(
             and (
                 _xml_local_name(child.tag) != "graphicFrame"
                 or _worksheet_drawing_shape_graphic_frame_kind(child)
-                not in {"chart", "chart-ex"}
+                not in {"chart", "chart-ex", "web-extension"}
             )
         )
     )
@@ -36596,7 +37583,12 @@ def _worksheet_drawing_shape_inspection(
     all_container_nodes: list[ElementTree.Element] = []
 
     def visit_container_nodes(element: ElementTree.Element) -> None:
-        if _worksheet_drawing_shape_is_chart_ex_alternate_content(element):
+        if (
+            _worksheet_drawing_shape_is_chart_ex_alternate_content(element)
+            or _worksheet_drawing_shape_is_in_content_web_extension_alternate_content(
+                element
+            )
+        ):
             # Retain any unexpected control in the active Choice branch as an
             # unanchored coverage warning, but do not treat Excel's legacy
             # fallback shape as a second live worksheet control.
@@ -38029,6 +39021,20 @@ def _worksheet_image_picture_containers(
     pictures: list[ElementTree.Element] = []
 
     def visit(element: ElementTree.Element) -> None:
+        if _worksheet_drawing_shape_is_in_content_web_extension_alternate_content(
+            element
+        ):
+            # The active Choice branch is a web-extension frame, which is
+            # inspected by the add-in scanner.  Its Fallback branch is a
+            # native picture preview and remains a normal image control.
+            for child in element:
+                if (
+                    _xml_namespace(child.tag) == _MARKUP_COMPATIBILITY_NS
+                    and _xml_local_name(child.tag) == "Fallback"
+                ):
+                    for fallback_child in child:
+                        visit(fallback_child)
+            return
         if _xml_namespace(element.tag) not in _WORKSHEET_IMAGE_DRAWING_NAMESPACES:
             return
         local_name = _xml_local_name(element.tag)

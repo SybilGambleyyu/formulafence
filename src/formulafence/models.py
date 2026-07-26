@@ -979,12 +979,13 @@ class RibbonCustomizationSnapshot:
 
 @dataclass(frozen=True)
 class OfficeWebAddinSnapshot:
-    """Safe aggregate of document-linked Office Web Add-in task panes.
+    """Safe aggregate of document-linked and in-content Office Web Add-ins.
 
-    OOXML task-pane parts can bind a workbook to an installed Office Web
-    Add-in and request auto-show behavior. Private signatures retain the
-    add-in reference, property, binding, and relationship material needed for
-    comparison; ``to_dict`` intentionally exposes only structural counts.
+    OOXML task-pane parts, worksheet binding extensions, and DrawingML
+    in-content frames can bind a workbook to an installed Office Web Add-in.
+    Private signatures retain the add-in reference, property, binding, frame,
+    and relationship material needed for comparison; ``to_dict`` intentionally
+    exposes only structural counts.
     """
 
     declared_taskpane_part_count: int = 0
@@ -1002,10 +1003,17 @@ class OfficeWebAddinSnapshot:
     snapshot_reference_count: int = 0
     related_relationship_count: int = 0
     external_relationship_count: int = 0
+    worksheet_binding_sheet_count: int = 0
+    worksheet_binding_count: int = 0
+    in_content_drawing_part_count: int = 0
+    in_content_web_extension_reference_count: int = 0
+    in_content_web_extension_part_count: int = 0
     declaration_signature: str | None = field(default=None, repr=False)
     taskpane_signature: str | None = field(default=None, repr=False)
     web_extension_signature: str | None = field(default=None, repr=False)
     relationship_signature: str | None = field(default=None, repr=False)
+    worksheet_binding_signature: str | None = field(default=None, repr=False)
+    in_content_signature: str | None = field(default=None, repr=False)
 
     @property
     def present(self) -> bool:
@@ -1013,10 +1021,13 @@ class OfficeWebAddinSnapshot:
             self.declared_taskpane_part_count
             or self.taskpane_part_count
             or self.web_extension_part_count
+            or self.unrecognized_part_count
+            or self.worksheet_binding_count
+            or self.in_content_web_extension_reference_count
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Return task-pane inventory without add-in identities or endpoints."""
+        """Return add-in inventory without identities, bindings, or endpoints."""
         return {
             "present": self.present,
             "declared_taskpane_part_count": self.declared_taskpane_part_count,
@@ -1034,6 +1045,15 @@ class OfficeWebAddinSnapshot:
             "snapshot_reference_count": self.snapshot_reference_count,
             "related_relationship_count": self.related_relationship_count,
             "external_relationship_count": self.external_relationship_count,
+            "worksheet_binding_sheet_count": self.worksheet_binding_sheet_count,
+            "worksheet_binding_count": self.worksheet_binding_count,
+            "in_content_drawing_part_count": self.in_content_drawing_part_count,
+            "in_content_web_extension_reference_count": (
+                self.in_content_web_extension_reference_count
+            ),
+            "in_content_web_extension_part_count": (
+                self.in_content_web_extension_part_count
+            ),
         }
 
     def profile_dict(self) -> dict[str, Any]:
@@ -3973,6 +3993,12 @@ class WorkbookSnapshot:
             ),
             "office_web_addin_auto_show_taskpane_count": (
                 self.office_web_addins.auto_show_taskpane_count
+            ),
+            "office_web_addin_worksheet_binding_count": (
+                self.office_web_addins.worksheet_binding_count
+            ),
+            "office_web_addin_in_content_reference_count": (
+                self.office_web_addins.in_content_web_extension_reference_count
             ),
             "has_office_web_addins": self.office_web_addins.present,
             "pivot_table_sheet_count": (

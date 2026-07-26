@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.64.0/formulafence-0.64.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.65.0/formulafence-0.65.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -135,7 +135,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -344,25 +344,31 @@ part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-customui2/
 specifications; its `onLoad`, `loadImage`, and `onAction` callback surface is
 documented in the [Custom UI schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-customui2/a232628d-f6fb-4630-a463-459989a68e7a).
 
-FormulaFence separately inventories document-linked **Office Web Add-in task
-panes**. A workbook can declare a task-pane part, bind it to a web-extension
-definition, and request `Office.AutoShowTaskpaneWithDocument` even though no
-ordinary cell, VBA payload, or RibbonX control changes. FormulaFence follows
-the bounded package chain from the workbook relationship through
-`taskpanes.xml` and its direct `webextension*.xml` definitions. It compares
-task-pane configuration, visible/locked state, add-in references, auto-show
-properties, bindings, snapshots, and direct relationship semantics privately;
-profiles expose only safe counts. A material change emits `FF028`; enable
+FormulaFence separately inventories **Office Web Add-ins**. A workbook can
+declare a task pane, bind a documented worksheet `x15:webExtensions` entry to
+a definition `appref`, or host a `we:webextensionref` frame in worksheet
+DrawingML even though no ordinary cell, VBA payload, or RibbonX control
+changes. FormulaFence follows the bounded workbook-to-`taskpanes.xml` chain,
+validates worksheet `appRef` bindings against direct `webextension*.xml`
+definitions, and follows direct in-content frame relationships in the active
+`mc:Choice` branch. It compares task-pane configuration, visible/locked state,
+add-in references, auto-show properties, bindings, snapshots, active frame
+placement/XML, and direct relationship semantics privately; profiles expose
+only safe counts. The native-picture fallback is retained under the separate
+worksheet-image boundary. A material change emits `FF028`; enable
 `no_office_web_addin_changes` for `FFP028`. Add-in IDs, store references,
-property values, binding values, snapshot data, XML, and relationship targets
-never enter profiles or reports. FormulaFence does not install, load, execute,
-or fetch an add-in or manifest, and it never follows an external relationship.
-Task-pane and web-extension XML reads are bounded to 16 MiB per part, 32 MiB
-per workbook, and 64 parts; malformed, unbound, oversized, or over-budget
-parts remain explicit coverage warnings. Worksheet-scoped web-extension markup
-outside this task-pane chain is not yet modeled. The package surface follows
-Microsoft's [Taskpane Web Extension File](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/3d04f8ce-65f2-4dc3-bafa-636d0a7e41a1)
-and [Web Extension](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/56fe5a64-dd6d-422c-beac-19d72dd10ade)
+property values, binding values, worksheet formulas, snapshot data, frame XML,
+and relationship targets never enter profiles or reports. FormulaFence does
+not install, load, execute, or fetch an add-in or manifest, and it never
+follows an external relationship. Task-pane and web-extension XML reads are
+bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts; worksheet
+binding and in-content DrawingML XML reads are each bounded to 16 MiB per part,
+64 MiB per workbook, and 512 parts. Malformed, unbound, oversized, or
+over-budget parts remain explicit coverage warnings. The package surface
+follows Microsoft's [Taskpane Web Extension File](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/3d04f8ce-65f2-4dc3-bafa-636d0a7e41a1),
+[Web Extension](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-owexml/56fe5a64-dd6d-422c-beac-19d72dd10ade),
+[Worksheet](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/07d607af-5618-4ca2-b683-6a78dc0d9627),
+and [CT_WebExtension](https://learn.microsoft.com/en-nz/openspecs/office_standards/ms-xlsx/386851b6-b7b6-42b8-8cf1-d94bab7b0731)
 specifications.
 
 FormulaFence also inventories **DrawingML chart definitions and cached

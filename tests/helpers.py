@@ -5817,6 +5817,7 @@ def make_office_web_addin_model(
     path: Path,
     *,
     taskpane_reference_element: str = "webextension",
+    worksheet_binding: bool = False,
 ) -> Path:
     """Create a harmless Office Web Add-in task-pane package fixture.
 
@@ -5846,6 +5847,7 @@ def make_office_web_addin_model(
     web_extension_relationship = (
         "http://schemas.microsoft.com/office/2011/relationships/webextension"
     )
+    worksheet_web_extension_uri = "{F7C9EE02-42E1-4005-9D12-6889AFFD525C}"
     image_relationship = f"{document_relationships}/image"
 
     def serialize(root: ElementTree.Element) -> bytes:
@@ -6010,6 +6012,32 @@ def make_office_web_addin_model(
             b"private baseline add-in snapshot"
         )
 
+        if worksheet_binding:
+            worksheet = _inputs_worksheet_root(contents)
+            extension_list = ElementTree.SubElement(
+                worksheet,
+                f"{{{_SPREADSHEETML_NS}}}extLst",
+            )
+            extension = ElementTree.SubElement(
+                extension_list,
+                f"{{{_SPREADSHEETML_NS}}}ext",
+                {"uri": worksheet_web_extension_uri},
+            )
+            bindings = ElementTree.SubElement(
+                extension,
+                f"{{{_OFFICE_2013_SPREADSHEET_NS}}}webExtensions",
+            )
+            binding = ElementTree.SubElement(
+                bindings,
+                f"{{{_OFFICE_2013_SPREADSHEET_NS}}}webExtension",
+                {"appRef": "PrivateBaselineTable"},
+            )
+            ElementTree.SubElement(
+                binding,
+                f"{{{_EXCEL_2006_MAIN_NS}}}f",
+            ).text = "Inputs!$B$2:$B$4"
+            _save_inputs_worksheet(contents, worksheet)
+
     return _rewrite_archive(path, mutate, ".office-web-addin.tmp.xlsx")
 
 
@@ -6044,6 +6072,36 @@ def change_office_web_addin_auto_show(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".office-web-addin-autoshow.tmp.xlsx")
+
+
+def change_office_web_addin_worksheet_binding(path: Path) -> Path:
+    """Change only the private local range bound to a worksheet add-in."""
+    formula_tag = f"{{{_EXCEL_2006_MAIN_NS}}}f"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = _inputs_worksheet_root(contents)
+        formula = next(worksheet.iter(formula_tag), None)
+        if formula is None:
+            raise ValueError("Fixture does not contain a worksheet add-in binding")
+        formula.text = "Inputs!$B$2:$B$3"
+        _save_inputs_worksheet(contents, worksheet)
+
+    return _rewrite_archive(path, mutate, ".office-web-addin-worksheet-change.tmp.xlsx")
+
+
+def corrupt_office_web_addin_worksheet_binding(path: Path) -> Path:
+    """Remove a required worksheet appRef so add-in parsing fails closed."""
+    binding_tag = f"{{{_OFFICE_2013_SPREADSHEET_NS}}}webExtension"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = _inputs_worksheet_root(contents)
+        binding = next(worksheet.iter(binding_tag), None)
+        if binding is None:
+            raise ValueError("Fixture does not contain a worksheet add-in binding")
+        binding.attrib.pop("appRef", None)
+        _save_inputs_worksheet(contents, worksheet)
+
+    return _rewrite_archive(path, mutate, ".office-web-addin-worksheet-corrupt.tmp.xlsx")
 
 
 def change_office_web_addin_controls(path: Path) -> Path:
@@ -6269,6 +6327,354 @@ def corrupt_office_web_addin_definition_root(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".office-web-addin-corrupt.tmp.xlsx")
+
+
+def make_in_content_office_web_addin_model(path: Path) -> Path:
+    """Create an Office Web Add-in hosted in a worksheet DrawingML frame.
+
+    Modern Excel workbooks can host a Web Extension in the active branch of
+    ``mc:AlternateContent`` and retain a native-picture preview as a fallback.
+    This fixture deliberately has no workbook task-pane declaration, exercising
+    the distinct in-content relationship graph that FormulaFence follows.
+    """
+    make_model(path)
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    drawing_main = _DRAWINGML_MAIN_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    spreadsheet = _SPREADSHEETML_NS
+    markup_compatibility = _MARKUP_COMPATIBILITY_NS
+    web_extension = (
+        "http://schemas.microsoft.com/office/webextensions/webextension/2010/11"
+    )
+    web_extension_relationship = (
+        "http://schemas.microsoft.com/office/2011/relationships/webextension"
+    )
+    baseline_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9JdcAAAAAASUVORK5CYII="
+    )
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def marker(
+        parent: ElementTree.Element,
+        name: str,
+        *,
+        column: int,
+        row: int,
+    ) -> None:
+        point = ElementTree.SubElement(parent, f"{{{drawing}}}{name}")
+        ElementTree.SubElement(point, f"{{{drawing}}}col").text = str(column)
+        ElementTree.SubElement(point, f"{{{drawing}}}colOff").text = "0"
+        ElementTree.SubElement(point, f"{{{drawing}}}row").text = str(row)
+        ElementTree.SubElement(point, f"{{{drawing}}}rowOff").text = "0"
+
+    def fallback_picture(parent: ElementTree.Element) -> None:
+        picture = ElementTree.SubElement(parent, f"{{{drawing}}}pic")
+        nonvisual = ElementTree.SubElement(picture, f"{{{drawing}}}nvPicPr")
+        ElementTree.SubElement(
+            nonvisual,
+            f"{{{drawing}}}cNvPr",
+            {
+                "id": "7301",
+                "name": "PRIVATE-IN-CONTENT-ADDIN-PREVIEW",
+                "descr": "PRIVATE-IN-CONTENT-ADDIN-PREVIEW-DESCRIPTION",
+            },
+        )
+        ElementTree.SubElement(nonvisual, f"{{{drawing}}}cNvPicPr")
+        fill = ElementTree.SubElement(picture, f"{{{drawing}}}blipFill")
+        ElementTree.SubElement(
+            fill,
+            f"{{{drawing_main}}}blip",
+            {f"{{{document_relationships}}}embed": "rIdFenceInContentPreview"},
+        )
+        stretch = ElementTree.SubElement(fill, f"{{{drawing_main}}}stretch")
+        ElementTree.SubElement(stretch, f"{{{drawing_main}}}fillRect")
+        properties = ElementTree.SubElement(picture, f"{{{drawing}}}spPr")
+        transform = ElementTree.SubElement(properties, f"{{{drawing_main}}}xfrm")
+        ElementTree.SubElement(transform, f"{{{drawing_main}}}off", {"x": "0", "y": "0"})
+        ElementTree.SubElement(
+            transform,
+            f"{{{drawing_main}}}ext",
+            {"cx": "1828800", "cy": "1371600"},
+        )
+        geometry = ElementTree.SubElement(
+            properties,
+            f"{{{drawing_main}}}prstGeom",
+            {"prst": "rect"},
+        )
+        ElementTree.SubElement(geometry, f"{{{drawing_main}}}avLst")
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member = "xl/drawings/drawing1.xml"
+        worksheet_member = "xl/worksheets/sheet1.xml"
+        preview_member = "xl/media/private-in-content-addin-preview.png"
+        definition_member = "xl/webextensions/webextension1.xml"
+
+        drawing_root = ElementTree.Element(f"{{{drawing}}}wsDr")
+        anchor = ElementTree.SubElement(
+            drawing_root,
+            f"{{{drawing}}}twoCellAnchor",
+            {"editAs": "oneCell"},
+        )
+        marker(anchor, "from", column=2, row=3)
+        marker(anchor, "to", column=8, row=12)
+        alternate_content = ElementTree.SubElement(
+            anchor,
+            f"{{{markup_compatibility}}}AlternateContent",
+        )
+        choice = ElementTree.SubElement(
+            alternate_content,
+            f"{{{markup_compatibility}}}Choice",
+            {"Requires": "we"},
+        )
+        frame = ElementTree.SubElement(choice, f"{{{drawing}}}graphicFrame")
+        nonvisual = ElementTree.SubElement(frame, f"{{{drawing}}}nvGraphicFramePr")
+        ElementTree.SubElement(
+            nonvisual,
+            f"{{{drawing}}}cNvPr",
+            {
+                "id": "7300",
+                "name": "PRIVATE-IN-CONTENT-ADDIN-FRAME",
+                "descr": "PRIVATE-IN-CONTENT-ADDIN-FRAME-DESCRIPTION",
+            },
+        )
+        ElementTree.SubElement(nonvisual, f"{{{drawing}}}cNvGraphicFramePr")
+        transform = ElementTree.SubElement(frame, f"{{{drawing}}}xfrm")
+        ElementTree.SubElement(transform, f"{{{drawing_main}}}off", {"x": "0", "y": "0"})
+        ElementTree.SubElement(
+            transform,
+            f"{{{drawing_main}}}ext",
+            {"cx": "1828800", "cy": "1371600"},
+        )
+        graphic = ElementTree.SubElement(frame, f"{{{drawing_main}}}graphic")
+        graphic_data = ElementTree.SubElement(
+            graphic,
+            f"{{{drawing_main}}}graphicData",
+            {"uri": web_extension},
+        )
+        ElementTree.SubElement(
+            graphic_data,
+            f"{{{web_extension}}}webextensionref",
+            {f"{{{document_relationships}}}id": "rIdFenceInContentExtension"},
+        )
+        fallback = ElementTree.SubElement(
+            alternate_content,
+            f"{{{markup_compatibility}}}Fallback",
+        )
+        fallback_picture(fallback)
+        ElementTree.SubElement(anchor, f"{{{drawing}}}clientData")
+        contents[drawing_member] = serialize(drawing_root)
+
+        drawing_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        for relationship_id, relationship_type, target in (
+            (
+                "rIdFenceInContentExtension",
+                web_extension_relationship,
+                "../webextensions/webextension1.xml",
+            ),
+            (
+                "rIdFenceInContentPreview",
+                f"{document_relationships}/image",
+                "../media/private-in-content-addin-preview.png",
+            ),
+        ):
+            ElementTree.SubElement(
+                drawing_relationships,
+                f"{{{package_relationships}}}Relationship",
+                {"Id": relationship_id, "Type": relationship_type, "Target": target},
+            )
+        contents[_relationship_member(drawing_member)] = serialize(drawing_relationships)
+
+        definition = ElementTree.Element(
+            f"{{{web_extension}}}webextension",
+            {"id": "{22222222-2222-2222-2222-222222222222}"},
+        )
+        ElementTree.SubElement(
+            definition,
+            f"{{{web_extension}}}reference",
+            {
+                "id": "PrivateInContentAddin",
+                "version": "1.0.0.0",
+                "store": "private-in-content-manifest.xml",
+                "storeType": "Filesystem",
+            },
+        )
+        properties = ElementTree.SubElement(definition, f"{{{web_extension}}}properties")
+        ElementTree.SubElement(
+            properties,
+            f"{{{web_extension}}}property",
+            {"name": "PrivateInContentBehavior", "value": "private in-content behavior"},
+        )
+        contents[definition_member] = serialize(definition)
+        contents[preview_member] = baseline_png
+
+        worksheet = _inputs_worksheet_root(contents)
+        ElementTree.SubElement(
+            worksheet,
+            f"{{{spreadsheet}}}drawing",
+            {f"{{{document_relationships}}}id": "rIdFenceInContentDrawing"},
+        )
+        _save_inputs_worksheet(contents, worksheet)
+        worksheet_relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            worksheet_relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceInContentDrawing",
+                "Type": f"{document_relationships}/drawing",
+                "Target": "../drawings/drawing1.xml",
+            },
+        )
+        contents[_relationship_member(worksheet_member)] = serialize(worksheet_relationships)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        default_tag = f"{{{_CONTENT_TYPES_NS}}}Default"
+        override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
+        if not any(
+            element.get("Extension") == "png"
+            for element in content_types.findall(default_tag)
+        ):
+            ElementTree.SubElement(
+                content_types,
+                default_tag,
+                {"Extension": "png", "ContentType": "image/png"},
+            )
+        for part_name, content_type in (
+            (
+                "/xl/drawings/drawing1.xml",
+                "application/vnd.openxmlformats-officedocument.drawing+xml",
+            ),
+            (
+                "/xl/webextensions/webextension1.xml",
+                "application/vnd.ms-office.webextension+xml",
+            ),
+        ):
+            ElementTree.SubElement(
+                content_types,
+                override_tag,
+                {"PartName": part_name, "ContentType": content_type},
+            )
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+    return _rewrite_archive(path, mutate, ".in-content-office-web-addin.tmp.xlsx")
+
+
+def change_in_content_office_web_addin_anchor(path: Path) -> Path:
+    """Move only an in-content add-in frame's private anchor."""
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member = "xl/drawings/drawing1.xml"
+        root = ElementTree.fromstring(contents[drawing_member])
+        end = next(root.iter(f"{{{drawing}}}to"), None)
+        if end is None:
+            raise ValueError("Fixture does not contain an in-content add-in anchor")
+        row = end.find(f"{{{drawing}}}row")
+        if row is None:
+            raise ValueError("Fixture in-content add-in anchor has no ending row")
+        row.text = "14"
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".in-content-office-web-addin-anchor.tmp.xlsx")
+
+
+def change_in_content_office_web_addin_preview_payload(path: Path) -> Path:
+    """Replace only the static fallback-preview image bytes."""
+    candidate_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z8DwHwAFgAI/ScLkYQAAAABJRU5ErkJggg=="
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["xl/media/private-in-content-addin-preview.png"] = candidate_png
+
+    return _rewrite_archive(path, mutate, ".in-content-office-web-addin-preview.tmp.xlsx")
+
+
+def renumber_in_content_office_web_addin_identifiers(path: Path) -> Path:
+    """Renumber volatile frame and drawing relationship IDs consistently."""
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    web_extension = (
+        "http://schemas.microsoft.com/office/webextensions/webextension/2010/11"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member = "xl/drawings/drawing1.xml"
+        root = ElementTree.fromstring(contents[drawing_member])
+        for index, properties in enumerate(
+            root.iter(f"{{{drawing}}}cNvPr"),
+            start=9500,
+        ):
+            properties.set("id", str(index))
+        reference = next(root.iter(f"{{{web_extension}}}webextensionref"), None)
+        if reference is None:
+            raise ValueError("Fixture does not contain an in-content add-in reference")
+        reference.set(
+            f"{{{document_relationships}}}id",
+            "rIdFenceRenumberedInContentExtension",
+        )
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships_member = _relationship_member(drawing_member)
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            (
+                current
+                for current in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if current.get("Id") == "rIdFenceInContentExtension"
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain an in-content add-in relationship")
+        relationship.set("Id", "rIdFenceRenumberedInContentExtension")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".in-content-office-web-addin-ids.tmp.xlsx")
+
+
+def corrupt_in_content_office_web_addin_reference(path: Path) -> Path:
+    """Remove the frame relationship ID so in-content parsing fails closed."""
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    web_extension = (
+        "http://schemas.microsoft.com/office/webextensions/webextension/2010/11"
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        drawing_member = "xl/drawings/drawing1.xml"
+        root = ElementTree.fromstring(contents[drawing_member])
+        reference = next(root.iter(f"{{{web_extension}}}webextensionref"), None)
+        if reference is None:
+            raise ValueError("Fixture does not contain an in-content add-in reference")
+        reference.attrib.pop(f"{{{document_relationships}}}id", None)
+        contents[drawing_member] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".in-content-office-web-addin-corrupt.tmp.xlsx")
 
 
 def make_worksheet_embedded_control_model(

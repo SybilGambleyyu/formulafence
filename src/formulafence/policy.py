@@ -512,7 +512,7 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                 Finding(
                     "FFP028",
                     "critical",
-                    "Policy forbids changes to Office Web Add-in task panes.",
+                    "Policy forbids changes to Office Web Add-in controls.",
                     details=finding.details,
                 )
             )

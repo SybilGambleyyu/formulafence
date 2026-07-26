@@ -1109,6 +1109,10 @@ def _workbook_control_changes(
             details["web_extension_definition_material_changed"] = True
         if old_addins.relationship_signature != new_addins.relationship_signature:
             details["related_part_relationships_changed"] = True
+        if old_addins.worksheet_binding_signature != new_addins.worksheet_binding_signature:
+            details["worksheet_binding_material_changed"] = True
+        if old_addins.in_content_signature != new_addins.in_content_signature:
+            details["in_content_drawing_binding_changed"] = True
         changes.append(
             Change(
                 "office_web_addins_changed",
@@ -1121,7 +1125,7 @@ def _workbook_control_changes(
             Finding(
                 "FF028",
                 "critical",
-                "Office Web Add-in task-pane controls changed.",
+                "Office Web Add-in controls changed.",
                 details=details,
             )
         )

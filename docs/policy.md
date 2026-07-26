@@ -103,7 +103,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_macro_changes` | boolean | The `xl/vbaProject.bin` payload is added, removed, or has a different SHA-256. |
 | `no_xlm_macro_sheet_changes` | boolean | An Excel 4.0 / XLM macro-sheet declaration, program XML, related-part relationship, or direct internal related-part payload changes. |
 | `no_ribbon_customization_changes` | boolean | An Office RibbonX custom-UI package declaration, control/callback XML, or direct relationship changes. |
-| `no_office_web_addin_changes` | boolean | An Office Web Add-in task-pane workbook binding, task-pane configuration, web-extension definition, or direct relationship changes. |
+| `no_office_web_addin_changes` | boolean | An Office Web Add-in task-pane or worksheet/in-content binding, configuration, web-extension definition, or direct relationship changes. |
 | `no_chart_definition_changes` | boolean | A legacy DrawingML or Office 2016+ ChartEx chart binding, chart definition, cached series data, chart-overlay shape, direct relationship, or bounded direct related payload changes. |
 | `no_pivot_table_definition_changes` | boolean | A PivotTable binding/layout, cache schema, shared item, cache-record relationship, or bounded cached-record payload changes. Source and refresh controls remain under `no_external_data_connection_changes`. |
 | `no_slicer_timeline_cache_changes` | boolean | A Slicer or Timeline workbook binding, cached filter state, source binding, filtered-PivotTable binding, or direct cache-part relationship changes. |
@@ -329,26 +329,30 @@ otherwise unrecognized custom-UI parts remain visible coverage warnings.
 Custom-UI XML reads are bounded to 16 MiB per part, 32 MiB per workbook, and
 eight parts.
 
-Office Web Add-in task panes can bind a document to an installed add-in and
-request `Office.AutoShowTaskpaneWithDocument` while remaining outside ordinary
-worksheet XML, the VBA payload, and RibbonX. FormulaFence follows the bounded
-chain from the workbook's documented task-pane relationship through
-`taskpanes.xml`, its task-pane-to-extension bindings, and direct
-`webextension*.xml` definitions. It privately fingerprints task-pane
-configuration, add-in references, auto-show properties, bindings, snapshots,
-and direct relationship semantics while normalizing writer-chosen relationship
-IDs and equivalent internal target spellings. Profiles expose only safe counts:
-parts, task panes, visible/locked panes, references, auto-show requests,
-bindings, snapshots, and relationships. Add-in IDs, store references, property
-values, binding values, XML, snapshot data, and relationship targets never
+Office Web Add-ins can bind a document through a task pane, a worksheet's
+documented `x15:webExtensions` extension, or an in-content DrawingML
+`we:webextensionref` frame while remaining outside ordinary cell values, the
+VBA payload, and RibbonX. FormulaFence follows the bounded workbook-to-
+`taskpanes.xml`-to-`webextension*.xml` chain, validates worksheet `appRef`
+bindings against definition bindings, and follows direct worksheet-DrawingML
+web-extension references in the active `mc:Choice` branch. It fingerprints
+task-pane configuration, add-in references, auto-show properties, bindings,
+snapshots, active frame XML/placement, and direct relationship semantics while
+normalizing writer-chosen relationship IDs and equivalent internal target
+spellings. The static native-picture fallback of an in-content frame remains
+under the native worksheet-image boundary. Profiles expose only safe counts:
+parts, task panes, worksheet bindings, in-content references, snapshots, and
+relationships. Add-in IDs, store references, property values, binding values,
+worksheet formulas, frame XML, snapshot data, and relationship targets never
 enter a profile or diff. A material change emits `FF028`; enable
 `no_office_web_addin_changes` to make it `FFP028` in CI. FormulaFence does not
 install, load, execute, or fetch an add-in or manifest, and it never follows
 an external relationship. Missing, oversized, malformed, unbound, or
 over-budget parts remain coverage warnings. Task-pane and web-extension XML
-reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts.
-Worksheet-scoped web-extension markup outside this task-pane chain is not yet
-modeled.
+reads are bounded to 16 MiB per part, 32 MiB per workbook, and 64 parts;
+worksheet-binding and in-content DrawingML scans are each bounded to 16 MiB
+per part, 64 MiB per workbook, and 512 parts. Other unrecognized extension or
+graphic-frame forms remain outside this boundary.
 
 DrawingML charts can change a report's series, axis, title, formatting, cached
 values, or overlay annotations without changing an ordinary worksheet cell.

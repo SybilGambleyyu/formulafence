@@ -137,6 +137,14 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "- **Office Web Add-ins requesting auto-show:** "
             f"{workbook['office_web_addin_auto_show_taskpane_count']}"
         ),
+        (
+            "- **Office Web Add-in worksheet bindings:** "
+            f"{workbook['office_web_addin_worksheet_binding_count']}"
+        ),
+        (
+            "- **Office Web Add-in in-content references:** "
+            f"{workbook['office_web_addin_in_content_reference_count']}"
+        ),
         f"- **PivotTable host sheets:** {workbook['pivot_table_sheet_count']}",
         f"- **PivotTable parts:** {workbook['pivot_table_part_count']}",
         (
@@ -914,7 +922,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "## Office Web Add-in task panes",
+                "## Office Web Add-ins",
                 "",
                 (
                     "- **Workbook task-pane declarations:** "
@@ -952,6 +960,17 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 ),
                 f"- **Bindings:** {office_web_addins['binding_count']}",
                 (
+                    "- **Worksheet binding sheets / bindings:** "
+                    f"{office_web_addins['worksheet_binding_sheet_count']} / "
+                    f"{office_web_addins['worksheet_binding_count']}"
+                ),
+                (
+                    "- **In-content drawing parts / references / definitions:** "
+                    f"{office_web_addins['in_content_drawing_part_count']} / "
+                    f"{office_web_addins['in_content_web_extension_reference_count']} / "
+                    f"{office_web_addins['in_content_web_extension_part_count']}"
+                ),
+                (
                     "- **Snapshot relationships:** "
                     f"{office_web_addins['snapshot_reference_count']}"
                 ),
@@ -968,8 +987,9 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 f"{office_web_addins['unrecognized_part_count']}"
             )
         lines.append(
-            "Add-in identities, store references, properties, bindings, snapshots, and "
-            "relationship targets are compared privately and intentionally omitted."
+            "Add-in identities, store references, properties, bindings, worksheet formulas, "
+            "snapshots, frame XML, and relationship targets are compared privately and "
+            "intentionally omitted."
         )
     pivot_table_definitions = profile["pivot_table_definitions"]
     if pivot_table_definitions["present"]:

@@ -58,6 +58,8 @@ from .helpers import (
     change_gradient_fill_definition,
     change_ignored_error_extension_target,
     change_ignored_error_target,
+    change_in_content_office_web_addin_anchor,
+    change_in_content_office_web_addin_preview_payload,
     change_inline_rich_text_run_color,
     change_legacy_comment_text,
     change_legacy_note_visibility,
@@ -69,6 +71,7 @@ from .helpers import (
     change_number_format_default_style,
     change_office_web_addin_auto_show,
     change_office_web_addin_controls,
+    change_office_web_addin_worksheet_binding,
     change_package_signature_certificate_payload,
     change_package_signature_reference,
     change_pivot_table_definition_material,
@@ -142,12 +145,14 @@ from .helpers import (
     corrupt_font_definition,
     corrupt_formula_cached_result,
     corrupt_ignored_error_control,
+    corrupt_in_content_office_web_addin_reference,
     corrupt_legacy_comment_root,
     corrupt_legacy_vml_control_root,
     corrupt_named_sheet_view_control,
     corrupt_number_format_column_control,
     corrupt_number_format_definition,
     corrupt_office_web_addin_definition_root,
+    corrupt_office_web_addin_worksheet_binding,
     corrupt_package_signature_root,
     corrupt_pivot_table_definition_root,
     corrupt_ribbon_customization_root,
@@ -212,6 +217,7 @@ from .helpers import (
     make_formula_cached_result_model,
     make_ignored_error_model,
     make_implicit_intersection_model,
+    make_in_content_office_web_addin_model,
     make_legacy_array_model,
     make_legacy_comment_model,
     make_legacy_threaded_placeholder_model,
@@ -320,6 +326,7 @@ from .helpers import (
     renumber_chart_relationships,
     renumber_extended_chart_relationships,
     renumber_external_link_declaration_relationships,
+    renumber_in_content_office_web_addin_identifiers,
     renumber_legacy_comment_identifiers,
     renumber_legacy_threaded_placeholder_identifiers,
     renumber_legacy_vml_control_relationships,
@@ -2496,8 +2503,13 @@ def test_office_web_addin_auto_show_changes_are_profiled_and_diffed_privately(
         "snapshot_reference_count": 1,
         "related_relationship_count": 3,
         "external_relationship_count": 1,
+        "worksheet_binding_sheet_count": 0,
+        "worksheet_binding_count": 0,
+        "in_content_drawing_part_count": 0,
+        "in_content_web_extension_reference_count": 0,
+        "in_content_web_extension_part_count": 0,
     }
-    assert "## Office Web Add-in task panes" in markdown
+    assert "## Office Web Add-ins" in markdown
     assert "**Auto-show task-pane requests:** 1" in markdown
     assert addin_change.details["web_extension_definition_material_changed"] is True
     assert "workbook_binding_changed" not in addin_change.details
@@ -2661,6 +2673,212 @@ def test_malformed_office_web_addin_parts_fail_closed(tmp_path) -> None:
         for warning in candidate_snapshot.parser_warnings
     )
     assert "office_web_addins_changed" in {change.kind for change in report.changes}
+    assert "FF028" in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_office_web_addin_bindings_are_diffed_privately(tmp_path) -> None:
+    baseline = make_office_web_addin_model(
+        tmp_path / "baseline.xlsx",
+        worksheet_binding=True,
+    )
+    candidate = make_office_web_addin_model(
+        tmp_path / "candidate.xlsx",
+        worksheet_binding=True,
+    )
+    change_office_web_addin_worksheet_binding(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    addin_change = next(
+        change for change in report.changes if change.kind == "office_web_addins_changed"
+    )
+
+    assert baseline_snapshot.cells == candidate_snapshot.cells
+    assert baseline_snapshot.office_web_addins.worksheet_binding_sheet_count == 1
+    assert baseline_snapshot.office_web_addins.worksheet_binding_count == 1
+    assert baseline_snapshot.office_web_addins.unrecognized_part_count == 0
+    assert baseline_snapshot.parser_warnings == ()
+    assert profile["office_web_addins"]["worksheet_binding_sheet_count"] == 1
+    assert profile["office_web_addins"]["worksheet_binding_count"] == 1
+    assert "**Worksheet binding sheets / bindings:** 1 / 1" in markdown
+    assert addin_change.details["worksheet_binding_material_changed"] is True
+    assert "in_content_drawing_binding_changed" not in addin_change.details
+    assert "FF028" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PrivateBaselineTable",
+        "Inputs!$B$2:$B$4",
+        "Inputs!$B$2:$B$3",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_malformed_or_oversized_worksheet_addin_bindings_fail_closed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_office_web_addin_model(
+        tmp_path / "baseline.xlsx",
+        worksheet_binding=True,
+    )
+    malformed = make_office_web_addin_model(
+        tmp_path / "malformed.xlsx",
+        worksheet_binding=True,
+    )
+    corrupt_office_web_addin_worksheet_binding(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert malformed_snapshot.office_web_addins.unrecognized_part_count >= 1
+    assert any(
+        "malformed or unsupported worksheet Office Web Add-in metadata" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert "FF028" in {finding.rule_id for finding in malformed_report.findings}
+
+    oversized = make_office_web_addin_model(
+        tmp_path / "oversized.xlsx",
+        worksheet_binding=True,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKSHEET_WEB_EXTENSION_MAX_XML_BYTES",
+        1,
+    )
+    oversized_snapshot = load_snapshot(oversized)
+
+    assert oversized_snapshot.office_web_addins.unrecognized_part_count >= 1
+    assert any(
+        "oversized Office Web Add-in worksheet binding XML part" in warning
+        for warning in oversized_snapshot.parser_warnings
+    )
+
+
+def test_in_content_office_web_addins_and_preview_fallbacks_are_covered(tmp_path) -> None:
+    baseline = make_in_content_office_web_addin_model(tmp_path / "baseline.xlsx")
+    anchor_candidate = make_in_content_office_web_addin_model(
+        tmp_path / "anchor-candidate.xlsx"
+    )
+    preview_candidate = make_in_content_office_web_addin_model(
+        tmp_path / "preview-candidate.xlsx"
+    )
+    change_in_content_office_web_addin_anchor(anchor_candidate)
+    change_in_content_office_web_addin_preview_payload(preview_candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    anchor_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(anchor_candidate),
+    )
+    preview_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(preview_candidate),
+    )
+    addin_change = next(
+        change
+        for change in anchor_report.changes
+        if change.kind == "office_web_addins_changed"
+    )
+    preview_change = next(
+        change
+        for change in preview_report.changes
+        if change.kind == "worksheet_image_controls_changed"
+    )
+
+    assert baseline_snapshot.parser_warnings == ()
+    assert baseline_snapshot.office_web_addins.to_dict() == {
+        "present": True,
+        "declared_taskpane_part_count": 0,
+        "taskpane_part_count": 0,
+        "web_extension_part_count": 1,
+        "unrecognized_part_count": 0,
+        "taskpane_count": 0,
+        "visible_taskpane_count": 0,
+        "locked_taskpane_count": 0,
+        "web_extension_reference_count": 0,
+        "auto_show_taskpane_count": 0,
+        "store_reference_count": 1,
+        "alternate_reference_count": 0,
+        "binding_count": 0,
+        "snapshot_reference_count": 0,
+        "related_relationship_count": 1,
+        "external_relationship_count": 0,
+        "worksheet_binding_sheet_count": 0,
+        "worksheet_binding_count": 0,
+        "in_content_drawing_part_count": 1,
+        "in_content_web_extension_reference_count": 1,
+        "in_content_web_extension_part_count": 1,
+    }
+    assert baseline_snapshot.worksheet_drawing_shapes.present is False
+    assert baseline_snapshot.worksheet_images.anchored_picture_count == 1
+    assert baseline_snapshot.worksheet_images.fingerprinted_image_part_count == 1
+    assert "**In-content drawing parts / references / definitions:** 1 / 1 / 1" in markdown
+    assert addin_change.details["in_content_drawing_binding_changed"] is True
+    assert "FF028" in {finding.rule_id for finding in anchor_report.findings}
+    assert preview_change.details["worksheet_image_payload_material_changed"] is True
+    assert "FF059" in {finding.rule_id for finding in preview_report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(anchor_report.to_dict()),
+        report_to_markdown(anchor_report),
+        json.dumps(report_to_sarif(anchor_report)),
+        json.dumps(preview_report.to_dict()),
+        report_to_markdown(preview_report),
+        json.dumps(report_to_sarif(preview_report)),
+    )
+    for sensitive_value in (
+        "PrivateInContentAddin",
+        "private-in-content-manifest.xml",
+        "private in-content behavior",
+        "PRIVATE-IN-CONTENT-ADDIN-FRAME",
+        "PRIVATE-IN-CONTENT-ADDIN-PREVIEW",
+        "rIdFenceInContentExtension",
+        "rIdFenceInContentPreview",
+        "private-in-content-addin-preview.png",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_in_content_office_web_addin_identifier_rewrites_are_ignored(tmp_path) -> None:
+    baseline = make_in_content_office_web_addin_model(tmp_path / "baseline.xlsx")
+    renumbered = make_in_content_office_web_addin_model(tmp_path / "renumbered.xlsx")
+    renumber_in_content_office_web_addin_identifiers(renumbered)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered))
+
+    assert report.changes == []
+    assert report.findings == []
+
+
+def test_malformed_in_content_office_web_addin_references_fail_closed(tmp_path) -> None:
+    baseline = make_in_content_office_web_addin_model(tmp_path / "baseline.xlsx")
+    candidate = make_in_content_office_web_addin_model(tmp_path / "candidate.xlsx")
+    corrupt_in_content_office_web_addin_reference(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.office_web_addins.unrecognized_part_count >= 1
+    assert any(
+        "malformed or unsupported Office Web Add-in in-content DrawingML metadata"
+        in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
     assert "FF028" in {finding.rule_id for finding in report.findings}
 
 

@@ -180,6 +180,42 @@ _PYTHON_IN_EXCEL_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2023/09/relationships/python"
 )
 _PYTHON_IN_EXCEL_CANONICAL_MEMBER = "xl/python.xml"
+_PYTHON_IN_EXCEL_SCRIPTS_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2022/pythonscript"
+)
+_PYTHON_IN_EXCEL_SCRIPTS_CONTENT_TYPE = (
+    "application/vnd.ms-excel.pythonscripts+xml"
+)
+_PYTHON_IN_EXCEL_SCRIPTS_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2022/03/relationships/pythonscripts"
+)
+_PYTHON_IN_EXCEL_SCRIPTS_CANONICAL_MEMBER = "xl/pythonScripts.xml"
+_PYTHON_IN_EXCEL_VARIANT_PYTHON = "python"
+_PYTHON_IN_EXCEL_VARIANT_PYTHON_SCRIPTS = "python-scripts"
+_PYTHON_IN_EXCEL_VARIANT_BY_MEMBER = {
+    _PYTHON_IN_EXCEL_CANONICAL_MEMBER.casefold(): _PYTHON_IN_EXCEL_VARIANT_PYTHON,
+    _PYTHON_IN_EXCEL_SCRIPTS_CANONICAL_MEMBER.casefold(): (
+        _PYTHON_IN_EXCEL_VARIANT_PYTHON_SCRIPTS
+    ),
+}
+_PYTHON_IN_EXCEL_VARIANT_BY_CONTENT_TYPE = {
+    _PYTHON_IN_EXCEL_CONTENT_TYPE.casefold(): _PYTHON_IN_EXCEL_VARIANT_PYTHON,
+    _PYTHON_IN_EXCEL_SCRIPTS_CONTENT_TYPE.casefold(): (
+        _PYTHON_IN_EXCEL_VARIANT_PYTHON_SCRIPTS
+    ),
+}
+_PYTHON_IN_EXCEL_VARIANT_BY_RELATIONSHIP = {
+    _PYTHON_IN_EXCEL_RELATIONSHIP.casefold(): _PYTHON_IN_EXCEL_VARIANT_PYTHON,
+    _PYTHON_IN_EXCEL_SCRIPTS_RELATIONSHIP.casefold(): (
+        _PYTHON_IN_EXCEL_VARIANT_PYTHON_SCRIPTS
+    ),
+}
+_PYTHON_IN_EXCEL_VARIANT_BY_ROOT = {
+    (_PYTHON_IN_EXCEL_NS, "python"): _PYTHON_IN_EXCEL_VARIANT_PYTHON,
+    (_PYTHON_IN_EXCEL_SCRIPTS_NS, "pythonScripts"): (
+        _PYTHON_IN_EXCEL_VARIANT_PYTHON_SCRIPTS
+    ),
+}
 _PYTHON_IN_EXCEL_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _PYTHON_IN_EXCEL_TOTAL_XML_BYTES = 64 * 1024 * 1024
 _PYTHON_IN_EXCEL_TOTAL_XML_PARTS = 512
@@ -193,6 +229,7 @@ _XML_NAMESPACE_PREFIXES = {
     _EXCEL_2006_MAIN_NS: "xm:",
     _NAMED_SHEET_VIEW_NS: "nsv:",
     _PYTHON_IN_EXCEL_NS: "py:",
+    _PYTHON_IN_EXCEL_SCRIPTS_NS: "pys:",
 }
 _GUID_PATTERN = re.compile(
     r"\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -32752,6 +32789,40 @@ def _python_in_excel_issue(
     issues.append((context, repr(detail)))
 
 
+def _python_in_excel_variant_for_member(member: str | None) -> str | None:
+    """Return the recognized Python package variant for one normalized member."""
+    if member is None:
+        return None
+    return _PYTHON_IN_EXCEL_VARIANT_BY_MEMBER.get(member.casefold())
+
+
+def _python_in_excel_variant_for_content_type(
+    content_type: str | None,
+) -> str | None:
+    """Return the recognized Python package variant for one content type."""
+    if content_type is None:
+        return None
+    return _PYTHON_IN_EXCEL_VARIANT_BY_CONTENT_TYPE.get(content_type.casefold())
+
+
+def _python_in_excel_variant_for_relationship(
+    relationship_type: str | None,
+) -> str | None:
+    """Return the recognized Python package variant for one relationship."""
+    if relationship_type is None:
+        return None
+    return _PYTHON_IN_EXCEL_VARIANT_BY_RELATIONSHIP.get(
+        relationship_type.casefold()
+    )
+
+
+def _python_in_excel_variant_for_root(root: ElementTree.Element) -> str | None:
+    """Return the recognized Python package variant for one XML root."""
+    return _PYTHON_IN_EXCEL_VARIANT_BY_ROOT.get(
+        (_xml_namespace(root.tag), _xml_local_name(root.tag))
+    )
+
+
 def _python_in_excel_bounded_payload(
     archive: ZipFile,
     member: str,
@@ -32849,7 +32920,7 @@ def _python_in_excel_content_type_members(
     warnings: set[str],
     budget: _PythonInExcelBudget,
     issues: list[tuple[str, str]],
-) -> tuple[set[str], str | None]:
+) -> tuple[dict[str, str], str | None]:
     """Discover Python parts declared by content type without exposing paths."""
     root, fallback_signature = _python_in_excel_bounded_root(
         archive,
@@ -32859,16 +32930,21 @@ def _python_in_excel_content_type_members(
         report_failure=False,
     )
     if root is None:
-        return set(), fallback_signature
+        return {}, fallback_signature
     if (
         _xml_namespace(root.tag) != _CONTENT_TYPES_NS
         or _xml_local_name(root.tag) != "Types"
     ):
-        return set(), _private_external_data_signature(
-            (("unexpected-python-in-excel-content-types-root", _xml_display_name(root.tag)),)
+        return {}, _private_external_data_signature(
+            (
+                (
+                    "unexpected-python-in-excel-content-types-root",
+                    _xml_display_name(root.tag),
+                ),
+            )
         )
 
-    members: set[str] = set()
+    members: dict[str, str] = {}
     override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
     for child in root:
         if child.tag != override_tag:
@@ -32881,13 +32957,11 @@ def _python_in_excel_content_type_members(
             else None
         )
         content_type = raw_content_type.casefold() if raw_content_type else None
-        canonical_path = bool(
-            raw_member
-            and raw_member.lstrip("/").casefold()
-            == _PYTHON_IN_EXCEL_CANONICAL_MEMBER.casefold()
+        member_variant = _python_in_excel_variant_for_member(member)
+        content_type_variant = _python_in_excel_variant_for_content_type(
+            content_type
         )
-        is_python_content_type = content_type == _PYTHON_IN_EXCEL_CONTENT_TYPE
-        if not canonical_path and not is_python_content_type:
+        if member_variant is None and content_type_variant is None:
             continue
         if member is None or content_type is None:
             _python_in_excel_issue(
@@ -32896,13 +32970,34 @@ def _python_in_excel_content_type_members(
                 (raw_member, raw_content_type),
             )
             continue
-        members.add(member)
-        if content_type != _PYTHON_IN_EXCEL_CONTENT_TYPE:
+        variant = content_type_variant or member_variant
+        if variant is None:
+            continue
+        if (
+            member_variant is not None
+            and content_type_variant is not None
+            and member_variant != content_type_variant
+        ):
+            _python_in_excel_issue(
+                issues,
+                "mismatched-python-in-excel-content-type-contract",
+                (member, member_variant, content_type_variant),
+            )
+        elif member_variant is not None and content_type_variant is None:
             _python_in_excel_issue(
                 issues,
                 "unexpected-python-in-excel-content-type",
                 (member, content_type),
             )
+        existing_variant = members.get(member)
+        if existing_variant is not None and existing_variant != variant:
+            _python_in_excel_issue(
+                issues,
+                "ambiguous-python-in-excel-content-type-contract",
+                (member, existing_variant, variant),
+            )
+            continue
+        members[member] = variant
     return members, None
 
 
@@ -32912,7 +33007,7 @@ def _python_in_excel_workbook_relationships(
     warnings: set[str],
     budget: _PythonInExcelBudget,
     issues: list[tuple[str, str]],
-) -> tuple[tuple[_PackageRelationship, ...], str | None]:
+) -> tuple[tuple[tuple[_PackageRelationship, str], ...], str | None]:
     """Read only Python-relevant workbook relationships without following them."""
     relationship_member = _relationship_part_path("xl/workbook.xml")
     if relationship_member not in members:
@@ -32940,7 +33035,7 @@ def _python_in_excel_workbook_relationships(
         )
 
     relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
-    result: list[_PackageRelationship] = []
+    result: list[tuple[_PackageRelationship, str]] = []
     identifiers: list[str] = []
     for child in root:
         if child.tag != relationship_tag:
@@ -32953,15 +33048,14 @@ def _python_in_excel_workbook_relationships(
             if raw_target is not None and target_mode.casefold() == "internal"
             else None
         )
-        normalized_type = (relationship_type or "").casefold()
-        canonical_target = bool(
-            target
-            and target.casefold() == _PYTHON_IN_EXCEL_CANONICAL_MEMBER.casefold()
+        relationship_variant = _python_in_excel_variant_for_relationship(
+            relationship_type
         )
-        if (
-            normalized_type != _PYTHON_IN_EXCEL_RELATIONSHIP.casefold()
-            and not canonical_target
-        ):
+        target_variant = _python_in_excel_variant_for_member(target)
+        if relationship_variant is None and target_variant is None:
+            continue
+        variant = relationship_variant or target_variant
+        if variant is None:
             continue
         relationship_id = child.get("Id")
         if not relationship_id:
@@ -32978,7 +33072,17 @@ def _python_in_excel_workbook_relationships(
                 "malformed-python-in-excel-workbook-relationship",
                 _xml_fragment(child).sort_key(),
             )
-        if normalized_type != _PYTHON_IN_EXCEL_RELATIONSHIP.casefold():
+        if (
+            relationship_variant is not None
+            and target_variant is not None
+            and relationship_variant != target_variant
+        ):
+            _python_in_excel_issue(
+                issues,
+                "mismatched-python-in-excel-workbook-relationship-contract",
+                (relationship_type, target),
+            )
+        elif relationship_variant is None:
             _python_in_excel_issue(
                 issues,
                 "unexpected-python-in-excel-workbook-relationship-type",
@@ -32991,12 +33095,15 @@ def _python_in_excel_workbook_relationships(
                 (target_mode, raw_target),
             )
         result.append(
-            _PackageRelationship(
-                relationship_id=relationship_id,
-                relationship_type=relationship_type or "",
-                target=target,
-                target_mode=target_mode,
-                raw_target=raw_target,
+            (
+                _PackageRelationship(
+                    relationship_id=relationship_id,
+                    relationship_type=relationship_type or "",
+                    target=target,
+                    target_mode=target_mode,
+                    raw_target=raw_target,
+                ),
+                variant,
             )
         )
     if len(identifiers) != len(set(identifiers)):
@@ -33011,11 +33118,12 @@ def _python_in_excel_workbook_relationships(
 def _python_in_excel_metadata(path: Path) -> _PythonInExcelMetadata:
     """Inventory stored Python-in-Excel code without executing or exposing it.
 
-    Excel keeps Python code in the workbook-level ``xl/python.xml`` part and
-    connects it to ``PY`` formulas by script index. This scanner fingerprints
-    the full bounded XML semantics privately, while publishing only aggregate
-    part, script, environment, and coverage counts. It never loads the code as
-    Python, contacts the Microsoft Cloud, or evaluates a formula.
+    Excel can keep Python code in the documented workbook-level ``xl/python.xml``
+    part and in a separately stored 2022 ``xl/pythonScripts.xml`` part. This
+    scanner fingerprints both bounded XML contracts privately, while publishing
+    only aggregate physical-part, script, environment, and coverage counts. It
+    never loads the code as Python, contacts the Microsoft Cloud, or evaluates a
+    formula.
     """
     warnings: set[str] = set()
     issues: list[tuple[str, str]] = []
@@ -33047,12 +33155,28 @@ def _python_in_excel_metadata(path: Path) -> _PythonInExcelMetadata:
             )
             relationship_members = {
                 relationship.target
-                for relationship in workbook_relationships
+                for relationship, _variant in workbook_relationships
                 if relationship.target is not None
             }
-            python_members = set(content_type_members) | relationship_members
-            if _PYTHON_IN_EXCEL_CANONICAL_MEMBER in members:
-                python_members.add(_PYTHON_IN_EXCEL_CANONICAL_MEMBER)
+            python_member_variants: dict[str, set[str]] = defaultdict(set)
+            for member, variant in content_type_members.items():
+                python_member_variants[member].add(variant)
+            for relationship, variant in workbook_relationships:
+                if relationship.target is not None:
+                    python_member_variants[relationship.target].add(variant)
+            for member, variant in (
+                (
+                    _PYTHON_IN_EXCEL_CANONICAL_MEMBER,
+                    _PYTHON_IN_EXCEL_VARIANT_PYTHON,
+                ),
+                (
+                    _PYTHON_IN_EXCEL_SCRIPTS_CANONICAL_MEMBER,
+                    _PYTHON_IN_EXCEL_VARIANT_PYTHON_SCRIPTS,
+                ),
+            ):
+                if member in members:
+                    python_member_variants[member].add(variant)
+            python_members = set(python_member_variants)
             python_evidence = bool(python_members or workbook_relationships)
             if not python_evidence:
                 return _PythonInExcelMetadata(PythonInExcelSnapshot(), ())
@@ -33072,23 +33196,31 @@ def _python_in_excel_metadata(path: Path) -> _PythonInExcelMetadata:
                     relationship_fallback,
                 )
 
-            for member in sorted(content_type_members, key=str.casefold):
-                definition_entries.append(("python-in-excel-content-type", member))
+            for member, variant in sorted(
+                content_type_members.items(), key=lambda item: item[0].casefold()
+            ):
+                definition_entries.append(
+                    ("python-in-excel-content-type", repr((member, variant)))
+                )
             relationship_semantics = tuple(
                 sorted(
                     (
+                        variant,
                         relationship.relationship_type.casefold(),
                         relationship.target_mode.casefold(),
                         relationship.target
                         if relationship.target is not None
-                        else relationship.raw_target,
+                        else relationship.raw_target or "",
                     )
-                    for relationship in workbook_relationships
+                    for relationship, variant in workbook_relationships
                 )
             )
             if relationship_semantics:
                 definition_entries.append(
-                    ("python-in-excel-workbook-relationships", repr(relationship_semantics))
+                    (
+                        "python-in-excel-workbook-relationships",
+                        repr(relationship_semantics),
+                    )
                 )
 
             for member in sorted(python_members, key=str.casefold):
@@ -33104,6 +33236,16 @@ def _python_in_excel_metadata(path: Path) -> _PythonInExcelMetadata:
                         issues,
                         "duplicate-python-in-excel-package-member",
                         (member, count),
+                    )
+
+            for member, variants in sorted(
+                python_member_variants.items(), key=lambda item: item[0].casefold()
+            ):
+                if len(variants) > 1:
+                    _python_in_excel_issue(
+                        issues,
+                        "ambiguous-python-in-excel-package-contract",
+                        (member, tuple(sorted(variants))),
                     )
 
             if relationship_fallback is None:
@@ -33126,6 +33268,9 @@ def _python_in_excel_metadata(path: Path) -> _PythonInExcelMetadata:
             script_tag = f"{{{_PYTHON_IN_EXCEL_NS}}}pythonScript"
             code_tag = f"{{{_PYTHON_IN_EXCEL_NS}}}code"
             extension_tag = f"{{{_PYTHON_IN_EXCEL_NS}}}extLst"
+            scripts_root_tag = f"{{{_PYTHON_IN_EXCEL_SCRIPTS_NS}}}pythonScripts"
+            scripts_script_tag = f"{{{_PYTHON_IN_EXCEL_SCRIPTS_NS}}}pythonScript"
+            scripts_code_tag = f"{{{_PYTHON_IN_EXCEL_SCRIPTS_NS}}}code"
 
             for member in sorted(python_members & members, key=str.casefold):
                 python_part_count += 1
@@ -33145,98 +33290,183 @@ def _python_in_excel_metadata(path: Path) -> _PythonInExcelMetadata:
                 definition_entries.append(
                     (
                         "python-in-excel-package-part",
-                        repr((member, _xml_fragment(root).sort_key())),
+                        repr(
+                            (
+                                member,
+                                tuple(sorted(python_member_variants[member])),
+                                _xml_fragment(root).sort_key(),
+                            )
+                        ),
                     )
                 )
-                if root.tag != root_tag:
+                root_variant = _python_in_excel_variant_for_root(root)
+                if root_variant is None:
                     _python_in_excel_issue(
                         issues,
                         "unexpected-python-in-excel-root",
                         (member, _xml_display_name(root.tag)),
                     )
                     continue
+                if root_variant not in python_member_variants[member]:
+                    _python_in_excel_issue(
+                        issues,
+                        "mismatched-python-in-excel-package-root-contract",
+                        (
+                            member,
+                            tuple(sorted(python_member_variants[member])),
+                            root_variant,
+                        ),
+                    )
 
-                environment_definitions = [
-                    child for child in root if child.tag == environment_tag
-                ]
-                scripts_containers = [child for child in root if child.tag == scripts_tag]
-                python_environment_definition_count += len(environment_definitions)
-                if len(environment_definitions) > 1:
-                    _python_in_excel_issue(
-                        issues,
-                        "duplicate-python-in-excel-environment-definition",
-                        (member, len(environment_definitions)),
-                    )
-                if len(scripts_containers) > 1:
-                    _python_in_excel_issue(
-                        issues,
-                        "duplicate-python-in-excel-script-container",
-                        (member, len(scripts_containers)),
-                    )
-                for child in root:
-                    if child.tag not in {environment_tag, scripts_tag, extension_tag}:
+                if root_variant == _PYTHON_IN_EXCEL_VARIANT_PYTHON:
+                    if root.tag != root_tag:
                         _python_in_excel_issue(
                             issues,
-                            "unexpected-python-in-excel-root-child",
-                            (member, _xml_display_name(child.tag)),
+                            "unexpected-python-in-excel-root",
+                            (member, _xml_display_name(root.tag)),
                         )
-
-                for environment in environment_definitions:
-                    initializations = [
-                        child for child in environment if child.tag == initialization_tag
+                        continue
+                    environment_definitions = [
+                        child for child in root if child.tag == environment_tag
                     ]
-                    python_initialization_count += len(initializations)
-                    if len(initializations) > 1:
+                    scripts_containers = [
+                        child for child in root if child.tag == scripts_tag
+                    ]
+                    python_environment_definition_count += len(environment_definitions)
+                    if len(environment_definitions) > 1:
                         _python_in_excel_issue(
                             issues,
-                            "duplicate-python-in-excel-environment-initialization",
-                            (member, len(initializations)),
+                            "duplicate-python-in-excel-environment-definition",
+                            (member, len(environment_definitions)),
                         )
-                    for child in environment:
-                        if child.tag not in {initialization_tag, extension_tag}:
+                    if len(scripts_containers) > 1:
+                        _python_in_excel_issue(
+                            issues,
+                            "duplicate-python-in-excel-script-container",
+                            (member, len(scripts_containers)),
+                        )
+                    for child in root:
+                        if child.tag not in {
+                            environment_tag,
+                            scripts_tag,
+                            extension_tag,
+                        }:
                             _python_in_excel_issue(
                                 issues,
-                                "unexpected-python-in-excel-environment-child",
+                                "unexpected-python-in-excel-root-child",
                                 (member, _xml_display_name(child.tag)),
                             )
-                    for initialization in initializations:
-                        code_children = [
-                            child for child in initialization if child.tag == code_tag
+
+                    for environment in environment_definitions:
+                        initializations = [
+                            child
+                            for child in environment
+                            if child.tag == initialization_tag
                         ]
-                        if len(code_children) > 1 or len(code_children) != len(initialization):
+                        python_initialization_count += len(initializations)
+                        if len(initializations) > 1:
                             _python_in_excel_issue(
                                 issues,
-                                "malformed-python-in-excel-environment-initialization",
-                                (member, _xml_fragment(initialization).sort_key()),
+                                "duplicate-python-in-excel-environment-initialization",
+                                (member, len(initializations)),
                             )
+                        for child in environment:
+                            if child.tag not in {initialization_tag, extension_tag}:
+                                _python_in_excel_issue(
+                                    issues,
+                                    "unexpected-python-in-excel-environment-child",
+                                    (member, _xml_display_name(child.tag)),
+                                )
+                        for initialization in initializations:
+                            code_children = [
+                                child
+                                for child in initialization
+                                if child.tag == code_tag
+                            ]
+                            if (
+                                len(code_children) > 1
+                                or len(code_children) != len(initialization)
+                            ):
+                                _python_in_excel_issue(
+                                    issues,
+                                    (
+                                        "malformed-python-in-excel-"
+                                        "environment-initialization"
+                                    ),
+                                    (
+                                        member,
+                                        _xml_fragment(initialization).sort_key(),
+                                    ),
+                                )
 
-                for scripts in scripts_containers:
-                    script_children = [child for child in scripts if child.tag == script_tag]
+                    for scripts in scripts_containers:
+                        script_children = [
+                            child for child in scripts if child.tag == script_tag
+                        ]
+                        python_script_count += len(script_children)
+                        if not script_children:
+                            _python_in_excel_issue(
+                                issues,
+                                "empty-python-in-excel-script-container",
+                                member,
+                            )
+                        if len(script_children) != len(scripts):
+                            _python_in_excel_issue(
+                                issues,
+                                "unexpected-python-in-excel-script-container-child",
+                                (member, _xml_fragment(scripts).sort_key()),
+                            )
+                        for script in script_children:
+                            code_children = [
+                                child for child in script if child.tag == code_tag
+                            ]
+                            if (
+                                len(code_children) > 1
+                                or any(
+                                    child.tag not in {code_tag, extension_tag}
+                                    for child in script
+                                )
+                            ):
+                                _python_in_excel_issue(
+                                    issues,
+                                    "malformed-python-in-excel-script",
+                                    (member, _xml_fragment(script).sort_key()),
+                                )
+                else:
+                    if root.tag != scripts_root_tag:
+                        _python_in_excel_issue(
+                            issues,
+                            "unexpected-python-in-excel-root",
+                            (member, _xml_display_name(root.tag)),
+                        )
+                        continue
+                    script_children = [
+                        child for child in root if child.tag == scripts_script_tag
+                    ]
                     python_script_count += len(script_children)
                     if not script_children:
                         _python_in_excel_issue(
                             issues,
-                            "empty-python-in-excel-script-container",
+                            "empty-python-in-excel-scripts-part",
                             member,
                         )
-                    if len(script_children) != len(scripts):
+                    if len(script_children) != len(root):
                         _python_in_excel_issue(
                             issues,
-                            "unexpected-python-in-excel-script-container-child",
-                            (member, _xml_fragment(scripts).sort_key()),
+                            "unexpected-python-in-excel-scripts-part-child",
+                            (member, _xml_fragment(root).sort_key()),
                         )
                     for script in script_children:
-                        code_children = [child for child in script if child.tag == code_tag]
+                        code_children = [
+                            child for child in script if child.tag == scripts_code_tag
+                        ]
                         if (
-                            len(code_children) > 1
-                            or any(
-                                child.tag not in {code_tag, extension_tag}
-                                for child in script
-                            )
+                            len(code_children) != 1
+                            or len(code_children) != len(script)
                         ):
                             _python_in_excel_issue(
                                 issues,
-                                "malformed-python-in-excel-script",
+                                "malformed-python-in-excel-scripts-script",
                                 (member, _xml_fragment(script).sort_key()),
                             )
 

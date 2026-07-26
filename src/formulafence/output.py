@@ -1038,10 +1038,12 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 f"{python_in_excel['unrecognized_python_in_excel_count']}"
             )
         lines.append(
-            "Python code, environment identifiers, script indexes, and raw XML are "
-            "compared privately and intentionally omitted. Ordinary semantic diffs retain "
-            "changed PY formulas and values by design; no code is loaded or run and no "
-            "cloud runtime is contacted."
+            "Package totals include each stored 2023 Python and 2022 PythonScripts "
+            "part; FormulaFence does not assume they agree. Python code, environment "
+            "identifiers, script indexes, and raw XML are compared privately and "
+            "intentionally omitted. Ordinary semantic diffs retain changed PY formulas "
+            "and values by design; no code is loaded or run and no cloud runtime is "
+            "contacted."
         )
     if office_custom_functions["present"]:
         lines.extend(

@@ -5,6 +5,47 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## PythonScripts compatibility boundary — 2026-07-26
+
+FormulaFence 0.84.0 was checked against Microsoft's [Python in Excel
+introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel)
+and the OOXML [Python part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/151e4bcd-90a0-4d82-8b98-f16bf273e4ff)
+definition. The newer standard part is not the only package shape found in
+real workbooks, so the scanner was also exercised against independently
+maintained public [Python in Excel course workbooks](https://github.com/LinkedInLearning/python-in-excel-quick-start-4551222).
+No workbook formulas or Python source were executed, copied into this
+repository, or emitted in a report.
+
+The public `Debug.xlsx` workbook carries only the separate 2022
+`pythonScripts.xml` contract: its `pythonscripts` content type, `PythonScripts`
+workbook relationship, and one script record are all present. Before this
+release it appeared as zero inspected Python parts/scripts with a coverage gap;
+FormulaFence 0.84.0 reports one physical Python part, one stored script, one
+`PY` formula cell/call, and no unsupported-Python metadata. The public
+`DFexplore_finished.xlsx` workbook carries both the 2023 `python.xml` and 2022
+`pythonScripts.xml` contracts. It reports two physical parts and thirty stored
+script records (fifteen in each stored representation), one environment
+definition/initialization, fifteen `PY` formula cells/calls, and no Python
+coverage gap. This verifies package inventory only; it does not decide which
+representation a particular Excel runtime will execute.
+
+A temporary copy of the legacy-only public workbook then received a code-only
+change inside its `pythonScripts.xml` part. A fresh virtual environment
+installed the release wheel, reported `FF065` with a private definition change,
+and the report JSON contained neither the original nor replacement source
+string. This confirms that the compatibility format is both detected and
+redacted in an independently maintained workbook, rather than only in a
+synthetic fixture.
+
+Controlled fixtures additionally changed only a private 2022 script, changed
+that script while a 2023 part coexisted, renumbered only its workbook
+relationship ID, and malformed its XML. The first two emit `FF065` and
+`FFP065` under the existing policy; the ID rewrite normalizes; malformed XML
+remains explicit coverage evidence. Profile JSON, Markdown, report JSON, and
+SARIF were checked for every controlled source sentinel and exposed none. The
+full suite passed **580 tests in 88.97 seconds**, followed by a clean Ruff
+check.
+
 ## XLM automatic-macro binding boundary — 2026-07-26
 
 FormulaFence 0.83.0 was checked against Microsoft's

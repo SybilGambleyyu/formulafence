@@ -104,6 +104,15 @@ _PYTHON_IN_EXCEL_CONTENT_TYPE = "application/vnd.ms-excel.python+xml"
 _PYTHON_IN_EXCEL_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2023/09/relationships/Python"
 )
+_PYTHON_IN_EXCEL_SCRIPTS_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2022/pythonscript"
+)
+_PYTHON_IN_EXCEL_SCRIPTS_CONTENT_TYPE = (
+    "application/vnd.ms-excel.pythonscripts+xml"
+)
+_PYTHON_IN_EXCEL_SCRIPTS_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2022/03/relationships/PythonScripts"
+)
 _RICH_DATA_METADATA_EXTENSION_URI = "{3E2802C4-A4D2-4D8B-9148-E3BE6C30E623}"
 _DRAWINGML_MAIN_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _DRAWINGML_STRICT_MAIN_NS = "http://purl.oclc.org/ooxml/drawingml/main"
@@ -1214,6 +1223,174 @@ def make_python_in_excel_model(path: Path) -> Path:
         contents["[Content_Types].xml"] = serialize(content_types)
 
     return _rewrite_archive(path, mutate, ".python-in-excel-model.tmp.xlsx")
+
+
+def add_python_in_excel_scripts_compatibility_part(path: Path) -> Path:
+    """Add Excel's separately stored 2022 PythonScripts package contract."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        if "xl/pythonScripts.xml" in contents:
+            raise ValueError("Fixture already contains a PythonScripts package part")
+
+        scripts = ElementTree.Element(
+            f"{{{_PYTHON_IN_EXCEL_SCRIPTS_NS}}}pythonScripts"
+        )
+        for code in (
+            "PRIVATE-PYTHON-SCRIPTS-BASELINE = xl(\"A9\")",
+            "PRIVATE-PYTHON-SCRIPTS-SECOND = xl(\"A9\")",
+        ):
+            script = ElementTree.SubElement(
+                scripts,
+                f"{{{_PYTHON_IN_EXCEL_SCRIPTS_NS}}}pythonScript",
+            )
+            script_code = ElementTree.SubElement(
+                script,
+                f"{{{_PYTHON_IN_EXCEL_SCRIPTS_NS}}}code",
+            )
+            script_code.text = code
+        contents["xl/pythonScripts.xml"] = ElementTree.tostring(
+            scripts,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        ElementTree.SubElement(
+            relationships,
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship",
+            {
+                "Id": "rIdFencePythonScripts",
+                "Type": _PYTHON_IN_EXCEL_SCRIPTS_RELATIONSHIP,
+                "Target": "pythonScripts.xml",
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        ElementTree.SubElement(
+            content_types,
+            f"{{{_CONTENT_TYPES_NS}}}Override",
+            {
+                "PartName": "/xl/pythonScripts.xml",
+                "ContentType": _PYTHON_IN_EXCEL_SCRIPTS_CONTENT_TYPE,
+            },
+        )
+        contents["[Content_Types].xml"] = ElementTree.tostring(
+            content_types,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".python-in-excel-scripts-model.tmp.xlsx")
+
+
+def make_python_in_excel_scripts_model(path: Path) -> Path:
+    """Create a workbook that uses only the 2022 PythonScripts contract."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "PythonScripts compatibility controls"
+    inputs["A9"] = 7
+    inputs["B2"] = "=_xlfn._xlws.PY(0,0,A9)"
+    workbook.save(path)
+    return add_python_in_excel_scripts_compatibility_part(path)
+
+
+def change_python_in_excel_scripts_script(path: Path) -> Path:
+    """Change stored 2022 PythonScripts code without rewriting its PY formula."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = ElementTree.fromstring(contents["xl/pythonScripts.xml"])
+        script = root.find(
+            f"{{{_PYTHON_IN_EXCEL_SCRIPTS_NS}}}pythonScript/"
+            f"{{{_PYTHON_IN_EXCEL_SCRIPTS_NS}}}code"
+        )
+        if script is None:
+            raise ValueError("Fixture does not contain a PythonScripts script")
+        script.text = "PRIVATE-PYTHON-SCRIPTS-CANDIDATE = xl(\"A9\")"
+        contents["xl/pythonScripts.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".python-in-excel-scripts-script.tmp.xlsx")
+
+
+def renumber_python_in_excel_scripts_relationship_identifier(path: Path) -> Path:
+    """Change only the non-semantic 2022 PythonScripts relationship ID."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        relationship = next(
+            (
+                current
+                for current in relationships.findall(
+                    f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+                )
+                if current.get("Type") == _PYTHON_IN_EXCEL_SCRIPTS_RELATIONSHIP
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain a PythonScripts relationship")
+        relationship.set("Id", "rIdFencePythonScriptsRenumbered")
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(
+        path,
+        mutate,
+        ".python-in-excel-scripts-relationship-id.tmp.xlsx",
+    )
+
+
+def corrupt_python_in_excel_scripts_package(path: Path) -> Path:
+    """Make the 2022 PythonScripts material malformed for coverage tests."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["xl/pythonScripts.xml"] = b"<pythonScripts"
+
+    return _rewrite_archive(path, mutate, ".python-in-excel-scripts-corrupt.tmp.xlsx")
+
+
+def mismatch_python_in_excel_scripts_relationship_contract(path: Path) -> Path:
+    """Bind a 2022 PythonScripts target with the incompatible 2023 relation."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        relationship = next(
+            (
+                current
+                for current in relationships.findall(
+                    f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+                )
+                if current.get("Type") == _PYTHON_IN_EXCEL_SCRIPTS_RELATIONSHIP
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain a PythonScripts relationship")
+        relationship.set("Type", _PYTHON_IN_EXCEL_RELATIONSHIP)
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(
+        path,
+        mutate,
+        ".python-in-excel-scripts-mismatched-contract.tmp.xlsx",
+    )
 
 
 def change_python_in_excel_script(path: Path) -> Path:

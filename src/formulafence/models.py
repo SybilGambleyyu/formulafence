@@ -1013,11 +1013,13 @@ class FormulaDdeLinkSnapshot:
 class PythonInExcelSnapshot:
     """Safe aggregate of Python-in-Excel code and its workbook bindings.
 
-    Python-in-Excel stores executable Python code in ``xl/python.xml`` and
-    references it from ``PY`` formula calls. The public model deliberately
-    retains only aggregate counts. Private signatures preserve the code,
-    environment, package binding, formula placeholders, and arguments for
-    comparison; private formula-cell identities support static-input guarding.
+    Python-in-Excel can store executable code in the documented 2023
+    ``xl/python.xml`` part and in a separately stored 2022
+    ``xl/pythonScripts.xml`` package part. The public model deliberately
+    retains only aggregate physical-part and script counts. Private signatures
+    preserve code, environment, package binding, formula placeholders, and
+    arguments for comparison; private formula-cell identities support
+    static-input guarding.
     """
 
     python_part_count: int = 0

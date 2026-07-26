@@ -410,10 +410,14 @@ Python in Excel is a distinct executable-code boundary. Microsoft documents
 that its Python runtime runs in the Microsoft Cloud, and the OOXML standard
 stores code separately from the `PY` formula that references it. FormulaFence
 recognizes `PY` formula spellings and inventories the documented workbook
-Python part, relationship, and content type directly from the package. It
-privately fingerprints bounded source/environment/script XML and the stored PY
-formula binding, while the public profile and `FF065` show only safe package,
-formula-cell, call, script, environment, initialization, and coverage counts.
+2023 `python.xml` part plus the separately stored 2022 `pythonScripts.xml`
+compatibility contract, including their relationships and content types,
+directly from the package. It privately fingerprints bounded
+source/environment/script XML and the stored PY formula binding, while the
+public profile and `FF065` show only safe physical-package, formula-cell, call,
+script, environment, initialization, and coverage counts. When both package
+contracts are present, FormulaFence inventories each stored part independently
+rather than assuming they agree or selecting a runtime implementation.
 
 `FF065` is emitted for a code/environment/package change, a changed PY formula
 binding, or a normal cell edit that reaches a PY formula through the static

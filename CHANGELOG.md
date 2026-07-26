@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.84.0 — 2026-07-26
+
+- Extend the existing `FF065` / `FFP065` Python-in-Excel boundary to recognize
+  the separately stored 2022 `pythonScripts.xml` package contract—its root,
+  script records, workbook relationship, and content type—alongside the
+  documented 2023 `python.xml` contract.
+- Fingerprint every stored Python package part independently when both
+  representations coexist. Public profiles continue to expose only aggregate
+  physical-part, formula-call, script, environment, initialization, and
+  coverage counts; Python source, IDs, script indexes, formulas, locations,
+  and raw XML remain private.
+- Treat conflicting package declarations, malformed roots, missing/unbound
+  parts, and read-budget limits as explicit coverage evidence rather than
+  guessing which contract Excel will run. Relationship-ID-only rewrites still
+  normalize and neither Python representation is loaded, evaluated, or sent to
+  a runtime.
+
 ## 0.83.0 — 2026-07-26
 
 - Add `FF076`, a high-severity private boundary for Excel 4.0 / XLM

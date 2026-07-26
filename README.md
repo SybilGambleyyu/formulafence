@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.83.0/formulafence-0.83.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.84.0/formulafence-0.84.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -67,7 +67,7 @@ readability and pin to an immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.83.0
+  uses: SybilGambleyyu/formulafence@v0.84.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -442,11 +442,14 @@ because package metadata can exist without a direct formula. Enable
 FormulaFence separately inventories **Python in Excel** workbooks. Microsoft
 documents that Python in Excel runs through a Microsoft Cloud runtime, while
 the OOXML specification stores a `PY` formula's script in a workbook Python
-part. FormulaFence recognizes stored `PY` formula spellings and the documented
-Python package part, relationship, and content type before the ordinary reader
-can discard that material. It privately fingerprints bounded raw Python XML,
+part. FormulaFence recognizes stored `PY` formula spellings, the documented
+2023 `python.xml` package contract, and the separately stored 2022
+`pythonScripts.xml` compatibility contract before the ordinary reader can
+discard that material. It privately fingerprints bounded raw Python XML,
 including code, environment definitions, script ordering, and extensions, then
-compares the stored PY formula binding separately.
+compares the stored PY formula binding separately. If both package contracts
+are present, FormulaFence inventories each stored part independently rather
+than assuming that they agree or choosing a runtime implementation.
 
 Profiles and `FF065`/`FFP065` details expose only package, formula-cell,
 function-call, script, environment, initialization, and coverage counts. Python

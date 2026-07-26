@@ -589,12 +589,16 @@ review prompt, not proof of an error.
   `FF025`.
 - Python in Excel keeps executable source separately from its `PY` formula
   placeholder. FormulaFence recognizes stored `PY` spellings, privately
-  fingerprints the documented workbook Python part, relationship, content type,
-  code/environment/script XML, and stored formula binding, then exposes only
-  safe aggregate counts. A code/package/environment change, formula-binding
-  change, or ordinary cell change that statically reaches a PY formula emits
-  `FF065`; `no_python_in_excel_changes` blocks it as `FFP065`. This includes a
-  source such as `=_xlfn._xlws.PY(0,0,A1)` without decoding the script index,
+  fingerprints the documented 2023 `python.xml` package part and the
+  separately stored 2022 `pythonScripts.xml` compatibility contract—their
+  relationships, content types, code/environment/script XML, and stored
+  formula binding—then exposes only safe aggregate counts. Both physical parts
+  remain independently compared when they coexist; FormulaFence does not
+  choose one runtime representation or assume they agree. A
+  code/package/environment change, formula-binding change, or ordinary cell
+  change that statically reaches a PY formula emits `FF065`;
+  `no_python_in_excel_changes` blocks it as `FFP065`. This includes a source
+  such as `=_xlfn._xlws.PY(0,0,A1)` without decoding the script index,
   interpreting `A1`, or parsing source as Python. Dynamic or unresolved inputs
   remain formula-coverage limits. Relationship-ID-only rewrites normalize;
   missing, malformed, unbound, oversized, unreadable, or over-budget metadata

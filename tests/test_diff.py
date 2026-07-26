@@ -22,6 +22,7 @@ from .helpers import (
     add_ordinary_dimension_resize,
     add_power_pivot_data_model_direct_relationship,
     add_protected_range,
+    add_python_in_excel_scripts_compatibility_part,
     add_unsupported_extended_chart_relationship,
     add_worksheet_dimension_baseline_adjustments,
     add_worksheet_smartart_component_relationship,
@@ -119,6 +120,7 @@ from .helpers import (
     change_python_in_excel_formula_binding,
     change_python_in_excel_input,
     change_python_in_excel_script,
+    change_python_in_excel_scripts_script,
     change_ribbon_customization_callback,
     change_ribbon_customization_controls,
     change_rich_data_binding,
@@ -199,6 +201,7 @@ from .helpers import (
     corrupt_package_signature_root,
     corrupt_pivot_table_definition_root,
     corrupt_python_in_excel_package,
+    corrupt_python_in_excel_scripts_package,
     corrupt_ribbon_customization_root,
     corrupt_rich_data_value_root,
     corrupt_rich_text_run,
@@ -296,6 +299,7 @@ from .helpers import (
     make_power_query_model,
     make_protection_model,
     make_python_in_excel_model,
+    make_python_in_excel_scripts_model,
     make_ribbon_customization_model,
     make_rich_data_model,
     make_rich_text_run_model,
@@ -339,6 +343,7 @@ from .helpers import (
     make_zero_dimension_visibility_model,
     mark_array_formula_dynamic,
     mark_array_formula_unclassified,
+    mismatch_python_in_excel_scripts_relationship_contract,
     normalize_alignment_control_spelling,
     normalize_alignment_inheritance,
     normalize_border_control_spelling,
@@ -400,6 +405,7 @@ from .helpers import (
     renumber_pivot_table_relationships,
     renumber_power_pivot_data_model_relationship,
     renumber_python_in_excel_relationship_identifier,
+    renumber_python_in_excel_scripts_relationship_identifier,
     renumber_ribbon_customization_relationships,
     renumber_slicer_timeline_pivot_cache_id,
     renumber_slicer_timeline_relationships,
@@ -2653,6 +2659,91 @@ def test_python_in_excel_code_is_profiled_diffed_and_redacted(tmp_path) -> None:
         "PRIVATE-PYTHON-SCRIPT-CANDIDATE",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_python_in_excel_python_scripts_contract_is_profiled_and_private(
+    tmp_path,
+) -> None:
+    baseline = make_python_in_excel_scripts_model(tmp_path / "baseline.xlsx")
+    candidate = make_python_in_excel_scripts_model(tmp_path / "candidate.xlsx")
+    change_python_in_excel_scripts_script(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    expected_python = {
+        "present": True,
+        "python_part_count": 1,
+        "python_formula_cell_count": 1,
+        "python_function_count": 1,
+        "python_script_count": 2,
+        "python_environment_definition_count": 0,
+        "python_initialization_count": 0,
+        "unrecognized_python_in_excel_count": 0,
+    }
+    assert baseline_snapshot.python_in_excel.to_dict() == expected_python
+    assert profile["python_in_excel"] == expected_python
+    assert "**Package parts / PY formula cells / PY calls:** 1 / 1 / 1" in markdown
+    assert "**Stored scripts / environment definitions / initializations:** 2 / 0 / 0" in markdown
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    python_change = next(
+        change
+        for change in report.changes
+        if change.kind == "python_in_excel_changed"
+    )
+    assert python_change.details["before"] == expected_python
+    assert python_change.details["after"] == expected_python
+    assert python_change.details["python_in_excel_definition_changed"] is True
+    assert "FF065" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-PYTHON-SCRIPTS-BASELINE",
+        "PRIVATE-PYTHON-SCRIPTS-SECOND",
+        "PRIVATE-PYTHON-SCRIPTS-CANDIDATE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_python_in_excel_python_scripts_contract_is_guarded_alongside_python_part(
+    tmp_path,
+) -> None:
+    baseline = make_python_in_excel_model(tmp_path / "baseline.xlsx")
+    add_python_in_excel_scripts_compatibility_part(baseline)
+    candidate = tmp_path / "candidate.xlsx"
+    shutil.copyfile(baseline, candidate)
+    change_python_in_excel_scripts_script(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.python_in_excel.to_dict() == {
+        "present": True,
+        "python_part_count": 2,
+        "python_formula_cell_count": 2,
+        "python_function_count": 2,
+        "python_script_count": 4,
+        "python_environment_definition_count": 1,
+        "python_initialization_count": 1,
+        "unrecognized_python_in_excel_count": 0,
+    }
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    python_change = next(
+        change
+        for change in report.changes
+        if change.kind == "python_in_excel_changed"
+    )
+    assert python_change.details["python_in_excel_definition_changed"] is True
+    assert "FF065" in {finding.rule_id for finding in report.findings}
 
 
 def test_python_in_excel_static_inputs_are_guarded(tmp_path) -> None:
@@ -5404,6 +5495,25 @@ def test_python_in_excel_relationship_identifier_rewrites_are_ignored(tmp_path) 
     assert "FF065" not in {finding.rule_id for finding in report.findings}
 
 
+def test_python_in_excel_python_scripts_relationship_identifier_rewrites_are_ignored(
+    tmp_path,
+) -> None:
+    baseline = make_python_in_excel_scripts_model(tmp_path / "baseline.xlsx")
+    candidate = tmp_path / "candidate.xlsx"
+    shutil.copyfile(baseline, candidate)
+    renumber_python_in_excel_scripts_relationship_identifier(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert baseline_snapshot.python_in_excel == candidate_snapshot.python_in_excel
+    assert "python_in_excel_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF065" not in {finding.rule_id for finding in report.findings}
+
+
 def test_malformed_python_in_excel_metadata_reports_a_coverage_gap(tmp_path) -> None:
     baseline = make_python_in_excel_model(tmp_path / "baseline.xlsx")
     candidate = make_python_in_excel_model(tmp_path / "candidate.xlsx")
@@ -5436,6 +5546,73 @@ def test_malformed_python_in_excel_metadata_reports_a_coverage_gap(tmp_path) -> 
         "PRIVATE-PYTHON-INIT-BASELINE",
         "PRIVATE-PYTHON-SCRIPT-BASELINE",
         "PRIVATE-PYTHON-SCRIPT-SECOND",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_malformed_python_in_excel_python_scripts_metadata_reports_a_coverage_gap(
+    tmp_path,
+) -> None:
+    baseline = make_python_in_excel_scripts_model(tmp_path / "baseline.xlsx")
+    candidate = make_python_in_excel_scripts_model(tmp_path / "candidate.xlsx")
+    corrupt_python_in_excel_scripts_package(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    assert candidate_snapshot.python_in_excel.to_dict() == {
+        "present": True,
+        "python_part_count": 1,
+        "python_formula_cell_count": 1,
+        "python_function_count": 1,
+        "python_script_count": 0,
+        "python_environment_definition_count": 0,
+        "python_initialization_count": 0,
+        "unrecognized_python_in_excel_count": 2,
+    }
+    assert any(
+        "Python-in-Excel" in warning for warning in candidate_snapshot.parser_warnings
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    assert "FF065" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-PYTHON-SCRIPTS-BASELINE",
+        "PRIVATE-PYTHON-SCRIPTS-SECOND",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_mismatched_python_in_excel_python_scripts_contract_is_coverage_evidence(
+    tmp_path,
+) -> None:
+    baseline = make_python_in_excel_scripts_model(tmp_path / "baseline.xlsx")
+    candidate = make_python_in_excel_scripts_model(tmp_path / "candidate.xlsx")
+    mismatch_python_in_excel_scripts_relationship_contract(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    assert candidate_snapshot.python_in_excel.python_part_count == 1
+    assert candidate_snapshot.python_in_excel.python_script_count == 2
+    assert candidate_snapshot.python_in_excel.unrecognized_python_in_excel_count > 0
+    assert any(
+        "Python-in-Excel" in warning for warning in candidate_snapshot.parser_warnings
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    assert "FF065" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-PYTHON-SCRIPTS-BASELINE",
+        "PRIVATE-PYTHON-SCRIPTS-SECOND",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
 

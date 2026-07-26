@@ -39,9 +39,11 @@ from formulafence.formulas import (
     parse_external_link_indexed_defined_name_reference,
     parse_external_link_indexed_sheet_defined_name_reference,
     parse_external_link_indexed_workbook_reference,
+    parse_external_link_indexed_workbook_three_d_reference,
     parse_external_workbook_defined_name_reference,
     parse_external_workbook_reference,
     parse_external_workbook_sheet_defined_name_reference,
+    parse_external_workbook_three_d_reference,
     parse_reference_token,
     parse_workbook_defined_name_alias,
     reference_lookup_key,
@@ -70,6 +72,7 @@ from formulafence.models import (
     ExternalRelationshipSnapshot,
     ExternalWorkbookDefinedNameReference,
     ExternalWorkbookReference,
+    ExternalWorkbookThreeDReference,
     FillSnapshot,
     FilterVisibilitySnapshot,
     FontSnapshot,
@@ -927,6 +930,8 @@ class _WorkbookTabOrderMetadata:
 
     tab_order: tuple[str, ...]
     complete: bool
+    worksheet_tab_order: tuple[str, ...]
+    worksheet_tab_order_complete: bool
     warnings: tuple[str, ...]
 
 
@@ -2684,11 +2689,20 @@ def _workbook_tab_order_metadata(path: Path) -> _WorkbookTabOrderMetadata:
     try:
         with ZipFile(path) as archive:
             workbook = _xml_root(archive, "xl/workbook.xml")
+            relationship_kinds = {
+                relationship.relationship_id: relationship.relationship_type.rsplit(
+                    "/", maxsplit=1
+                )[-1]
+                for relationship in _package_relationships(archive, "xl/workbook.xml")
+                if relationship.relationship_id and relationship.relationship_type
+            }
     except (BadZipFile, ElementTree.ParseError, KeyError, OSError, ValueError) as error:
         return _WorkbookTabOrderMetadata(
-            (),
-            False,
-            (
+            tab_order=(),
+            complete=False,
+            worksheet_tab_order=(),
+            worksheet_tab_order_complete=False,
+            warnings=(
                 "FormulaFence could not inspect the raw OOXML workbook tab catalog "
                 f"({type(error).__name__}); SHEET and SHEETS workbook-structure "
                 "coverage has a gap.",
@@ -2701,9 +2715,11 @@ def _workbook_tab_order_metadata(path: Path) -> _WorkbookTabOrderMetadata:
         not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
     ):
         return _WorkbookTabOrderMetadata(
-            (),
-            False,
-            (
+            tab_order=(),
+            complete=False,
+            worksheet_tab_order=(),
+            worksheet_tab_order_complete=False,
+            warnings=(
                 "FormulaFence found an unexpected raw OOXML workbook root; SHEET and "
                 "SHEETS workbook-structure coverage has a gap.",
             ),
@@ -2723,9 +2739,11 @@ def _workbook_tab_order_metadata(path: Path) -> _WorkbookTabOrderMetadata:
     )
     if sheets is None:
         return _WorkbookTabOrderMetadata(
-            (),
-            False,
-            (
+            tab_order=(),
+            complete=False,
+            worksheet_tab_order=(),
+            worksheet_tab_order_complete=False,
+            warnings=(
                 "FormulaFence found no raw OOXML workbook tab catalog; SHEET and SHEETS "
                 "workbook-structure coverage has a gap.",
             ),
@@ -2735,6 +2753,14 @@ def _workbook_tab_order_metadata(path: Path) -> _WorkbookTabOrderMetadata:
     warnings: set[str] = set()
     seen_titles: set[str] = set()
     complete = True
+    worksheet_tab_order: list[str] = []
+    worksheet_tab_order_complete = True
+    known_non_worksheet_kinds = {
+        "chartsheet",
+        "dialogsheet",
+        "xlIntlMacrosheet",
+        "xlMacrosheet",
+    }
     for sheet in sheets:
         if (
             _xml_local_name(sheet.tag) != "sheet"
@@ -2742,6 +2768,7 @@ def _workbook_tab_order_metadata(path: Path) -> _WorkbookTabOrderMetadata:
             not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
         ):
             complete = False
+            worksheet_tab_order_complete = False
             warnings.add(
                 "FormulaFence found an unexpected raw OOXML workbook tab declaration; "
                 "SHEET and SHEETS workbook-structure coverage has a gap."
@@ -2750,6 +2777,7 @@ def _workbook_tab_order_metadata(path: Path) -> _WorkbookTabOrderMetadata:
         title = sheet.get("name")
         if not title:
             complete = False
+            worksheet_tab_order_complete = False
             warnings.add(
                 "FormulaFence found a raw OOXML workbook tab without a name; SHEET and "
                 "SHEETS workbook-structure coverage has a gap."
@@ -2758,6 +2786,7 @@ def _workbook_tab_order_metadata(path: Path) -> _WorkbookTabOrderMetadata:
         title_key = title.casefold()
         if title_key in seen_titles:
             complete = False
+            worksheet_tab_order_complete = False
             warnings.add(
                 "FormulaFence found duplicate raw OOXML workbook tab names; SHEET and "
                 "SHEETS workbook-structure coverage has a gap."
@@ -2765,15 +2794,35 @@ def _workbook_tab_order_metadata(path: Path) -> _WorkbookTabOrderMetadata:
             continue
         seen_titles.add(title_key)
         tab_order.append(title)
+        relationship_id = sheet.get(f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id")
+        if relationship_id is None:
+            relationship_id = sheet.get(f"{{{_STRICT_DOCUMENT_RELATIONSHIP_NS}}}id")
+        relationship_kind = (
+            relationship_kinds.get(relationship_id) if relationship_id else None
+        )
+        if relationship_kind == "worksheet":
+            worksheet_tab_order.append(title)
+        elif relationship_kind not in known_non_worksheet_kinds:
+            worksheet_tab_order_complete = False
+            warnings.add(
+                "FormulaFence could not classify a raw OOXML workbook tab as an ordinary "
+                "worksheet or a supported non-worksheet tab; external 3-D portfolio "
+                "coverage has a gap."
+            )
 
     if not tab_order:
         complete = False
+        worksheet_tab_order_complete = False
         warnings.add(
             "FormulaFence found an empty raw OOXML workbook tab catalog; SHEET and SHEETS "
             "workbook-structure coverage has a gap."
         )
     return _WorkbookTabOrderMetadata(
-        tuple(tab_order), complete, tuple(sorted(warnings))
+        tab_order=tuple(tab_order),
+        complete=complete,
+        worksheet_tab_order=tuple(worksheet_tab_order),
+        worksheet_tab_order_complete=worksheet_tab_order_complete,
+        warnings=tuple(sorted(warnings)),
     )
 
 
@@ -44084,6 +44133,7 @@ def _local_defined_name_keys(workbook: object) -> dict[str, frozenset[str]]:
 _ExternalAliasReference = TypeVar(
     "_ExternalAliasReference",
     ExternalWorkbookReference,
+    ExternalWorkbookThreeDReference,
     ExternalWorkbookDefinedNameReference,
 )
 
@@ -44379,6 +44429,84 @@ def _package_indexed_external_workbook_references(
                 ExternalWorkbookReference(
                     source_path=source_path,
                     sheet=indexed_reference.sheet,
+                    min_column=indexed_reference.min_column,
+                    min_row=indexed_reference.min_row,
+                    max_column=indexed_reference.max_column,
+                    max_row=indexed_reference.max_row,
+                ),
+            )
+    return result
+
+
+def _direct_external_workbook_three_d_references(
+    workbook: object,
+) -> dict[str, tuple[ExternalWorkbookThreeDReference, ...]]:
+    """Keep exact workbook-scoped aliases for direct external 3-D A1 spans.
+
+    The source path and endpoint identities remain private until the portfolio
+    resolver binds the path to an already inspected in-root candidate and
+    verifies the source workbook's real worksheet ordering. Consumer-local
+    names and formula-valued definitions never enter this endpoint map.
+    """
+    names = getattr(workbook, "defined_names", {})
+    try:
+        items = names.items()
+    except AttributeError:
+        return {}
+    result: dict[str, tuple[ExternalWorkbookThreeDReference, ...]] = {}
+    for name, definition in items:
+        if getattr(definition, "localSheetId", None) is not None:
+            continue
+        reference = parse_external_workbook_three_d_reference(
+            _definition_text(definition)
+        )
+        if reference is None:
+            continue
+        name_key = reference_lookup_key(str(name))
+        if name_key:
+            result[name_key] = (reference,)
+    return result
+
+
+def _package_indexed_external_workbook_three_d_references(
+    workbook: object,
+    indexed_external_workbook_paths: Mapping[int, str],
+) -> dict[str, tuple[ExternalWorkbookThreeDReference, ...]]:
+    """Resolve direct global aliases for indexed external 3-D A1 spans only.
+
+    A workbook name can store ``[1]Jan:Mar!$B$2`` directly. The index is
+    meaningful only after the raw external-link declaration established one
+    unambiguous target. Local consumer names, dynamic definitions, and
+    unresolved indices remain outside this graph; a reversed or otherwise
+    unresolvable endpoint order cannot produce an edge after that target
+    becomes an inspected candidate.
+    """
+    if not indexed_external_workbook_paths:
+        return {}
+    names = getattr(workbook, "defined_names", {})
+    try:
+        items = names.items()
+    except AttributeError:
+        return {}
+    result: dict[str, tuple[ExternalWorkbookThreeDReference, ...]] = {}
+    for name, definition in items:
+        if getattr(definition, "localSheetId", None) is not None:
+            continue
+        indexed_reference = parse_external_link_indexed_workbook_three_d_reference(
+            _definition_text(definition)
+        )
+        if indexed_reference is None:
+            continue
+        source_path = indexed_external_workbook_paths.get(indexed_reference.index)
+        if source_path is None:
+            continue
+        name_key = reference_lookup_key(str(name))
+        if name_key:
+            result[name_key] = (
+                ExternalWorkbookThreeDReference(
+                    source_path=source_path,
+                    first_sheet=indexed_reference.first_sheet,
+                    last_sheet=indexed_reference.last_sheet,
                     min_column=indexed_reference.min_column,
                     min_row=indexed_reference.min_row,
                     max_column=indexed_reference.max_column,
@@ -44714,6 +44842,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     external_workbook_references: dict[
         CellKey, tuple[ExternalWorkbookReference, ...]
     ] = {}
+    external_workbook_three_d_references: dict[
+        CellKey, tuple[ExternalWorkbookThreeDReference, ...]
+    ] = {}
     external_workbook_defined_name_references: dict[
         CellKey, tuple[ExternalWorkbookDefinedNameReference, ...]
     ] = {}
@@ -44885,6 +45016,24 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         },
         workbook_scoped_external_aliases,
     )
+    package_indexed_external_workbook_three_d_references = (
+        _package_indexed_external_workbook_three_d_references(
+            workbook,
+            indexed_external_workbook_paths,
+        )
+    )
+    direct_external_workbook_three_d_references = (
+        _direct_external_workbook_three_d_references(workbook)
+    )
+    named_external_workbook_three_d_references = (
+        _expand_workbook_scoped_external_aliases(
+            {
+                **package_indexed_external_workbook_three_d_references,
+                **direct_external_workbook_three_d_references,
+            },
+            workbook_scoped_external_aliases,
+        )
+    )
 
     for worksheet in workbook.worksheets:
         shadowing_local_names = local_defined_name_keys.get(
@@ -44898,6 +45047,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         visible_named_external_workbook_references = {
             name_key: references
             for name_key, references in named_external_workbook_references.items()
+            if name_key not in shadowing_local_names
+        }
+        visible_named_external_workbook_three_d_references = {
+            name_key: references
+            for name_key, references in named_external_workbook_three_d_references.items()
             if name_key not in shadowing_local_names
         }
         named_references = {
@@ -45078,6 +45232,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 indexed_external_workbook_paths=indexed_external_workbook_paths,
                 named_external_workbook_references=(
                     visible_named_external_workbook_references
+                ),
+                named_external_workbook_three_d_references=(
+                    visible_named_external_workbook_three_d_references
                 ),
                 structured_tables=structured_tables,
                 origin=snapshot.location,
@@ -45363,6 +45520,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 external_workbook_references[snapshot.location] = (
                     inspection.external_workbook_references
                 )
+            if inspection.external_workbook_three_d_references:
+                external_workbook_three_d_references[snapshot.location] = (
+                    inspection.external_workbook_three_d_references
+                )
             if inspection.external_workbook_defined_name_references:
                 external_workbook_defined_name_references[snapshot.location] = (
                     inspection.external_workbook_defined_name_references
@@ -45639,6 +45800,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         dynamic_array_formula_ranges=array_formula_classification.dynamic_ranges,
         dynamic_array_output_references=dynamic_array_output_references,
         external_workbook_references=external_workbook_references,
+        external_workbook_three_d_references=external_workbook_three_d_references,
         external_workbook_defined_name_references=(
             external_workbook_defined_name_references
         ),
@@ -45747,6 +45909,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         power_query=external_data_metadata.power_query,
         workbook_tab_order=workbook_tab_order_metadata.tab_order,
         workbook_tab_order_complete=workbook_tab_order_metadata.complete,
+        worksheet_tab_order=workbook_tab_order_metadata.worksheet_tab_order,
+        worksheet_tab_order_complete=(
+            workbook_tab_order_metadata.worksheet_tab_order_complete
+        ),
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),

@@ -278,6 +278,54 @@ def _canonical_sheet_name(snapshot: WorkbookSnapshot, requested_sheet: str) -> s
     return matches[0] if len(matches) == 1 else None
 
 
+def _canonical_three_d_sheet_span(
+    snapshot: WorkbookSnapshot, first_sheet: str, last_sheet: str
+) -> tuple[str, ...]:
+    """Return one bounded source worksheet span, or nothing when it is ambiguous.
+
+    Excel's 3-D form selects every worksheet between two endpoint tabs. The
+    source snapshot carries both the worksheet order and a raw OOXML tab
+    catalog captured from the candidate itself, not a filename-derived
+    approximation. Require that complete catalog's ordinary-worksheet subset to
+    agree exactly with the loaded order, then require unique endpoint and span
+    identities, a forward order, and an inspected worksheet for every included
+    tab before creating any cross-workbook graph edge.
+    """
+    if (
+        not snapshot.workbook_tab_order_complete
+        or not snapshot.worksheet_tab_order_complete
+        or not snapshot.sheet_order
+    ):
+        return ()
+    sheet_positions: dict[str, int] = {}
+    for position, title in enumerate(snapshot.sheet_order):
+        key = title.casefold()
+        if key in sheet_positions:
+            return ()
+        sheet_positions[key] = position
+    raw_worksheet_keys = tuple(title.casefold() for title in snapshot.worksheet_tab_order)
+    if len(raw_worksheet_keys) != len(set(raw_worksheet_keys)):
+        return ()
+    if raw_worksheet_keys != tuple(title.casefold() for title in snapshot.sheet_order):
+        return ()
+    canonical_first = _canonical_sheet_name(snapshot, first_sheet)
+    canonical_last = _canonical_sheet_name(snapshot, last_sheet)
+    if canonical_first is None or canonical_last is None:
+        return ()
+    first_position = sheet_positions.get(canonical_first.casefold())
+    last_position = sheet_positions.get(canonical_last.casefold())
+    if (
+        first_position is None
+        or last_position is None
+        or first_position > last_position
+    ):
+        return ()
+    span = snapshot.sheet_order[first_position : last_position + 1]
+    if any(_canonical_sheet_name(snapshot, title) != title for title in span):
+        return ()
+    return span
+
+
 def _build_candidate_impact_graph(
     entries: Iterable[PortfolioWorkbookReport],
 ) -> _PortfolioImpactGraph:
@@ -321,6 +369,38 @@ def _build_candidate_impact_graph(
                 external_dependents[
                     (source_workbook, source_sheet.casefold())
                 ].append(dependency)
+
+        for dependent_location in sorted(
+            snapshot.external_workbook_three_d_references, key=_location_sort_key
+        ):
+            for reference in snapshot.external_workbook_three_d_references[
+                dependent_location
+            ]:
+                source_workbook = _resolve_relative_external_workbook(
+                    dependent_workbook,
+                    reference.source_path,
+                    candidate_paths,
+                )
+                if source_workbook is None:
+                    continue
+                source_snapshot = snapshots[source_workbook]
+                for source_sheet in _canonical_three_d_sheet_span(
+                    source_snapshot,
+                    reference.first_sheet,
+                    reference.last_sheet,
+                ):
+                    dependency = _ExternalPortfolioDependency(
+                        source_workbook=source_workbook,
+                        source_sheet=source_sheet,
+                        min_column=reference.min_column,
+                        min_row=reference.min_row,
+                        max_column=reference.max_column,
+                        max_row=reference.max_row,
+                        dependent=(dependent_workbook, dependent_location),
+                    )
+                    external_dependents[
+                        (source_workbook, source_sheet.casefold())
+                    ].append(dependency)
 
         for dependent_location in sorted(
             snapshot.external_workbook_defined_name_references,

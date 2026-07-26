@@ -11,12 +11,14 @@ from formulafence.formulas import (
     parse_external_link_indexed_defined_name_reference,
     parse_external_link_indexed_sheet_defined_name_reference,
     parse_external_link_indexed_workbook_reference,
+    parse_external_link_indexed_workbook_three_d_reference,
     parse_external_workbook_defined_name_reference,
     parse_external_workbook_reference,
     parse_external_workbook_sheet_defined_name_reference,
+    parse_external_workbook_three_d_reference,
     parse_workbook_defined_name_alias,
 )
-from formulafence.models import ExternalWorkbookReference
+from formulafence.models import ExternalWorkbookReference, ExternalWorkbookThreeDReference
 
 
 def test_fingerprint_normalises_relative_copy_patterns() -> None:
@@ -111,6 +113,78 @@ def test_external_workbook_a1_references_keep_private_source_spelling_for_portfo
     ] == [
         ("Inputs.xlsx", "Data"),
         ("..\\shared\\Other.xlsx", "Data"),
+    ]
+
+
+def test_external_workbook_three_d_references_keep_private_endpoints_for_portfolios() -> None:
+    direct = parse_external_workbook_three_d_reference(
+        "[Inputs.xlsx]Jan:Mar!$B$2:$B$4"
+    )
+    relative = parse_external_workbook_three_d_reference(
+        "'..\\shared\\[Inputs.xlsx]Jan 2026:Mar 2026'!A:A"
+    )
+    leading_equals = parse_external_workbook_three_d_reference(
+        "='..\\shared\\[Inputs.xlsx]Jan 2026:Mar 2026'!A1"
+    )
+
+    assert direct is not None
+    assert (
+        direct.source_path,
+        direct.first_sheet,
+        direct.last_sheet,
+        direct.min_column,
+        direct.min_row,
+        direct.max_column,
+        direct.max_row,
+    ) == ("Inputs.xlsx", "Jan", "Mar", 2, 2, 2, 4)
+    assert relative is not None
+    assert (
+        relative.source_path,
+        relative.first_sheet,
+        relative.last_sheet,
+        relative.min_column,
+        relative.min_row,
+        relative.max_column,
+        relative.max_row,
+    ) == (
+        "..\\shared\\Inputs.xlsx",
+        "Jan 2026",
+        "Mar 2026",
+        1,
+        1,
+        1,
+        1_048_576,
+    )
+    assert leading_equals is not None
+    assert leading_equals.source_path == "..\\shared\\Inputs.xlsx"
+    assert parse_external_workbook_three_d_reference("[Inputs.xlsx]Data!A1") is None
+    assert parse_external_workbook_three_d_reference("[1]Jan:Mar!A1") is None
+    assert parse_external_workbook_three_d_reference("[Inputs.xlsx]Jan:Mar:Baz!A1") is None
+    assert parse_external_workbook_three_d_reference("[Inputs.xlsx]Jan::Mar!A1") is None
+    assert parse_external_workbook_three_d_reference("[Inputs.xlsx]Jan:Mar!InputRange") is None
+    assert (
+        parse_external_workbook_three_d_reference("=SUM([Inputs.xlsx]Jan:Mar!A1)")
+        is None
+    )
+
+    inspection = inspect_formula(
+        "=SUM([Inputs.xlsx]Jan:Mar!$B$2:$B$4)"
+        "+SUM('..\\shared\\[Other.xlsx]Jan 2026:Mar 2026'!A1)"
+    )
+
+    assert inspection.unresolved_range_tokens == ()
+    assert len(inspection.references) == 2
+    assert all(reference.is_external for reference in inspection.references)
+    assert [
+        (
+            reference.source_path,
+            reference.first_sheet,
+            reference.last_sheet,
+        )
+        for reference in inspection.external_workbook_three_d_references
+    ] == [
+        ("Inputs.xlsx", "Jan", "Mar"),
+        ("..\\shared\\Other.xlsx", "Jan 2026", "Mar 2026"),
     ]
 
 
@@ -445,6 +519,107 @@ def test_package_indexed_external_a1_references_require_a_declared_one_based_ind
         (reference.source_path, reference.sheet)
         for reference in alias.external_workbook_references
     ] == [("../inputs/source.xlsx", "Data")]
+
+
+def test_package_indexed_external_three_d_references_require_a_declared_index() -> None:
+    direct = parse_external_link_indexed_workbook_three_d_reference(
+        "[1]Jan:Mar!$B$2:$B$4"
+    )
+    quoted = parse_external_link_indexed_workbook_three_d_reference(
+        "'[42]Jan 2026:Mar 2026'!A:A"
+    )
+    leading_equals = parse_external_link_indexed_workbook_three_d_reference(
+        "=[7]Jan:Mar!A1"
+    )
+    escaped_quote = parse_external_link_indexed_workbook_three_d_reference(
+        "'[9]O''Brien:Year End'!A1"
+    )
+
+    assert direct is not None
+    assert (
+        direct.index,
+        direct.first_sheet,
+        direct.last_sheet,
+        direct.min_column,
+        direct.min_row,
+        direct.max_column,
+        direct.max_row,
+    ) == (1, "Jan", "Mar", 2, 2, 2, 4)
+    assert quoted is not None
+    assert (
+        quoted.index,
+        quoted.first_sheet,
+        quoted.last_sheet,
+        quoted.min_column,
+        quoted.min_row,
+        quoted.max_column,
+        quoted.max_row,
+    ) == (42, "Jan 2026", "Mar 2026", 1, 1, 1, 1_048_576)
+    assert escaped_quote is not None
+    assert (escaped_quote.first_sheet, escaped_quote.last_sheet) == (
+        "O'Brien",
+        "Year End",
+    )
+    assert leading_equals is not None
+    assert leading_equals.index == 7
+    assert parse_external_link_indexed_workbook_three_d_reference("[1]Data!A1") is None
+    assert parse_external_link_indexed_workbook_three_d_reference("[0]Jan:Mar!A1") is None
+    assert parse_external_link_indexed_workbook_three_d_reference("[01]Jan:Mar!A1") is None
+    assert (
+        parse_external_link_indexed_workbook_three_d_reference("[1]Jan:Mar:Baz!A1")
+        is None
+    )
+    assert parse_external_link_indexed_workbook_three_d_reference("[1]Jan::Mar!A1") is None
+    assert parse_external_link_indexed_workbook_three_d_reference("[1]Jan:Mar!Input") is None
+
+    inspection = inspect_formula(
+        "=SUM([1]Jan:Mar!$B$2:$B$4)+SUM('[2]Jan 2026:Mar 2026'!A:A)",
+        indexed_external_workbook_paths={
+            1: "../inputs/source.xlsx",
+            2: "../inputs/other.xlsx",
+        },
+    )
+    assert inspection.unresolved_range_tokens == ()
+    assert len(inspection.references) == 2
+    assert all(reference.is_external for reference in inspection.references)
+    assert [
+        (
+            reference.source_path,
+            reference.first_sheet,
+            reference.last_sheet,
+            reference.min_column,
+            reference.min_row,
+            reference.max_column,
+            reference.max_row,
+        )
+        for reference in inspection.external_workbook_three_d_references
+    ] == [
+        ("../inputs/source.xlsx", "Jan", "Mar", 2, 2, 2, 4),
+        ("../inputs/other.xlsx", "Jan 2026", "Mar 2026", 1, 1, 1, 1_048_576),
+    ]
+
+    alias = inspect_formula(
+        "=PackageExternalThreeD",
+        named_external_workbook_three_d_references={
+            "packageexternalthreed": (
+                ExternalWorkbookThreeDReference(
+                    source_path="../inputs/source.xlsx",
+                    first_sheet="Jan",
+                    last_sheet="Mar",
+                    min_column=2,
+                    min_row=2,
+                    max_column=2,
+                    max_row=4,
+                ),
+            )
+        },
+    )
+    assert alias.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in alias.references)
+    assert [
+        (reference.source_path, reference.first_sheet, reference.last_sheet)
+        for reference in alias.external_workbook_three_d_references
+    ] == [("../inputs/source.xlsx", "Jan", "Mar")]
 
 
 def test_formula_inspection_resolves_names_and_marks_static_coverage_gaps() -> None:

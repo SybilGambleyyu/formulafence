@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.93.0 — 2026-07-26
+
+- Extend the candidate-only `FF079` portfolio graph through exact static
+  external 3-D A1 spans: direct spellings such as
+  `=[Inputs.xlsx]Jan:Mar!$B$2` and validated package-indexed spellings such as
+  `=[1]Jan:Mar!$B$2`. The same finite, acyclic workbook-scoped consumer alias
+  chains added in 0.92.0 can terminate in either span form.
+- Expand a span only after its private source spelling resolves to an already
+  inspected relative candidate. FormulaFence requires that candidate's complete
+  raw OOXML tab catalog to agree with its inspected worksheet order, then adds
+  the same static A1 bounds for every worksheet from the first endpoint through
+  the last. It does not open, fetch, refresh, calculate, or trust an external
+  target or cache.
+- Fail closed for incomplete or inconsistent source tab metadata, reversed,
+  missing, ambiguous, or non-worksheet endpoints; malformed paths, quoting,
+  indexes, or A1 payloads; local/shadowed consumer aliases; formula wrappers,
+  dynamic forms, and every unresolved package declaration. Keep source paths,
+  endpoint identities, package targets, and consumer aliases out of JSON,
+  Markdown, and SARIF portfolio evidence. Add parser, tab-catalog, direct,
+  package, alias-chain, span-boundary, and redaction coverage.
+
 ## 0.92.0 — 2026-07-26
 
 - Extend the candidate-only `FF079` portfolio graph through finite, acyclic

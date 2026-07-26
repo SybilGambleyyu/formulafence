@@ -17,6 +17,7 @@ from openpyxl.utils.cell import (
 from formulafence.models import (
     ExternalWorkbookDefinedNameReference,
     ExternalWorkbookReference,
+    ExternalWorkbookThreeDReference,
 )
 
 MAX_EXCEL_ROW = 1_048_576
@@ -376,6 +377,25 @@ class IndexedExternalWorkbookReference:
 
 
 @dataclass(frozen=True)
+class IndexedExternalWorkbookThreeDReference:
+    """One package-indexed external A1 span without a source path.
+
+    The nonzero index is a position in the workbook's external-link
+    collection. The source path remains unavailable until a separately
+    validated package declaration supplies it; the two worksheet endpoints
+    are retained privately for the same candidate-only portfolio bridge.
+    """
+
+    index: int
+    first_sheet: str
+    last_sheet: str
+    min_column: int
+    min_row: int
+    max_column: int
+    max_row: int
+
+
+@dataclass(frozen=True)
 class FormulaInspection:
     """Static formula coverage collected from one formula without evaluation."""
 
@@ -383,6 +403,9 @@ class FormulaInspection:
     unresolved_range_tokens: tuple[str, ...]
     dynamic_reference_functions: tuple[str, ...]
     external_workbook_references: tuple[ExternalWorkbookReference, ...] = ()
+    external_workbook_three_d_references: tuple[
+        ExternalWorkbookThreeDReference, ...
+    ] = ()
     external_workbook_defined_name_references: tuple[
         ExternalWorkbookDefinedNameReference, ...
     ] = ()
@@ -611,16 +634,43 @@ def _unescape_external_reference_prefix(value: str) -> tuple[str, bool] | None:
     return "".join(unescaped), True
 
 
-def _parse_external_link_indexed_sheet_prefix(
-    value: str,
-) -> tuple[int, str, str] | None:
-    """Split one strict ``[N]Sheet!`` prefix without assigning its payload.
+def _is_static_external_sheet_name(value: str, *, quoted: bool) -> bool:
+    """Return whether one external sheet endpoint has an exact static spelling."""
+    return not (
+        not value
+        or any(character in "[]\\?*/:" for character in value)
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        or (
+            not quoted
+            and any(
+                character.isspace() or character in "'+-*/^&=<>%,;(){}!"
+                for character in value
+            )
+        )
+    )
 
-    Excel reuses ``single-sheet-prefix`` for both an external A1 destination
-    and an external sheet-local defined name.  Keep the quote and sheet-name
-    checks in one place so the two parsers cannot disagree about which private
-    package index or source scope they observed.
-    """
+
+def _split_static_external_sheet_range(
+    value: str, *, quoted: bool
+) -> tuple[str, str] | None:
+    """Split two exact external worksheet endpoints without inferring either."""
+    first_sheet, separator, last_sheet = value.partition(":")
+    if (
+        not separator
+        or not first_sheet
+        or not last_sheet
+        or ":" in last_sheet
+        or not _is_static_external_sheet_name(first_sheet, quoted=quoted)
+        or not _is_static_external_sheet_name(last_sheet, quoted=quoted)
+    ):
+        return None
+    return first_sheet, last_sheet
+
+
+def _parse_external_link_indexed_sheet_prefix_parts(
+    value: str,
+) -> tuple[int, str, str, bool] | None:
+    """Split an indexed external prefix before selecting single or 3-D sheets."""
     token = value.strip()
     if token.startswith("="):
         token = token[1:].strip()
@@ -638,28 +688,34 @@ def _parse_external_link_indexed_sheet_prefix(
         return None
     index = _parse_external_link_index(prefix[1:closing])
     sheet = prefix[closing + 1 :]
-    if (
-        index is None
-        or not sheet
-        or any(character in "[]\\?*/:" for character in sheet)
-        or any(ord(character) < 32 or ord(character) == 127 for character in sheet)
-        or (
-            not quoted
-            and any(
-                character.isspace()
-                or character in "'+-*/^&=<>%,;(){}!"
-                for character in sheet
-            )
-        )
-    ):
+    if index is None:
+        return None
+    return index, sheet, payload, quoted
+
+
+def _parse_external_link_indexed_sheet_prefix(
+    value: str,
+) -> tuple[int, str, str] | None:
+    """Split one strict ``[N]Sheet!`` prefix without assigning its payload.
+
+    Excel reuses ``single-sheet-prefix`` for both an external A1 destination
+    and an external sheet-local defined name.  Keep the quote and sheet-name
+    checks in one place so the two parsers cannot disagree about which private
+    package index or source scope they observed.
+    """
+    parsed = _parse_external_link_indexed_sheet_prefix_parts(value)
+    if parsed is None:
+        return None
+    index, sheet, payload, quoted = parsed
+    if not _is_static_external_sheet_name(sheet, quoted=quoted):
         return None
     return index, sheet, payload
 
 
-def _parse_direct_external_workbook_sheet_prefix(
+def _parse_direct_external_workbook_sheet_prefix_parts(
     value: str,
-) -> tuple[str, str, str] | None:
-    """Split one exact direct external ``[Book]Sheet!`` literal.
+) -> tuple[str, str, str, bool] | None:
+    """Split one exact direct external prefix before selecting sheet form.
 
     Defined-name OOXML commonly stores a static target with no leading
     equals sign, while some producers retain one.  Accept both spellings, but
@@ -700,7 +756,6 @@ def _parse_direct_external_workbook_sheet_prefix(
         or "[" in source_prefix
         or "]" in source_prefix
         or any(character in "[]\\?*/:" for character in workbook_name)
-        or any(character in "[]\\?*/:" for character in sheet)
         or any(
             ord(character) < 32 or ord(character) == 127
             for character in f"{source_prefix}{workbook_name}{sheet}"
@@ -715,14 +770,6 @@ def _parse_direct_external_workbook_sheet_prefix(
             not quoted
             and any(character in "'+-*/^&=<>%,;(){}!" for character in source_prefix)
         )
-        or (
-            not quoted
-            and any(
-                character.isspace()
-                or character in "'+-*/^&=<>%,;(){}!"
-                for character in sheet
-            )
-        )
         # A numeric ``[N]`` prefix is a package external-link index, never a
         # direct filename. It must be resolved only after package validation.
         or (
@@ -732,7 +779,20 @@ def _parse_direct_external_workbook_sheet_prefix(
         )
     ):
         return None
-    return f"{source_prefix}{workbook_name}", sheet, payload
+    return f"{source_prefix}{workbook_name}", sheet, payload, quoted
+
+
+def _parse_direct_external_workbook_sheet_prefix(
+    value: str,
+) -> tuple[str, str, str] | None:
+    """Split one strict direct external ``[Book]Sheet!`` literal."""
+    parsed = _parse_direct_external_workbook_sheet_prefix_parts(value)
+    if parsed is None:
+        return None
+    source_path, sheet, payload, quoted = parsed
+    if not _is_static_external_sheet_name(sheet, quoted=quoted):
+        return None
+    return source_path, sheet, payload
 
 
 def parse_external_workbook_reference(value: str) -> ExternalWorkbookReference | None:
@@ -785,6 +845,74 @@ def parse_external_link_indexed_workbook_reference(
     return IndexedExternalWorkbookReference(
         index=index,
         sheet=sheet,
+        min_column=min_column or 1,
+        min_row=min_row or 1,
+        max_column=max_column or MAX_EXCEL_COLUMN,
+        max_row=max_row or MAX_EXCEL_ROW,
+    )
+
+
+def parse_external_workbook_three_d_reference(
+    value: str,
+) -> ExternalWorkbookThreeDReference | None:
+    """Parse one exact direct external 3-D A1 reference without resolving it.
+
+    A source workbook can use ``[Book.xlsx]Jan:Mar!A1`` (or its quoted,
+    path-bearing equivalent) to select the same A1 destination across every
+    worksheet between two endpoint tabs. This parser retains only static A1
+    bounds and both endpoint identities. Candidate portfolio analysis later
+    decides whether a private path resolves to an inspected source and whether
+    its real worksheet order makes the span unambiguous.
+    """
+    parsed_prefix = _parse_direct_external_workbook_sheet_prefix_parts(value)
+    if parsed_prefix is None:
+        return None
+    source_path, sheet_range, address, quoted = parsed_prefix
+    sheet_endpoints = _split_static_external_sheet_range(sheet_range, quoted=quoted)
+    if sheet_endpoints is None:
+        return None
+    try:
+        min_column, min_row, max_column, max_row = range_boundaries(address)
+    except ValueError:
+        return None
+    first_sheet, last_sheet = sheet_endpoints
+    return ExternalWorkbookThreeDReference(
+        source_path=source_path,
+        first_sheet=first_sheet,
+        last_sheet=last_sheet,
+        min_column=min_column or 1,
+        min_row=min_row or 1,
+        max_column=max_column or MAX_EXCEL_COLUMN,
+        max_row=max_row or MAX_EXCEL_ROW,
+    )
+
+
+def parse_external_link_indexed_workbook_three_d_reference(
+    value: str,
+) -> IndexedExternalWorkbookThreeDReference | None:
+    """Parse one package-indexed external 3-D A1 reference without resolving it.
+
+    Office uses the same ``[N]`` external-link collection index for a
+    single-sheet prefix and a sheet range. Keep only a nonzero, bounded index,
+    static A1 bounds, and exact endpoints until validated package metadata
+    provides a candidate-only source path.
+    """
+    parsed_prefix = _parse_external_link_indexed_sheet_prefix_parts(value)
+    if parsed_prefix is None:
+        return None
+    index, sheet_range, address, quoted = parsed_prefix
+    sheet_endpoints = _split_static_external_sheet_range(sheet_range, quoted=quoted)
+    if sheet_endpoints is None:
+        return None
+    try:
+        min_column, min_row, max_column, max_row = range_boundaries(address)
+    except ValueError:
+        return None
+    first_sheet, last_sheet = sheet_endpoints
+    return IndexedExternalWorkbookThreeDReference(
+        index=index,
+        first_sheet=first_sheet,
+        last_sheet=last_sheet,
         min_column=min_column or 1,
         min_row=min_row or 1,
         max_column=max_column or MAX_EXCEL_COLUMN,
@@ -2473,6 +2601,9 @@ def inspect_formula(
     named_external_workbook_references: (
         Mapping[str, Sequence[ExternalWorkbookReference]] | None
     ) = None,
+    named_external_workbook_three_d_references: (
+        Mapping[str, Sequence[ExternalWorkbookThreeDReference]] | None
+    ) = None,
     *,
     inspect_formula_defined_xlm_registrations: bool = False,
     inspect_formula_defined_xlm_evaluations: bool = False,
@@ -2514,6 +2645,9 @@ def inspect_formula(
     )
     resolved_indexed_external_workbook_paths = indexed_external_workbook_paths or {}
     resolved_named_external_workbooks = named_external_workbook_references or {}
+    resolved_named_external_workbook_three_d_references = (
+        named_external_workbook_three_d_references or {}
+    )
     resolved_named_functions = named_function_references or {}
     resolved_named_custom_functions = named_custom_function_candidates or {}
     resolved_named_function_custom_functions = (
@@ -2582,6 +2716,7 @@ def inspect_formula(
     unresolved_range_tokens: list[str] = []
     dynamic_reference_functions: list[str] = []
     external_workbook_references: list[ExternalWorkbookReference] = []
+    external_workbook_three_d_references: list[ExternalWorkbookThreeDReference] = []
     external_workbook_defined_name_references: list[
         ExternalWorkbookDefinedNameReference
     ] = []
@@ -2680,6 +2815,46 @@ def inspect_formula(
                         )
                     )
                 continue
+            if indexed_external_workbook_three_d_reference := (
+                parse_external_link_indexed_workbook_three_d_reference(token.value)
+            ):
+                # A package index never supplies a filename by itself. Retain
+                # this private span only after the raw external-link metadata
+                # has validated one exact candidate source spelling.
+                references.append(
+                    ParsedReference(
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        token.value,
+                        is_external=True,
+                    )
+                )
+                if source_path := resolved_indexed_external_workbook_paths.get(
+                    indexed_external_workbook_three_d_reference.index
+                ):
+                    external_workbook_three_d_references.append(
+                        ExternalWorkbookThreeDReference(
+                            source_path=source_path,
+                            first_sheet=(
+                                indexed_external_workbook_three_d_reference.first_sheet
+                            ),
+                            last_sheet=(
+                                indexed_external_workbook_three_d_reference.last_sheet
+                            ),
+                            min_column=(
+                                indexed_external_workbook_three_d_reference.min_column
+                            ),
+                            min_row=indexed_external_workbook_three_d_reference.min_row,
+                            max_column=(
+                                indexed_external_workbook_three_d_reference.max_column
+                            ),
+                            max_row=indexed_external_workbook_three_d_reference.max_row,
+                        )
+                    )
+                continue
             if indexed_external_workbook_reference := (
                 parse_external_link_indexed_workbook_reference(token.value)
             ):
@@ -2715,8 +2890,14 @@ def inspect_formula(
             if reference is not None:
                 references.append(reference)
                 if reference.is_external:
-                    if external_workbook_reference := parse_external_workbook_reference(
-                        token.value
+                    if external_workbook_three_d_reference := (
+                        parse_external_workbook_three_d_reference(token.value)
+                    ):
+                        external_workbook_three_d_references.append(
+                            external_workbook_three_d_reference
+                        )
+                    elif external_workbook_reference := (
+                        parse_external_workbook_reference(token.value)
                     ):
                         external_workbook_references.append(external_workbook_reference)
                     elif external_workbook_sheet_name_reference := (
@@ -2774,6 +2955,27 @@ def inspect_formula(
                     )
                 )
                 external_workbook_references.extend(named_external_workbook_references)
+                continue
+            if named_external_workbook_three_d_references := (
+                resolved_named_external_workbook_three_d_references.get(named_key)
+            ):
+                # Workbook-scoped aliases are expanded only from a previously
+                # validated direct or package endpoint. The private path and
+                # tab span never come from the consumer formula itself.
+                references.append(
+                    ParsedReference(
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        token.value,
+                        is_external=True,
+                    )
+                )
+                external_workbook_three_d_references.extend(
+                    named_external_workbook_three_d_references
+                )
                 continue
             if named_external_references := (
                 resolved_named_external_workbook_defined_names.get(named_key)
@@ -3140,6 +3342,9 @@ def inspect_formula(
         unresolved_range_tokens=tuple(dict.fromkeys(unresolved_range_tokens)),
         dynamic_reference_functions=tuple(dict.fromkeys(dynamic_reference_functions)),
         external_workbook_references=tuple(dict.fromkeys(external_workbook_references)),
+        external_workbook_three_d_references=tuple(
+            dict.fromkeys(external_workbook_three_d_references)
+        ),
         external_workbook_defined_name_references=tuple(
             dict.fromkeys(external_workbook_defined_name_references)
         ),

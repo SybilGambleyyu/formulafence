@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Candidate-only external 3-D A1 spans — 2026-07-26
+
+Microsoft's [cell-reference grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/3c420ebb-6ef1-4b0d-959d-76e88c841c3e)
+define an external cell reference whose sheet prefix can be a `sheet-range`,
+including a workbook index. Its [3-D-reference guidance](https://support.microsoft.com/en-us/excel/create-a-reference-to-the-same-cell-range-on-multiple-worksheets)
+states that a span uses every worksheet between its endpoints. FormulaFence
+0.93.0 applies that only after a direct or package-validated source spelling
+resolves to an already-inspected candidate: the candidate must expose a
+complete raw OOXML tab catalog consistent with the inspected ordinary-worksheet
+order, and both endpoint tabs must be unique, present, and forward.
+
+The independently maintained [MullinsLab external-data workbook](https://github.com/MullinsLab/excel-external-data/blob/5b4d55319c2eab3ad25408a85de025bdffa35e8b/external-data-blank.xlsx)
+was downloaded at commit `5b4d55319c2eab3ad25408a85de025bdffa35e8b` to a
+temporary directory outside this repository (SHA-256
+`b194aa281d64f1b5cf7f953a328adca211d67245c6b2d0fe64b5245c352a7b68`). A
+temporary source copy received controlled `FenceJan`, `FenceFeb`, `FenceMar`,
+and out-of-span `FenceOutside` worksheets. A separate consumer used one direct
+external `FenceJan:FenceMar` A1 span, a one-hop workbook-name alias to the same
+span, a leading-`=` alias, and a reversed-span control. Changing only
+`FenceFeb!B3` yielded exactly three `FF079` impacts and `FFP079`; the reversed
+control did not add an edge. JSON, Markdown, SARIF, and the source CLI's JSON
+omitted the uppercase external-source spelling, all controlled alias names, and
+the span endpoint identities. The upstream workbook was neither executed,
+refreshed, modified in place, nor copied into this repository.
+
+The release-versioned source tree passed **620 tests in 81.76 seconds**, a
+clean Ruff check, and `git diff --check`. Fresh 0.93.0 source and wheel
+distributions passed `twine check`. An isolated environment installed the exact
+final wheel and reran the temporary public portfolio through its CLI; it
+returned policy exit `1` with `FF079` and `FFP079`, while the controlled aliases,
+uppercase source spelling, and endpoint identities remained absent from JSON.
+
 ## Exact workbook-name alias chains — 2026-07-26
 
 Microsoft's [name-formula grammar](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/da7f42ad-0083-451a-98cf-b475b578d91d)

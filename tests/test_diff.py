@@ -5280,6 +5280,8 @@ def test_native_workbook_tab_information_detects_all_tab_catalog_changes(tmp_pat
         "Model",
         "Report",
     )
+    assert candidate_snapshot.worksheet_tab_order_complete is True
+    assert candidate_snapshot.worksheet_tab_order == ("Inputs", "Model", "Report")
     assert (
         baseline_snapshot.formula_environment_information_calls
         == candidate_snapshot.formula_environment_information_calls

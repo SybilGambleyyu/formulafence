@@ -38,6 +38,29 @@ class ExternalWorkbookReference:
 
 
 @dataclass(frozen=True)
+class ExternalWorkbookThreeDReference:
+    """One static A1 reference spanning worksheets in another workbook.
+
+    The source spelling and both endpoint titles can disclose an author's
+    private model layout, so all three remain private implementation data.
+    Portfolio analysis may expand the span only after it has bound the source
+    to an inspected candidate workbook and verified its worksheet tab order.
+    """
+
+    source_path: str = field(repr=False)
+    first_sheet: str = field(repr=False)
+    last_sheet: str = field(repr=False)
+    min_column: int
+    min_row: int
+    max_column: int
+    max_row: int
+
+    @property
+    def is_range(self) -> bool:
+        return self.min_column != self.max_column or self.min_row != self.max_row
+
+
+@dataclass(frozen=True)
 class ExternalWorkbookDefinedNameReference:
     """One direct external defined-name reference to another workbook.
 
@@ -4360,6 +4383,11 @@ class WorkbookSnapshot:
     # needs aggregate counts, while ordinary sheet inventory remains separate.
     workbook_tab_order: tuple[str, ...] = field(default_factory=tuple, repr=False)
     workbook_tab_order_complete: bool = False
+    # The raw subset whose relationships identify ordinary worksheets. This is
+    # private because external 3-D portfolio resolution uses it only to prove
+    # the workbook reader retained every potentially referenced worksheet.
+    worksheet_tab_order: tuple[str, ...] = field(default_factory=tuple, repr=False)
+    worksheet_tab_order_complete: bool = False
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     spill_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -4377,6 +4405,12 @@ class WorkbookSnapshot:
     # resolves only a narrow, relative subset against supplied input roots.
     external_workbook_references: dict[
         CellKey, tuple[ExternalWorkbookReference, ...]
+    ] = field(default_factory=dict, repr=False)
+    # Static external 3-D A1 spans stay separate from single-sheet ranges.
+    # Their private endpoints are expanded only against the exact worksheet
+    # order of an already inspected candidate source workbook.
+    external_workbook_three_d_references: dict[
+        CellKey, tuple[ExternalWorkbookThreeDReference, ...]
     ] = field(default_factory=dict, repr=False)
     # Direct external workbook-defined names are retained separately from
     # external A1 ranges. Both their source spelling and the name itself stay

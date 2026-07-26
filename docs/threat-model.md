@@ -96,9 +96,10 @@ financial correctness or replace model review.
 - Cross-workbook portfolio impact evidence is candidate-only and local to the
   supplied inventory. FormulaFence retains raw external source spellings and
   package targets only as private parser state, then resolves a direct static
-  A1 source, a direct workbook-scoped or sheet-local external name, or narrow
-  package-indexed forms `[N]Sheet!A1`, `[N]!Name`, and
-  `[N]Sheet!LocalName`. For an indexed form, `N` must select exactly one
+  A1 source, an exact static external 3-D A1 span, a direct workbook-scoped or
+  sheet-local external name, or narrow package-indexed forms `[N]Sheet!A1`,
+  `[N]First:Last!A1`, `[N]!Name`, and `[N]Sheet!LocalName`. For an indexed
+  form, `N` must select exactly one
   document-order `externalReference`, `externalLink` part, `externalBook`, and
   external `externalLinkPath` relationship before that target may normalize to
   one exact relative candidate. A workbook-scoped consumer alias may terminate
@@ -106,12 +107,15 @@ financial correctness or replace model review.
   workbook-scoped-name, or sheet-local spelling. It may reach that terminal
   through a finite, acyclic chain whose intermediate definitions are each one
   unqualified non-A1 name identity; a same-named sheet-local consumer
-  definition shadows the workbook alias. Sheet-scoped aliases, formula
-  wrappers/expressions, missing or cyclic bridges, caches, non-static package
-  A1 forms, and ambiguous package shapes are not expanded. A source name must
-  also expand completely to static internal A1 destinations in that source candidate; an
-  explicit source sheet selects only that local scope, never a global or other
-  sheet fallback. It never opens a target path,
+  definition shadows the workbook alias. A 3-D span is expanded only when its
+  source candidate has a complete raw OOXML tab catalog consistent with the
+  inspected ordinary-worksheet order, and only from exact forward endpoints.
+  Sheet-scoped aliases, formula wrappers/expressions, missing or cyclic bridges,
+  caches, non-static package A1 forms, ambiguous package shapes, and spans with
+  missing, reversed, non-worksheet, or inconsistent-tab-catalog endpoints are
+  not expanded. A source name must also expand completely to static internal A1
+  destinations in that source candidate; an explicit source sheet selects only
+  that local scope, never a global or other sheet fallback. It never opens a target path,
   searches by basename, follows an absolute/UNC/URI/escaping path, fetches
   anything, evaluates a formula, trusts cached external-link values, or emits
   the stored external path or source-name spelling in portfolio evidence.
@@ -1334,9 +1338,10 @@ formula will produce.
 - Static internal 3-D A1 references such as `Jan:Mar!B2:B10` are expanded over
   every worksheet in the endpoint tab span. FormulaFence compares the resolved
   span when the same 3-D formula survives a workbook change, because moving,
-  adding, or removing tabs can change its semantics. External 3-D references
-  remain external-link hazards; malformed, endpoint-missing, and non-A1 3-D
-  forms remain explicit coverage gaps.
+  adding, or removing tabs can change its semantics. Exact static external 3-D
+  A1 spans are separately eligible only for a candidate source with a complete
+  consistent tab catalog; malformed, endpoint-missing, non-A1, and all other
+  external 3-D forms remain explicit coverage gaps.
 - Explicit external-workbook references are detected. References assembled from
   text or macro code are not.
 - A formula that the underlying tokenizer cannot inspect is recorded by cell

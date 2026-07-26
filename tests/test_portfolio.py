@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,8 +14,13 @@ from openpyxl.workbook.defined_name import DefinedName
 from formulafence.cli import main
 from formulafence.output import as_json, portfolio_to_markdown, portfolio_to_sarif
 from formulafence.policy import parse_policy
-from formulafence.portfolio import PortfolioError, compare_portfolios, discover_workbooks
-from formulafence.workbook import profile_snapshot
+from formulafence.portfolio import (
+    PortfolioError,
+    _canonical_three_d_sheet_span,
+    compare_portfolios,
+    discover_workbooks,
+)
+from formulafence.workbook import load_snapshot, profile_snapshot
 
 from .helpers import (
     duplicate_external_link_definition,
@@ -916,6 +922,210 @@ def test_portfolio_resolves_static_direct_external_alias_chains_privately(
         "DirectExternalUnresolvedAlias",
         "DirectExternalChainedShadowed",
         "DirectExternalLocalFormulaAlias",
+        "SOURCE.XLSX",
+    ):
+        assert all(private_value not in value for value in rendered)
+
+
+def test_external_three_d_spans_require_complete_candidate_tab_metadata(
+    tmp_path: Path,
+) -> None:
+    source_path = _write_workbook(
+        tmp_path / "source.xlsx",
+        "Jan",
+        {"B2": 10},
+    )
+    source = load_workbook(source_path)
+    source.create_sheet("Feb")["B2"] = 20
+    source.create_sheet("Mar")["B2"] = 30
+    source.save(source_path)
+
+    snapshot = load_snapshot(source_path)
+
+    assert snapshot.workbook_tab_order_complete
+    assert snapshot.worksheet_tab_order_complete
+    assert snapshot.worksheet_tab_order == ("Jan", "Feb", "Mar")
+    assert _canonical_three_d_sheet_span(snapshot, "Jan", "Mar") == (
+        "Jan",
+        "Feb",
+        "Mar",
+    )
+    assert (
+        _canonical_three_d_sheet_span(
+            replace(snapshot, workbook_tab_order_complete=False),
+            "Jan",
+            "Mar",
+        )
+        == ()
+    )
+    assert (
+        _canonical_three_d_sheet_span(
+            replace(snapshot, worksheet_tab_order_complete=False),
+            "Jan",
+            "Mar",
+        )
+        == ()
+    )
+    assert (
+        _canonical_three_d_sheet_span(
+            replace(snapshot, worksheet_tab_order=("Jan", "Mar")),
+            "Jan",
+            "Mar",
+        )
+        == ()
+    )
+
+
+def test_portfolio_resolves_static_external_three_d_a1_spans_privately(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    source_path = _write_workbook(
+        baseline / "inputs" / "source.xlsx",
+        "Jan",
+        {"B2": 10, "B3": 11, "B4": 12},
+    )
+    source = load_workbook(source_path)
+    for title, values in (
+        ("Feb", {"B2": 20, "B3": 21, "B4": 22}),
+        ("Mar", {"B2": 30, "B3": 31, "B4": 32}),
+        ("Outside", {"B2": 40, "B3": 41, "B4": 42}),
+    ):
+        worksheet = source.create_sheet(title)
+        for coordinate, value in values.items():
+            worksheet[coordinate] = value
+    source.save(source_path)
+
+    direct_path = _write_workbook(
+        baseline / "reports" / "direct.xlsx",
+        "Summary",
+        {
+            "D2": "=SUM('..\\inputs\\[SOURCE.XLSX]Jan:Mar'!$B$2:$B$4)",
+            "E2": "=SUM(DirectExternalThreeDBridge)",
+            "F2": "=SUM(DirectExternalThreeDLeadingEquals)",
+            "G2": "=SUM(DirectExternalThreeDReverse)",
+            "H2": "=SUM(DirectExternalThreeDShadowed)",
+            "I2": "=SUM(DirectExternalThreeDLocal)",
+            "J2": "=SUM('..\\inputs\\[SOURCE.XLSX]Jan:Missing'!$B$2:$B$4)",
+        },
+    )
+    direct = load_workbook(direct_path)
+    direct.defined_names.add(
+        DefinedName(
+            "DirectExternalThreeD",
+            attr_text="'..\\inputs\\[SOURCE.XLSX]Jan:Mar'!$B$2:$B$4",
+        )
+    )
+    direct.defined_names.add(
+        DefinedName(
+            "DirectExternalThreeDBridge",
+            attr_text="=DirectExternalThreeD",
+        )
+    )
+    direct.defined_names.add(
+        DefinedName(
+            "DirectExternalThreeDLeadingEquals",
+            attr_text="='..\\inputs\\[SOURCE.XLSX]Jan:Mar'!$B$2:$B$4",
+        )
+    )
+    direct.defined_names.add(
+        DefinedName(
+            "DirectExternalThreeDReverse",
+            attr_text="'..\\inputs\\[SOURCE.XLSX]Mar:Jan'!$B$2:$B$4",
+        )
+    )
+    direct.defined_names.add(
+        DefinedName(
+            "DirectExternalThreeDShadowed",
+            attr_text="'..\\inputs\\[SOURCE.XLSX]Jan:Mar'!$B$2:$B$4",
+        )
+    )
+    direct["Summary"].defined_names.add(
+        DefinedName(
+            "DirectExternalThreeDShadowed",
+            attr_text="Summary!$A$1",
+            localSheetId=0,
+        )
+    )
+    direct["Summary"].defined_names.add(
+        DefinedName(
+            "DirectExternalThreeDLocal",
+            attr_text="'..\\inputs\\[SOURCE.XLSX]Jan:Mar'!$B$2:$B$4",
+            localSheetId=0,
+        )
+    )
+    direct.save(direct_path)
+    make_indexed_external_workbook_a1_link_model(
+        baseline / "reports" / "package.xlsx",
+        source_sheet="Jan:Mar",
+        source_range="$B$2:$B$4",
+        consumer_formula_alias=True,
+    )
+
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs" / "source.xlsx",
+        lambda workbook: setattr(workbook["Feb"]["B3"], "value", 23),
+    )
+
+    report = compare_portfolios(
+        baseline,
+        candidate,
+        policy=parse_policy(
+            {"version": 1, "rules": {"no_cross_workbook_impacts": True}}
+        ),
+    )
+    source_entry = next(
+        entry for entry in report.workbooks if entry.path == "inputs/source.xlsx"
+    )
+    finding = next(
+        finding
+        for finding in source_entry.findings
+        if finding.rule_id == "FF079" and finding.location == ("Feb", "B3")
+    )
+    rendered = (
+        as_json(report.to_dict()),
+        portfolio_to_markdown(report),
+        as_json(portfolio_to_sarif(report)),
+    )
+
+    assert not report.incomplete
+    assert finding.details["impacted_workbook_count"] == 2
+    assert finding.details["impacted_formula_count"] == 5
+    assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
+    assert {
+        (impact["workbook"], impact["location"])
+        for impact in finding.details["sample_impacts"]
+    } == {
+        ("reports/direct.xlsx", "Summary!D2"),
+        ("reports/direct.xlsx", "Summary!E2"),
+        ("reports/direct.xlsx", "Summary!F2"),
+        ("reports/package.xlsx", "Model!D2"),
+        ("reports/package.xlsx", "Model!E2"),
+    }
+    outside_candidate = tmp_path / "candidate-outside"
+    shutil.copytree(baseline, outside_candidate)
+    rewrite(
+        outside_candidate / "inputs" / "source.xlsx",
+        lambda workbook: setattr(workbook["Outside"]["B3"], "value", 43),
+    )
+    outside_report = compare_portfolios(baseline, outside_candidate)
+    outside_source_entry = next(
+        entry
+        for entry in outside_report.workbooks
+        if entry.path == "inputs/source.xlsx"
+    )
+    assert "FF079" not in {finding.rule_id for finding in outside_source_entry.findings}
+    for private_value in (
+        "DirectExternalThreeD",
+        "DirectExternalThreeDBridge",
+        "DirectExternalThreeDLeadingEquals",
+        "DirectExternalThreeDReverse",
+        "DirectExternalThreeDShadowed",
+        "DirectExternalThreeDLocal",
+        "PackageExternalCell",
+        "PackageExternalFormulaAlias",
         "SOURCE.XLSX",
     ):
         assert all(private_value not in value for value in rendered)

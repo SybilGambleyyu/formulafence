@@ -83,6 +83,7 @@ from formulafence.models import (
     RichTextRunEntry,
     RichTextRunSnapshot,
     ScenarioManagerSnapshot,
+    SharedWorkbookRevisionSnapshot,
     SheetProtectionSnapshot,
     SheetSnapshot,
     SlicerTimelineCacheSnapshot,
@@ -851,6 +852,14 @@ class _TableStyleControlsMetadata:
     """Raw Excel Table Style evidence retained before reader normalization."""
 
     controls: TableStyleControlsSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _SharedWorkbookRevisionMetadata:
+    """Raw legacy shared-workbook revision evidence kept outside the reader."""
+
+    revisions: SharedWorkbookRevisionSnapshot
     warnings: tuple[str, ...]
 
 
@@ -2168,6 +2177,77 @@ _TABLE_STYLE_BUILT_IN_NAME = re.compile(
     r"^TableStyle(?:Light(?:[1-9]|1[0-9]|2[0-1])|"
     r"Medium(?:[1-9]|1[0-9]|2[0-8])|Dark(?:[1-9]|1[0-1]))$",
     re.IGNORECASE,
+)
+_SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIP = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+    "revisionHeaders"
+)
+_SHARED_WORKBOOK_REVISION_LOG_RELATIONSHIP = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+    "revisionLog"
+)
+_SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIPS = frozenset(
+    {
+        _SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIP.casefold(),
+        f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/revisionHeaders".casefold(),
+    }
+)
+_SHARED_WORKBOOK_REVISION_LOG_RELATIONSHIPS = frozenset(
+    {
+        _SHARED_WORKBOOK_REVISION_LOG_RELATIONSHIP.casefold(),
+        f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/revisionLog".casefold(),
+    }
+)
+_SHARED_WORKBOOK_REVISION_HEADERS_MEMBER_PATTERN = re.compile(
+    r"^xl/revisions/revisionHeaders(?:\d+)?\.xml$",
+    re.IGNORECASE,
+)
+_SHARED_WORKBOOK_REVISION_LOG_MEMBER_PATTERN = re.compile(
+    r"^xl/revisions/revisionLog(?:\d+)?\.xml$",
+    re.IGNORECASE,
+)
+_SHARED_WORKBOOK_REVISION_MAX_PART_BYTES = 16 * 1024 * 1024
+_SHARED_WORKBOOK_REVISION_TOTAL_MAX_BYTES = 64 * 1024 * 1024
+_SHARED_WORKBOOK_REVISION_TOTAL_MAX_COUNT = 512
+_SHARED_WORKBOOK_REVISION_HEADER_BOOLEAN_ATTRIBUTES = frozenset(
+    {
+        "diskRevisions",
+        "exclusive",
+        "history",
+        "keepChangeHistory",
+        "protected",
+        "shared",
+        "trackRevisions",
+    }
+)
+_SHARED_WORKBOOK_REVISION_HEADER_UNSIGNED_ATTRIBUTES = frozenset(
+    {"preserveHistory", "revisionId"}
+)
+_SHARED_WORKBOOK_REVISION_HEADER_SIGNED_ATTRIBUTES = frozenset({"version"})
+_SHARED_WORKBOOK_REVISION_HEADERS_ATTRIBUTES = frozenset(
+    {
+        *_SHARED_WORKBOOK_REVISION_HEADER_BOOLEAN_ATTRIBUTES,
+        *_SHARED_WORKBOOK_REVISION_HEADER_UNSIGNED_ATTRIBUTES,
+        *_SHARED_WORKBOOK_REVISION_HEADER_SIGNED_ATTRIBUTES,
+        "guid",
+        "lastGuid",
+    }
+)
+_SHARED_WORKBOOK_REVISION_HEADER_ATTRIBUTES = frozenset(
+    {"dateTime", "guid", "maxRId", "maxSheetId", "minRId", "userName"}
+)
+_SHARED_WORKBOOK_REVISION_HEADER_CHILDREN = frozenset({"header"})
+_SHARED_WORKBOOK_REVISION_HEADER_CONTENT_CHILDREN = frozenset(
+    {"extLst", "reviewedList", "sheetIdMap"}
+)
+_SHARED_WORKBOOK_REVISION_LOG_CHILDREN = frozenset(
+    {"raf", "rcc", "rcft", "rcmt", "rcv", "rdn", "rfmt", "ris", "rm", "rqt", "rrc", "rsnm"}
+)
+_SHARED_WORKBOOK_REVISION_RELATIONSHIP_ATTRIBUTES = frozenset(
+    {
+        f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id",
+        f"{{{_STRICT_DOCUMENT_RELATIONSHIP_NS}}}id",
+    }
 )
 _FILTER_VISIBILITY_AUTO_FILTER_UID_NAMESPACES = frozenset(
     {_OFFICE_2014_REVISION_NS, _OFFICE_2015_REVISION2_NS}
@@ -18945,6 +19025,707 @@ def _table_style_controls_metadata(path: Path) -> _TableStyleControlsMetadata:
         ),
     )
     return _TableStyleControlsMetadata(snapshot, tuple(sorted(warnings)))
+
+
+def _shared_workbook_revision_xml_fragment(
+    element: ElementTree.Element,
+    relationship_semantics: Mapping[str, tuple[object, ...]],
+    *,
+    normalise_header_controls: bool = False,
+) -> tuple[object, ...]:
+    """Canonicalize private revision XML while resolving relationship-ID noise."""
+
+    def normalise_value(attribute: str, value: str) -> str:
+        if not normalise_header_controls:
+            return value
+        name = _xml_local_name(attribute)
+        if name in _SHARED_WORKBOOK_REVISION_HEADER_BOOLEAN_ATTRIBUTES:
+            parsed = _number_format_boolean(value, False)
+            if parsed is not None:
+                return "true" if parsed else "false"
+        if name in (
+            _SHARED_WORKBOOK_REVISION_HEADER_UNSIGNED_ATTRIBUTES
+            | frozenset({"maxRId", "maxSheetId", "minRId"})
+        ):
+            if (parsed := _custom_workbook_view_unsigned(value)) is not None:
+                return str(parsed)
+        if name in _SHARED_WORKBOOK_REVISION_HEADER_SIGNED_ATTRIBUTES:
+            if (parsed := _custom_workbook_view_signed(value)) is not None:
+                return str(parsed)
+        return value
+
+    attributes: list[tuple[str, str]] = []
+    for attribute, value in element.attrib.items():
+        if attribute in _SHARED_WORKBOOK_REVISION_RELATIONSHIP_ATTRIBUTES:
+            relationship = relationship_semantics.get(value)
+            resolved = (
+                ("relationship", relationship)
+                if relationship is not None
+                else ("missing-relationship", value)
+            )
+            # Strict and transitional SpreadsheetML use distinct namespace
+            # spellings for the same relationship identifier attribute.
+            attributes.append(("relationship-id", repr(resolved)))
+        else:
+            attributes.append(
+                (_xml_display_name(attribute), normalise_value(attribute, value))
+            )
+    children = tuple(
+        _shared_workbook_revision_xml_fragment(
+            child,
+            relationship_semantics,
+            normalise_header_controls=normalise_header_controls,
+        )
+        for child in element
+    )
+    text = element.text
+    if children and text is not None and not text.strip():
+        text = None
+    tail = element.tail
+    if tail is not None and not tail.strip():
+        tail = None
+    return (
+        _xml_display_name(element.tag),
+        tuple(sorted(attributes)),
+        text,
+        children,
+        tail,
+    )
+
+
+def _shared_workbook_revision_relationship_type(value: str) -> str:
+    """Canonicalize Strict and transitional Office relationship type spelling."""
+    normalized = value.casefold()
+    strict_prefix = f"{_STRICT_DOCUMENT_RELATIONSHIP_NS}/".casefold()
+    if normalized.startswith(strict_prefix):
+        return (
+            f"{_DOCUMENT_RELATIONSHIP_NS}/".casefold()
+            + normalized[len(strict_prefix) :]
+        )
+    return normalized
+
+
+def _shared_workbook_revision_relationship_semantics(
+    relationships: tuple[_PackageRelationship, ...],
+    issues: dict[str, str],
+    *,
+    context: str,
+) -> dict[str, tuple[object, ...]]:
+    """Resolve revision relationship IDs to stable private semantics."""
+    by_id: dict[str, list[tuple[object, ...]]] = defaultdict(list)
+    for relationship in relationships:
+        semantic = (
+            _shared_workbook_revision_relationship_type(
+                relationship.relationship_type
+            ),
+            relationship.target_mode.casefold(),
+            (
+                relationship.target
+                if relationship.target_mode.casefold() == "internal"
+                else relationship.raw_target
+            ),
+        )
+        if relationship.relationship_id:
+            by_id[relationship.relationship_id].append(semantic)
+        else:
+            issues.setdefault(
+                f"{context}:relationship-without-id",
+                repr(semantic),
+            )
+    resolved: dict[str, tuple[object, ...]] = {}
+    for relationship_id, values in by_id.items():
+        distinct = sorted(set(values), key=repr)
+        if len(values) > 1:
+            issues.setdefault(
+                f"{context}:duplicate-relationship-id:{relationship_id}",
+                repr(tuple(distinct)),
+            )
+        resolved[relationship_id] = distinct[0]
+    return resolved
+
+
+def _shared_workbook_revision_metadata(path: Path) -> _SharedWorkbookRevisionMetadata:
+    """Inspect legacy shared-workbook revision history before readers omit it.
+
+    Revision headers and logs retain a private audit trail that can include old
+    values, coordinates, authors, timestamps, comments, formatting, and
+    conflict-resolution records. This scanner compares complete bounded raw
+    declarations without exposing any record material in a profile or report.
+    """
+    warnings: set[str] = set()
+    issues: dict[str, str] = {}
+    header_entries: list[tuple[str, str]] = []
+    log_entries: list[tuple[str, str]] = []
+    relationship_entries: list[tuple[str, str]] = []
+    revision_header_part_count = 0
+    revision_header_count = 0
+    revision_log_part_count = 0
+    revision_log_entry_count = 0
+    shared_workbook_enabled_count = 0
+    track_revisions_enabled_count = 0
+    revision_history_enabled_count = 0
+    keep_change_history_enabled_count = 0
+    revision_history_protected_count = 0
+
+    def note_issue(context: str, detail: object) -> None:
+        issues.setdefault(context, repr(detail))
+
+    def read_root(
+        archive: ZipFile,
+        members: set[str],
+        member: str,
+        *,
+        context: str,
+        budget: list[int],
+    ) -> ElementTree.Element | None:
+        if member not in members:
+            note_issue(f"{context}:missing-part", member)
+            return None
+        try:
+            info = archive.getinfo(member)
+        except KeyError:
+            note_issue(f"{context}:missing-part", member)
+            return None
+        if info.file_size > _SHARED_WORKBOOK_REVISION_MAX_PART_BYTES:
+            note_issue(f"{context}:oversized-part", info.file_size)
+            return None
+        if budget[0] <= 0:
+            note_issue(f"{context}:part-count-limit", member)
+            return None
+        if budget[1] < info.file_size:
+            note_issue(f"{context}:total-size-limit", info.file_size)
+            return None
+        budget[0] -= 1
+        budget[1] -= info.file_size
+        try:
+            return _xml_root_from_payload(archive.read(member))
+        except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+            note_issue(f"{context}:unreadable-part", type(error).__name__)
+            return None
+
+    def relationships_for(
+        archive: ZipFile,
+        members: set[str],
+        source_member: str,
+        *,
+        context: str,
+        budget: list[int],
+    ) -> tuple[_PackageRelationship, ...]:
+        relationship_member = _relationship_part_path(source_member)
+        if relationship_member not in members:
+            return ()
+        root = read_root(
+            archive,
+            members,
+            relationship_member,
+            context=f"{context}:relationships",
+            budget=budget,
+        )
+        if root is None:
+            return ()
+        if (
+            _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+            or _xml_local_name(root.tag) != "Relationships"
+        ):
+            note_issue(f"{context}:relationships:unexpected-root", root.tag)
+            return ()
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+        parsed: list[_PackageRelationship] = []
+        for child_index, relationship in enumerate(root):
+            if relationship.tag != relationship_tag:
+                note_issue(
+                    f"{context}:relationships:unsupported-child:{child_index}",
+                    _shared_workbook_revision_xml_fragment(relationship, {}),
+                )
+                continue
+            target_mode = relationship.get("TargetMode", "Internal")
+            raw_target = relationship.get("Target")
+            parsed.append(
+                _PackageRelationship(
+                    relationship_id=relationship.get("Id"),
+                    relationship_type=relationship.get("Type", ""),
+                    target=(
+                        _normalise_part_target(source_member, raw_target)
+                        if raw_target is not None
+                        and target_mode.casefold() == "internal"
+                        else None
+                    ),
+                    target_mode=target_mode,
+                    raw_target=raw_target,
+                )
+            )
+        return tuple(parsed)
+
+    def relationship_entry(
+        context: str,
+        relationship: _PackageRelationship,
+    ) -> tuple[str, str]:
+        return (
+            context,
+            repr(
+                (
+                    _shared_workbook_revision_relationship_type(
+                        relationship.relationship_type
+                    ),
+                    relationship.target_mode.casefold(),
+                    (
+                        relationship.target
+                        if relationship.target_mode.casefold() == "internal"
+                        else relationship.raw_target
+                    ),
+                )
+            ),
+        )
+
+    try:
+        with ZipFile(path) as archive:
+            members = set(archive.namelist())
+            member_counts: dict[str, int] = defaultdict(int)
+            for info in archive.infolist():
+                member_counts[info.filename] += 1
+            revision_members = {
+                member
+                for member in members
+                if member.casefold().startswith("xl/revisions/")
+            }
+            budget = [
+                _SHARED_WORKBOOK_REVISION_TOTAL_MAX_COUNT,
+                _SHARED_WORKBOOK_REVISION_TOTAL_MAX_BYTES,
+            ]
+            if len(revision_members) > _SHARED_WORKBOOK_REVISION_TOTAL_MAX_COUNT:
+                note_issue("revisions:part-count-limit", len(revision_members))
+            for member in sorted(revision_members):
+                if member_counts[member] > 1:
+                    note_issue(
+                        f"revisions:duplicate-package-member:{member}",
+                        member_counts[member],
+                    )
+
+            try:
+                workbook_relationships = _package_relationships(archive, "xl/workbook.xml")
+            except (
+                ElementTree.ParseError,
+                KeyError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                note_issue("workbook:relationship-scan-failure", type(error).__name__)
+                workbook_relationships = ()
+
+            declared_headers: set[str] = set()
+            revision_header_relationship_count = 0
+            for relationship in workbook_relationships:
+                if (
+                    relationship.relationship_type.casefold()
+                    not in _SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIPS
+                ):
+                    continue
+                revision_header_relationship_count += 1
+                relationship_entries.append(
+                    relationship_entry("workbook:revision-header-relationship", relationship)
+                )
+                if (
+                    relationship.target_mode.casefold() != "internal"
+                    or relationship.target is None
+                ):
+                    note_issue(
+                        "workbook:unsafe-revision-header-relationship",
+                        relationship_entry("", relationship)[1],
+                    )
+                    continue
+                declared_headers.add(relationship.target)
+                if relationship.target not in members:
+                    note_issue(
+                        "workbook:missing-revision-header-target",
+                        relationship.target,
+                    )
+            if revision_header_relationship_count != len(declared_headers):
+                note_issue(
+                    "workbook:duplicate-revision-header-target",
+                    tuple(sorted(declared_headers)),
+                )
+
+            discovered_headers = {
+                member
+                for member in revision_members
+                if _SHARED_WORKBOOK_REVISION_HEADERS_MEMBER_PATTERN.fullmatch(member)
+            } | declared_headers
+            header_members = sorted(member for member in discovered_headers if member in members)
+            revision_header_part_count = len(header_members)
+            for member in header_members:
+                if member not in declared_headers:
+                    note_issue("revisions:unbound-revision-header-part", member)
+
+            declared_logs: set[str] = set()
+            inspected_relationship_members: set[str] = set()
+            for header_index, member in enumerate(header_members):
+                context = f"revision-header:{header_index}"
+                root = read_root(
+                    archive,
+                    members,
+                    member,
+                    context=context,
+                    budget=budget,
+                )
+                if root is None:
+                    header_entries.append((f"{context}:unreadable", member))
+                    continue
+                root = _custom_workbook_view_compatibility_element(root)
+                if (
+                    _xml_namespace(root.tag) != _SPREADSHEETML_NS
+                    or _xml_local_name(root.tag) != "headers"
+                ):
+                    note_issue(f"{context}:unexpected-root", root.tag)
+                if root.text and root.text.strip():
+                    note_issue(f"{context}:unexpected-text", root.text)
+                for attribute_index, (attribute, value) in enumerate(
+                    root.attrib.items()
+                ):
+                    if (
+                        _xml_namespace(attribute) is None
+                        and _xml_local_name(attribute)
+                        in _SHARED_WORKBOOK_REVISION_HEADERS_ATTRIBUTES
+                    ):
+                        continue
+                    note_issue(
+                        f"{context}:unexpected-attribute:{attribute_index}",
+                        (_xml_display_name(attribute), value),
+                    )
+
+                relationships = relationships_for(
+                    archive,
+                    members,
+                    member,
+                    context=context,
+                    budget=budget,
+                )
+                relationship_member = _relationship_part_path(member)
+                if relationship_member in members:
+                    inspected_relationship_members.add(relationship_member)
+                relationship_semantics = _shared_workbook_revision_relationship_semantics(
+                    relationships,
+                    issues,
+                    context=context,
+                )
+                revision_log_relationships = []
+                for relationship in relationships:
+                    relationship_entries.append(
+                        relationship_entry(f"{context}:relationship", relationship)
+                    )
+                    if (
+                        relationship.relationship_type.casefold()
+                        not in _SHARED_WORKBOOK_REVISION_LOG_RELATIONSHIPS
+                    ):
+                        note_issue(
+                            f"{context}:unsupported-relationship",
+                            relationship_entry("", relationship)[1],
+                        )
+                        continue
+                    revision_log_relationships.append(relationship)
+                    if (
+                        relationship.target_mode.casefold() != "internal"
+                        or relationship.target is None
+                    ):
+                        note_issue(
+                            f"{context}:unsafe-revision-log-relationship",
+                            relationship_entry("", relationship)[1],
+                        )
+                        continue
+                    declared_logs.add(relationship.target)
+                    if relationship.target not in members:
+                        note_issue(
+                            f"{context}:missing-revision-log-target",
+                            relationship.target,
+                        )
+
+                boolean_controls: dict[str, bool] = {}
+                for attribute in _SHARED_WORKBOOK_REVISION_HEADER_BOOLEAN_ATTRIBUTES:
+                    parsed = _number_format_boolean(root.get(attribute), False)
+                    if parsed is None:
+                        note_issue(f"{context}:invalid-{attribute}", root.get(attribute))
+                        parsed = False
+                    boolean_controls[attribute] = parsed
+                shared_workbook_enabled_count += int(boolean_controls["shared"])
+                track_revisions_enabled_count += int(boolean_controls["trackRevisions"])
+                revision_history_enabled_count += int(boolean_controls["history"])
+                keep_change_history_enabled_count += int(
+                    boolean_controls["keepChangeHistory"]
+                )
+                revision_history_protected_count += int(boolean_controls["protected"])
+                for attribute in _SHARED_WORKBOOK_REVISION_HEADER_UNSIGNED_ATTRIBUTES:
+                    raw_value = root.get(attribute)
+                    if raw_value is not None and _custom_workbook_view_unsigned(raw_value) is None:
+                        note_issue(f"{context}:invalid-{attribute}", raw_value)
+                raw_version = root.get("version")
+                if raw_version is not None and _custom_workbook_view_signed(raw_version) is None:
+                    note_issue(f"{context}:invalid-version", raw_version)
+
+                for child_index, child in enumerate(root):
+                    if (
+                        _xml_namespace(child.tag) != _SPREADSHEETML_NS
+                        or _xml_local_name(child.tag)
+                        not in _SHARED_WORKBOOK_REVISION_HEADER_CHILDREN
+                    ):
+                        note_issue(
+                            f"{context}:unsupported-child:{child_index}",
+                            _shared_workbook_revision_xml_fragment(
+                                child,
+                                relationship_semantics,
+                                normalise_header_controls=True,
+                            ),
+                        )
+                        continue
+                    revision_header_count += 1
+                    if child.text and child.text.strip():
+                        note_issue(
+                            f"{context}:header:{child_index}:unexpected-text",
+                            child.text,
+                        )
+                    for attribute_index, (attribute, value) in enumerate(
+                        child.attrib.items()
+                    ):
+                        if attribute in _SHARED_WORKBOOK_REVISION_RELATIONSHIP_ATTRIBUTES:
+                            continue
+                        if (
+                            _xml_namespace(attribute) is None
+                            and _xml_local_name(attribute)
+                            in _SHARED_WORKBOOK_REVISION_HEADER_ATTRIBUTES
+                        ):
+                            continue
+                        note_issue(
+                            (
+                                f"{context}:header:{child_index}:"
+                                f"unexpected-attribute:{attribute_index}"
+                            ),
+                            (_xml_display_name(attribute), value),
+                        )
+                    for content_index, content in enumerate(child):
+                        if (
+                            _xml_namespace(content.tag) != _SPREADSHEETML_NS
+                            or _xml_local_name(content.tag)
+                            not in _SHARED_WORKBOOK_REVISION_HEADER_CONTENT_CHILDREN
+                        ):
+                            note_issue(
+                                (
+                                    f"{context}:header:{child_index}:"
+                                    f"unsupported-child:{content_index}"
+                                ),
+                                _shared_workbook_revision_xml_fragment(
+                                    content,
+                                    relationship_semantics,
+                                    normalise_header_controls=True,
+                                ),
+                            )
+                    for attribute in ("maxRId", "maxSheetId", "minRId"):
+                        raw_value = child.get(attribute)
+                        if (
+                            raw_value is not None
+                            and _custom_workbook_view_unsigned(raw_value) is None
+                        ):
+                            note_issue(
+                                (
+                                    f"{context}:header:{child_index}:"
+                                    f"invalid-{attribute}"
+                                ),
+                                raw_value,
+                            )
+                    relationship_id = next(
+                        (
+                            child.get(attribute)
+                            for attribute in _SHARED_WORKBOOK_REVISION_RELATIONSHIP_ATTRIBUTES
+                            if child.get(attribute) is not None
+                        ),
+                        None,
+                    )
+                    if (
+                        relationship_id is not None
+                        and relationship_id not in relationship_semantics
+                    ):
+                        note_issue(
+                            f"{context}:header-missing-revision-log-relationship",
+                            relationship_id,
+                        )
+                header_entries.append(
+                    (
+                        f"revision-header-part:{header_index}",
+                        repr(
+                            _shared_workbook_revision_xml_fragment(
+                                root,
+                                relationship_semantics,
+                                normalise_header_controls=True,
+                            )
+                        ),
+                    )
+                )
+                local_log_targets = {
+                    relationship.target
+                    for relationship in revision_log_relationships
+                    if relationship.target is not None
+                    and relationship.target_mode.casefold() == "internal"
+                }
+                if len(revision_log_relationships) != len(local_log_targets):
+                    # The aggregate set is checked below; this local branch keeps
+                    # duplicate log targets visible even when other headers exist.
+                    note_issue(
+                        f"{context}:duplicate-revision-log-target",
+                        tuple(
+                            sorted(
+                                relationship.target
+                                for relationship in revision_log_relationships
+                                if relationship.target is not None
+                            )
+                        ),
+                    )
+
+            discovered_logs = {
+                member
+                for member in revision_members
+                if _SHARED_WORKBOOK_REVISION_LOG_MEMBER_PATTERN.fullmatch(member)
+            } | declared_logs
+            log_members = sorted(member for member in discovered_logs if member in members)
+            revision_log_part_count = len(log_members)
+            for member in log_members:
+                if member not in declared_logs:
+                    note_issue("revisions:unbound-revision-log-part", member)
+            for member in sorted(revision_members):
+                if member.endswith(".rels"):
+                    continue
+                if member not in set(header_members) | set(log_members):
+                    note_issue("revisions:unsupported-part", member)
+
+            for log_index, member in enumerate(log_members):
+                context = f"revision-log:{log_index}"
+                root = read_root(
+                    archive,
+                    members,
+                    member,
+                    context=context,
+                    budget=budget,
+                )
+                if root is None:
+                    log_entries.append((f"{context}:unreadable", member))
+                    continue
+                root = _custom_workbook_view_compatibility_element(root)
+                if (
+                    _xml_namespace(root.tag) != _SPREADSHEETML_NS
+                    or _xml_local_name(root.tag) != "revisions"
+                ):
+                    note_issue(f"{context}:unexpected-root", root.tag)
+                if root.text and root.text.strip():
+                    note_issue(f"{context}:unexpected-text", root.text)
+                for attribute_index, (attribute, value) in enumerate(
+                    root.attrib.items()
+                ):
+                    note_issue(
+                        f"{context}:unexpected-attribute:{attribute_index}",
+                        (_xml_display_name(attribute), value),
+                    )
+                relationships = relationships_for(
+                    archive,
+                    members,
+                    member,
+                    context=context,
+                    budget=budget,
+                )
+                relationship_member = _relationship_part_path(member)
+                if relationship_member in members:
+                    inspected_relationship_members.add(relationship_member)
+                relationship_semantics = _shared_workbook_revision_relationship_semantics(
+                    relationships,
+                    issues,
+                    context=context,
+                )
+                for relationship in relationships:
+                    relationship_entries.append(
+                        relationship_entry(f"{context}:relationship", relationship)
+                    )
+                    note_issue(
+                        f"{context}:unsupported-relationship",
+                        relationship_entry("", relationship)[1],
+                    )
+                for child_index, child in enumerate(root):
+                    if (
+                        _xml_namespace(child.tag) != _SPREADSHEETML_NS
+                        or _xml_local_name(child.tag)
+                        not in _SHARED_WORKBOOK_REVISION_LOG_CHILDREN
+                    ):
+                        note_issue(
+                            f"{context}:unsupported-child:{child_index}",
+                            _shared_workbook_revision_xml_fragment(
+                                child,
+                                relationship_semantics,
+                            ),
+                        )
+                        continue
+                    revision_log_entry_count += 1
+                log_entries.append(
+                    (
+                        f"revision-log-part:{log_index}",
+                        repr(
+                            _shared_workbook_revision_xml_fragment(
+                                root,
+                                relationship_semantics,
+                            )
+                        ),
+                    )
+                )
+
+            for member in sorted(revision_members):
+                if member.endswith(".rels") and member not in inspected_relationship_members:
+                    note_issue("revisions:unbound-relationship-part", member)
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _SharedWorkbookRevisionMetadata(
+            SharedWorkbookRevisionSnapshot(
+                unrecognized_shared_workbook_revision_count=1,
+                unrecognized_signature=_private_external_data_signature(
+                    (("shared-workbook-revision-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect legacy shared-workbook revision OOXML "
+                f"({type(error).__name__}); revision history was not compared.",
+            ),
+        )
+
+    if issues:
+        warnings.add(
+            "FormulaFence found malformed, unsupported, unresolved, or bounded legacy "
+            "shared-workbook revision metadata; affected revision history has a coverage gap."
+        )
+    issue_entries = tuple(
+        (f"shared-workbook-revision-issue:{context}", detail)
+        for context, detail in sorted(issues.items())
+    )
+    snapshot = SharedWorkbookRevisionSnapshot(
+        revision_header_part_count=revision_header_part_count,
+        revision_header_count=revision_header_count,
+        revision_log_part_count=revision_log_part_count,
+        revision_log_entry_count=revision_log_entry_count,
+        shared_workbook_enabled_count=shared_workbook_enabled_count,
+        track_revisions_enabled_count=track_revisions_enabled_count,
+        revision_history_enabled_count=revision_history_enabled_count,
+        keep_change_history_enabled_count=keep_change_history_enabled_count,
+        revision_history_protected_count=revision_history_protected_count,
+        unrecognized_shared_workbook_revision_count=len(issues),
+        header_signature=(
+            _private_external_data_signature(tuple(header_entries))
+            if header_entries
+            else None
+        ),
+        log_signature=(
+            _private_external_data_signature(tuple(log_entries)) if log_entries else None
+        ),
+        relationship_signature=(
+            _private_external_data_signature(tuple(sorted(relationship_entries)))
+            if relationship_entries
+            else None
+        ),
+        unrecognized_signature=(
+            _private_external_data_signature(issue_entries) if issue_entries else None
+        ),
+    )
+    return _SharedWorkbookRevisionMetadata(snapshot, tuple(sorted(warnings)))
 
 
 _NUMBER_FORMAT_BUILT_IN_MAXIMUM = 163
@@ -37957,6 +38738,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     named_sheet_view_metadata = _named_sheet_view_metadata(source)
     custom_workbook_view_metadata = _custom_workbook_view_metadata(source)
     table_style_controls_metadata = _table_style_controls_metadata(source)
+    shared_workbook_revision_metadata = _shared_workbook_revision_metadata(source)
     number_format_metadata = _number_format_metadata(source)
     font_metadata = _font_metadata(source)
     fill_metadata = _fill_metadata(source)
@@ -38017,6 +38799,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(named_sheet_view_metadata.warnings)
     parser_warnings.update(custom_workbook_view_metadata.warnings)
     parser_warnings.update(table_style_controls_metadata.warnings)
+    parser_warnings.update(shared_workbook_revision_metadata.warnings)
     parser_warnings.update(number_format_metadata.warnings)
     parser_warnings.update(font_metadata.warnings)
     parser_warnings.update(fill_metadata.warnings)
@@ -38261,6 +39044,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         named_sheet_views=named_sheet_view_metadata.views,
         custom_workbook_views=custom_workbook_view_metadata.views,
         table_style_controls=table_style_controls_metadata.controls,
+        shared_workbook_revisions=shared_workbook_revision_metadata.revisions,
         number_format_controls=number_format_metadata.controls,
         font_controls=font_metadata.controls,
         fill_controls=fill_metadata.controls,
@@ -38358,6 +39142,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "named_sheet_views": snapshot.named_sheet_views.profile_dict(),
         "custom_workbook_views": snapshot.custom_workbook_views.profile_dict(),
         "table_style_controls": snapshot.table_style_controls.profile_dict(),
+        "shared_workbook_revisions": (
+            snapshot.shared_workbook_revisions.profile_dict()
+        ),
         "number_format_controls": snapshot.number_format_controls.profile_dict(),
         "font_controls": snapshot.font_controls.profile_dict(),
         "fill_controls": snapshot.fill_controls.profile_dict(),
@@ -38413,6 +39200,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_named_sheet_views": snapshot.named_sheet_views.present,
             "has_custom_workbook_views": snapshot.custom_workbook_views.present,
             "has_table_style_controls": snapshot.table_style_controls.present,
+            "has_shared_workbook_revisions": (
+                snapshot.shared_workbook_revisions.present
+            ),
             "has_number_format_controls": snapshot.number_format_controls.present,
             "has_font_controls": snapshot.font_controls.present,
             "has_fill_controls": snapshot.fill_controls.present,

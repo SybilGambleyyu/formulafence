@@ -67,6 +67,12 @@ _EXCEL_2006_MAIN_NS = "http://schemas.microsoft.com/office/excel/2006/main"
 _NAMED_SHEET_VIEW_NS = "http://schemas.microsoft.com/office/spreadsheetml/2019/namedsheetviews"
 _XML_MAP_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIPS_NS}/xmlMaps"
 _TABLE_SINGLE_CELLS_RELATIONSHIP = f"{_DOCUMENT_RELATIONSHIPS_NS}/tableSingleCells"
+_SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIP = (
+    f"{_DOCUMENT_RELATIONSHIPS_NS}/revisionHeaders"
+)
+_SHARED_WORKBOOK_REVISION_LOG_RELATIONSHIP = (
+    f"{_DOCUMENT_RELATIONSHIPS_NS}/revisionLog"
+)
 _XML_DIGITAL_SIGNATURE_NS = "http://www.w3.org/2000/09/xmldsig#"
 _DIGITAL_SIGNATURE_ORIGIN_RELATIONSHIP = (
     f"{_PACKAGE_RELATIONSHIPS_NS}/digital-signature/origin"
@@ -2842,6 +2848,348 @@ def corrupt_table_style_control(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".table-style-corrupt.tmp.xlsx")
+
+
+_SHARED_WORKBOOK_REVISION_HEADERS_MEMBER = "xl/revisions/revisionHeaders.xml"
+_SHARED_WORKBOOK_REVISION_LOG_MEMBER = "xl/revisions/revisionLog1.xml"
+_SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIPS_MEMBER = (
+    "xl/revisions/_rels/revisionHeaders.xml.rels"
+)
+
+
+def _shared_workbook_revision_override(
+    content_types: ElementTree.Element,
+    member: str,
+    content_type: str,
+) -> None:
+    """Register one private revision part with the fixture package."""
+    if any(
+        current.get("PartName") == f"/{member}"
+        for current in content_types.findall(f"{{{_CONTENT_TYPES_NS}}}Override")
+    ):
+        raise ValueError(f"Fixture already contains revision content type for {member!r}")
+    ElementTree.SubElement(
+        content_types,
+        f"{{{_CONTENT_TYPES_NS}}}Override",
+        {"PartName": f"/{member}", "ContentType": content_type},
+    )
+
+
+def make_shared_workbook_revision_model(path: Path) -> Path:
+    """Create a workbook with a private legacy shared-workbook audit trail.
+
+    ``openpyxl`` does not author the obsolete shared-workbook revision parts,
+    so this fixture deliberately injects a relationship-backed header and log
+    after writing an ordinary model. The cell history contains private values,
+    identities, dates, and identifiers that reporting must never expose.
+    """
+    make_model(path)
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        _shared_workbook_revision_override(
+            content_types,
+            _SHARED_WORKBOOK_REVISION_HEADERS_MEMBER,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml."
+            "revisionHeaders+xml",
+        )
+        _shared_workbook_revision_override(
+            content_types,
+            _SHARED_WORKBOOK_REVISION_LOG_MEMBER,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml."
+            "revisionLog+xml",
+        )
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        ElementTree.SubElement(
+            workbook_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdPrivateRevisionHeaders",
+                "Type": _SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIP,
+                "Target": "revisions/revisionHeaders.xml",
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
+
+        headers = ElementTree.Element(
+            f"{{{_SPREADSHEETML_NS}}}headers",
+            {
+                "diskRevisions": "1",
+                "exclusive": "0",
+                "history": "true",
+                "keepChangeHistory": "true",
+                "protected": "true",
+                "shared": "1",
+                "trackRevisions": "true",
+                "preserveHistory": "30",
+                "revisionId": "7",
+                "version": "+2",
+            },
+        )
+        ElementTree.SubElement(
+            headers,
+            f"{{{_SPREADSHEETML_NS}}}header",
+            {
+                "guid": "{11111111-2222-3333-4444-555555555555}",
+                "dateTime": "2026-07-26T01:02:03Z",
+                "maxSheetId": "4",
+                "userName": "PRIVATE-REVISION-AUTHOR",
+                f"{{{_DOCUMENT_RELATIONSHIPS_NS}}}id": "rIdPrivateRevisionLog",
+            },
+        )
+        contents[_SHARED_WORKBOOK_REVISION_HEADERS_MEMBER] = serialize(headers)
+
+        header_relationships = ElementTree.Element(
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships"
+        )
+        ElementTree.SubElement(
+            header_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdPrivateRevisionLog",
+                "Type": _SHARED_WORKBOOK_REVISION_LOG_RELATIONSHIP,
+                "Target": "revisionLog1.xml",
+            },
+        )
+        contents[_SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIPS_MEMBER] = serialize(
+            header_relationships
+        )
+
+        revisions = ElementTree.Element(f"{{{_SPREADSHEETML_NS}}}revisions")
+        changed_cells = ElementTree.SubElement(
+            revisions,
+            f"{{{_SPREADSHEETML_NS}}}rcc",
+            {"rId": "1", "sId": "1"},
+        )
+        old_cell = ElementTree.SubElement(
+            changed_cells,
+            f"{{{_SPREADSHEETML_NS}}}oc",
+            {"r": "B2"},
+        )
+        ElementTree.SubElement(
+            old_cell,
+            f"{{{_SPREADSHEETML_NS}}}v",
+        ).text = "PRIVATE-OLD-REVISION-VALUE"
+        new_cell = ElementTree.SubElement(
+            changed_cells,
+            f"{{{_SPREADSHEETML_NS}}}nc",
+            {"r": "B2"},
+        )
+        ElementTree.SubElement(
+            new_cell,
+            f"{{{_SPREADSHEETML_NS}}}v",
+        ).text = "PRIVATE-NEW-REVISION-VALUE"
+        ElementTree.SubElement(
+            revisions,
+            f"{{{_SPREADSHEETML_NS}}}rrc",
+            {
+                "rId": "2",
+                "sId": "1",
+                "ref": "A1:A1048576",
+                "action": "insertCol",
+            },
+        )
+        ElementTree.SubElement(
+            revisions,
+            f"{{{_SPREADSHEETML_NS}}}rfmt",
+            {"sheetId": "1", "sqref": "B2"},
+        )
+        contents[_SHARED_WORKBOOK_REVISION_LOG_MEMBER] = serialize(revisions)
+
+    return _rewrite_archive(path, mutate, ".shared-workbook-revisions.tmp.xlsx")
+
+
+def change_shared_workbook_revision_log(path: Path) -> Path:
+    """Change private historic data without touching visible workbook cells."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        revisions = ElementTree.fromstring(
+            contents[_SHARED_WORKBOOK_REVISION_LOG_MEMBER]
+        )
+        old_value = next(
+            (
+                current
+                for current in revisions.iter(f"{{{_SPREADSHEETML_NS}}}v")
+                if current.text == "PRIVATE-OLD-REVISION-VALUE"
+            ),
+            None,
+        )
+        if old_value is None:
+            raise ValueError("Fixture revision log does not contain its private old value")
+        old_value.text = "CANDIDATE-PRIVATE-OLD-REVISION-VALUE"
+        contents[_SHARED_WORKBOOK_REVISION_LOG_MEMBER] = ElementTree.tostring(
+            revisions,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".shared-workbook-revision-log.tmp.xlsx")
+
+
+def change_shared_workbook_revision_controls(path: Path) -> Path:
+    """Change retention and protection controls without modifying history cells."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        headers = ElementTree.fromstring(
+            contents[_SHARED_WORKBOOK_REVISION_HEADERS_MEMBER]
+        )
+        headers.set("keepChangeHistory", "false")
+        headers.set("protected", "0")
+        contents[_SHARED_WORKBOOK_REVISION_HEADERS_MEMBER] = ElementTree.tostring(
+            headers,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".shared-workbook-revision-controls.tmp.xlsx")
+
+
+def normalize_shared_workbook_revision_writer_noise(path: Path) -> Path:
+    """Use equivalent scalar spellings and relationship identifiers."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        headers = ElementTree.fromstring(
+            contents[_SHARED_WORKBOOK_REVISION_HEADERS_MEMBER]
+        )
+        headers.set("diskRevisions", "true")
+        headers.set("exclusive", "false")
+        headers.set("history", "1")
+        headers.set("keepChangeHistory", "1")
+        headers.set("protected", "1")
+        headers.set("shared", "true")
+        headers.set("trackRevisions", "1")
+        headers.set("preserveHistory", "030")
+        headers.set("revisionId", "0007")
+        headers.set("version", "2")
+        header = headers.find(f"{{{_SPREADSHEETML_NS}}}header")
+        if header is None:
+            raise ValueError("Fixture revision headers does not contain a header")
+        identifier_attribute = f"{{{_DOCUMENT_RELATIONSHIPS_NS}}}id"
+        header.set(identifier_attribute, "rIdWriterRevisionLog")
+        contents[_SHARED_WORKBOOK_REVISION_HEADERS_MEMBER] = ElementTree.tostring(
+            headers,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships = ElementTree.fromstring(
+            contents[_SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIPS_MEMBER]
+        )
+        relationship = relationships.find(
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        )
+        if relationship is None:
+            raise ValueError("Fixture revision headers does not contain a relationship")
+        relationship.set("Id", "rIdWriterRevisionLog")
+        contents[_SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIPS_MEMBER] = (
+            ElementTree.tostring(
+                relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+        )
+
+    return _rewrite_archive(path, mutate, ".shared-workbook-revision-noise.tmp.xlsx")
+
+
+def make_strict_shared_workbook_revision_model(path: Path) -> Path:
+    """Create a Strict SpreadsheetML legacy shared-workbook revision fixture."""
+    make_shared_workbook_revision_model(path)
+
+    def strict_name(name: str, source_namespace: str, target_namespace: str) -> str:
+        prefix = f"{{{source_namespace}}}"
+        if name.startswith(prefix):
+            return f"{{{target_namespace}}}{name[len(prefix):]}"
+        return name
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        for member in (
+            _SHARED_WORKBOOK_REVISION_HEADERS_MEMBER,
+            _SHARED_WORKBOOK_REVISION_LOG_MEMBER,
+        ):
+            root = ElementTree.fromstring(contents[member])
+            for element in root.iter():
+                element.tag = strict_name(
+                    element.tag,
+                    _SPREADSHEETML_NS,
+                    _STRICT_SPREADSHEETML_NS,
+                )
+                replacements = {
+                    attribute: strict_name(
+                        attribute,
+                        _DOCUMENT_RELATIONSHIPS_NS,
+                        _STRICT_DOCUMENT_RELATIONSHIPS_NS,
+                    )
+                    for attribute in element.attrib
+                    if attribute.startswith(f"{{{_DOCUMENT_RELATIONSHIPS_NS}}}")
+                }
+                for old_name, new_name in replacements.items():
+                    element.attrib[new_name] = element.attrib.pop(old_name)
+            contents[member] = ElementTree.tostring(
+                root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        for relationship in workbook_relationships.findall(relationship_tag):
+            if relationship.get("Type") == _SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIP:
+                relationship.set(
+                    "Type",
+                    f"{_STRICT_DOCUMENT_RELATIONSHIPS_NS}/revisionHeaders",
+                )
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            workbook_relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        header_relationships = ElementTree.fromstring(
+            contents[_SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIPS_MEMBER]
+        )
+        for relationship in header_relationships.findall(relationship_tag):
+            if relationship.get("Type") == _SHARED_WORKBOOK_REVISION_LOG_RELATIONSHIP:
+                relationship.set(
+                    "Type",
+                    f"{_STRICT_DOCUMENT_RELATIONSHIPS_NS}/revisionLog",
+                )
+        contents[_SHARED_WORKBOOK_REVISION_HEADERS_RELATIONSHIPS_MEMBER] = (
+            ElementTree.tostring(
+                header_relationships,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+        )
+
+    return _rewrite_archive(path, mutate, ".strict-shared-workbook-revisions.tmp.xlsx")
+
+
+def corrupt_shared_workbook_revision(path: Path) -> Path:
+    """Inject an unrecognized private revision control to fail closed."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        headers = ElementTree.fromstring(
+            contents[_SHARED_WORKBOOK_REVISION_HEADERS_MEMBER]
+        )
+        headers.set("privateRevisionControl", "PRIVATE-REVISION-CONTROL")
+        contents[_SHARED_WORKBOOK_REVISION_HEADERS_MEMBER] = ElementTree.tostring(
+            headers,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".shared-workbook-revision-corrupt.tmp.xlsx")
 
 
 def _xml_mapping_table_member(contents: dict[str, bytes]) -> str:

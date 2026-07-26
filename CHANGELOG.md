@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.61.0 — 2026-07-26
+
+- Inspect legacy shared-workbook revision history directly from raw OOXML:
+  workbook-bound `revisionHeaders` parts, header-to-log relationships, bounded
+  `revisionLog` records, and shared/tracking/history-retention/protection
+  controls. Profiles, Markdown, JSON, and SARIF expose only structural
+  aggregates; historic values, locations, author identities, timestamps,
+  comments, GUIDs, relationship identifiers, and XML remain private.
+- Emit `FF062` for a material revision header/log, audit record, relationship,
+  control, or coverage change and add the fail-closed
+  `no_shared_workbook_revision_changes` policy rule (`FFP062`). Equivalent
+  Boolean/integer spelling, coordinated relationship-ID rewrites, and
+  transitional/Strict relationship types normalize without suppressing material
+  history changes.
+- Support header-only and header-plus-log packages, including Strict
+  SpreadsheetML. Missing, duplicate, malformed, unsupported, unresolved,
+  unsafe, oversized, or over-budget revision metadata is visible coverage
+  evidence. FormulaFence fingerprints stored declarations rather than applying
+  revisions, reconstructing historic state, resolving conflicts, validating
+  author/timestamp claims, rendering Excel, or interpreting arbitrary future
+  extensions.
+
 ## 0.60.0 — 2026-07-26
 
 - Inspect Excel Table presentation controls directly from raw OOXML: applied

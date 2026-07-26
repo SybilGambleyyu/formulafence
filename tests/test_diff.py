@@ -83,6 +83,8 @@ from .helpers import (
     change_rich_text_run_color,
     change_rich_text_run_text_only,
     change_scenario_manager_input_value,
+    change_shared_workbook_revision_controls,
+    change_shared_workbook_revision_log,
     change_slicer_timeline_filter_material,
     change_strict_worksheet_display_controls,
     change_strict_worksheet_print_layout_controls,
@@ -144,6 +146,7 @@ from .helpers import (
     corrupt_rich_data_value_root,
     corrupt_rich_text_run,
     corrupt_scenario_manager_input,
+    corrupt_shared_workbook_revision,
     corrupt_slicer_timeline_cache_root,
     corrupt_table_style_control,
     corrupt_threaded_comment_root,
@@ -217,10 +220,12 @@ from .helpers import (
     make_rich_text_run_model,
     make_scenario_manager_model,
     make_scoped_named_lambda_model,
+    make_shared_workbook_revision_model,
     make_slicer_timeline_cache_model,
     make_spill_model,
     make_strict_border_model,
     make_strict_custom_workbook_view_model,
+    make_strict_shared_workbook_revision_model,
     make_strict_table_style_control_model,
     make_strict_workbook_theme_image_model,
     make_strict_worksheet_dimension_model,
@@ -269,6 +274,7 @@ from .helpers import (
     normalize_rich_data_relationship_ids,
     normalize_rich_text_run_property_spelling,
     normalize_scenario_manager_reference_spelling,
+    normalize_shared_workbook_revision_writer_noise,
     normalize_table_style_control_writer_noise,
     normalize_what_if_data_table_reference_spelling,
     normalize_workbook_theme_relationship_identifiers,
@@ -9219,6 +9225,182 @@ def test_table_style_free_table_has_no_control_inventory(tmp_path) -> None:
     assert snapshot.table_style_controls.table_style_info_count == 0
     assert snapshot.table_style_controls.custom_table_style_count == 0
     assert not any("Table Style" in warning for warning in snapshot.parser_warnings)
+
+
+def test_shared_workbook_revisions_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_shared_workbook_revision_model(tmp_path / "baseline.xlsx")
+    candidate = make_shared_workbook_revision_model(tmp_path / "candidate.xlsx")
+    change_shared_workbook_revision_log(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    self_report = compare_snapshots(baseline_snapshot, load_snapshot(baseline))
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "shared_workbook_revisions_changed"
+    )
+
+    assert baseline_snapshot.summary()["revision_header_count"] == 1
+    assert baseline_snapshot.summary()["revision_log_entry_count"] == 3
+    assert baseline_snapshot.summary()["has_shared_workbook_revisions"] is True
+    assert profile["shared_workbook_revisions"] == {
+        "present": True,
+        "revision_header_part_count": 1,
+        "revision_header_count": 1,
+        "revision_log_part_count": 1,
+        "revision_log_entry_count": 3,
+        "shared_workbook_enabled_count": 1,
+        "track_revisions_enabled_count": 1,
+        "revision_history_enabled_count": 1,
+        "keep_change_history_enabled_count": 1,
+        "revision_history_protected_count": 1,
+        "unrecognized_shared_workbook_revision_count": 0,
+    }
+    assert baseline_snapshot.parser_warnings == ()
+    assert baseline_snapshot.cells == candidate_snapshot.cells
+    assert baseline_snapshot.sheets == candidate_snapshot.sheets
+    assert self_report.changes == []
+    assert self_report.findings == []
+    assert "## Legacy Shared-Workbook Revision History" in markdown
+    assert change.details["revision_log_material_changed"] is True
+    assert "revision_header_material_changed" not in change.details
+    assert "FF062" in {finding.rule_id for finding in report.findings}
+    assert "FF001" not in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-REVISION-AUTHOR",
+        "PRIVATE-OLD-REVISION-VALUE",
+        "CANDIDATE-PRIVATE-OLD-REVISION-VALUE",
+        "PRIVATE-NEW-REVISION-VALUE",
+        "{11111111-2222-3333-4444-555555555555}",
+        "2026-07-26T01:02:03Z",
+        "rIdPrivateRevisionLog",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_shared_workbook_revision_controls_are_detected_without_cell_noise(
+    tmp_path,
+) -> None:
+    baseline = make_shared_workbook_revision_model(tmp_path / "baseline.xlsx")
+    candidate = make_shared_workbook_revision_model(tmp_path / "candidate.xlsx")
+    change_shared_workbook_revision_controls(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "shared_workbook_revisions_changed"
+    )
+
+    assert baseline_snapshot.cells == candidate_snapshot.cells
+    assert baseline_snapshot.sheets == candidate_snapshot.sheets
+    assert change.details["revision_header_material_changed"] is True
+    assert change.details["before"]["keep_change_history_enabled_count"] == 1
+    assert change.details["after"]["keep_change_history_enabled_count"] == 0
+    assert change.details["after"]["revision_history_protected_count"] == 0
+    assert "FF062" in {finding.rule_id for finding in report.findings}
+    assert "FF001" not in {finding.rule_id for finding in report.findings}
+
+
+def test_shared_workbook_revision_writer_noise_is_normalized(tmp_path) -> None:
+    baseline = make_shared_workbook_revision_model(tmp_path / "baseline.xlsx")
+    equivalent = make_shared_workbook_revision_model(tmp_path / "equivalent.xlsx")
+    normalize_shared_workbook_revision_writer_noise(equivalent)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(equivalent))
+
+    assert report.changes == []
+    assert report.findings == []
+    assert "shared_workbook_revisions_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF062" not in {finding.rule_id for finding in report.findings}
+
+
+def test_shared_workbook_revisions_support_strict_spreadsheetml(tmp_path) -> None:
+    baseline = make_shared_workbook_revision_model(tmp_path / "baseline.xlsx")
+    strict = make_strict_shared_workbook_revision_model(tmp_path / "strict.xlsx")
+
+    baseline_snapshot = load_snapshot(baseline)
+    strict_snapshot = load_snapshot(strict)
+    report = compare_snapshots(baseline_snapshot, strict_snapshot)
+
+    assert strict_snapshot.shared_workbook_revisions.to_dict() == (
+        baseline_snapshot.shared_workbook_revisions.to_dict()
+    )
+    assert (
+        strict_snapshot.shared_workbook_revisions.unrecognized_shared_workbook_revision_count
+        == 0
+    )
+    assert not any(
+        "shared-workbook revision" in warning
+        for warning in strict_snapshot.parser_warnings
+    )
+    assert "shared_workbook_revisions_changed" not in {
+        change.kind for change in report.changes
+    }
+    assert "FF062" not in {finding.rule_id for finding in report.findings}
+
+
+def test_malformed_shared_workbook_revision_fails_closed_and_is_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_shared_workbook_revision_model(tmp_path / "baseline.xlsx")
+    malformed = make_shared_workbook_revision_model(tmp_path / "malformed.xlsx")
+    corrupt_shared_workbook_revision(malformed)
+
+    malformed_snapshot = load_snapshot(malformed)
+    malformed_profile = profile_snapshot(malformed_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), malformed_snapshot)
+
+    assert (
+        malformed_snapshot.shared_workbook_revisions.unrecognized_shared_workbook_revision_count
+        >= 1
+    )
+    assert any(
+        "shared-workbook revision" in warning
+        for warning in malformed_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF062"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(malformed_profile),
+        profile_to_markdown(malformed_profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-REVISION-AUTHOR",
+        "PRIVATE-OLD-REVISION-VALUE",
+        "PRIVATE-NEW-REVISION-VALUE",
+        "PRIVATE-REVISION-CONTROL",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_shared_workbook_revision_free_workbook_has_no_inventory(tmp_path) -> None:
+    snapshot = load_snapshot(make_model(tmp_path / "ordinary.xlsx"))
+
+    assert snapshot.shared_workbook_revisions.present is False
+    assert snapshot.shared_workbook_revisions.revision_header_part_count == 0
+    assert snapshot.shared_workbook_revisions.revision_log_entry_count == 0
+    assert not any(
+        "shared-workbook revision" in warning for warning in snapshot.parser_warnings
+    )
 
 
 def test_power_query_material_is_guarded_without_leaking_query_contents(tmp_path) -> None:

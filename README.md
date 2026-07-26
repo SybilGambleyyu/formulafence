@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.60.0/formulafence-0.60.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.61.0/formulafence-0.61.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -76,6 +76,7 @@ rules:
   no_named_sheet_view_changes: true
   no_custom_workbook_view_changes: true
   no_table_style_control_changes: true
+  no_shared_workbook_revision_changes: true
   no_number_format_changes: true
   no_cell_font_changes: true
   no_cell_fill_changes: true
@@ -134,7 +135,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
@@ -675,6 +676,36 @@ their same-name underlying style definitions remain outside this Table Style
 boundary. The boundary follows Microsoft's [`TableStyles`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.tablestyles?view=openxml-3.0.1),
 [`TableStyleInfo`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.tablestyleinfo?view=openxml-3.0.1),
 and [`TableColumn`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.tablecolumn?view=openxml-3.0.1)
+definitions.
+
+FormulaFence also inventories **legacy shared-workbook revision history**. An
+older shared workbook can retain headers and log files outside the ordinary
+worksheet grid. They can preserve prior cell values, author identities,
+timestamps, comments, formatting edits, conflict-resolution records, and
+tracking/retention/protection controls even when cells and formulas are
+unchanged. FormulaFence follows the workbook-to-header and header-to-log
+relationships, fingerprints complete bounded revision declarations privately,
+and emits `FF062` for any material history, relationship, control, or coverage
+change. Enable `no_shared_workbook_revision_changes` for `FFP062` in CI.
+
+Profiles expose only revision-header/log-part and record counts plus aggregate
+shared/tracked/history-retention/protection state and unrecognized-metadata
+counts. Prior/new values, locations, author names, timestamps, comments, GUIDs,
+relationship IDs, and raw XML never enter JSON, Markdown, `FF062` details, or
+SARIF. Equivalent Boolean/integer spelling, coordinated relationship-ID
+rewrites, and transitional versus Strict SpreadsheetML relationship spelling
+normalize. Missing, duplicate, malformed, unsafe, unsupported, oversized, or
+over-budget declarations become explicit coverage evidence rather than a silent
+blind spot.
+
+FormulaFence compares stored audit declarations; it does not apply revisions,
+reconstruct a historical workbook state, resolve conflicts, validate an author
+or timestamp, render Excel, or interpret arbitrary future-extension content.
+The boundary follows Microsoft's
+[`headers`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.headers?view=openxml-3.0.1),
+[`header`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.header?view=openxml-3.0.1),
+and
+[`revisions`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.revisions?view=openxml-3.0.1)
 definitions.
 
 FormulaFence also inventories **cell number-format controls**. A number format

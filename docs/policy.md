@@ -26,6 +26,7 @@ rules:
   no_named_sheet_view_changes: true
   no_custom_workbook_view_changes: true
   no_table_style_control_changes: true
+  no_shared_workbook_revision_changes: true
   no_number_format_changes: true
   no_cell_font_changes: true
   no_cell_fill_changes: true
@@ -114,6 +115,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_named_sheet_view_changes` | boolean | A relationship-backed Excel Named Sheet View, alternate AutoFilter criterion, sort rule, or reconciled base-filter binding changes. View names, IDs, criteria, ranges, table bindings, and sort keys are compared privately. |
 | `no_custom_workbook_view_changes` | boolean | A legacy Excel Custom View's workbook declaration, GUID-linked per-sheet alternate display/filter/print state, or recognized sheet binding changes. View names, GUIDs, sheet bindings, ranges, filters, pane locations, print settings, and raw XML are compared privately. |
 | `no_table_style_control_changes` | boolean | An Excel Table Style binding/toggle, applicable custom Table Style definition or resolved Dxf material, or direct Table/TableColumn Dxf or named-cell-style reference changes. Table/style names, formatting, colours, IDs, and raw XML are compared privately. |
+| `no_shared_workbook_revision_changes` | boolean | A legacy shared-workbook revision header/log declaration, historic revision record, tracking/retention/protection control, relationship, or coverage state changes. Prior/new values, locations, author identities, timestamps, comments, GUIDs, relationship IDs, and raw XML are compared privately. |
 | `no_number_format_changes` | boolean | An effective default, direct-cell, row, or column number-format control changes. Format codes, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_font_changes` | boolean | An effective default, direct-cell, row, or column font control changes. Font names, colours, effects, style IDs, and cell/row/column targets are compared privately. |
 | `no_cell_fill_changes` | boolean | An effective default, direct-cell, row, or column fill control changes. Fill colours, pattern/gradient definitions, style IDs, and cell/row/column targets are compared privately. |
@@ -563,6 +565,25 @@ conditional formatting, or cover PivotTable-only style regions.
 `defaultTableStyle` is a new-table preference rather than an existing-table
 binding, and a same-name named cell-style definition is not resolved under this
 Table Style rule.
+
+Legacy shared-workbook revision history can persist outside ordinary worksheet
+cells in relationship-backed `revisionHeaders` and `revisionLog` parts. The
+records can retain prior/new values, locations, authors, timestamps, comments,
+formatting edits, conflict-resolution material, and shared/tracking/retention/
+protection controls. FormulaFence fingerprints complete bounded declarations
+privately, follows workbook-to-header and header-to-log relationships, and
+emits `FF062`; `no_shared_workbook_revision_changes` makes it `FFP062` in CI.
+
+Profiles and `FF062` details expose only header/log part and record counts,
+aggregate shared/tracked/history-retention/protection state, and coverage
+counts. Historic values, locations, identities, timestamps, comments, GUIDs,
+relationship IDs, and raw XML remain private. Equivalent Boolean/integer
+spelling, coordinated relationship-ID changes, and transitional/Strict
+relationship type spelling normalize. Missing, duplicate, malformed, unsafe,
+unsupported, oversized, or over-budget declarations are explicit coverage
+warnings. FormulaFence does not apply revisions, reconstruct historical
+workbook state, resolve conflicts, validate identity/timestamp claims, render
+Excel, or interpret arbitrary future extensions.
 
 Excel number formats can hide or materially reinterpret a value without changing
 its stored value or formula: `;;;` can make it appear blank, while custom

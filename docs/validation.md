@@ -5,6 +5,53 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Legacy shared-workbook revision history — 2026-07-26
+
+FormulaFence 0.61.0 was checked against Microsoft's documented
+[`headers`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.headers?view=openxml-3.0.1),
+[`header`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.header?view=openxml-3.0.1),
+and
+[`revisions`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.revisions?view=openxml-3.0.1)
+SpreadsheetML models, plus the independently maintained
+[`fil` revision-fixture generator](https://gea.i80.dk/hjess/fil/src/commit/bd5cbc68279b71839c566888020aac896ee01cef/tools/generate_test_fixtures/src/generate_test_fixtures/xlsx_revisions.py)
+at commit `bd5cbc68279b71839c566888020aac896ee01cef`. Its generated
+`xlsx_revisions_basic.xlsx` (SHA-256
+`2714a53e96e653a3dfe6906824e6b8bce7291d8781b0ce42f4393ffd5321cfad`)
+contains a workbook-bound `revisionHeaders` part with three historic headers
+and no log relationship. FormulaFence reported one header part, three headers,
+zero log parts/entries, and no shared-workbook revision coverage warning. This
+also verifies that a header-only package is not incorrectly treated as a broken
+log binding.
+
+A controlled raw-OOXML pair used one revision header and one related log with
+three record classes, shared/tracking/history-retention/protection controls,
+and private historic cell values, author identity, date, GUID, and relationship
+IDs. The candidate changed only a private historic old value in
+`xl/revisions/revisionLog1.xml`; both ZIP archives passed `unzip -t`, and it
+was the only member with different uncompressed bytes. The baseline and
+candidate SHA-256 values were respectively
+`5dcaca2c513819c970a88df0e457ee17a2636c14361a19de5e81ccd3f7ed1a8f` and
+`591f422cf8885b57b73d99021ef193650a99a36446bf5775ea6bb2a94696bf60`.
+The ordinary cell/sheet snapshots stayed equal while the report emitted exactly
+one `shared_workbook_revisions_changed` change with high-severity `FF062`.
+
+The suite separately validates tracking/retention/protection control changes,
+Boolean and integer spelling plus coordinated relationship-ID normalization,
+Strict SpreadsheetML and Strict relationship types, malformed/private unknown
+revision metadata, redaction across JSON/Markdown/SARIF, and `FFP062` policy
+enforcement. FormulaFence compares bounded stored declarations only: it does
+not apply revisions, reconstruct a historic workbook state, resolve conflicts,
+validate identity/timestamp claims, render Excel, or interpret arbitrary future
+extensions.
+
+A clean Python virtual environment installed the staged 0.61.0 wheel
+(SHA-256 `01877e215bceaadd094b7f656a094a64f7ece0813dd9c37460e45232128db7a8`)
+and returned `FormulaFence 0.61.0`. Its installed CLI profiled the controlled
+baseline, emitted exactly `shared_workbook_revisions_changed` with `FF062`, and
+its generated starter policy exited `1` with `FFP062`. JSON profile, diff, and
+policy-report output were checked to confirm that the private historic values,
+author identity, relationship ID, and log material remained absent.
+
 ## Excel Table Style controls — 2026-07-26
 
 FormulaFence 0.60.0 was checked against the SpreadsheetML `TableStyles`,

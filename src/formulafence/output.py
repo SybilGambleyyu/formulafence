@@ -1446,6 +1446,40 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             "Table names, custom and named cell-style names, differential formats, "
             "colours, and raw XML are compared privately and intentionally omitted."
         )
+    shared_workbook_revisions = profile["shared_workbook_revisions"]
+    if shared_workbook_revisions["present"]:
+        lines.extend(
+            [
+                "",
+                "## Legacy Shared-Workbook Revision History",
+                "",
+                (
+                    "- **Revision header parts / headers / log parts / log entries:** "
+                    f"{shared_workbook_revisions['revision_header_part_count']} / "
+                    f"{shared_workbook_revisions['revision_header_count']} / "
+                    f"{shared_workbook_revisions['revision_log_part_count']} / "
+                    f"{shared_workbook_revisions['revision_log_entry_count']}"
+                ),
+                (
+                    "- **Shared workbooks / tracked histories / history-enabled / "
+                    "retained histories / protected histories:** "
+                    f"{shared_workbook_revisions['shared_workbook_enabled_count']} / "
+                    f"{shared_workbook_revisions['track_revisions_enabled_count']} / "
+                    f"{shared_workbook_revisions['revision_history_enabled_count']} / "
+                    f"{shared_workbook_revisions['keep_change_history_enabled_count']} / "
+                    f"{shared_workbook_revisions['revision_history_protected_count']}"
+                ),
+            ]
+        )
+        if shared_workbook_revisions["unrecognized_shared_workbook_revision_count"]:
+            lines.append(
+                "- **Unrecognized, malformed, unresolved, or bounded revision controls:** "
+                f"{shared_workbook_revisions['unrecognized_shared_workbook_revision_count']}"
+            )
+        lines.append(
+            "Revision values, locations, authors, timestamps, comments, GUIDs, "
+            "relationship identifiers, and raw XML are compared privately and omitted."
+        )
     number_format_controls = profile["number_format_controls"]
     if number_format_controls["present"]:
         lines.extend(

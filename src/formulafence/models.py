@@ -1740,6 +1740,69 @@ class TableStyleControlsSnapshot:
 
 
 @dataclass(frozen=True)
+class SharedWorkbookRevisionSnapshot:
+    """Safe aggregate of legacy shared-workbook revision-history controls.
+
+    Legacy shared workbooks can retain a private change history in revision
+    header and log parts. Those records can contain prior values, cell
+    locations, author names, timestamps, comments, and conflict-resolution
+    details that are outside the current worksheet grid. Public evidence stays
+    structural while private signatures retain the complete stored history for
+    comparison.
+    """
+
+    revision_header_part_count: int = 0
+    revision_header_count: int = 0
+    revision_log_part_count: int = 0
+    revision_log_entry_count: int = 0
+    shared_workbook_enabled_count: int = 0
+    track_revisions_enabled_count: int = 0
+    revision_history_enabled_count: int = 0
+    keep_change_history_enabled_count: int = 0
+    revision_history_protected_count: int = 0
+    unrecognized_shared_workbook_revision_count: int = 0
+    header_signature: str | None = field(default=None, repr=False)
+    log_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+    unrecognized_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.revision_header_part_count
+            or self.revision_header_count
+            or self.revision_log_part_count
+            or self.revision_log_entry_count
+            or self.unrecognized_shared_workbook_revision_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return structural revision-history evidence without private records."""
+        return {
+            "present": self.present,
+            "revision_header_part_count": self.revision_header_part_count,
+            "revision_header_count": self.revision_header_count,
+            "revision_log_part_count": self.revision_log_part_count,
+            "revision_log_entry_count": self.revision_log_entry_count,
+            "shared_workbook_enabled_count": self.shared_workbook_enabled_count,
+            "track_revisions_enabled_count": self.track_revisions_enabled_count,
+            "revision_history_enabled_count": self.revision_history_enabled_count,
+            "keep_change_history_enabled_count": (
+                self.keep_change_history_enabled_count
+            ),
+            "revision_history_protected_count": (
+                self.revision_history_protected_count
+            ),
+            "unrecognized_shared_workbook_revision_count": (
+                self.unrecognized_shared_workbook_revision_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class NumberFormatSnapshot:
     """Safe aggregate of cell, row, and column number-format controls.
 
@@ -3454,6 +3517,9 @@ class WorkbookSnapshot:
     table_style_controls: TableStyleControlsSnapshot = field(
         default_factory=TableStyleControlsSnapshot
     )
+    shared_workbook_revisions: SharedWorkbookRevisionSnapshot = field(
+        default_factory=SharedWorkbookRevisionSnapshot
+    )
     number_format_controls: NumberFormatSnapshot = field(
         default_factory=NumberFormatSnapshot
     )
@@ -3691,6 +3757,15 @@ class WorkbookSnapshot:
                 self.table_style_controls.table_named_cell_style_assignment_count
             ),
             "has_table_style_controls": self.table_style_controls.present,
+            "revision_header_count": (
+                self.shared_workbook_revisions.revision_header_count
+            ),
+            "revision_log_entry_count": (
+                self.shared_workbook_revisions.revision_log_entry_count
+            ),
+            "has_shared_workbook_revisions": (
+                self.shared_workbook_revisions.present
+            ),
             "number_format_assignment_count": (
                 self.number_format_controls.default_format_override_count
                 + self.number_format_controls.cell_format_assignment_count

@@ -35,6 +35,7 @@ from .helpers import (
     change_rich_data_value,
     change_rich_text_run_color,
     change_scenario_manager_input_value,
+    change_shared_workbook_revision_controls,
     change_slicer_timeline_filter_material,
     change_table_style_control,
     change_threaded_comment_reply,
@@ -82,6 +83,7 @@ from .helpers import (
     make_rich_data_model,
     make_rich_text_run_model,
     make_scenario_manager_model,
+    make_shared_workbook_revision_model,
     make_slicer_timeline_cache_model,
     make_table_model,
     make_table_style_control_model,
@@ -541,6 +543,21 @@ def test_policy_can_block_table_style_control_changes(tmp_path) -> None:
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
         "FFP061"
+    }
+
+
+def test_policy_can_block_shared_workbook_revision_changes(tmp_path) -> None:
+    baseline = make_shared_workbook_revision_model(tmp_path / "baseline.xlsx")
+    candidate = make_shared_workbook_revision_model(tmp_path / "candidate.xlsx")
+    change_shared_workbook_revision_controls(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_shared_workbook_revision_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP062"
     }
 
 

@@ -48,6 +48,7 @@ from formulafence.models import (
     RichTextRunEntry,
     RichTextRunSnapshot,
     ScenarioManagerSnapshot,
+    SharedWorkbookRevisionSnapshot,
     SlicerTimelineCacheSnapshot,
     TableStyleControlsSnapshot,
     ThreadedCommentSnapshot,
@@ -1509,6 +1510,38 @@ def _workbook_control_changes(
                 "high",
                 "Excel Table Style controls changed; headers, totals, data areas, borders, "
                 "banding, or emphasized columns may present a different review surface.",
+                details=details,
+            )
+        )
+    if before.shared_workbook_revisions != after.shared_workbook_revisions:
+        old_revisions: SharedWorkbookRevisionSnapshot = before.shared_workbook_revisions
+        new_revisions: SharedWorkbookRevisionSnapshot = after.shared_workbook_revisions
+        details: dict[str, object] = {
+            "before": old_revisions.to_dict(),
+            "after": new_revisions.to_dict(),
+        }
+        if old_revisions.header_signature != new_revisions.header_signature:
+            details["revision_header_material_changed"] = True
+        if old_revisions.log_signature != new_revisions.log_signature:
+            details["revision_log_material_changed"] = True
+        if old_revisions.relationship_signature != new_revisions.relationship_signature:
+            details["revision_relationship_material_changed"] = True
+        if old_revisions.unrecognized_signature != new_revisions.unrecognized_signature:
+            details["unrecognized_shared_workbook_revision_metadata_changed"] = True
+        changes.append(
+            Change(
+                "shared_workbook_revisions_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF062",
+                "high",
+                "Legacy shared-workbook revision history changed; prior values, audit "
+                "trail, tracking, or conflict-resolution controls may differ.",
                 details=details,
             )
         )

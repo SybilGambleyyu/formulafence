@@ -263,6 +263,23 @@ review prompt, not proof of an error.
   themes, calculate values, apply conditional formatting, cover PivotTable-only
   style regions, treat `defaultTableStyle` as an existing-table binding, or
   resolve a same-name named cell-style definition.
+- Legacy shared-workbook revision headers and logs can preserve a private audit
+  trail outside ordinary cells: prior/new values, locations, authors,
+  timestamps, comments, formatting records, conflict-resolution material, and
+  shared/tracking/retention/protection controls. FormulaFence follows the
+  workbook-to-header and header-to-log relationships, fingerprints complete
+  bounded raw declarations privately, and emits `FF062`; the
+  `no_shared_workbook_revision_changes` rule can block it as `FFP062`. Profiles
+  and `FF062` details expose only structural header/log parts and record counts,
+  aggregate control counts, and unrecognized metadata—never historic values,
+  locations, identities, timestamps, comments, GUIDs, relationship IDs, or raw
+  XML. Equivalent Boolean/integer spelling, coordinated relationship-ID
+  rewrites, and transitional/Strict relationship type spelling normalize.
+  Missing, duplicate, malformed, unsafe, unsupported, oversized, or
+  over-budget declarations remain visible coverage evidence. FormulaFence does
+  not apply revisions, reconstruct a historical state, resolve conflicts,
+  validate identity/timestamp claims, render Excel, or interpret arbitrary
+  future extensions.
 - Excel number formats can hide or materially reinterpret an unchanged stored
   value: `;;;` can display it as blank, while custom sections, scaling commas,
   dates, percentages, literals, and text placeholders can change the review

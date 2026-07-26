@@ -72,6 +72,27 @@ _FORMULA_DEFINED_XLM_REGISTRATION_FUNCTIONS = {"REGISTER"}
 # remain outside this narrow boundary; the caller enables inspection only for
 # formula-defined names and named LAMBDAs.
 _FORMULA_DEFINED_XLM_EVALUATION_FUNCTIONS = {"EVALUATE"}
+# These selected XLM macro-sheet functions can dispatch another macro, launch
+# a program, invoke a DLL entry point, send a DDE command, or install an event
+# handler that runs a macro later. They are deliberately inspected only inside
+# formula-defined names and named LAMBDAs: raw XLM macro-sheet programs remain
+# under the separate package-level boundary, and FormulaFence never executes or
+# resolves any stored action argument.
+_FORMULA_DEFINED_XLM_ACTION_FUNCTIONS = {
+    "CALL",
+    "EXEC",
+    "EXECUTE",
+    "ON.DATA",
+    "ON.DOUBLECLICK",
+    "ON.ENTRY",
+    "ON.KEY",
+    "ON.RECALC",
+    "ON.SHEET",
+    "ON.TIME",
+    "ON.WINDOW",
+    "RUN",
+    "SEND.KEYS",
+}
 # `GET.CELL` is an XLM information function that can observe cell contents,
 # formatting, dimensions, protection, and other state outside ordinary
 # value/formula dependency semantics. Keep it in a dedicated stored-definition
@@ -266,6 +287,7 @@ class FormulaInspection:
     worksheet_code_resource_registration_functions: tuple[str, ...] = ()
     formula_defined_xlm_registration_functions: tuple[str, ...] = ()
     formula_defined_xlm_evaluation_functions: tuple[str, ...] = ()
+    formula_defined_xlm_action_functions: tuple[str, ...] = ()
     formula_defined_xlm_get_cell_functions: tuple[str, ...] = ()
     formula_defined_xlm_environment_information_functions: tuple[str, ...] = ()
     formula_environment_information_functions: tuple[str, ...] = ()
@@ -1227,6 +1249,21 @@ def _formula_defined_xlm_evaluation_function(token: object) -> str | None:
     return None
 
 
+def _formula_defined_xlm_action_function(token: object) -> str | None:
+    """Return a selected defined-name-only XLM action call, if present.
+
+    The raw-spelling classifier is deliberately opt-in and only used while
+    examining a stored formula-defined name or named LAMBDA. Known defined
+    callables are resolved before it runs, so a workbook-defined action-shaped
+    name is never asserted to be an Excel legacy macro primitive.
+    """
+    raw_name = str(getattr(token, "value", "")).rstrip("(").strip()
+    normalized = raw_name.removeprefix("@").upper()
+    if normalized in _FORMULA_DEFINED_XLM_ACTION_FUNCTIONS:
+        return normalized
+    return None
+
+
 def _formula_defined_xlm_get_cell_function(token: object) -> str | None:
     """Return a defined-name-only XLM `GET.CELL` call, if present.
 
@@ -1598,6 +1635,12 @@ def inspect_formula(
     named_function_formula_defined_xlm_evaluation_functions: (
         Mapping[str, Sequence[str]] | None
     ) = None,
+    named_formula_defined_xlm_action_functions: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
+    named_function_formula_defined_xlm_action_functions: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
     named_formula_defined_xlm_get_cell_functions: (
         Mapping[str, Sequence[str]] | None
     ) = None,
@@ -1619,6 +1662,7 @@ def inspect_formula(
     *,
     inspect_formula_defined_xlm_registrations: bool = False,
     inspect_formula_defined_xlm_evaluations: bool = False,
+    inspect_formula_defined_xlm_actions: bool = False,
     inspect_formula_defined_xlm_get_cell_calls: bool = False,
     inspect_formula_defined_xlm_environment_information_calls: bool = False,
 ) -> FormulaInspection:
@@ -1676,6 +1720,12 @@ def inspect_formula(
     resolved_named_function_formula_defined_xlm_evaluations = (
         named_function_formula_defined_xlm_evaluation_functions or {}
     )
+    resolved_named_formula_defined_xlm_actions = (
+        named_formula_defined_xlm_action_functions or {}
+    )
+    resolved_named_function_formula_defined_xlm_actions = (
+        named_function_formula_defined_xlm_action_functions or {}
+    )
     resolved_named_formula_defined_xlm_get_cell_calls = (
         named_formula_defined_xlm_get_cell_functions or {}
     )
@@ -1704,6 +1754,7 @@ def inspect_formula(
     worksheet_code_resource_registration_functions: list[str] = []
     formula_defined_xlm_registration_functions: list[str] = []
     formula_defined_xlm_evaluation_functions: list[str] = []
+    formula_defined_xlm_action_functions: list[str] = []
     formula_defined_xlm_get_cell_functions: list[str] = []
     formula_defined_xlm_environment_information_functions: list[str] = []
     formula_environment_information_functions: list[str] = []
@@ -1768,6 +1819,9 @@ def inspect_formula(
                 formula_defined_xlm_evaluation_functions.extend(
                     resolved_named_formula_defined_xlm_evaluations.get(named_key, ())
                 )
+                formula_defined_xlm_action_functions.extend(
+                    resolved_named_formula_defined_xlm_actions.get(named_key, ())
+                )
                 formula_defined_xlm_get_cell_functions.extend(
                     resolved_named_formula_defined_xlm_get_cell_calls.get(named_key, ())
                 )
@@ -1807,6 +1861,12 @@ def inspect_formula(
             ):
                 formula_defined_xlm_evaluation_functions.extend(
                     named_formula_defined_xlm_evaluations
+                )
+            if named_formula_defined_xlm_actions := (
+                resolved_named_formula_defined_xlm_actions.get(named_key)
+            ):
+                formula_defined_xlm_action_functions.extend(
+                    named_formula_defined_xlm_actions
                 )
             if named_formula_defined_xlm_get_cell_calls := (
                 resolved_named_formula_defined_xlm_get_cell_calls.get(named_key)
@@ -1865,6 +1925,11 @@ def inspect_formula(
                     )
                     formula_defined_xlm_evaluation_functions.extend(
                         resolved_named_function_formula_defined_xlm_evaluations.get(
+                            function_key, ()
+                        )
+                    )
+                    formula_defined_xlm_action_functions.extend(
+                        resolved_named_function_formula_defined_xlm_actions.get(
                             function_key, ()
                         )
                     )
@@ -1934,6 +1999,20 @@ def inspect_formula(
                 ):
                     formula_defined_xlm_evaluation_functions.append(
                         formula_defined_xlm_evaluation_function
+                    )
+                if (
+                    inspect_formula_defined_xlm_actions
+                    and function_key not in resolved_names
+                    and function_key not in resolved_named_functions
+                    and (
+                        formula_defined_xlm_action_function := (
+                            _formula_defined_xlm_action_function(token)
+                        )
+                    )
+                    is not None
+                ):
+                    formula_defined_xlm_action_functions.append(
+                        formula_defined_xlm_action_function
                     )
                 if (
                     inspect_formula_defined_xlm_get_cell_calls
@@ -2023,6 +2102,9 @@ def inspect_formula(
         ),
         formula_defined_xlm_evaluation_functions=tuple(
             formula_defined_xlm_evaluation_functions
+        ),
+        formula_defined_xlm_action_functions=tuple(
+            formula_defined_xlm_action_functions
         ),
         formula_defined_xlm_get_cell_functions=tuple(
             formula_defined_xlm_get_cell_functions

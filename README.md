@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.78.0/formulafence-0.78.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.79.0/formulafence-0.79.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -120,6 +120,7 @@ rules:
   no_worksheet_code_resource_registration_changes: true
   no_formula_defined_xlm_registration_changes: true
   no_formula_defined_xlm_evaluation_changes: true
+  no_formula_defined_xlm_action_changes: true
   no_formula_defined_xlm_get_cell_changes: true
   no_formula_defined_xlm_environment_information_changes: true
   no_formula_environment_information_changes: true
@@ -510,6 +511,33 @@ edge remain reviewable through private signatures. Formula text parsed by
 coverage limit. Direct worksheet `EVALUATE` calls and raw XLM macro-sheet parts
 are deliberately outside this narrow stored-definition boundary. Enable
 `no_formula_defined_xlm_evaluation_changes` to block this boundary in CI.
+
+FormulaFence also keeps a separate **formula-defined XLM action and
+event-dispatch ledger** for the selected legacy calls `CALL`, `EXEC`,
+`EXECUTE`, `RUN`, `SEND.KEYS`, `ON.DATA`, `ON.DOUBLECLICK`, `ON.ENTRY`,
+`ON.KEY`, `ON.RECALC`, `ON.SHEET`, `ON.TIME`, and `ON.WINDOW` when they are
+stored in formula-defined names and named `LAMBDA` bodies. Microsoft's [Excel C
+API reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel)
+describes XLM command-equivalent functions and event traps including `ON.ENTRY`
+and `ON.TIME`; its [DLL-access
+guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/how-to-access-dlls-in-excel)
+documents `CALL` and `REGISTER` as XLM macro-sheet routes to DLL functions or
+commands. Microsoft also documents `EXEC` as a runtime-risky XLM trigger in
+its [XLM AMSI analysis](https://www.microsoft.com/en-us/security/blog/2021/03/03/xlm-amsi-new-runtime-defense-against-excel-4-0-macro-malware/).
+
+This is intentionally a finite, stored-definition inventory rather than an
+attempt to interpret all XLM commands. The ledger propagates selected calls
+through nested and sheet-local formula names to invoking cells. Profiles and
+`FF073`/`FFP073` details expose only invocation-cell, call, and relevant
+formula-defined-name counts; function targets, handler names, formulas,
+arguments, cells, and name identities remain private. Same-count definition or
+invocation changes, uninvoked stored names, and ordinary static input edits are
+reviewable through private signatures. FormulaFence does not evaluate a
+formula, resolve an action target or event handler, load a DLL, send DDE, run a
+macro or program, or infer whether an action succeeds. Direct worksheet action
+calls and raw XLM macro-sheet parts are deliberately outside this narrow
+stored-definition boundary. Enable `no_formula_defined_xlm_action_changes` to
+block this boundary in CI.
 
 FormulaFence also keeps a separate **formula-defined XLM cell-information
 ledger** for GET.CELL calls stored in formula-defined names and named LAMBDA

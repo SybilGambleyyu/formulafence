@@ -75,6 +75,7 @@ _RULE_FIELDS = {
     "no_worksheet_code_resource_registration_changes",
     "no_formula_defined_xlm_registration_changes",
     "no_formula_defined_xlm_evaluation_changes",
+    "no_formula_defined_xlm_action_changes",
     "no_formula_defined_xlm_get_cell_changes",
     "no_formula_defined_xlm_environment_information_changes",
     "no_formula_environment_information_changes",
@@ -171,6 +172,7 @@ class Policy:
     no_worksheet_code_resource_registration_changes: bool = False
     no_formula_defined_xlm_registration_changes: bool = False
     no_formula_defined_xlm_evaluation_changes: bool = False
+    no_formula_defined_xlm_action_changes: bool = False
     no_formula_defined_xlm_get_cell_changes: bool = False
     no_formula_defined_xlm_environment_information_changes: bool = False
     no_formula_environment_information_changes: bool = False
@@ -249,6 +251,7 @@ rules:
   no_worksheet_code_resource_registration_changes: true
   no_formula_defined_xlm_registration_changes: true
   no_formula_defined_xlm_evaluation_changes: true
+  no_formula_defined_xlm_action_changes: true
   no_formula_defined_xlm_get_cell_changes: true
   no_formula_defined_xlm_environment_information_changes: true
   no_formula_environment_information_changes: true
@@ -470,6 +473,9 @@ def parse_policy(data: object) -> Policy:
         ),
         no_formula_defined_xlm_evaluation_changes=_boolean_rule(
             rules, "no_formula_defined_xlm_evaluation_changes"
+        ),
+        no_formula_defined_xlm_action_changes=_boolean_rule(
+            rules, "no_formula_defined_xlm_action_changes"
         ),
         no_formula_defined_xlm_get_cell_changes=_boolean_rule(
             rules, "no_formula_defined_xlm_get_cell_changes"
@@ -815,6 +821,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                         "Policy forbids formula-defined XLM expression-evaluation "
                         "changes."
                     ),
+                    details=finding.details,
+                )
+            )
+    if policy.no_formula_defined_xlm_action_changes:
+        for finding in _rule_triggered(report, "FF073"):
+            violations.append(
+                Finding(
+                    "FFP073",
+                    "high",
+                    "Policy forbids formula-defined XLM action changes.",
                     details=finding.details,
                 )
             )

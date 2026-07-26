@@ -70,6 +70,7 @@ rules:
   no_worksheet_code_resource_registration_changes: true
   no_formula_defined_xlm_registration_changes: true
   no_formula_defined_xlm_evaluation_changes: true
+  no_formula_defined_xlm_action_changes: true
   no_formula_defined_xlm_get_cell_changes: true
   no_formula_defined_xlm_environment_information_changes: true
   no_formula_environment_information_changes: true
@@ -169,6 +170,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_worksheet_code_resource_registration_changes` | boolean | A stored worksheet or formula-defined `REGISTER.ID` call, relevant formula-defined-name chain, private call inventory, or statically visible input changes. Module paths, procedure names, type strings, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates a formula, resolves a path, loads a DLL/XLL, or determines whether registration succeeds. |
 | `no_formula_defined_xlm_registration_changes` | boolean | A legacy XLM `REGISTER` call stored in a formula-defined name or named `LAMBDA`, its relevant definition chain/private invocation inventory, or a statically visible input changes. Module paths, procedure names, type strings, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates a formula, executes a macro, resolves a path, loads a DLL/XLL, or determines whether registration succeeds. |
 | `no_formula_defined_xlm_evaluation_changes` | boolean | A legacy XLM `EVALUATE` call stored in a formula-defined name or named `LAMBDA`, its relevant definition chain/private invocation inventory, or a statically visible argument input changes. Expressions, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates the text, parses the runtime-generated expression, executes a macro, or infers dependencies inside that expression. |
+| `no_formula_defined_xlm_action_changes` | boolean | A selected legacy XLM `CALL`, `EXEC`, `EXECUTE`, `RUN`, `SEND.KEYS`, or `ON.*` action/event-dispatch call stored in a formula-defined name or named `LAMBDA`; its relevant definition chain/private invocation inventory; or a statically visible input changes. Function targets, handler names, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates a formula, resolves a target or handler, loads a DLL, sends DDE, or runs a macro or program. |
 | no_formula_defined_xlm_get_cell_changes | boolean | A legacy XLM GET.CELL call stored in a formula-defined name or named LAMBDA, its relevant definition chain/private invocation inventory, or a statically visible argument input changes. Information types, references, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates the call, determines its requested information type, resolves dynamic references, or simulates Excel formatting, display, comments, protection, or other workbook state. |
 | no_formula_defined_xlm_environment_information_changes | boolean | A selected legacy XLM GET.WORKBOOK, GET.WORKSPACE, or GET.DOCUMENT call stored in a formula-defined name or named LAMBDA, its relevant definition chain/private invocation inventory, or a statically visible argument input changes. Information types, references, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates the call, determines its requested information type, resolves dynamic references, or simulates workbook, workspace, document, client, add-in, printer, or other Excel state. |
 | no_formula_environment_information_changes | boolean | A native CELL, INFO, SHEET, or SHEETS call stored in a worksheet formula, formula-defined name, or named LAMBDA; its relevant definition chain/private invocation inventory; or a statically visible argument input changes. Profiles separately aggregate CELL calls without an explicit reference, SHEET calls, SHEETS calls, and SHEETS calls without an explicit reference. When a complete raw OOXML tab catalog changes, FormulaFence also raises FF072 for stored SHEET or omitted-reference SHEETS calls; all declared tabs, including hidden, chart, macro, and dialog sheets, are in scope, while visibility-only changes are not this condition. Information types, references, formulas, arguments, locations, name identities, and raw tab-catalog comparison material are compared privately; ordinary sheet inventory remains normal reviewer context. FormulaFence never evaluates the call, resolves dynamic arguments, infers a selected cell, or simulates file, folder, client, workspace, workbook, or other Excel state. |
@@ -501,6 +503,35 @@ inside that expression. It traces only the stored call's own statically visible
 argument edge. Direct worksheet `EVALUATE` formulas and raw XLM macro-sheet
 parts remain deliberately outside this narrow stored-definition boundary; the
 latter remain under `FF026`.
+
+## Formula-defined XLM actions and event dispatch
+
+FormulaFence inventories the deliberately finite set of legacy XLM action and
+event-dispatch spellings `CALL`, `EXEC`, `EXECUTE`, `RUN`, `SEND.KEYS`,
+`ON.DATA`, `ON.DOUBLECLICK`, `ON.ENTRY`, `ON.KEY`, `ON.RECALC`, `ON.SHEET`,
+`ON.TIME`, and `ON.WINDOW` only while inspecting formula-defined names and
+named `LAMBDA` bodies. Microsoft's [Excel C API
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel)
+describes XLM command-equivalent functions and event traps including
+`ON.ENTRY` and `ON.TIME`; its [DLL-access
+guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/how-to-access-dlls-in-excel)
+documents `CALL` and `REGISTER` as XLM macro-sheet routes to DLL functions or
+commands. This is not an attempt to interpret all XLM commands.
+
+The public profile and `FF073` expose only invocation-cell, selected-call, and
+relevant formula-defined-name counts. Function targets, handler names,
+formulas, arguments, cells, and name identities stay private. Same-count
+definition or invocation changes remain visible through private signatures; a
+normal cell edit that statically reaches an invoking formula emits `FF073` as
+well. Uninvoked stored definitions still appear as a count.
+
+`no_formula_defined_xlm_action_changes` turns `FF073` into `FFP073`.
+FormulaFence does not evaluate a formula, resolve an action target or event
+handler, load a DLL, send DDE, run a macro or program, or determine whether an
+action succeeds. Direct worksheet action formulas and raw XLM macro-sheet
+parts remain deliberately outside this narrow stored-definition boundary; the
+latter remain under `FF026`. Workbook-defined callables shadow the native
+spelling rather than being classified as legacy XLM actions.
 
 ## Formula-defined XLM GET.CELL information
 

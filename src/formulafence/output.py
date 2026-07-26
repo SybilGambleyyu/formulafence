@@ -583,6 +583,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     formula_defined_xlm_evaluations = profile[
         "formula_defined_xlm_evaluations"
     ]
+    formula_defined_xlm_actions = profile["formula_defined_xlm_actions"]
     formula_defined_xlm_get_cell_calls = profile[
         "formula_defined_xlm_get_cell_calls"
     ]
@@ -1105,6 +1106,35 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     "Formula text parsed by EVALUATE is not re-tokenized, so dependencies "
                     "inside that text remain an explicit coverage limit. Direct worksheet "
                     "EVALUATE calls and raw XLM macro-sheet parts are outside this narrow "
+                    "boundary."
+                ),
+            ]
+        )
+    if formula_defined_xlm_actions["present"]:
+        lines.extend(
+            [
+                "",
+                "## Formula-defined XLM actions and event dispatch",
+                "",
+                (
+                    "- **Invoking formula cells / selected action calls / "
+                    "formula-defined names:** "
+                    f"{formula_defined_xlm_actions['action_formula_cell_count']} / "
+                    f"{formula_defined_xlm_actions['action_function_count']} / "
+                    f"{formula_defined_xlm_actions['action_defined_name_count']}"
+                ),
+                (
+                    "FormulaFence inventories selected XLM CALL, EXEC, EXECUTE, "
+                    "RUN, SEND.KEYS, and ON.* action or event-dispatch calls stored "
+                    "in formula-defined names and named LAMBDAs, then records cells "
+                    "that statically invoke them. Function spelling, cells, formulas, "
+                    "arguments, action targets, and name identities are compared "
+                    "privately and intentionally omitted."
+                ),
+                (
+                    "No formula is evaluated and no macro, program, DLL entry point, "
+                    "DDE command, or event handler is resolved or run. Direct worksheet "
+                    "action calls and raw XLM macro-sheet parts are outside this narrow "
                     "boundary."
                 ),
             ]

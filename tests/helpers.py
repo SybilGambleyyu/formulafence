@@ -687,6 +687,67 @@ def change_formula_defined_xlm_evaluation_input(path: Path) -> Path:
     return path
 
 
+def make_formula_defined_xlm_action_model(path: Path) -> Path:
+    """Create inert XLM action calls stored only in defined formulas.
+
+    The workbook is never opened in Excel. The stored literals exercise static
+    comparison of selected macro and event-dispatch calls without resolving or
+    executing a macro, program, DLL entry point, DDE command, or event handler.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Formula-defined XLM action controls"
+    inputs["A9"] = "PRIVATE-XLM-ACTION-INPUT-BASELINE"
+    inputs["B2"] = "=FENCE.XLM.ACTION(A9)"
+    inputs["B3"] = "=FENCE.XLM.ACTION.DIRECT"
+    inputs["B4"] = "=FENCE.XLM.ACTION.CHAIN(A9)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.ACTION",
+            attr_text=(
+                '=LAMBDA(payload,EXEC(payload)+RUN("PRIVATE-XLM-ACTION-MACRO"))'
+            ),
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.ACTION.CHAIN",
+            attr_text="=LAMBDA(payload,FENCE.XLM.ACTION(payload))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.ACTION.DIRECT",
+            attr_text='=ON.TIME(NOW(),"PRIVATE-XLM-ACTION-EVENT")',
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_action_definition(path: Path) -> Path:
+    """Change a stored XLM action target without changing public counts."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.XLM.ACTION"]
+    baseline = '=LAMBDA(payload,EXEC(payload)+RUN("PRIVATE-XLM-ACTION-MACRO"))'
+    if definition.attr_text != baseline:
+        raise ValueError("Fixture does not contain the expected XLM action")
+    definition.attr_text = (
+        '=LAMBDA(payload,EXEC(payload)+RUN("PRIVATE-XLM-ACTION-MACRO-CANDIDATE"))'
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_action_input(path: Path) -> Path:
+    """Change a static input used by a formula-defined XLM action."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-XLM-ACTION-INPUT-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_formula_defined_xlm_get_cell_model(path: Path) -> Path:
     """Create inert XLM `GET.CELL` calls stored only in defined formulas.
 

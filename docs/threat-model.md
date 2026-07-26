@@ -662,6 +662,27 @@ review prompt, not proof of an error.
   Direct worksheet `EVALUATE` formulas and raw XLM macro-sheet parts are
   intentionally outside this narrow boundary; runtime-text dependencies remain
   explicit static-coverage limits.
+- Selected legacy XLM action and event-dispatch calls can also be stored in a
+  formula-defined name or named `LAMBDA`, outside raw macro-sheet XML.
+  FormulaFence inventories only `CALL`, `EXEC`, `EXECUTE`, `RUN`, `SEND.KEYS`,
+  `ON.DATA`, `ON.DOUBLECLICK`, `ON.ENTRY`, `ON.KEY`, `ON.RECALC`, `ON.SHEET`,
+  `ON.TIME`, and `ON.WINDOW`, then propagates them through nested and
+  sheet-local names to invoking formula cells. Microsoft's [Excel C API
+  reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel)
+  describes XLM command-equivalent functions and event traps such as
+  `ON.ENTRY` and `ON.TIME`; its [DLL-access
+  guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/how-to-access-dlls-in-excel)
+  documents `CALL` and `REGISTER` as XLM macro-sheet routes to DLL functions
+  or commands. A material stored definition, invocation, or ordinary static
+  input change emits `FF073`; enable `no_formula_defined_xlm_action_changes`
+  for `FFP073`. Public output exposes only invoking-cell, selected-call, and
+  relevant definition counts; targets, handler names, formulas, arguments,
+  locations, and name identities remain private. FormulaFence does not
+  evaluate a formula, resolve a target/handler, load a DLL, send DDE, execute a
+  macro or program, or infer whether an action succeeds. Direct worksheet
+  action calls and raw XLM macro-sheet parts remain intentionally outside this
+  narrow boundary; this finite inventory does not claim to interpret arbitrary
+  XLM commands, and dynamic/unresolved inputs remain static-coverage limits.
 - Legacy XLM GET.CELL is an XLM information function. FormulaFence separately
   inventories only calls stored in formula-defined names and named LAMBDA
   bodies, then propagates them through nested and sheet-local names to invoking

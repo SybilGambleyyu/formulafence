@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.79.0 — 2026-07-26
+
+- Add `FF073`, a private ledger for selected legacy XLM action and
+  event-dispatch calls—`CALL`, `EXEC`, `EXECUTE`, `RUN`, `SEND.KEYS`, and
+  `ON.*`—when stored in formula-defined names or named `LAMBDA` bodies. The
+  ledger follows nested, recursive, and sheet-local names to their invoking
+  formula cells without evaluating a formula or resolving an action target,
+  handler, DLL, DDE command, macro, or program.
+- Preserve private review of same-count definition/invocation changes,
+  uninvoked stored names, and ordinary static input changes. Safe profiles and
+  Markdown expose only invoking-cell, selected-action, and
+  formula-defined-name counts; targets, handlers, formulas, arguments,
+  locations, and name identities stay private. Workbook-defined callables
+  shadow these spellings rather than being asserted to be legacy XLM actions.
+- Add the fail-closed `no_formula_defined_xlm_action_changes` policy rule
+  (`FFP073`). Direct worksheet action calls and raw XLM macro-sheet parts
+  remain outside this stored-definition boundary; FormulaFence does not claim
+  to interpret arbitrary XLM commands or execute any action.
+
 ## 0.78.0 — 2026-07-26
 
 - Extend `FF072` / `FFP072` from native `CELL` and `INFO` to native `SHEET`

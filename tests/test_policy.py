@@ -24,6 +24,7 @@ from .helpers import (
     change_filter_visibility_hidden_column,
     change_font_definition,
     change_formula_cached_result,
+    change_formula_defined_xlm_action_definition,
     change_formula_defined_xlm_environment_information_definition,
     change_formula_defined_xlm_evaluation_definition,
     change_formula_defined_xlm_get_cell_definition,
@@ -90,6 +91,7 @@ from .helpers import (
     make_filter_visibility_model,
     make_font_model,
     make_formula_cached_result_model,
+    make_formula_defined_xlm_action_model,
     make_formula_defined_xlm_environment_information_model,
     make_formula_defined_xlm_evaluation_model,
     make_formula_defined_xlm_get_cell_model,
@@ -584,6 +586,24 @@ def test_policy_blocks_formula_defined_xlm_evaluation_changes(tmp_path) -> None:
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
         "FFP069"
+    }
+
+
+def test_policy_blocks_formula_defined_xlm_action_changes(tmp_path) -> None:
+    baseline = make_formula_defined_xlm_action_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_defined_xlm_action_model(tmp_path / "candidate.xlsx")
+    change_formula_defined_xlm_action_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_formula_defined_xlm_action_changes": True},
+        }
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP073"
     }
 
 

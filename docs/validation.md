@@ -5,6 +5,64 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Formula-defined XLM action and event-dispatch boundary — 2026-07-26
+
+FormulaFence 0.79.0 was checked against Microsoft's [Excel C API
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel),
+which describes XLM command-equivalent functions and event traps including
+`ON.ENTRY` and `ON.TIME`, and its [DLL-access
+guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/how-to-access-dlls-in-excel),
+which documents `CALL` and `REGISTER` as XLM macro-sheet routes to DLL
+functions or commands. The scope remains static: FormulaFence inventories only
+the selected stored-definition spellings `CALL`, `EXEC`, `EXECUTE`, `RUN`,
+`SEND.KEYS`, `ON.DATA`, `ON.DOUBLECLICK`, `ON.ENTRY`, `ON.KEY`, `ON.RECALC`,
+`ON.SHEET`, `ON.TIME`, and `ON.WINDOW`; it does not evaluate a formula,
+resolve a target or handler, load a DLL, send DDE, execute a macro or program,
+or interpret arbitrary XLM commands.
+
+Four fresh controlled `.xlsx` files were generated in a standalone validation
+directory without opening Excel. The baseline (SHA-256
+`4d43bb04d24e690bbe1199f8d2d5253880c955d78dfde8c27573c3d127a8c174`)
+uses a named `LAMBDA` with `EXEC` and `RUN`, a nested named `LAMBDA`, and a
+formula-defined `ON.TIME` value. Its dedicated public ledger reports three
+invoking formula cells, five selected calls, and three relevant
+formula-defined names. Changing only a private `RUN` target (SHA-256
+`2954c95263ec4234cfabe1082e3c5bcab2478bb64f7e9dc543523483709cc93b`)
+kept those public counts fixed while emitting `FF073`; the narrow policy
+exited 1 with `FFP073`. Changing only a statically visible payload input
+(SHA-256
+`6ea7e7e6a3a465e2a9581b8a03c9231a54abc7c9db241e2107d09b6bcb23631b`)
+kept the action ledger equal and emitted `FF073` with a static-input count of
+one.
+
+The state-only candidate (SHA-256
+`9559f91fb58e5961ee6ac6991be1576a5d05b10d363c689c3f7ef9c86d897db3`)
+adds an unrelated worksheet while retaining every stored action definition. It
+emitted no `FF073` or `FFP073` and passed the narrow policy with exit 0,
+demonstrating that FormulaFence does not simulate event dispatch or claim that
+unrelated workbook state changes an action. The suite separately covers every
+selected spelling, nested names, recursive names, sheet-local resolution,
+workbook-defined callable shadowing, direct worksheet-call exclusion,
+uninvoked definitions, static inputs, private signatures, policy enforcement,
+and report rendering. The full suite passed with 545 tests.
+
+The dedicated `formula_defined_xlm_actions` profile object and `FF073` /
+`FFP073` SARIF results excluded the controlled formula-name identities and
+action/input sentinels. Ordinary defined-name and semantic-diff output remains
+normal reviewer context, so that redaction claim is deliberately limited to the
+dedicated ledger and policy-facing results. No formula was evaluated and no
+macro, program, DLL, DDE command, or event handler was invoked during
+validation.
+
+The staged `formulafence-0.79.0-py3-none-any.whl` (SHA-256
+`2d5a67246ad36558607b242924b4ea46aa6b9af5fd9d9e74a3c104c4e0e1d26e`)
+and its source distribution were built from the release tree and passed `twine
+check`. The wheel installed with declared dependencies into a fresh virtual
+environment and returned `FormulaFence 0.79.0`; it reproduced the 3 / 5 / 3
+ledger counts, emitted `FF073` / `FFP073` for the definition candidate, and
+retained the unrelated-sheet policy control. Dedicated packaged SARIF results
+remained redacted.
+
 ## Workbook tab information formula boundary — 2026-07-26
 
 FormulaFence 0.78.0 was checked against Microsoft's [SHEET function

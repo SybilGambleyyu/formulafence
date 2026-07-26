@@ -1184,6 +1184,42 @@ class FormulaDefinedXlmEvaluationSnapshot:
 
 
 @dataclass(frozen=True)
+class FormulaDefinedXlmActionSnapshot:
+    """Private ledger for selected XLM actions stored in defined formulas.
+
+    The selected legacy functions can dispatch a macro, program, DLL entry
+    point, DDE command, or a future event handler. FormulaFence inventories
+    only the function spelling stored in a formula-defined name or named
+    LAMBDA and the worksheet cells that statically invoke it. It neither
+    evaluates a formula nor resolves, exposes, or executes an action target,
+    argument, handler, macro, program, DLL, or DDE command.
+    """
+
+    action_formula_cell_count: int = 0
+    action_function_count: int = 0
+    action_defined_name_count: int = 0
+    invocation_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    action_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(self.action_formula_cell_count or self.action_defined_name_count)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate counts without action or formula material."""
+        return {
+            "present": self.present,
+            "action_formula_cell_count": self.action_formula_cell_count,
+            "action_function_count": self.action_function_count,
+            "action_defined_name_count": self.action_defined_name_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class FormulaDefinedXlmGetCellSnapshot:
     """Private ledger for XLM `GET.CELL` calls stored in defined formulas.
 
@@ -4030,6 +4066,9 @@ class WorkbookSnapshot:
     formula_defined_xlm_evaluations: FormulaDefinedXlmEvaluationSnapshot = (
         field(default_factory=FormulaDefinedXlmEvaluationSnapshot)
     )
+    formula_defined_xlm_actions: FormulaDefinedXlmActionSnapshot = field(
+        default_factory=FormulaDefinedXlmActionSnapshot
+    )
     formula_defined_xlm_get_cell_calls: FormulaDefinedXlmGetCellSnapshot = field(
         default_factory=FormulaDefinedXlmGetCellSnapshot
     )
@@ -4576,6 +4615,18 @@ class WorkbookSnapshot:
             ),
             "has_formula_defined_xlm_evaluations": (
                 self.formula_defined_xlm_evaluations.present
+            ),
+            "formula_defined_xlm_action_formula_cell_count": (
+                self.formula_defined_xlm_actions.action_formula_cell_count
+            ),
+            "formula_defined_xlm_action_function_count": (
+                self.formula_defined_xlm_actions.action_function_count
+            ),
+            "formula_defined_xlm_action_defined_name_count": (
+                self.formula_defined_xlm_actions.action_defined_name_count
+            ),
+            "has_formula_defined_xlm_actions": (
+                self.formula_defined_xlm_actions.present
             ),
             "formula_defined_xlm_get_cell_formula_cell_count": (
                 self.formula_defined_xlm_get_cell_calls.get_cell_formula_cell_count

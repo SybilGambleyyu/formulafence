@@ -101,13 +101,15 @@ financial correctness or replace model review.
   `[N]Sheet!LocalName`. For an indexed form, `N` must select exactly one
   document-order `externalReference`, `externalLink` part, `externalBook`, and
   external `externalLinkPath` relationship before that target may normalize to
-  one exact relative candidate. A workbook-scoped consumer alias may use one
-  exact static indexed spelling or one direct A1, workbook-scoped-name, or
-  sheet-local spelling; a same-named sheet-local consumer definition shadows
-  the workbook alias;
-  sheet-scoped/formula consumer aliases, caches, non-static package A1 forms,
-  and ambiguous package shapes are not expanded. A source name must also expand
-  completely to static internal A1 destinations in that source candidate; an
+  one exact relative candidate. A workbook-scoped consumer alias may terminate
+  in one exact static indexed spelling or one direct A1,
+  workbook-scoped-name, or sheet-local spelling. It may reach that terminal
+  through a finite, acyclic chain whose intermediate definitions are each one
+  unqualified non-A1 name identity; a same-named sheet-local consumer
+  definition shadows the workbook alias. Sheet-scoped aliases, formula
+  wrappers/expressions, missing or cyclic bridges, caches, non-static package
+  A1 forms, and ambiguous package shapes are not expanded. A source name must
+  also expand completely to static internal A1 destinations in that source candidate; an
   explicit source sheet selects only that local scope, never a global or other
   sheet fallback. It never opens a target path,
   searches by basename, follows an absolute/UNC/URI/escaping path, fetches

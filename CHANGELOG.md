@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.92.0 — 2026-07-26
+
+- Extend the candidate-only `FF079` portfolio graph through finite, acyclic
+  chains of exact workbook-scoped consumer-name aliases. Every bridge must be
+  one unqualified non-A1 name identity (with the usual optional leading `=`),
+  and must terminate in an already-supported direct or validated
+  package-indexed external A1, workbook-name, or sheet-local-name endpoint.
+  The resolver retains only that prevalidated endpoint; it never evaluates the
+  alias formula, resolves a path during parsing, or invents a source name.
+- Keep the graph fail closed for sheet-local consumer aliases, local shadowing
+  at a formula use site, functions, operators, constants, ranges, structured
+  references, sheet-qualified targets, missing links, and cyclic chains.
+  Source local-name scope and the existing direct/package validation boundaries
+  remain unchanged.
+- Add parser and portfolio coverage for direct and package A1/global/local-name
+  alias chains, canonical no-leading-`=` name text, cycles, unresolved bridges,
+  formula wrappers, local aliases, and JSON/Markdown/SARIF redaction. Validate
+  the boundary against an independently maintained external-data workbook.
+
 ## 0.91.0 — 2026-07-26
 
 - Extend the candidate-only `FF079` portfolio graph through exact,

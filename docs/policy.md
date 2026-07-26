@@ -183,7 +183,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | no_formula_environment_information_changes | boolean | A native CELL, INFO, SHEET, or SHEETS call stored in a worksheet formula, formula-defined name, or named LAMBDA; its relevant definition chain/private invocation inventory; or a statically visible argument input changes. Profiles separately aggregate CELL calls without an explicit reference, SHEET calls, SHEETS calls, and SHEETS calls without an explicit reference. When a complete raw OOXML tab catalog changes, FormulaFence also raises FF072 for stored SHEET or omitted-reference SHEETS calls; all declared tabs, including hidden, chart, macro, and dialog sheets, are in scope, while visibility-only changes are not this condition. Information types, references, formulas, arguments, locations, name identities, and raw tab-catalog comparison material are compared privately; ordinary sheet inventory remains normal reviewer context. FormulaFence never evaluates the call, resolves dynamic arguments, infers a selected cell, or simulates file, folder, client, workspace, workbook, or other Excel state. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_portfolio_membership_changes` | boolean | A `formulafence portfolio` run finds a supported workbook relative path only in the baseline or only in the candidate directory. This blocks `FF077` as `FFP077`; it does not infer that same-content files with different paths are a rename. |
-| `no_cross_workbook_impacts` | boolean | A changed candidate cell has one or more statically reachable formula cells in another candidate workbook through FormulaFence's exact, safely relative external-A1, direct workbook-scoped-name or sheet-local-name, or validated package-indexed-A1/name portfolio graph. An exact workbook-scoped consumer alias may retain one supported static spelling, unless a same-named local consumer name shadows it. An indexed form must traverse one document-order `externalReference`, one `externalBook`, and one external `externalLinkPath` relationship; any source name must expand completely to static internal A1 destinations in the already-inspected candidate, and an explicit source sheet selects only that local scope. This blocks `FF079` as `FFP079` without resolving a file, trusting a cache, evaluating a formula, or inferring an unresolved target. |
+| `no_cross_workbook_impacts` | boolean | A changed candidate cell has one or more statically reachable formula cells in another candidate workbook through FormulaFence's exact, safely relative external-A1, direct workbook-scoped-name or sheet-local-name, or validated package-indexed-A1/name portfolio graph. A workbook-scoped consumer alias may terminate in one supported static spelling through a finite, acyclic chain of exact unqualified non-A1 name identities, unless a same-named local consumer name shadows it. An indexed form must traverse one document-order `externalReference`, one `externalBook`, and one external `externalLinkPath` relationship; any source name must expand completely to static internal A1 destinations in the already-inspected candidate, and an explicit source sheet selects only that local scope. This blocks `FF079` as `FFP079` without resolving a file, trusting a cache, evaluating a formula, or inferring an unresolved target. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
@@ -1696,11 +1696,13 @@ workbook to another already-inspected candidate path. For the package forms,
 `[1]` is not a filename: FormulaFence requires it to select one document-order
 `externalReference`, one declared `externalLink` part with exactly one
 `externalBook`, and one external `externalLinkPath` relationship before
-treating that private target as the workbook spelling. A direct
-workbook-scoped consumer alias may retain one exact indexed static spelling,
-or one exact direct A1, workbook-scoped-name, or sheet-local spelling. A
-same-named sheet-local consumer definition shadows the workbook alias. A source
-name must expand
+treating that private target as the workbook spelling. A workbook-scoped
+consumer alias may terminate in one exact indexed static
+spelling, or one exact direct A1, workbook-scoped-name, or sheet-local
+spelling. It may reach that terminal through a finite, acyclic chain whose
+intermediate definitions are exactly one unqualified, non-A1 name identity
+(with or without a leading `=`). A same-named sheet-local consumer definition
+shadows the workbook alias. A source name must expand
 completely to static internal A1 destinations in the source candidate; a
 sheet-local spelling selects only the exact source sheet's local-name scope,
 with no global or other-sheet fallback. This may include a safely resolved
@@ -1713,9 +1715,10 @@ millions of cells.
 
 Absolute, UNC, URI, or portfolio-escaping paths; malformed or ambiguous
 package declarations; DDE/OLE/non-workbook package links; package A1 forms
-that are not one static destination; sheet-scoped or formula-defined consumer
-aliases; external-link cache values; missing, dynamic, relative, cyclic,
-external, 3-D, malformed, otherwise non-statically-expanded, unknown-scope, or
+that are not one static destination; sheet-scoped consumer aliases; consumer
+formula wrappers, expressions, ranges, missing bridges, or cyclic bridges;
+external-link cache values; missing, dynamic, relative, cyclic, external, 3-D,
+malformed, otherwise non-statically-expanded, unknown-scope, or
 wrong-scope source names; direct structured references; unknown source sheets;
 unreadable targets; and basename-only near matches are not resolved or guessed.
 FormulaFence never opens, downloads, calculates, refreshes, trusts a cache, or

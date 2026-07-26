@@ -883,6 +883,35 @@ def parse_external_workbook_sheet_defined_name_reference(
     )
 
 
+def parse_workbook_defined_name_alias(value: str) -> str | None:
+    """Parse one exact workbook-name alias without evaluating its formula.
+
+    A defined-name formula can contain one ``name-reference``.  That is a
+    useful, deterministic indirection layer for a workbook-scoped alias of an
+    already validated external link, but it is not a licence to evaluate an
+    arbitrary formula.  Accept both OOXML's common no-leading-``=`` spelling
+    and writers which retain it; require the remainder to be exactly one
+    unqualified, non-A1 name identity.  Sheet-local references, functions,
+    operators, structured references, direct external literals, and malformed
+    name text deliberately remain outside the static portfolio graph.
+    """
+    token = value.strip()
+    if token.startswith("="):
+        token = token[1:].strip()
+    if (
+        not token
+        or len(token) > 255
+        or token != token.strip()
+        or token.startswith("\\")
+        or any(character in "[]'!+-*/^&=<>%,;(){}" for character in token)
+        or any(ord(character) < 32 or ord(character) == 127 for character in token)
+        or not _is_external_link_name_identity(token)
+        or parse_reference_token(token) is not None
+    ):
+        return None
+    return reference_lookup_key(token)
+
+
 def parse_external_link_indexed_defined_name_reference(
     value: str,
 ) -> tuple[int, str] | None:

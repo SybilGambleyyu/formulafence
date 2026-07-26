@@ -14,6 +14,7 @@ from formulafence.formulas import (
     parse_external_workbook_defined_name_reference,
     parse_external_workbook_reference,
     parse_external_workbook_sheet_defined_name_reference,
+    parse_workbook_defined_name_alias,
 )
 from formulafence.models import ExternalWorkbookReference
 
@@ -230,6 +231,28 @@ def test_external_workbook_sheet_defined_names_keep_scope_private_and_static() -
         ("Inputs.xlsx", "Data", "localinput"),
         ("..\\shared\\Other.xlsx", "Input Sheet", "margin"),
     ]
+
+
+def test_workbook_defined_name_aliases_require_one_static_unqualified_name() -> None:
+    assert parse_workbook_defined_name_alias("InputRange") == "inputrange"
+    assert parse_workbook_defined_name_alias("= Private.Input ") == "private.input"
+    assert parse_workbook_defined_name_alias("=ÜnicodeName") == "ünicodename"
+
+    for value in (
+        "",
+        "A1",
+        "Sheet1!InputRange",
+        "='Sheet 1'!InputRange",
+        "[Inputs.xlsx]InputRange",
+        "=+InputRange",
+        "=SUM(InputRange)",
+        "=InputRange+1",
+        "=InputRange[Column]",
+        "=Input Range",
+        "=\\InputRange",
+        "==InputRange",
+    ):
+        assert parse_workbook_defined_name_alias(value) is None
 
 
 def test_package_indexed_external_name_references_require_a_declared_one_based_index() -> None:

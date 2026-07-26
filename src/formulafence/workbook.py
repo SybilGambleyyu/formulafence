@@ -18,6 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import TypeVar
 from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile, ZipInfo
 
@@ -42,6 +43,7 @@ from formulafence.formulas import (
     parse_external_workbook_reference,
     parse_external_workbook_sheet_defined_name_reference,
     parse_reference_token,
+    parse_workbook_defined_name_alias,
     reference_lookup_key,
 )
 from formulafence.models import (
@@ -44079,6 +44081,92 @@ def _local_defined_name_keys(workbook: object) -> dict[str, frozenset[str]]:
     return result
 
 
+_ExternalAliasReference = TypeVar(
+    "_ExternalAliasReference",
+    ExternalWorkbookReference,
+    ExternalWorkbookDefinedNameReference,
+)
+
+
+def _workbook_scoped_defined_name_aliases(workbook: object) -> dict[str, str]:
+    """Return exact global name-to-name bridges without evaluating formulas.
+
+    Workbook formula names routinely provide an extra semantic layer over an
+    external link: ``RevenueInputs`` can be a direct external range while
+    ``ForecastInputs`` is exactly ``=RevenueInputs``.  The latter is safe to
+    retain only when it is a workbook-scoped, one-name bridge as parsed by the
+    shared lexical helper.  Local names, formula wrappers, sheet-qualified
+    syntax, dynamic functions, and malformed definitions never enter this
+    map, so later portfolio resolution cannot infer an edge from workbook
+    logic.
+    """
+    names = getattr(workbook, "defined_names", {})
+    try:
+        items = names.items()
+    except AttributeError:
+        return {}
+    aliases: dict[str, str] = {}
+    for name, definition in items:
+        if getattr(definition, "localSheetId", None) is not None:
+            continue
+        name_key = reference_lookup_key(str(name))
+        target_key = parse_workbook_defined_name_alias(_definition_text(definition))
+        if name_key and target_key and name_key != target_key:
+            aliases[name_key] = target_key
+    return aliases
+
+
+def _expand_workbook_scoped_external_aliases(
+    direct_references: Mapping[str, tuple[_ExternalAliasReference, ...]],
+    aliases: Mapping[str, str],
+) -> dict[str, tuple[_ExternalAliasReference, ...]]:
+    """Expand finite exact global alias chains to existing external endpoints.
+
+    The endpoint map has already passed the direct-link and package-link
+    validation appropriate to its reference kind.  This pass only follows
+    name keys between those endpoints; it never resolves paths, formulas, or
+    source definitions.  The iterative walk treats missing targets and every
+    cycle as unresolved, avoiding invented dependencies without adding a
+    recursive traversal to this portfolio bridge.
+    """
+    resolved = dict(direct_references)
+    failed: set[str] = set()
+
+    def resolve(name_key: str) -> tuple[_ExternalAliasReference, ...] | None:
+        if name_key in resolved:
+            return resolved[name_key]
+        if name_key in failed:
+            return None
+
+        trail: list[str] = []
+        seen: set[str] = set()
+        current = name_key
+        endpoint: tuple[_ExternalAliasReference, ...] | None = None
+        while True:
+            if current in resolved:
+                endpoint = resolved[current]
+                break
+            if current in failed or current in seen:
+                break
+            target = aliases.get(current)
+            if target is None:
+                break
+            seen.add(current)
+            trail.append(current)
+            current = target
+
+        if endpoint is None:
+            failed.update(trail)
+            return None
+        for alias_key in trail:
+            resolved[alias_key] = endpoint
+        return endpoint
+
+    for name_key in aliases:
+        resolve(name_key)
+    return resolved
+
+
 def _package_indexed_external_name_references(
     workbook: object,
     indexed_external_workbook_paths: Mapping[int, str],
@@ -44771,12 +44859,18 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     direct_external_workbook_defined_name_references = (
         _direct_external_workbook_defined_name_references(workbook)
     )
-    named_external_workbook_defined_name_references = {
-        **package_indexed_external_name_references,
-        **package_indexed_external_sheet_defined_name_references,
-        **direct_external_workbook_defined_name_references,
-        **direct_external_sheet_defined_name_references,
-    }
+    workbook_scoped_external_aliases = _workbook_scoped_defined_name_aliases(workbook)
+    named_external_workbook_defined_name_references = (
+        _expand_workbook_scoped_external_aliases(
+            {
+                **package_indexed_external_name_references,
+                **package_indexed_external_sheet_defined_name_references,
+                **direct_external_workbook_defined_name_references,
+                **direct_external_sheet_defined_name_references,
+            },
+            workbook_scoped_external_aliases,
+        )
+    )
     package_indexed_external_workbook_references = (
         _package_indexed_external_workbook_references(
             workbook,
@@ -44784,10 +44878,13 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         )
     )
     direct_external_workbook_references = _direct_external_workbook_references(workbook)
-    named_external_workbook_references = {
-        **package_indexed_external_workbook_references,
-        **direct_external_workbook_references,
-    }
+    named_external_workbook_references = _expand_workbook_scoped_external_aliases(
+        {
+            **package_indexed_external_workbook_references,
+            **direct_external_workbook_references,
+        },
+        workbook_scoped_external_aliases,
+    )
 
     for worksheet in workbook.worksheets:
         shadowing_local_names = local_defined_name_keys.get(

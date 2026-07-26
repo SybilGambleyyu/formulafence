@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Exact workbook-name alias chains — 2026-07-26
+
+Microsoft's [name-formula grammar](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/da7f42ad-0083-451a-98cf-b475b578d91d)
+permits a `name-reference`, and its [name grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/1399f3cb-927c-4611-96ee-666143a8be35)
+define that reference separately from an external name. FormulaFence 0.92.0
+uses that narrow grammar only to bridge a finite, acyclic chain of
+workbook-scoped aliases: each intermediate stored definition is exactly one
+unqualified, non-A1 name identity, with or without the optional leading `=`.
+The chain must end at an already-supported direct or package-validated external
+A1/global-name/sheet-local-name endpoint. Sheet-local consumer aliases,
+operators, functions, ranges, structured references, missing targets, and
+cycles stay unresolved; no formula is evaluated.
+
+The independently maintained [MullinsLab external-data workbook](https://github.com/MullinsLab/excel-external-data/blob/5b4d55319c2eab3ad25408a85de025bdffa35e8b/external-data-blank.xlsx)
+was downloaded at commit `5b4d55319c2eab3ad25408a85de025bdffa35e8b` to a
+temporary directory outside this repository. A temporary source copy gained a
+controlled static global name, while a separate consumer used a direct external
+A1 alias plus a one-hop bridge, and a direct external global-name alias plus a
+two-hop bridge whose final definition omitted `=`. Changing the candidate
+copy's `External data!A1` produced exactly four `FF079` impacts and policy
+`FFP079`. JSON, Markdown, and SARIF omitted every controlled source and
+consumer alias identity and the raw uppercase external-workbook spelling. The
+upstream workbook was never executed, refreshed, changed in place, or copied
+into this repository.
+
+The release-versioned source tree passed **616 tests in 80.66 seconds**, a
+clean Ruff check, and `git diff --check`. Fresh 0.92.0 source and wheel
+distributions passed `twine check`. An isolated environment installed the
+exact final wheel and reran the temporary public portfolio through both the
+library and CLI. The CLI returned policy exit `1` with `FF079` and `FFP079`;
+the controlled aliases and uppercase external source spelling remained absent
+from its JSON output.
+
 ## Direct external-alias portfolio boundary — 2026-07-26
 
 Microsoft's [cell-reference grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/e531ebe0-a152-4978-a876-28e2a68f746e)

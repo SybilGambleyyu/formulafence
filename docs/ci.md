@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.91.0
+        uses: SybilGambleyyu/formulafence@v0.92.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -72,7 +72,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.91.0
+  uses: SybilGambleyyu/formulafence@v0.92.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -103,17 +103,20 @@ changed source cell to a formula in another candidate workbook, the report
 emits `FF079` with safe relative workbook identities, logical cells, and
 shortest-path samples. An indexed form is eligible only when its document-order
 `externalReference` reaches exactly one external workbook part and external
-`externalLinkPath` relationship. Any supported form may be retained through one
-exact workbook-scoped consumer alias, including direct external A1 and
-workbook-scoped-name definitions. The
-matched source candidate must expand a name completely to static internal A1
+`externalLinkPath` relationship. Any supported form may be retained through a
+finite, acyclic chain of workbook-scoped consumer aliases. Its terminal is one
+exact direct external A1 or workbook-scoped-name definition (or the
+corresponding validated package form), and every intermediate definition is
+exactly one unqualified, non-A1 name identity with or without its leading `=`.
+The matched source candidate must expand a name completely to static internal A1
 destinations. An explicit source sheet uses only that sheet's local name scope,
 never a global fallback.
 `no_cross_workbook_impacts` converts this to `FFP079`. The Action never follows
 a link on disk or over the network, trusts package caches, evaluates a formula,
 or guesses a basename, rename, absolute path, URI, malformed/ambiguous package
-declaration, sheet-scoped/formula consumer alias (or a workbook alias shadowed
-by a local consumer name), non-static package-A1/direct
+declaration, sheet-scoped consumer alias, formula wrapper/expression, cyclic
+or missing alias chain (or a workbook alias shadowed by a local consumer name),
+non-static package-A1/direct
 structured/3-D reference, wrong-scope source local, or other unresolved target.
 If the global graph bound is reached, it emits critical `FF080`, marks the
 evidence incomplete, and preserves the report with exit code `2`.
@@ -149,7 +152,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.91.0/formulafence-0.91.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.92.0/formulafence-0.92.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

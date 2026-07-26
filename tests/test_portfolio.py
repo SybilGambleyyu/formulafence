@@ -496,6 +496,94 @@ def test_portfolio_resolves_declared_package_indexed_external_a1_links_privately
     assert "PackageExternalCell" in profile_rendered
 
 
+def test_portfolio_resolves_package_indexed_external_alias_chains_privately(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    source_path = _write_workbook(
+        baseline / "inputs" / "source.xlsx",
+        "Data",
+        {"B2": 10, "B3": 20, "B4": 30},
+    )
+    source = load_workbook(source_path)
+    source.defined_names.add(
+        DefinedName("PrivatePackageChainGlobal", attr_text="Data!$B$2:$B$4")
+    )
+    source["Data"].defined_names.add(
+        DefinedName(
+            "PrivatePackageChainLocal",
+            attr_text="Data!$B$2:$B$4",
+            localSheetId=0,
+        )
+    )
+    source.save(source_path)
+    make_indexed_external_workbook_name_link_model(
+        baseline / "reports" / "name-chain.xlsx",
+        source_name="PrivatePackageChainGlobal",
+        include_direct_indexed_formula=False,
+        consumer_formula_alias=True,
+    )
+    make_indexed_external_workbook_a1_link_model(
+        baseline / "reports" / "a1-chain.xlsx",
+        include_direct_indexed_formula=False,
+        consumer_formula_alias=True,
+    )
+    make_indexed_external_workbook_sheet_defined_name_link_model(
+        baseline / "reports" / "local-name-chain.xlsx",
+        source_name="PrivatePackageChainLocal",
+        include_direct_indexed_formula=False,
+        consumer_formula_alias=True,
+    )
+
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs" / "source.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B3"], "value", 21),
+    )
+
+    report = compare_portfolios(
+        baseline,
+        candidate,
+        policy=parse_policy(
+            {"version": 1, "rules": {"no_cross_workbook_impacts": True}}
+        ),
+    )
+    source_entry = next(
+        entry for entry in report.workbooks if entry.path == "inputs/source.xlsx"
+    )
+    finding = next(
+        finding for finding in source_entry.findings if finding.rule_id == "FF079"
+    )
+    report_rendered = (
+        as_json(report.to_dict()),
+        portfolio_to_markdown(report),
+        as_json(portfolio_to_sarif(report)),
+    )
+
+    assert not report.incomplete
+    assert finding.details["impacted_workbook_count"] == 3
+    assert finding.details["impacted_formula_count"] == 3
+    assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
+    assert {
+        (impact["workbook"], impact["location"])
+        for impact in finding.details["sample_impacts"]
+    } == {
+        ("reports/a1-chain.xlsx", "Model!D2"),
+        ("reports/local-name-chain.xlsx", "Model!D2"),
+        ("reports/name-chain.xlsx", "Model!D2"),
+    }
+    for private_value in (
+        "PrivatePackageChainGlobal",
+        "PrivatePackageChainLocal",
+        "PackageExternalFormulaAlias",
+        "PackageExternalInput",
+        "PackageExternalCell",
+        "PackageExternalSheetName",
+    ):
+        assert all(private_value not in value for value in report_rendered)
+
+
 def test_portfolio_resolves_static_external_sheet_local_names_privately(
     tmp_path: Path,
 ) -> None:
@@ -551,6 +639,7 @@ def test_portfolio_resolves_static_external_sheet_local_names_privately(
             "D4": "=SUM('..\\inputs\\[SOURCE.XLSX]Data'!PrivateDynamicLocal)",
             "D5": "=SUM('..\\inputs\\[SOURCE.XLSX]Data'!PrivateGlobalOnly)",
             "D6": "=SUM('..\\inputs\\[SOURCE.XLSX]Data'!PrivateWrongScope)",
+            "D7": "=SUM(DirectLocalFormulaAlias)",
         },
     )
     direct = load_workbook(direct_path)
@@ -558,6 +647,12 @@ def test_portfolio_resolves_static_external_sheet_local_names_privately(
         DefinedName(
             "DirectLocalAlias",
             attr_text="'..\\inputs\\[SOURCE.XLSX]Data'!PrivateLocalAlias",
+        )
+    )
+    direct.defined_names.add(
+        DefinedName(
+            "DirectLocalFormulaAlias",
+            attr_text="=DirectLocalAlias",
         )
     )
     direct.save(direct_path)
@@ -593,7 +688,7 @@ def test_portfolio_resolves_static_external_sheet_local_names_privately(
 
     assert not report.incomplete
     assert finding.details["impacted_workbook_count"] == 2
-    assert finding.details["impacted_formula_count"] == 4
+    assert finding.details["impacted_formula_count"] == 5
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
     assert {
         (impact["workbook"], impact["location"])
@@ -601,6 +696,7 @@ def test_portfolio_resolves_static_external_sheet_local_names_privately(
     } == {
         ("reports/direct.xlsx", "Summary!D2"),
         ("reports/direct.xlsx", "Summary!D3"),
+        ("reports/direct.xlsx", "Summary!D7"),
         ("reports/package.xlsx", "Model!D2"),
         ("reports/package.xlsx", "Model!E2"),
     }
@@ -609,9 +705,10 @@ def test_portfolio_resolves_static_external_sheet_local_names_privately(
     assert all("PrivateDynamicLocal" not in value for value in report_rendered)
     assert all("PrivateGlobalOnly" not in value for value in report_rendered)
     assert all("PrivateWrongScope" not in value for value in report_rendered)
+    assert all("DirectLocalFormulaAlias" not in value for value in report_rendered)
 
 
-def test_portfolio_resolves_static_direct_external_aliases_privately(
+def test_portfolio_resolves_static_direct_external_alias_chains_privately(
     tmp_path: Path,
 ) -> None:
     baseline = tmp_path / "baseline"
@@ -645,6 +742,13 @@ def test_portfolio_resolves_static_direct_external_aliases_privately(
             "I2": "=SUM(DirectExternalAbsoluteAlias)",
             "J2": "=SUM(DirectExternalMalformedAlias)",
             "K2": "=SUM(DirectExternalShadowed)",
+            "L2": "=SUM(DirectExternalChainedCellAlias)",
+            "M2": "=SUM(DirectExternalChainedNameAlias)",
+            "N2": "=SUM(DirectExternalFormulaWrapper)",
+            "O2": "=SUM(DirectExternalAliasCycleA)",
+            "P2": "=SUM(DirectExternalUnresolvedAlias)",
+            "Q2": "=SUM(DirectExternalChainedShadowed)",
+            "R2": "=SUM(DirectExternalLocalFormulaAlias)",
         },
     )
     consumer = load_workbook(consumer_path)
@@ -669,6 +773,48 @@ def test_portfolio_resolves_static_direct_external_aliases_privately(
     consumer.defined_names.add(
         DefinedName(
             "DirectExternalFormulaAlias",
+            attr_text="=DirectExternalCell",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalChainedCellAlias",
+            attr_text="=DirectExternalFormulaAlias",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalChainedNameAlias",
+            attr_text="DirectExternalName",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalFormulaWrapper",
+            attr_text="=SUM(DirectExternalCell)",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalAliasCycleA",
+            attr_text="=DirectExternalAliasCycleB",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalAliasCycleB",
+            attr_text="=DirectExternalAliasCycleA",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalUnresolvedAlias",
+            attr_text="=NoSuchAlias",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalChainedShadowed",
             attr_text="=DirectExternalCell",
         )
     )
@@ -704,6 +850,20 @@ def test_portfolio_resolves_static_direct_external_aliases_privately(
             localSheetId=0,
         )
     )
+    consumer["Summary"].defined_names.add(
+        DefinedName(
+            "DirectExternalChainedShadowed",
+            attr_text="Summary!$A$1",
+            localSheetId=0,
+        )
+    )
+    consumer["Summary"].defined_names.add(
+        DefinedName(
+            "DirectExternalLocalFormulaAlias",
+            attr_text="=DirectExternalCell",
+            localSheetId=0,
+        )
+    )
     consumer.save(consumer_path)
 
     shutil.copytree(baseline, candidate)
@@ -733,18 +893,29 @@ def test_portfolio_resolves_static_direct_external_aliases_privately(
 
     assert not report.incomplete
     assert finding.details["impacted_workbook_count"] == 1
-    assert finding.details["impacted_formula_count"] == 3
+    assert finding.details["impacted_formula_count"] == 6
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
     assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
         "Summary!D2",
         "Summary!E2",
         "Summary!F2",
+        "Summary!G2",
+        "Summary!L2",
+        "Summary!M2",
     ]
     for private_value in (
         "PrivateDirectSourceRange",
         "PrivateDirectSourceAlias",
         "DirectExternalCell",
         "DirectExternalName",
+        "DirectExternalFormulaAlias",
+        "DirectExternalChainedCellAlias",
+        "DirectExternalChainedNameAlias",
+        "DirectExternalFormulaWrapper",
+        "DirectExternalAliasCycleA",
+        "DirectExternalUnresolvedAlias",
+        "DirectExternalChainedShadowed",
+        "DirectExternalLocalFormulaAlias",
         "SOURCE.XLSX",
     ):
         assert all(private_value not in value for value in rendered)
@@ -799,13 +970,6 @@ def test_portfolio_fails_closed_for_dynamic_or_absolute_package_indexed_names(
         consumer_alias_local_sheet_id=1,
         include_direct_indexed_formula=False,
     )
-    make_indexed_external_workbook_name_link_model(
-        baseline / "reports" / "formula-alias.xlsx",
-        target_paths=("../inputs/source.xlsx",),
-        source_name="PrivatePackageStaticName",
-        include_direct_indexed_formula=False,
-        consumer_formula_alias=True,
-    )
     make_indexed_external_workbook_a1_link_model(
         baseline / "reports" / "a1-absolute.xlsx",
         target_paths=(f"C:\\{private_path}\\source.xlsx",),
@@ -815,12 +979,6 @@ def test_portfolio_fails_closed_for_dynamic_or_absolute_package_indexed_names(
         target_paths=("../inputs/source.xlsx",),
         consumer_alias_local_sheet_id=1,
         include_direct_indexed_formula=False,
-    )
-    make_indexed_external_workbook_a1_link_model(
-        baseline / "reports" / "a1-formula-alias.xlsx",
-        target_paths=("../inputs/source.xlsx",),
-        include_direct_indexed_formula=False,
-        consumer_formula_alias=True,
     )
     shutil.copytree(baseline, candidate)
     duplicate_external_link_definition(candidate / "reports" / "ambiguous.xlsx")

@@ -47,7 +47,7 @@ jobs:
               workbook.active["A1"] = value
               workbook.save(f".action-fixture/{name}")
           Path(".action-fixture/formulafence.yml").write_text(
-              "version: 1\\nrules:\\n  no_formula_to_value: true\\n",
+              "version: 1\nrules:\n  no_formula_to_value: true\n",
               encoding="utf-8",
           )
           PY

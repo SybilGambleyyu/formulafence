@@ -3005,8 +3005,9 @@ class WorksheetDrawingShapeSnapshot:
     Worksheet DrawingML can carry text boxes, shapes, connectors, and
     non-chart graphic frames outside the cell grid. Their private signatures
     retain anchors, presentation, connector attachments, SmartArt diagram
-    material, text, linked actions, and relationship semantics for comparison
-    without exposing any of that material in a profile or change report.
+    material and direct Diagram Data image evidence, text, linked actions, and
+    relationship semantics for comparison without exposing any of that material
+    in a profile or change report.
     """
 
     worksheet_drawing_sheet_count: int = 0
@@ -3023,6 +3024,9 @@ class WorksheetDrawingShapeSnapshot:
     diagram_quick_style_part_count: int = 0
     diagram_colour_part_count: int = 0
     diagram_drawing_part_count: int = 0
+    diagram_image_part_count: int = 0
+    fingerprinted_diagram_image_part_count: int = 0
+    uninspected_diagram_image_part_count: int = 0
     text_shape_count: int = 0
     text_paragraph_count: int = 0
     text_run_count: int = 0
@@ -3068,6 +3072,13 @@ class WorksheetDrawingShapeSnapshot:
             "diagram_quick_style_part_count": self.diagram_quick_style_part_count,
             "diagram_colour_part_count": self.diagram_colour_part_count,
             "diagram_drawing_part_count": self.diagram_drawing_part_count,
+            "diagram_image_part_count": self.diagram_image_part_count,
+            "fingerprinted_diagram_image_part_count": (
+                self.fingerprinted_diagram_image_part_count
+            ),
+            "uninspected_diagram_image_part_count": (
+                self.uninspected_diagram_image_part_count
+            ),
             "text_shape_count": self.text_shape_count,
             "text_paragraph_count": self.text_paragraph_count,
             "text_run_count": self.text_run_count,

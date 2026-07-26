@@ -114,6 +114,7 @@ from .helpers import (
     change_worksheet_image_presentation,
     change_worksheet_print_layout_controls,
     change_worksheet_smartart_data,
+    change_worksheet_smartart_diagram_image_payload,
     change_worksheet_smartart_graphic_frame_uri,
     change_worksheet_sparkline_presentation,
     change_worksheet_sparkline_source,
@@ -186,6 +187,7 @@ from .helpers import (
     externalize_slicer_timeline_cache_relationship,
     externalize_threaded_comment_relationship,
     externalize_worksheet_image_relationship,
+    externalize_worksheet_smartart_diagram_image_relationship,
     externalize_xml_mapping_relationship,
     lowercase_legacy_threaded_placeholder_identifiers,
     make_alignment_model,
@@ -244,6 +246,7 @@ from .helpers import (
     make_strict_worksheet_drawing_connector_model,
     make_strict_worksheet_image_model,
     make_strict_worksheet_print_layout_model,
+    make_strict_worksheet_smartart_image_model,
     make_strict_worksheet_smartart_model,
     make_table_model,
     make_table_style_control_model,
@@ -258,6 +261,7 @@ from .helpers import (
     make_worksheet_embedded_control_model,
     make_worksheet_image_model,
     make_worksheet_print_layout_model,
+    make_worksheet_smartart_image_model,
     make_worksheet_smartart_model,
     make_worksheet_sparkline_model,
     make_xlm_macro_sheet_model,
@@ -310,6 +314,7 @@ from .helpers import (
     rebind_xml_mapping_relationship,
     remove_extended_chart_direct_relationship_id,
     remove_power_pivot_data_model_workbook_binding,
+    remove_worksheet_smartart_diagram_image_payload,
     remove_xlm_macro_sheet_related_part_payload,
     renumber_cell_hyperlink_identifiers,
     renumber_chart_relationships,
@@ -330,6 +335,7 @@ from .helpers import (
     renumber_worksheet_drawing_shape_identifiers,
     renumber_worksheet_embedded_control_relationships,
     renumber_worksheet_image_identifiers,
+    renumber_worksheet_smartart_diagram_image_relationship,
     renumber_worksheet_smartart_identifiers,
     renumber_xlm_macro_sheet_relationships,
     reorder_conditional_differential_styles,
@@ -8275,6 +8281,9 @@ def test_worksheet_drawing_shapes_are_profiled_diffed_and_redacted(tmp_path) -> 
         "diagram_quick_style_part_count": 0,
         "diagram_colour_part_count": 0,
         "diagram_drawing_part_count": 0,
+        "diagram_image_part_count": 0,
+        "fingerprinted_diagram_image_part_count": 0,
+        "uninspected_diagram_image_part_count": 0,
         "text_shape_count": 2,
         "text_paragraph_count": 2,
         "text_run_count": 2,
@@ -8370,6 +8379,9 @@ def test_worksheet_smartart_diagrams_are_profiled_diffed_and_redacted(tmp_path) 
         "diagram_quick_style_part_count": 1,
         "diagram_colour_part_count": 1,
         "diagram_drawing_part_count": 1,
+        "diagram_image_part_count": 0,
+        "fingerprinted_diagram_image_part_count": 0,
+        "uninspected_diagram_image_part_count": 0,
         "text_shape_count": 0,
         "text_paragraph_count": 0,
         "text_run_count": 0,
@@ -8416,6 +8428,196 @@ def test_worksheet_smartart_identifier_rewrites_are_ignored(tmp_path) -> None:
         change.kind for change in report.changes
     }
     assert "FF044" not in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_smartart_diagram_images_are_profiled_diffed_and_redacted(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_smartart_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_smartart_image_model(tmp_path / "candidate.xlsx")
+    change_worksheet_smartart_diagram_image_payload(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_drawing_shape_controls_changed"
+    )
+
+    shapes = profile["worksheet_drawing_shapes"]
+    assert shapes["diagram_data_part_count"] == 1
+    assert shapes["diagram_image_part_count"] == 1
+    assert shapes["fingerprinted_diagram_image_part_count"] == 1
+    assert shapes["uninspected_diagram_image_part_count"] == 0
+    assert shapes["related_relationship_count"] == 6
+    assert shapes["external_relationship_count"] == 0
+    assert shapes["unrecognized_shape_count"] == 0
+    assert baseline_snapshot.parser_warnings == ()
+    assert "SmartArt Diagram Data images" in markdown
+    assert change.details["worksheet_drawing_diagram_material_changed"] is True
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-SMARTART-DIAGRAM-IMAGE-CANDIDATE",
+        "private-smartart-diagram.png",
+        "rIdFenceDiagramImage",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_worksheet_smartart_diagram_image_relationship_identifiers_are_ignored(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_smartart_image_model(tmp_path / "baseline.xlsx")
+    renumbered = make_worksheet_smartart_image_model(tmp_path / "renumbered.xlsx")
+    renumber_worksheet_smartart_diagram_image_relationship(renumbered)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(renumbered))
+
+    assert report.changes == []
+    assert report.findings == []
+
+
+def test_external_worksheet_smartart_diagram_images_fail_closed(tmp_path) -> None:
+    baseline = make_worksheet_smartart_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_smartart_image_model(tmp_path / "candidate.xlsx")
+    externalize_worksheet_smartart_diagram_image_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    shapes = candidate_snapshot.worksheet_drawing_shapes
+    assert shapes.diagram_image_part_count == 1
+    assert shapes.uninspected_diagram_image_part_count == 1
+    assert shapes.external_relationship_count >= 1
+    assert shapes.unrecognized_shape_count >= 1
+    assert any(
+        "SmartArt Diagram Data image relationship without a safe internal target"
+        in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "worksheet_drawing_shape_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    assert all("private-smartart-image" not in artifact for artifact in rendered_artifacts)
+
+
+def test_missing_worksheet_smartart_diagram_image_payloads_fail_closed(tmp_path) -> None:
+    baseline = make_worksheet_smartart_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_smartart_image_model(tmp_path / "candidate.xlsx")
+    remove_worksheet_smartart_diagram_image_payload(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    shapes = candidate_snapshot.worksheet_drawing_shapes
+    assert shapes.diagram_image_part_count == 1
+    assert shapes.fingerprinted_diagram_image_part_count == 0
+    assert shapes.uninspected_diagram_image_part_count == 1
+    assert any(
+        "could not locate a SmartArt Diagram Data image part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert "worksheet_drawing_shape_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+
+
+def test_oversized_worksheet_smartart_diagram_images_remain_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_worksheet_smartart_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_worksheet_smartart_image_model(tmp_path / "candidate.xlsx")
+    change_worksheet_smartart_diagram_image_payload(candidate)
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKSHEET_DRAWING_SHAPE_RELATED_PART_MAX_BYTES",
+        1,
+    )
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    shapes = baseline_snapshot.worksheet_drawing_shapes
+    assert shapes.diagram_image_part_count == 1
+    assert shapes.fingerprinted_diagram_image_part_count == 0
+    assert shapes.uninspected_diagram_image_part_count == 1
+    assert any(
+        "oversized SmartArt Diagram Data image" in warning
+        for warning in baseline_snapshot.parser_warnings
+    )
+    assert "worksheet_drawing_shape_controls_changed" in {
+        change.kind for change in report.changes
+    }
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_smartart_diagram_image_count_budget_remains_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_smartart_image_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._WorksheetDrawingShapeRelatedPartBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_WorksheetDrawingShapeRelatedPartBudget",
+        lambda: budget_type(remaining_parts=0),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    shapes = snapshot.worksheet_drawing_shapes
+    assert shapes.diagram_image_part_count == 1
+    assert shapes.fingerprinted_diagram_image_part_count == 0
+    assert shapes.uninspected_diagram_image_part_count == 1
+    assert any(
+        "SmartArt Diagram Data image part count budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_worksheet_smartart_diagram_image_byte_budget_remains_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_smartart_image_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._WorksheetDrawingShapeRelatedPartBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_WorksheetDrawingShapeRelatedPartBudget",
+        lambda: budget_type(remaining_bytes=1),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    shapes = snapshot.worksheet_drawing_shapes
+    assert shapes.diagram_image_part_count == 1
+    assert shapes.fingerprinted_diagram_image_part_count == 0
+    assert shapes.uninspected_diagram_image_part_count == 1
+    assert any(
+        "SmartArt Diagram Data image read budget" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_malformed_worksheet_smartart_relationships_fail_closed(tmp_path) -> None:
@@ -8690,6 +8892,23 @@ def test_strict_worksheet_smartart_diagrams_are_supported(tmp_path) -> None:
     assert not any(
         "SmartArt" in warning for warning in snapshot.parser_warnings
     )
+    assert "FF044" in {finding.rule_id for finding in report.findings}
+
+
+def test_strict_worksheet_smartart_diagram_images_are_supported(tmp_path) -> None:
+    baseline = make_strict_worksheet_smartart_image_model(tmp_path / "baseline.xlsx")
+    candidate = make_strict_worksheet_smartart_image_model(tmp_path / "candidate.xlsx")
+    change_worksheet_smartart_diagram_image_payload(candidate)
+
+    snapshot = load_snapshot(baseline)
+    report = compare_snapshots(snapshot, load_snapshot(candidate))
+
+    assert snapshot.worksheet_drawing_shapes.diagram_data_part_count == 1
+    assert snapshot.worksheet_drawing_shapes.diagram_image_part_count == 1
+    assert snapshot.worksheet_drawing_shapes.fingerprinted_diagram_image_part_count == 1
+    assert snapshot.worksheet_drawing_shapes.uninspected_diagram_image_part_count == 0
+    assert snapshot.worksheet_drawing_shapes.unrecognized_shape_count == 0
+    assert not any("SmartArt" in warning for warning in snapshot.parser_warnings)
     assert "FF044" in {finding.rule_id for finding in report.findings}
 
 

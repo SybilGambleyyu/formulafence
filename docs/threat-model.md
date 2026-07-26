@@ -27,8 +27,9 @@ financial correctness or replace model review.
   boundary.
 - Worksheet DrawingML regular-shape, connector, and recognized SmartArt
   graphic-frame presentation, geometry, anchors, diagram component material,
-  connector endpoint targets, macro assignments, text links, descriptions,
-  relationship identifiers, and targets are compared through private
+  bounded direct Diagram Data image payloads, connector endpoint targets,
+  macro assignments, text links, descriptions, relationship identifiers, and
+  targets are compared through private
   fingerprints only. Profiles and reports retain structural counts, never the
   underlying shape, connector, or SmartArt content.
 - Native worksheet image declarations, anchors, visual properties,
@@ -699,19 +700,23 @@ review prompt, not proof of an error.
   anchor/layout and frame/shape/group/connector XML; the explicitly bound
   diagram data (`r:dm`), layout (`r:lo`), quick-style (`r:qs`), and colours
   (`r:cs`) parts; direct worksheet-drawing `diagramDrawing` rendering parts;
-  connector `stCxn`/`endCxn` attachment semantics; macro assignments; text
+  and bounded direct internal Image targets from a Diagram Data part; connector
+  `stCxn`/`endCxn` attachment semantics; macro assignments; text
   links; click/hover relationship semantics; and visible text/presentation
   declarations. Profiles expose only safe worksheet/drawing/anchor,
-  shape/text/connector/group, graphic-frame/SmartArt-component,
-  connector-attachment, text paragraph/run, macro/text-link/hyperlink,
-  relationship, and malformed-control counts. A material change emits `FF044`
-  and can be blocked with `no_worksheet_drawing_shape_changes`. Consistent
+  shape/text/connector/group, graphic-frame/SmartArt-component, Diagram Data
+  image part/fingerprinted/uninspected, connector-attachment, text paragraph/
+  run, macro/text-link/hyperlink, relationship, and malformed-control counts.
+  A material change emits `FF044` and can be blocked with
+  `no_worksheet_drawing_shape_changes`. Consistent
   non-visual and connector endpoint ID rewrites, worksheet-DrawingML
   relationship-ID rewrites, and colour-case spelling are normalized.
   FormulaFence does **not** render DrawingML, resolve themes or contrast,
   calculate text links, execute macro assignments, retrieve external targets,
-  calculate final SmartArt layout, parse/hash media, or follow component-side
-  SmartArt relationships. Native pictures are handled by the separate
+  calculate final SmartArt layout, or decode/render media. It hashes only
+  bounded direct internal Diagram Data Image targets (32 MiB per image, 64 MiB
+  per workbook, and 512 images), and does not follow any other component-side
+  SmartArt relationship. Native pictures are handled by the separate
   worksheet-image boundary, chart frames remain in `FF030`, and unknown
   non-chart graphic-frame URI types are coverage gaps. Missing, duplicate,
   malformed, unsafe, oversized, over-budget, or unsupported metadata becomes
@@ -720,6 +725,7 @@ review prompt, not proof of an error.
   [`xdr:sp` Shape definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet.shape?view=openxml-3.0.1),
   [`xdr:cxnSp` ConnectionShape definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet.connectionshape?view=openxml-3.0.1),
   Microsoft's [Graphic Object Data](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/f58e82a5-5590-4e36-b178-e12989960415),
+  the OOXML [Diagram Data Part](https://ooxml.info/docs/14/14.2/14.2.4/),
   and [Diagram relationship IDs](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.diagrams.relationshipids?view=openxml-3.0.1)
   references.
 - Native worksheet image controls are followed from worksheet `drawing`, direct
@@ -1013,8 +1019,9 @@ review prompt, not proof of an error.
   second-hop relationship, or nested-chart semantics; future Named Sheet View extension/rich-
   sort or full differential-format semantics; unknown non-chart
   graphic-frame URI types, SmartArt rendering/final-layout behavior, or
-  SmartArt component-side relationship targets; chart-to-cell impact; Ribbon
-  image payloads; general VML/drawing-control
+  SmartArt component-side relationship targets other than bounded direct
+  Diagram Data Image payloads; chart-to-cell impact; Ribbon image payloads;
+  general VML/drawing-control
   layout beyond supported Note shapes; embedded OLE/package formats;
   worksheet-scoped Web Add-in markup; Power Query runtime behavior or returned
   data; ordinary styles beyond direct protection assignments; complete Excel

@@ -414,6 +414,10 @@ _CHART_RELATED_PART_HASH_CHUNK_BYTES = 1024 * 1024
 _WORKSHEET_DRAWING_SHAPE_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _WORKSHEET_DRAWING_SHAPE_TOTAL_XML_MAX_COUNT = 512
+_WORKSHEET_DRAWING_SHAPE_RELATED_PART_MAX_BYTES = 32 * 1024 * 1024
+_WORKSHEET_DRAWING_SHAPE_RELATED_PART_TOTAL_MAX_BYTES = 64 * 1024 * 1024
+_WORKSHEET_DRAWING_SHAPE_RELATED_PART_TOTAL_MAX_COUNT = 512
+_WORKSHEET_DRAWING_SHAPE_RELATED_PART_HASH_CHUNK_BYTES = 1024 * 1024
 _WORKSHEET_IMAGE_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _WORKSHEET_IMAGE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _WORKSHEET_IMAGE_TOTAL_XML_MAX_COUNT = 512
@@ -1433,6 +1437,14 @@ class _WorksheetDrawingShapeBudget:
 
 
 @dataclass
+class _WorksheetDrawingShapeRelatedPartBudget:
+    """Bound SmartArt Diagram Data image bytes in one package scan."""
+
+    remaining_bytes: int = _WORKSHEET_DRAWING_SHAPE_RELATED_PART_TOTAL_MAX_BYTES
+    remaining_parts: int = _WORKSHEET_DRAWING_SHAPE_RELATED_PART_TOTAL_MAX_COUNT
+
+
+@dataclass
 class _WorksheetImageXmlBudget:
     """Bound native worksheet-image XML bytes in one package scan."""
 
@@ -1641,6 +1653,16 @@ class _WorksheetImagePayloadInspection:
 
 
 @dataclass(frozen=True)
+class _WorksheetDrawingShapeRelatedPartPayloadInspection:
+    """Private fingerprint result for direct SmartArt Diagram Data images."""
+
+    image_part_count: int = 0
+    fingerprinted_part_count: int = 0
+    uninspected_part_count: int = 0
+    payload_signature: str | None = None
+
+
+@dataclass(frozen=True)
 class _PivotCacheRecordPayloadInspection:
     """Private fingerprint result for raw PivotTable cache-record parts."""
 
@@ -1686,6 +1708,8 @@ class _WorksheetDrawingShapeInspection:
     diagram_quick_style_part_count: int = 0
     diagram_colour_part_count: int = 0
     diagram_drawing_part_count: int = 0
+    diagram_image_members: tuple[str, ...] = ()
+    unresolved_diagram_image_entries: tuple[tuple[str, str], ...] = ()
     text_shape_count: int = 0
     text_paragraph_count: int = 0
     text_run_count: int = 0
@@ -36245,6 +36269,90 @@ def _worksheet_drawing_shape_xml_payload(
         return None, _private_external_data_signature((("unreadable-part", metadata),))
 
 
+def _worksheet_drawing_shape_related_payloads(
+    archive: ZipFile,
+    members: set[str],
+    unresolved_entries: list[tuple[str, str]],
+    warnings: set[str],
+    budget: _WorksheetDrawingShapeRelatedPartBudget,
+) -> _WorksheetDrawingShapeRelatedPartPayloadInspection:
+    """Fingerprint direct SmartArt Diagram Data images without decoding them."""
+    entries = list(unresolved_entries)
+    fingerprinted_part_count = 0
+    uninspected_part_count = len(unresolved_entries)
+    for member in sorted(members, key=str.casefold):
+        if budget.remaining_parts <= 0:
+            warnings.add(
+                "FormulaFence reached its bounded SmartArt Diagram Data image part "
+                "count budget; affected diagram controls have a coverage gap."
+            )
+            entries.append(("part-count-budget-exhausted", member))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_parts -= 1
+        try:
+            info = archive.getinfo(member)
+        except KeyError:
+            warnings.add(
+                "FormulaFence could not locate a SmartArt Diagram Data image part; "
+                "affected diagram controls were not compared."
+            )
+            entries.append(("missing-image-part", member))
+            uninspected_part_count += 1
+            continue
+        metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+        if info.file_size > _WORKSHEET_DRAWING_SHAPE_RELATED_PART_MAX_BYTES:
+            warnings.add(
+                "FormulaFence did not fully read an oversized SmartArt Diagram Data "
+                "image; affected diagram controls have a coverage gap."
+            )
+            entries.append(("oversized-image-part", metadata))
+            uninspected_part_count += 1
+            continue
+        if info.file_size > budget.remaining_bytes:
+            warnings.add(
+                "FormulaFence reached its bounded SmartArt Diagram Data image read "
+                "budget; affected diagram controls have a coverage gap."
+            )
+            entries.append(("image-read-budget-exhausted", metadata))
+            uninspected_part_count += 1
+            continue
+        budget.remaining_bytes -= info.file_size
+        digest = hashlib.sha256()
+        bytes_read = 0
+        try:
+            with archive.open(info) as payload:
+                while chunk := payload.read(
+                    _WORKSHEET_DRAWING_SHAPE_RELATED_PART_HASH_CHUNK_BYTES
+                ):
+                    bytes_read += len(chunk)
+                    if bytes_read > info.file_size:
+                        raise ValueError("payload exceeded its declared size")
+                    digest.update(chunk)
+            if bytes_read != info.file_size:
+                raise ValueError("payload did not match its declared size")
+        except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+            warnings.add(
+                "FormulaFence could not fingerprint a SmartArt Diagram Data image "
+                f"({type(error).__name__}); affected diagram controls were not compared."
+            )
+            entries.append(("unreadable-image-part", metadata))
+            uninspected_part_count += 1
+            continue
+        entries.append(("image-payload", repr((member, digest.hexdigest()))))
+        fingerprinted_part_count += 1
+
+    entries.sort()
+    return _WorksheetDrawingShapeRelatedPartPayloadInspection(
+        image_part_count=len(members) + len(unresolved_entries),
+        fingerprinted_part_count=fingerprinted_part_count,
+        uninspected_part_count=uninspected_part_count,
+        payload_signature=(
+            _private_external_data_signature(tuple(entries)) if entries else None
+        ),
+    )
+
+
 def _worksheet_drawing_shape_xml_fragment(
     element: ElementTree.Element,
     relationship_semantics: Mapping[str, tuple[str, str, str]],
@@ -36813,6 +36921,8 @@ def _worksheet_drawing_shape_inspection(
 
     diagram_members_by_kind: dict[str, set[str]] = defaultdict(set)
     diagram_signature_entries: list[tuple[str, str]] = []
+    diagram_image_members: set[str] = set()
+    unresolved_diagram_image_entries: list[tuple[str, str]] = []
     if diagram_graphic_frame_nodes:
         expected_component_kinds = {
             "dm": "data",
@@ -37063,19 +37173,90 @@ def _worksheet_drawing_shape_inspection(
                         component_relationship_semantics[relationship_id] = sorted(
                             relationship.semantic_key() for relationship in matches
                         )[0]
-                    if component_relationships:
+                    supported_image_relationships = [
+                        relationship
+                        for relationship in component_relationships
+                        if (
+                            component_kind == "data"
+                            and relationship.relationship_type.casefold()
+                            in _WORKSHEET_IMAGE_RELATIONSHIPS
+                        )
+                    ]
+                    unsupported_relationships = [
+                        relationship
+                        for relationship in component_relationships
+                        if relationship not in supported_image_relationships
+                    ]
+                    if unsupported_relationships:
                         warnings.add(
                             "FormulaFence found relationships from a Worksheet DrawingML "
-                            "SmartArt component that are outside the bounded diagram-part "
-                            "scan; affected diagram controls have a coverage gap."
+                            "SmartArt component that are outside the bounded Diagram Data "
+                            "image scan; affected diagram controls have a coverage gap."
                         )
-                        unrecognized_count += len(component_relationships)
+                        unrecognized_count += len(unsupported_relationships)
                         issue_entries.append(
                             (
                                 "unfollowed-diagram-component-relationships",
-                                repr((component_kind, component_member)),
+                                repr(
+                                    (
+                                        component_kind,
+                                        component_member,
+                                        tuple(
+                                            sorted(
+                                                relationship.semantic_key()
+                                                for relationship in unsupported_relationships
+                                            )
+                                        ),
+                                    )
+                                ),
                             )
                         )
+                    for relationship in supported_image_relationships:
+                        if relationship not in selected_relationships:
+                            selected_relationships.append(relationship)
+                        if not relationship.relationship_id:
+                            warnings.add(
+                                "FormulaFence found a SmartArt Diagram Data image "
+                                "relationship without an id; affected diagram controls have "
+                                "a coverage gap."
+                            )
+                            unrecognized_count += 1
+                            unresolved_diagram_image_entries.append(
+                                (
+                                    "missing-diagram-image-relationship-id",
+                                    repr(relationship.semantic_key()),
+                                )
+                            )
+                            continue
+                        if relationship.target_mode.casefold() != "internal":
+                            warnings.add(
+                                "FormulaFence found a SmartArt Diagram Data image "
+                                "relationship without a safe internal target; affected diagram "
+                                "controls were not compared."
+                            )
+                            unrecognized_count += 1
+                            unresolved_diagram_image_entries.append(
+                                (
+                                    "external-diagram-image-relationship",
+                                    repr(relationship.semantic_key()),
+                                )
+                            )
+                            continue
+                        if relationship.safe_target is None:
+                            warnings.add(
+                                "FormulaFence found a SmartArt Diagram Data image "
+                                "relationship without a safe package target; affected diagram "
+                                "controls were not compared."
+                            )
+                            unrecognized_count += 1
+                            unresolved_diagram_image_entries.append(
+                                (
+                                    "unsafe-diagram-image-relationship",
+                                    repr(relationship.semantic_key()),
+                                )
+                            )
+                            continue
+                        diagram_image_members.add(relationship.safe_target)
                 try:
                     component_fragment = _worksheet_drawing_shape_xml_fragment(
                         component_root,
@@ -37139,6 +37320,10 @@ def _worksheet_drawing_shape_inspection(
             ),
             diagram_colour_part_count=len(diagram_members_by_kind["colours"]),
             diagram_drawing_part_count=len(diagram_members_by_kind["drawing"]),
+            diagram_image_members=tuple(
+                sorted(diagram_image_members, key=str.casefold)
+            ),
+            unresolved_diagram_image_entries=tuple(unresolved_diagram_image_entries),
             unrecognized_graphic_frame_count=unrecognized_graphic_frame_count,
             unrecognized_count=unrecognized_count + 1,
             definition_signature=_private_payload_signature(payload),
@@ -37171,6 +37356,8 @@ def _worksheet_drawing_shape_inspection(
         diagram_quick_style_part_count=len(diagram_members_by_kind["quick-style"]),
         diagram_colour_part_count=len(diagram_members_by_kind["colours"]),
         diagram_drawing_part_count=len(diagram_members_by_kind["drawing"]),
+        diagram_image_members=tuple(sorted(diagram_image_members, key=str.casefold)),
+        unresolved_diagram_image_entries=tuple(unresolved_diagram_image_entries),
         text_shape_count=text_shape_count,
         text_paragraph_count=text_paragraph_count,
         text_run_count=text_run_count,
@@ -37207,8 +37394,9 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
 
     The scan follows worksheet drawing relationships and compares text-bearing
     shapes, connectors, their anchor/layout declarations, connector attachment
-    semantics, and directly referenced relationship semantics. It does not
-    render DrawingML, fetch external targets, or open arbitrary related media.
+    semantics, and directly referenced relationship semantics. It also hashes
+    bounded direct Diagram Data image payloads without decoding them. It does
+    not render DrawingML, fetch external targets, or open arbitrary related media.
     """
     warnings: set[str] = set()
     try:
@@ -37310,6 +37498,33 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
                 )
                 return _private_external_data_signature(tuple(entries))
 
+            diagram_image_members: set[str] = set()
+            unresolved_diagram_image_entries: list[tuple[str, str]] = []
+            for inspection in inspections:
+                diagram_image_members.update(inspection.diagram_image_members)
+                unresolved_diagram_image_entries.extend(
+                    inspection.unresolved_diagram_image_entries
+                )
+            diagram_image_payload_inspection = _worksheet_drawing_shape_related_payloads(
+                archive,
+                diagram_image_members,
+                unresolved_diagram_image_entries,
+                warnings,
+                _WorksheetDrawingShapeRelatedPartBudget(),
+            )
+            component_diagram_signature = aggregate_signature("diagram_signature")
+            diagram_signature_entries = tuple(
+                entry
+                for entry in (
+                    ("diagram-components", component_diagram_signature),
+                    (
+                        "diagram-data-image-payloads",
+                        diagram_image_payload_inspection.payload_signature,
+                    ),
+                )
+                if entry[1] is not None
+            )
+
             present_inspections = [
                 inspection for inspection in inspections if inspection.present
             ]
@@ -37356,6 +37571,13 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
                 diagram_drawing_part_count=sum(
                     inspection.diagram_drawing_part_count for inspection in inspections
                 ),
+                diagram_image_part_count=diagram_image_payload_inspection.image_part_count,
+                fingerprinted_diagram_image_part_count=(
+                    diagram_image_payload_inspection.fingerprinted_part_count
+                ),
+                uninspected_diagram_image_part_count=(
+                    diagram_image_payload_inspection.uninspected_part_count
+                ),
                 text_shape_count=sum(
                     inspection.text_shape_count for inspection in inspections
                 ),
@@ -37392,7 +37614,9 @@ def _worksheet_drawing_shape_metadata(path: Path) -> _WorksheetDrawingShapeMetad
                     tuple(sorted(declaration_entries))
                 ),
                 definition_signature=aggregate_signature("definition_signature"),
-                diagram_signature=aggregate_signature("diagram_signature"),
+                diagram_signature=_private_external_data_signature(
+                    diagram_signature_entries
+                ),
                 relationship_signature=aggregate_signature("relationship_signature"),
             )
     except (BadZipFile, OSError, RuntimeError, ValueError) as error:

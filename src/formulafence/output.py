@@ -2219,6 +2219,13 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     f"{worksheet_drawing_shapes['diagram_drawing_part_count']}"
                 ),
                 (
+                    "- **SmartArt Diagram Data images (parts / fingerprinted / "
+                    "uninspected):** "
+                    f"{worksheet_drawing_shapes['diagram_image_part_count']} / "
+                    f"{worksheet_drawing_shapes['fingerprinted_diagram_image_part_count']} / "
+                    f"{worksheet_drawing_shapes['uninspected_diagram_image_part_count']}"
+                ),
+                (
                     "- **Connector attachments:** "
                     f"{worksheet_drawing_shapes['connector_attachment_count']}"
                 ),
@@ -2252,8 +2259,9 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             )
         lines.append(
             "Shape, connector, and SmartArt presentation; attachment targets; anchors; "
-            "diagram content; macro assignments; text links; hyperlink targets; and raw "
-            "XML are compared privately and intentionally omitted."
+            "diagram content and bounded Diagram Data image payloads; macro assignments; "
+            "text links; hyperlink targets; and raw XML are compared privately and "
+            "intentionally omitted."
         )
     worksheet_images = profile["worksheet_images"]
     if worksheet_images["present"]:

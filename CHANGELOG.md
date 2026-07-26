@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.64.0 — 2026-07-26
+
+- Extend the existing `FF044` Worksheet DrawingML SmartArt boundary to
+  fingerprint bounded direct internal Image targets from each Diagram Data
+  part. Image bytes, names, targets, relationship IDs, and raw XML remain
+  private; profiles, Markdown, JSON, and SARIF expose only safe image,
+  fingerprinted-image, and uninspected-image counts.
+- Support both transitional and Strict Image relationship forms. Coordinated
+  Diagram Data image relationship-ID rewrites remain quiet, while byte-only
+  image changes emit the existing high-severity `FF044` finding and can be
+  blocked by `no_worksheet_drawing_shape_changes` (`FFP044`).
+- Bound direct image hashing to 32 MiB per image, 64 MiB per workbook, and 512
+  images. Missing, duplicate, external, unsafe, unreadable, oversized,
+  over-budget, or unsupported component-side relationships become visible
+  coverage evidence. FormulaFence never decodes or renders media, fetches a
+  target, or follows hyperlinks, second-hop targets, or relationships from
+  other SmartArt component kinds.
+
 ## 0.63.0 — 2026-07-26
 
 - Inspect Office 2016+ DrawingML ChartEx (`cx:chart`) workbook controls under

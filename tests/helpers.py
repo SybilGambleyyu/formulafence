@@ -14275,6 +14275,170 @@ def make_worksheet_smartart_model(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".worksheet-smartart.tmp.xlsx")
 
 
+def make_worksheet_smartart_image_model(path: Path) -> Path:
+    """Add a direct Diagram Data image relationship to the SmartArt fixture."""
+    make_worksheet_smartart_model(path)
+    drawing_main = _DRAWINGML_MAIN_NS
+    diagram = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    baseline_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9JdcAAAAAASUVORK5CYII="
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        data_member = "xl/diagrams/data1.xml"
+        data = ElementTree.fromstring(contents[data_member])
+        points = next(data.iter(f"{{{diagram}}}ptLst"))
+        image_point = ElementTree.SubElement(
+            points,
+            f"{{{diagram}}}pt",
+            {
+                "modelId": "{EEEEEEEE-EEEE-EEEE-EEEE-EEEEEEEEEEEE}",
+                "type": "pres",
+            },
+        )
+        shape_properties = ElementTree.SubElement(image_point, f"{{{diagram}}}spPr")
+        image_fill = ElementTree.SubElement(
+            shape_properties,
+            f"{{{drawing_main}}}blipFill",
+            {"rotWithShape": "false"},
+        )
+        ElementTree.SubElement(
+            image_fill,
+            f"{{{drawing_main}}}blip",
+            {f"{{{document_relationships}}}embed": "rIdFenceDiagramImage"},
+        )
+        stretch = ElementTree.SubElement(image_fill, f"{{{drawing_main}}}stretch")
+        ElementTree.SubElement(stretch, f"{{{drawing_main}}}fillRect")
+        contents[data_member] = ElementTree.tostring(
+            data,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships = ElementTree.Element(
+            f"{{{package_relationships}}}Relationships"
+        )
+        ElementTree.SubElement(
+            relationships,
+            f"{{{package_relationships}}}Relationship",
+            {
+                "Id": "rIdFenceDiagramImage",
+                "Type": f"{document_relationships}/image",
+                "Target": "../media/private-smartart-diagram.png",
+            },
+        )
+        contents[_relationship_member(data_member)] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents["xl/media/private-smartart-diagram.png"] = baseline_png
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        default_tag = f"{{{_CONTENT_TYPES_NS}}}Default"
+        if not any(
+            element.get("Extension") == "png"
+            for element in content_types.findall(default_tag)
+        ):
+            ElementTree.SubElement(
+                content_types,
+                default_tag,
+                {"Extension": "png", "ContentType": "image/png"},
+            )
+        contents["[Content_Types].xml"] = ElementTree.tostring(
+            content_types,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-smartart-image.tmp.xlsx")
+
+
+def change_worksheet_smartart_diagram_image_payload(path: Path) -> Path:
+    """Change only direct SmartArt Diagram Data image bytes outside cells."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        member = "xl/media/private-smartart-diagram.png"
+        if member not in contents:
+            raise ValueError("Fixture does not contain a SmartArt Diagram Data image")
+        contents[member] = b"PRIVATE-SMARTART-DIAGRAM-IMAGE-CANDIDATE"
+
+    return _rewrite_archive(path, mutate, ".worksheet-smartart-image-change.tmp.xlsx")
+
+
+def remove_worksheet_smartart_diagram_image_payload(path: Path) -> Path:
+    """Remove a declared Diagram Data image target to exercise coverage handling."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        member = "xl/media/private-smartart-diagram.png"
+        if member not in contents:
+            raise ValueError("Fixture does not contain a SmartArt Diagram Data image")
+        contents.pop(member)
+
+    return _rewrite_archive(path, mutate, ".worksheet-smartart-image-missing.tmp.xlsx")
+
+
+def renumber_worksheet_smartart_diagram_image_relationship(path: Path) -> Path:
+    """Rewrite a Diagram Data image relationship ID without changing its graph."""
+    data_member = "xl/diagrams/data1.xml"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+    document_relationships = _DOCUMENT_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships_member = _relationship_member(data_member)
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            item
+            for item in relationships.findall(f"{{{package_relationships}}}Relationship")
+            if item.get("Id") == "rIdFenceDiagramImage"
+        )
+        relationship.set("Id", "rIdFenceDiagramImageRenumbered")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        data = ElementTree.fromstring(contents[data_member])
+        image = next(data.iter(f"{{{_DRAWINGML_MAIN_NS}}}blip"))
+        image.set(
+            f"{{{document_relationships}}}embed",
+            "rIdFenceDiagramImageRenumbered",
+        )
+        contents[data_member] = ElementTree.tostring(
+            data,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-smartart-image-id.tmp.xlsx")
+
+
+def externalize_worksheet_smartart_diagram_image_relationship(path: Path) -> Path:
+    """Turn a Diagram Data image relationship into an external coverage gap."""
+    data_member = "xl/diagrams/data1.xml"
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships_member = _relationship_member(data_member)
+        relationships = ElementTree.fromstring(contents[relationships_member])
+        relationship = next(
+            item
+            for item in relationships.findall(f"{{{package_relationships}}}Relationship")
+            if item.get("Id") == "rIdFenceDiagramImage"
+        )
+        relationship.set("Target", "https://example.invalid/private-smartart-image")
+        relationship.set("TargetMode", "External")
+        contents[relationships_member] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".worksheet-smartart-image-external.tmp.xlsx")
+
+
 def change_worksheet_smartart_data(path: Path) -> Path:
     """Change only private SmartArt data, leaving every worksheet cell unchanged."""
 
@@ -14415,9 +14579,12 @@ def add_worksheet_smartart_component_relationship(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".worksheet-smartart-component-rels.tmp.xlsx")
 
 
-def make_strict_worksheet_smartart_model(path: Path) -> Path:
-    """Create a Strict SpreadsheetML variant of the SmartArt fixture."""
-    make_worksheet_smartart_model(path)
+def _make_strict_worksheet_smartart_model(path: Path, *, with_image: bool) -> Path:
+    """Create a Strict SpreadsheetML SmartArt fixture, optionally with an image."""
+    if with_image:
+        make_worksheet_smartart_image_model(path)
+    else:
+        make_worksheet_smartart_model(path)
     drawing = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
     strict_drawing = "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing"
     diagram = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
@@ -14476,10 +14643,13 @@ def make_strict_worksheet_smartart_model(path: Path) -> Path:
             )
 
         relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
-        for member in (
+        relationship_members = [
             _relationship_member(worksheet_member),
             drawing_relationships_member,
-        ):
+        ]
+        if with_image:
+            relationship_members.append(_relationship_member("xl/diagrams/data1.xml"))
+        for member in relationship_members:
             relationships = ElementTree.fromstring(contents[member])
             for relationship in relationships.findall(relationship_tag):
                 relationship_type = relationship.get("Type")
@@ -14501,6 +14671,16 @@ def make_strict_worksheet_smartart_model(path: Path) -> Path:
             )
 
     return _rewrite_archive(path, mutate, ".strict-worksheet-smartart.tmp.xlsx")
+
+
+def make_strict_worksheet_smartart_model(path: Path) -> Path:
+    """Create a Strict SpreadsheetML variant of the SmartArt fixture."""
+    return _make_strict_worksheet_smartart_model(path, with_image=False)
+
+
+def make_strict_worksheet_smartart_image_model(path: Path) -> Path:
+    """Create a Strict SpreadsheetML SmartArt fixture with a Diagram Data image."""
+    return _make_strict_worksheet_smartart_model(path, with_image=True)
 
 
 def make_worksheet_drawing_connector_model(

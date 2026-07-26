@@ -62,6 +62,67 @@ and data minimisation. It does not calculate formulas, render a chart, assess
 ChartEx visual semantics, follow external targets or second-hop relationships,
 or parse direct media and embedded-package formats.
 
+## SmartArt Diagram Data image payloads — 2026-07-26
+
+FormulaFence 0.64.0 was checked against the OOXML
+[Diagram Data Part](https://ooxml.info/docs/14/14.2/14.2.4/) rule and
+Microsoft's [`DiagramDataPart.ImageParts` API](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.packaging.diagramdatapart.imageparts?view=openxml-2.8.1).
+As an independent package-level check, the Open XML SDK project's immutable
+[`SmartArt1.docx`](https://github.com/dotnet/Open-XML-SDK/blob/cd2b359ef824737edb93f1c6157c19551aae1e52/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/v2FxTestFiles/wordprocessing/smart%20art/SmartArt1.docx)
+fixture at commit
+[`cd2b359ef824737edb93f1c6157c19551aae1e52`](https://github.com/dotnet/Open-XML-SDK/tree/cd2b359ef824737edb93f1c6157c19551aae1e52)
+(SHA-256
+`d67c50ee4f19528c2336f6d2cd4a6892792a15de78548f2d05ae85859ae193a9`)
+contains two Diagram Data relationship parts, each with three direct internal
+Image targets. Its Diagram Data XML uses `a:blip r:embed` bindings. It is a
+WordprocessingML package, so it is not passed to FormulaFence's SpreadsheetML
+reader; it independently verifies the package grammar used by the bounded
+SpreadsheetML boundary.
+
+The independently maintained
+[`JanMarvin/openxlsx-data`](https://github.com/JanMarvin/openxlsx-data) SmartArt
+fixture at immutable commit
+[`b89fc5dec8cc9f03b8026a87cbdffe4f5b785207`](https://github.com/JanMarvin/openxlsx-data/tree/b89fc5dec8cc9f03b8026a87cbdffe4f5b785207),
+[`diagram.xlsx`](https://github.com/JanMarvin/openxlsx-data/blob/b89fc5dec8cc9f03b8026a87cbdffe4f5b785207/diagram.xlsx)
+(SHA-256
+`cd708e028cb575f3b6821e721fde620bf15a307efda9893bbca0b96ec7a3b515`),
+was profiled again. It retained its two worksheet DrawingML parts and three
+SmartArt diagrams, with zero Diagram Data images and no parser warning. This
+checks that the image path does not broaden or perturb ordinary SmartArt
+workbooks.
+
+A controlled SpreadsheetML package added one `a:blip r:embed` relationship
+from a Diagram Data part to a direct internal PNG target. Both archives passed
+`unzip -t`, retained the same member set, and differed in uncompressed bytes
+only for that image payload. The baseline and candidate SHA-256 values were
+respectively
+`411c2fbe5d60a96786cf2123b7b4f65fbb093563ef96fb1f060f9b4ea2f4cffc` and
+`1421949c84dc5c1ed811d996e6c4ffece71fa05c167138263df0d3b53c7d11cc`.
+The baseline profile reported one SmartArt Diagram Data image, one
+fingerprinted image, zero uninspected images, six related relationships, and
+no parser warning. The ordinary cell and sheet inventories stayed equal while
+the CLI emitted exactly one high-severity
+`worksheet_drawing_shape_controls_changed` change with `FF044` and the safe
+`worksheet_drawing_diagram_material_changed` detail. Profile, JSON, Markdown,
+SARIF, and policy output were checked to ensure the image bytes, filename,
+target, and relationship identifier remained absent.
+
+A clean Python virtual environment installed the staged 0.64.0 wheel
+(SHA-256 `f736125207ad789ca8b3c90e035282a0734fe47f0c40c30bf3182fd67a3d8eda`)
+after wheel and source-distribution archive-integrity checks.
+The installed CLI returned `FormulaFence 0.64.0`, reproduced the public
+fixture's two drawing parts / three SmartArt diagrams / zero Diagram Data image
+counts with no warning, and reproduced the controlled fixture's one
+fingerprinted image with no uninspected image. It emitted `FF044` for the
+byte-only image change, and the
+`no_worksheet_drawing_shape_changes` policy exited `1` with `FFP044`.
+
+The suite separately validates transitional and Strict relationship forms,
+coordinated image relationship-ID rewrites, missing and external targets,
+oversized parts, and byte/count budgets. FormulaFence hashes stored bytes only:
+it does not decode or render an image, retrieve a target, or follow a hyperlink,
+second-hop target, or relationship from another SmartArt component kind.
+
 ## Worksheet DrawingML SmartArt graphic frames — 2026-07-26
 
 FormulaFence 0.62.0 was checked against Microsoft's documented

@@ -57,6 +57,8 @@ from .helpers import (
     change_font_definition,
     change_formula_cached_result,
     change_formula_cached_result_with_visible_precedent,
+    change_formula_defined_xlm_environment_information_definition,
+    change_formula_defined_xlm_environment_information_input,
     change_formula_defined_xlm_evaluation_definition,
     change_formula_defined_xlm_evaluation_input,
     change_formula_defined_xlm_get_cell_definition,
@@ -241,6 +243,7 @@ from .helpers import (
     make_filter_visibility_model,
     make_font_model,
     make_formula_cached_result_model,
+    make_formula_defined_xlm_environment_information_model,
     make_formula_defined_xlm_evaluation_model,
     make_formula_defined_xlm_get_cell_model,
     make_formula_defined_xlm_registration_model,
@@ -3577,6 +3580,287 @@ def test_formula_defined_xlm_get_cell_respects_named_lambda_shadowing(tmp_path) 
         "get_cell_formula_cell_count": 0,
         "get_cell_function_count": 0,
         "get_cell_defined_name_count": 0,
+    }
+    assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_formula_defined_xlm_environment_information_calls_are_private_and_traced(
+    tmp_path,
+) -> None:
+    baseline = make_formula_defined_xlm_environment_information_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_defined_xlm_environment_information_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_formula_defined_xlm_environment_information_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_calls = {
+        "present": True,
+        "environment_information_formula_cell_count": 3,
+        "environment_information_function_count": 3,
+        "environment_information_defined_name_count": 3,
+    }
+    assert (
+        baseline_snapshot.formula_defined_xlm_environment_information_calls.to_dict()
+        == expected_calls
+    )
+    assert (
+        baseline_snapshot.formula_defined_xlm_environment_information_calls.environment_information_cells
+        == frozenset({("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")})
+    )
+    assert baseline_snapshot.office_custom_functions.present is False
+    assert baseline_snapshot.xlm_macro_sheets.present is False
+    assert (
+        profile["formula_defined_xlm_environment_information_calls"] == expected_calls
+    )
+    assert "## Formula-defined XLM environment information" in profile_to_markdown(
+        profile
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    environment_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_defined_xlm_environment_information_calls_changed"
+    )
+    environment_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF071"
+    )
+    assert environment_change.details["before"] == expected_calls
+    assert environment_change.details["after"] == expected_calls
+    assert (
+        environment_change.details[
+            "formula_defined_xlm_environment_information_definition_material_changed"
+        ]
+        is True
+    )
+    assert environment_finding.details == environment_change.details
+
+    ff071_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF071"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["formula_defined_xlm_environment_information_calls"]),
+        profile_to_markdown(profile),
+        json.dumps(environment_change.details),
+        json.dumps(environment_finding.to_dict()),
+        json.dumps(ff071_sarif_result),
+    )
+    for sensitive_value in (
+        "FENCE.XLM.GET.WORKBOOK",
+        "PRIVATE-XLM-ENVIRONMENT-INPUT-BASELINE",
+        "GET.WORKBOOK(4,workbook_name)",
+        "GET.WORKBOOK(1,workbook_name)",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_formula_defined_xlm_environment_information_static_inputs_are_guarded(
+    tmp_path,
+) -> None:
+    baseline = make_formula_defined_xlm_environment_information_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_defined_xlm_environment_information_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_formula_defined_xlm_environment_information_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.formula_defined_xlm_environment_information_calls
+        == candidate_snapshot.formula_defined_xlm_environment_information_calls
+    )
+    assert {("Inputs", "B2"), ("Inputs", "B4")} <= set(
+        baseline_snapshot.reverse_dependencies[("Inputs", "A9")]
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    environment_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_defined_xlm_environment_information_calls_changed"
+    )
+    assert (
+        environment_change.details[
+            "formula_defined_xlm_environment_information_static_input_changed"
+        ]
+        is True
+    )
+    assert (
+        environment_change.details[
+            "formula_defined_xlm_environment_information_static_input_change_count"
+        ]
+        == 1
+    )
+    assert "FF071" in {finding.rule_id for finding in report.findings}
+
+
+def test_xlm_environment_information_state_is_not_simulated(tmp_path) -> None:
+    baseline = make_formula_defined_xlm_environment_information_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_defined_xlm_environment_information_model(
+        tmp_path / "candidate.xlsx"
+    )
+    workbook = load_workbook(candidate)
+    workbook.create_sheet("Candidate State")
+    workbook.save(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.formula_defined_xlm_environment_information_calls
+        == candidate_snapshot.formula_defined_xlm_environment_information_calls
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    assert "FF071" not in {finding.rule_id for finding in report.findings}
+
+
+def test_uninvoked_formula_defined_xlm_environment_information_is_profiled(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "stored-name.xlsx")
+
+    def add_stored_environment_call(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.STORED.ENVIRONMENT",
+                attr_text="=GET.DOCUMENT(37)",
+            )
+        )
+
+    rewrite(workbook_path, add_stored_environment_call)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_environment_information_calls.to_dict() == {
+        "present": True,
+        "environment_information_formula_cell_count": 0,
+        "environment_information_function_count": 0,
+        "environment_information_defined_name_count": 1,
+    }
+    assert (
+        snapshot.formula_defined_xlm_environment_information_calls.environment_information_cells
+        == frozenset()
+    )
+
+
+def test_recursive_named_xlm_environment_information_calls_are_cycle_safe(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "recursive.xlsx")
+
+    def add_recursive_environment_call(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.ENVIRONMENT.LOOP",
+                attr_text=(
+                    "=LAMBDA(value,GET.WORKSPACE(2)"
+                    "+FENCE.XLM.ENVIRONMENT.LOOP(value))"
+                ),
+            )
+        )
+        workbook["Model"]["D2"] = "=FENCE.XLM.ENVIRONMENT.LOOP(Inputs!B2)"
+
+    rewrite(workbook_path, add_recursive_environment_call)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_environment_information_calls.to_dict() == {
+        "present": True,
+        "environment_information_formula_cell_count": 1,
+        "environment_information_function_count": 1,
+        "environment_information_defined_name_count": 1,
+    }
+    assert (
+        snapshot.formula_defined_xlm_environment_information_calls.environment_information_cells
+        == frozenset({("Model", "D2")})
+    )
+    assert snapshot.unresolved_reference_tokens[("Model", "D2")] == (
+        "FENCE.XLM.ENVIRONMENT.LOOP",
+    )
+
+
+def test_scoped_xlm_environment_information_calls_follow_local_precedence(
+    tmp_path,
+) -> None:
+    workbook_path = make_scoped_named_lambda_model(tmp_path / "scoped.xlsx")
+    workbook = load_workbook(workbook_path)
+    model = workbook["Model"]
+    report = workbook["Report"]
+    model["D2"] = "=FENCE.XLM.ENVIRONMENT(A2)"
+    report["D2"] = "=Model!FENCE.XLM.ENVIRONMENT(A2)"
+    model.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.ENVIRONMENT",
+            attr_text="=LAMBDA(value,GET.WORKBOOK(4,value))",
+            localSheetId=1,
+        )
+    )
+    workbook.save(workbook_path)
+
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_environment_information_calls.to_dict() == {
+        "present": True,
+        "environment_information_formula_cell_count": 2,
+        "environment_information_function_count": 2,
+        "environment_information_defined_name_count": 1,
+    }
+    assert (
+        snapshot.formula_defined_xlm_environment_information_calls.environment_information_cells
+        == frozenset({("Model", "D2"), ("Report", "D2")})
+    )
+    assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_direct_worksheet_environment_information_is_outside_stored_boundary(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "direct-environment.xlsx")
+
+    def add_direct_environment_call(workbook) -> None:
+        workbook["Model"]["D2"] = "=GET.WORKBOOK(4)"
+
+    rewrite(workbook_path, add_direct_environment_call)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_environment_information_calls.to_dict() == {
+        "present": False,
+        "environment_information_formula_cell_count": 0,
+        "environment_information_function_count": 0,
+        "environment_information_defined_name_count": 0,
+    }
+    assert snapshot.office_custom_functions.present is False
+
+
+def test_xlm_environment_information_respects_named_lambda_shadowing(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "shadowed-environment.xlsx")
+
+    def add_shadowing_lambda(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "GET.WORKSPACE",
+                attr_text="=LAMBDA(value,value)",
+            )
+        )
+        workbook["Model"]["D2"] = "=GET.WORKSPACE(A2)"
+
+    rewrite(workbook_path, add_shadowing_lambda)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_environment_information_calls.to_dict() == {
+        "present": False,
+        "environment_information_formula_cell_count": 0,
+        "environment_information_function_count": 0,
+        "environment_information_defined_name_count": 0,
     }
     assert snapshot.unresolved_reference_tokens == {}
 

@@ -339,6 +339,59 @@ def test_formula_inspection_propagates_formula_defined_xlm_get_cell_calls() -> N
     assert named_formula.unresolved_range_tokens == ()
 
 
+def test_formula_inspection_inventories_xlm_environment_information_calls() -> None:
+    ordinary = inspect_formula(
+        "=GET.WORKBOOK(4)+@GET.WORKSPACE(2)+GET.DOCUMENT(37)"
+    )
+    definition = inspect_formula(
+        "=GET.WORKBOOK(4)+@GET.WORKSPACE(2)+GET.DOCUMENT(37)",
+        inspect_formula_defined_xlm_environment_information_calls=True,
+    )
+    shadowed = inspect_formula(
+        "=GET.WORKBOOK(4)",
+        named_function_references={"get.workbook": ()},
+        inspect_formula_defined_xlm_environment_information_calls=True,
+    )
+
+    assert ordinary.formula_defined_xlm_environment_information_functions == ()
+    assert ordinary.office_custom_function_candidates == ()
+    assert definition.formula_defined_xlm_environment_information_functions == (
+        "GET.WORKBOOK",
+        "GET.WORKSPACE",
+        "GET.DOCUMENT",
+    )
+    assert shadowed.formula_defined_xlm_environment_information_functions == ()
+
+
+def test_formula_inspection_propagates_xlm_environment_information_calls() -> None:
+    named_lambda = inspect_formula(
+        "=FENCE.ENVIRONMENT(A1)",
+        named_function_references={"fence.environment": ()},
+        named_function_formula_defined_xlm_environment_information_functions={
+            "fence.environment": ("GET.WORKBOOK", "GET.WORKSPACE")
+        },
+    )
+    named_formula = inspect_formula(
+        "=FENCE.DIRECT",
+        named_references={"fence.direct": ()},
+        named_formula_defined_xlm_environment_information_functions={
+            "fence.direct": ("GET.DOCUMENT",)
+        },
+    )
+
+    assert named_lambda.formula_defined_xlm_environment_information_functions == (
+        "GET.WORKBOOK",
+        "GET.WORKSPACE",
+    )
+    assert named_lambda.references == (
+        ParsedReference(None, 1, 1, 1, 1, raw="A1"),
+    )
+    assert named_formula.formula_defined_xlm_environment_information_functions == (
+        "GET.DOCUMENT",
+    )
+    assert named_formula.unresolved_range_tokens == ()
+
+
 def test_formula_inspection_recognises_a_known_named_constant() -> None:
     inspection = inspect_formula("=StaticRate", {"staticrate": ()})
 

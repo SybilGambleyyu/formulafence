@@ -670,6 +670,28 @@ review prompt, not proof of an error.
   comments/protection, or simulate other Excel state. Direct worksheet GET.CELL
   formulas and raw XLM macro-sheet parts are intentionally outside this narrow
   boundary; dynamic/unresolved inputs remain static-coverage limits.
+- Selected legacy XLM environment-information calls GET.WORKBOOK,
+  GET.WORKSPACE, and GET.DOCUMENT are separately inventoried only when stored
+  in formula-defined names and named LAMBDA bodies, then propagated through
+  nested and sheet-local names to invoking formula cells. Microsoft's [C API
+  reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel)
+  identifies workspace information functions such as GET.CELL and
+  GET.WORKBOOK; its [xlfFree
+  example](https://learn.microsoft.com/en-us/office/client-developer/excel/xlfree)
+  demonstrates GET.WORKSPACE returning platform information, and its [expression
+  evaluation reference](https://learn.microsoft.com/en-us/office/client-developer/excel/excel-worksheet-and-expression-evaluation)
+  identifies GET.DOCUMENT as an XLM information function. A material stored
+  definition, invocation, or ordinary static argument-input change emits
+  FF071; enable no_formula_defined_xlm_environment_information_changes for
+  FFP071. Public output exposes only invoking-cell, call, and relevant
+  definition counts; information types, references, formulas, arguments,
+  locations, and name identities remain private. FormulaFence does not
+  evaluate a call, determine its information type, resolve a dynamic reference,
+  or simulate workbook/workspace/document/client/add-in/printer state. It does
+  not assert that a state-only workbook change alters a stored call. Direct
+  worksheet calls and raw XLM macro-sheet parts remain intentionally outside
+  this narrow boundary; dynamic/unresolved inputs remain static-coverage
+  limits.
 - Office 2010 worksheet sparklines live in `x14:sparklineGroups` worksheet
   extensions, outside ordinary cell values. A group can be retargeted, moved,
   or have its type, axes, display, marker, line-weight, or colour controls

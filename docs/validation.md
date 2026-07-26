@@ -5,6 +5,65 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Formula-defined XLM environment-information boundary — 2026-07-26
+
+FormulaFence 0.75.0 was checked against Microsoft's [Excel C API
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel),
+which identifies workspace information functions such as GET.CELL and
+GET.WORKBOOK. Microsoft's [xlfFree
+example](https://learn.microsoft.com/en-us/office/client-developer/excel/xlfree)
+uses GET.WORKSPACE to return platform information, and its [expression-evaluation
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/excel-worksheet-and-expression-evaluation)
+identifies GET.DOCUMENT as an XLM information function. The scope is
+deliberately narrow: FormulaFence records those three calls only when stored in
+a formula-defined name or named LAMBDA; direct worksheet formulas and raw XLM
+macro-sheet program parts remain separate boundaries.
+
+Four fresh, controlled .xlsx artifacts were generated without opening Excel.
+The baseline (SHA-256
+`fba8cbcf6d3ca7c5f565e717a55affecd4e3fcb574947a2fe906f2778da5adcf`)
+uses a formula-defined value, a named LAMBDA, and one stored call for each of
+GET.WORKBOOK, GET.WORKSPACE, and GET.DOCUMENT. Its public ledger reports three
+invoking formula cells, three information calls, and three relevant
+formula-defined names; it reports no namespaced custom-function candidate or
+raw XLM macro-sheet surface. Changing only the private GET.WORKBOOK definition
+(SHA-256
+`acf35574cb682f3bf1694218119b018481b5f84e917151536a8bbf125e057b27`)
+kept every public count fixed while emitting FF071 with the private
+definition-material flag. Changing only a shared statically visible input
+(SHA-256
+`250d0ebcc576d4b8239fe09ae67b615ad0044daf66e1573e8e446ee0a4d1611d`)
+kept the environment-information snapshot equal and emitted FF071 with a
+static-input count of one.
+
+The state-only candidate (SHA-256
+`2f04901502793638955c867143e46d6877caf6547579df3618e8fdda8463df5e`)
+adds one worksheet while retaining the same stored calls. It produced no
+FF071 or FFP071 and passed the narrow policy, proving the implementation does
+not claim to evaluate an information type or simulate workbook state. The
+suite separately covers uninvoked stored names, recursive named LAMBDAs,
+sheet-local precedence, native-name shadowing, and direct worksheet calls
+remaining outside the boundary. The full suite passed with 511 tests. The new
+policy caused formulafence check to exit 1 and emit both FF071 and FFP071 for
+the definition and static-input candidates.
+
+The dedicated formula_defined_xlm_environment_information_calls profile object
+and dedicated FF071/FFP071 SARIF results excluded controlled name identities,
+arguments, and input values. Ordinary defined-name and semantic-diff output
+deliberately retains normal reviewer context, so that redaction claim is
+limited to the dedicated ledger and policy-facing results. No formula or
+information call was evaluated, no macro was run, and no workbook, workspace,
+document, client, add-in, or printer state was simulated during validation.
+
+The staged formulafence-0.75.0-py3-none-any.whl (SHA-256
+`f2229c04b4934d6a063528768eb1f5a6b6c9a65fa0e2c3ca33b32825af1f08ea`)
+was installed into a fresh virtual environment with its declared dependencies.
+Its CLI returned FormulaFence 0.75.0; the generated starter policy retained
+`no_formula_defined_xlm_environment_information_changes: true`, and the
+packaged check emitted both `FF071` and `FFP071` for the definition and
+static-input candidates. The state-only candidate again passed without either
+rule. The packaged profile and dedicated SARIF results remained redacted.
+
 ## Formula-defined XLM GET.CELL boundary — 2026-07-26
 
 FormulaFence 0.74.0 was checked against Microsoft's [Excel C API

@@ -64,6 +64,7 @@ from formulafence.models import (
     FontSnapshot,
     FormulaCachedResultEntry,
     FormulaCachedResultSnapshot,
+    FormulaDefinedXlmEnvironmentInformationSnapshot,
     FormulaDefinedXlmEvaluationSnapshot,
     FormulaDefinedXlmGetCellSnapshot,
     FormulaDefinedXlmRegistrationSnapshot,
@@ -41423,6 +41424,11 @@ def _named_reference_maps(
     dict[str, tuple[str, ...]],
     dict[str, dict[str, tuple[str, ...]]],
     tuple[tuple[str, str], ...],
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
+    tuple[tuple[str, str], ...],
 ]:
     """Build dependency and sensitive-call maps for formula-defined names.
 
@@ -41687,6 +41693,13 @@ def _named_reference_maps(
         identity: f"FORMULAFENCE_FORMULA_DEFINED_XLM_GET_CELL_MARKER_{index}"
         for index, identity in enumerate(definition_identities)
     }
+    formula_defined_xlm_environment_information_markers = {
+        identity: (
+            "FORMULAFENCE_FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_MARKER_"
+            f"{index}"
+        )
+        for index, identity in enumerate(definition_identities)
+    }
     identities_by_marker = {
         marker: identity
         for markers in (
@@ -41696,6 +41709,7 @@ def _named_reference_maps(
             formula_defined_xlm_registration_markers,
             formula_defined_xlm_evaluation_markers,
             formula_defined_xlm_get_cell_markers,
+            formula_defined_xlm_environment_information_markers,
         )
         for identity, marker in markers.items()
     }
@@ -41750,6 +41764,9 @@ def _named_reference_maps(
         tuple[str | None, str], tuple[str, ...]
     ] = {}
     direct_formula_defined_xlm_get_cell_functions: dict[
+        tuple[str | None, str], tuple[str, ...]
+    ] = {}
+    direct_formula_defined_xlm_environment_information_functions: dict[
         tuple[str | None, str], tuple[str, ...]
     ] = {}
     definition_dependencies: dict[
@@ -41812,9 +41829,20 @@ def _named_reference_maps(
                     definition.scope, formula_defined_xlm_get_cell_markers
                 )
             ),
+            named_formula_defined_xlm_environment_information_functions=(
+                visible_named_markers(
+                    definition.scope, formula_defined_xlm_environment_information_markers
+                )
+            ),
+            named_function_formula_defined_xlm_environment_information_functions=(
+                visible_named_function_markers(
+                    definition.scope, formula_defined_xlm_environment_information_markers
+                )
+            ),
             inspect_formula_defined_xlm_registrations=True,
             inspect_formula_defined_xlm_evaluations=True,
             inspect_formula_defined_xlm_get_cell_calls=True,
+            inspect_formula_defined_xlm_environment_information_calls=True,
         )
         identity = identity_for(definition)
         direct_external_action_functions[identity] = tuple(
@@ -41847,6 +41875,11 @@ def _named_reference_maps(
             for function in inspection.formula_defined_xlm_get_cell_functions
             if function not in identities_by_marker
         )
+        direct_formula_defined_xlm_environment_information_functions[identity] = tuple(
+            function
+            for function in inspection.formula_defined_xlm_environment_information_functions
+            if function not in identities_by_marker
+        )
         definition_dependencies[identity] = tuple(
             dict.fromkeys(
                 identities_by_marker[marker]
@@ -41857,6 +41890,7 @@ def _named_reference_maps(
                     + inspection.formula_defined_xlm_registration_functions
                     + inspection.formula_defined_xlm_evaluation_functions
                     + inspection.formula_defined_xlm_get_cell_functions
+                    + inspection.formula_defined_xlm_environment_information_functions
                 )
                 if marker in identities_by_marker
             )
@@ -41925,6 +41959,9 @@ def _named_reference_maps(
     component_direct_formula_defined_xlm_get_cell_functions: dict[
         int, tuple[str, ...]
     ] = {}
+    component_direct_formula_defined_xlm_environment_information_functions: dict[
+        int, tuple[str, ...]
+    ] = {}
     for component, members in enumerate(components):
         component_direct_external_action_functions[component] = tuple(
             function
@@ -41955,6 +41992,15 @@ def _named_reference_maps(
             function
             for identity in members
             for function in direct_formula_defined_xlm_get_cell_functions[identity]
+        )
+        component_direct_formula_defined_xlm_environment_information_functions[
+            component
+        ] = tuple(
+            function
+            for identity in members
+            for function in direct_formula_defined_xlm_environment_information_functions[
+                identity
+            ]
         )
         component_dependencies[component] = tuple(
             dependency_component
@@ -41988,6 +42034,9 @@ def _named_reference_maps(
         int, tuple[str, ...]
     ] = {}
     component_formula_defined_xlm_get_cell_functions: dict[int, tuple[str, ...]] = {}
+    component_formula_defined_xlm_environment_information_functions: dict[
+        int, tuple[str, ...]
+    ] = {}
     while ready_components:
         component = ready_components.pop(0)
         component_external_action_functions[component] = (
@@ -42044,6 +42093,20 @@ def _named_reference_maps(
                 ]
             )
         )
+        component_formula_defined_xlm_environment_information_functions[component] = (
+            component_direct_formula_defined_xlm_environment_information_functions[
+                component
+            ]
+            + tuple(
+                function
+                for dependency in component_dependencies[component]
+                for function in (
+                    component_formula_defined_xlm_environment_information_functions[
+                        dependency
+                    ]
+                )
+            )
+        )
         for dependent in sorted(component_dependents[component]):
             remaining_component_dependencies[dependent].remove(component)
             if not remaining_component_dependencies[dependent]:
@@ -42072,6 +42135,12 @@ def _named_reference_maps(
     }
     formula_defined_xlm_get_cell_functions_by_definition = {
         identity: component_formula_defined_xlm_get_cell_functions[component]
+        for identity, component in component_by_definition.items()
+    }
+    formula_defined_xlm_environment_information_functions_by_definition = {
+        identity: component_formula_defined_xlm_environment_information_functions[
+            component
+        ]
         for identity, component in component_by_definition.items()
     }
 
@@ -42516,6 +42585,86 @@ def _named_reference_maps(
         )
     )
 
+    global_formula_defined_xlm_environment_information_result: dict[
+        str, tuple[str, ...]
+    ] = {
+        key: formula_defined_xlm_environment_information_functions_by_definition[
+            identity_for(definition)
+        ]
+        for key, definition in global_formulas.items()
+    }
+    for scope, definitions in local_formulas.items():
+        for key, definition in definitions.items():
+            global_formula_defined_xlm_environment_information_result[
+                _qualified_name_key(sheet_titles[scope], key)
+            ] = formula_defined_xlm_environment_information_functions_by_definition[
+                identity_for(definition)
+            ]
+
+    local_formula_defined_xlm_environment_information_result: dict[
+        str, dict[str, tuple[str, ...]]
+    ] = {}
+    for scope, definitions in local_formulas.items():
+        functions = {
+            key: formula_defined_xlm_environment_information_functions_by_definition[
+                identity_for(definition)
+            ]
+            for key, definition in definitions.items()
+        }
+        if functions:
+            local_formula_defined_xlm_environment_information_result[scope] = functions
+
+    global_function_formula_defined_xlm_environment_information_result: dict[
+        str, tuple[str, ...]
+    ] = {
+        key: formula_defined_xlm_environment_information_functions_by_definition[
+            identity_for(definition)
+        ]
+        for key, definition in global_lambdas.items()
+    }
+    for scope, definitions in local_lambdas.items():
+        for key, definition in definitions.items():
+            global_function_formula_defined_xlm_environment_information_result[
+                _qualified_name_key(sheet_titles[scope], key)
+            ] = formula_defined_xlm_environment_information_functions_by_definition[
+                identity_for(definition)
+            ]
+
+    local_function_formula_defined_xlm_environment_information_result: dict[
+        str, dict[str, tuple[str, ...]]
+    ] = {}
+    for scope, definitions in local_lambdas.items():
+        functions = {
+            key: formula_defined_xlm_environment_information_functions_by_definition[
+                identity_for(definition)
+            ]
+            for key, definition in definitions.items()
+        }
+        if functions:
+            local_function_formula_defined_xlm_environment_information_result[
+                scope
+            ] = functions
+
+    formula_defined_xlm_environment_information_definition_entries = tuple(
+        sorted(
+            (
+                repr((definition.scope, definition.key)),
+                repr(
+                    (
+                        formula_defined_xlm_environment_information_functions_by_definition[
+                            identity_for(definition)
+                        ],
+                        definition.formula,
+                    )
+                ),
+            )
+            for definition in all_definitions
+            if formula_defined_xlm_environment_information_functions_by_definition[
+                identity_for(definition)
+            ]
+        )
+    )
+
     return (
         global_result,
         local_result,
@@ -42550,6 +42699,11 @@ def _named_reference_maps(
         global_function_formula_defined_xlm_get_cell_result,
         local_function_formula_defined_xlm_get_cell_result,
         formula_defined_xlm_get_cell_definition_entries,
+        global_formula_defined_xlm_environment_information_result,
+        local_formula_defined_xlm_environment_information_result,
+        global_function_formula_defined_xlm_environment_information_result,
+        local_function_formula_defined_xlm_environment_information_result,
+        formula_defined_xlm_environment_information_definition_entries,
     )
 
 
@@ -42892,6 +43046,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     formula_defined_xlm_get_cell_cells: set[CellKey] = set()
     formula_defined_xlm_get_cell_function_count = 0
     formula_defined_xlm_get_cell_invocation_entries: list[tuple[str, str]] = []
+    formula_defined_xlm_environment_information_cells: set[CellKey] = set()
+    formula_defined_xlm_environment_information_function_count = 0
+    formula_defined_xlm_environment_information_invocation_entries: list[
+        tuple[str, str]
+    ] = []
     broken_references: set[CellKey] = set()
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = {}
@@ -42937,6 +43096,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         global_named_function_formula_defined_xlm_get_cell_functions,
         local_named_function_formula_defined_xlm_get_cell_functions,
         formula_defined_xlm_get_cell_definition_entries,
+        global_named_formula_defined_xlm_environment_information_functions,
+        local_named_formula_defined_xlm_environment_information_functions,
+        global_named_function_formula_defined_xlm_environment_information_functions,
+        local_named_function_formula_defined_xlm_environment_information_functions,
+        formula_defined_xlm_environment_information_definition_entries,
     ) = _named_reference_maps(workbook, structured_tables, sheet_order)
 
     for worksheet in workbook.worksheets:
@@ -43020,6 +43184,18 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 worksheet.title.casefold(), {}
             ),
         }
+        named_formula_defined_xlm_environment_information_functions = {
+            **global_named_formula_defined_xlm_environment_information_functions,
+            **local_named_formula_defined_xlm_environment_information_functions.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
+        named_function_formula_defined_xlm_environment_information_functions = {
+            **global_named_function_formula_defined_xlm_environment_information_functions,
+            **local_named_function_formula_defined_xlm_environment_information_functions.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
         nonempty_cells = 0
         formula_cells = 0
         # _cells lets us avoid traversing a sheet's whole used rectangle when a
@@ -43089,6 +43265,12 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 ),
                 named_function_formula_defined_xlm_get_cell_functions=(
                     named_function_formula_defined_xlm_get_cell_functions
+                ),
+                named_formula_defined_xlm_environment_information_functions=(
+                    named_formula_defined_xlm_environment_information_functions
+                ),
+                named_function_formula_defined_xlm_environment_information_functions=(
+                    named_function_formula_defined_xlm_environment_information_functions
                 ),
             )
             if inspection.unresolved_range_tokens:
@@ -43196,6 +43378,24 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                         repr(
                             (
                                 inspection.formula_defined_xlm_get_cell_functions,
+                                snapshot.formula,
+                            )
+                        ),
+                    )
+                )
+            if inspection.formula_defined_xlm_environment_information_functions:
+                formula_defined_xlm_environment_information_cells.add(
+                    snapshot.location
+                )
+                formula_defined_xlm_environment_information_function_count += len(
+                    inspection.formula_defined_xlm_environment_information_functions
+                )
+                formula_defined_xlm_environment_information_invocation_entries.append(
+                    (
+                        f"{snapshot.location[0]}!{snapshot.location[1]}",
+                        repr(
+                            (
+                                inspection.formula_defined_xlm_environment_information_functions,
                                 snapshot.formula,
                             )
                         ),
@@ -43369,6 +43569,32 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         ),
         get_cell_cells=frozenset(formula_defined_xlm_get_cell_cells),
     )
+    formula_defined_xlm_environment_information_calls = (
+        FormulaDefinedXlmEnvironmentInformationSnapshot(
+            environment_information_formula_cell_count=len(
+                formula_defined_xlm_environment_information_cells
+            ),
+            environment_information_function_count=(
+                formula_defined_xlm_environment_information_function_count
+            ),
+            environment_information_defined_name_count=len(
+                formula_defined_xlm_environment_information_definition_entries
+            ),
+            invocation_signature=_private_external_data_signature(
+                tuple(
+                    sorted(
+                        formula_defined_xlm_environment_information_invocation_entries
+                    )
+                )
+            ),
+            definition_signature=_private_external_data_signature(
+                formula_defined_xlm_environment_information_definition_entries
+            ),
+            environment_information_cells=frozenset(
+                formula_defined_xlm_environment_information_cells
+            ),
+        )
+    )
 
     return WorkbookSnapshot(
         path=source,
@@ -43428,6 +43654,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         formula_defined_xlm_registrations=formula_defined_xlm_registrations,
         formula_defined_xlm_evaluations=formula_defined_xlm_evaluations,
         formula_defined_xlm_get_cell_calls=formula_defined_xlm_get_cell_calls,
+        formula_defined_xlm_environment_information_calls=(
+            formula_defined_xlm_environment_information_calls
+        ),
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
@@ -43542,6 +43771,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "formula_defined_xlm_get_cell_calls": (
             snapshot.formula_defined_xlm_get_cell_calls.profile_dict()
         ),
+        "formula_defined_xlm_environment_information_calls": (
+            snapshot.formula_defined_xlm_environment_information_calls.profile_dict()
+        ),
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
@@ -43615,6 +43847,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             ),
             "has_formula_defined_xlm_get_cell_calls": (
                 snapshot.formula_defined_xlm_get_cell_calls.present
+            ),
+            "has_formula_defined_xlm_environment_information_calls": (
+                snapshot.formula_defined_xlm_environment_information_calls.present
             ),
             "has_ribbon_customization": snapshot.ribbon_customization.present,
             "has_office_web_addins": snapshot.office_web_addins.present,

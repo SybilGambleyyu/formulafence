@@ -1218,6 +1218,55 @@ class FormulaDefinedXlmGetCellSnapshot:
 
 
 @dataclass(frozen=True)
+class FormulaDefinedXlmEnvironmentInformationSnapshot:
+    """Private ledger for selected XLM environment-information calls.
+
+    Legacy GET.WORKBOOK, GET.WORKSPACE, and GET.DOCUMENT calls can observe
+    workbook, application/workspace, or document state outside ordinary cell
+    dependencies. FormulaFence inventories only calls stored in a
+    formula-defined name or named LAMBDA, preserving their stored syntax and
+    definition chain privately. It records worksheet cells that statically
+    invoke a stored call, but does not evaluate it, determine its information
+    type, resolve a dynamic reference, or expose formulas, arguments,
+    locations, or defined-name identities in public output.
+    """
+
+    environment_information_formula_cell_count: int = 0
+    environment_information_function_count: int = 0
+    environment_information_defined_name_count: int = 0
+    invocation_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    environment_information_cells: frozenset[CellKey] = field(
+        default_factory=frozenset, repr=False
+    )
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.environment_information_formula_cell_count
+            or self.environment_information_defined_name_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate counts without environment or formula material."""
+        return {
+            "present": self.present,
+            "environment_information_formula_cell_count": (
+                self.environment_information_formula_cell_count
+            ),
+            "environment_information_function_count": (
+                self.environment_information_function_count
+            ),
+            "environment_information_defined_name_count": (
+                self.environment_information_defined_name_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class XlmMacroSheetSnapshot:
     """Safe aggregate of raw Excel 4.0 / XLM macro-sheet package parts.
 
@@ -3914,6 +3963,9 @@ class WorkbookSnapshot:
     formula_defined_xlm_get_cell_calls: FormulaDefinedXlmGetCellSnapshot = field(
         default_factory=FormulaDefinedXlmGetCellSnapshot
     )
+    formula_defined_xlm_environment_information_calls: (
+        FormulaDefinedXlmEnvironmentInformationSnapshot
+    ) = field(default_factory=FormulaDefinedXlmEnvironmentInformationSnapshot)
     xlm_macro_sheets: XlmMacroSheetSnapshot = field(
         default_factory=XlmMacroSheetSnapshot
     )
@@ -4451,6 +4503,18 @@ class WorkbookSnapshot:
             ),
             "has_formula_defined_xlm_get_cell_calls": (
                 self.formula_defined_xlm_get_cell_calls.present
+            ),
+            "formula_defined_xlm_environment_information_formula_cell_count": (
+                self.formula_defined_xlm_environment_information_calls.environment_information_formula_cell_count
+            ),
+            "formula_defined_xlm_environment_information_function_count": (
+                self.formula_defined_xlm_environment_information_calls.environment_information_function_count
+            ),
+            "formula_defined_xlm_environment_information_defined_name_count": (
+                self.formula_defined_xlm_environment_information_calls.environment_information_defined_name_count
+            ),
+            "has_formula_defined_xlm_environment_information_calls": (
+                self.formula_defined_xlm_environment_information_calls.present
             ),
             "xlm_macro_sheet_count": self.xlm_macro_sheets.macro_sheet_count,
             "xlm_macro_formula_cell_count": self.xlm_macro_sheets.formula_cell_count,

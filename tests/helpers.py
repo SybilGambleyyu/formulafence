@@ -653,6 +653,64 @@ def change_formula_defined_xlm_get_cell_input(path: Path) -> Path:
     return path
 
 
+def make_formula_defined_xlm_environment_information_model(path: Path) -> Path:
+    """Create inert legacy environment-information calls in defined formulas.
+
+    The workbook is never opened in Excel. The controlled stored formulas prove
+    FormulaFence inventories and compares private call material without
+    evaluating a call or simulating its workbook, workspace, or document state.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Formula-defined XLM environment-information controls"
+    inputs["A9"] = "PRIVATE-XLM-ENVIRONMENT-INPUT-BASELINE"
+    inputs["B2"] = "=FENCE.XLM.GET.WORKBOOK(A9)"
+    inputs["B3"] = "=FENCE.XLM.GET.WORKSPACE"
+    inputs["B4"] = "=FENCE.XLM.GET.DOCUMENT(A9)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.GET.WORKBOOK",
+            attr_text="=LAMBDA(workbook_name,GET.WORKBOOK(4,workbook_name))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.GET.WORKSPACE",
+            attr_text="=GET.WORKSPACE(2)",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.GET.DOCUMENT",
+            attr_text="=LAMBDA(document_name,GET.DOCUMENT(37,document_name))",
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_environment_information_definition(path: Path) -> Path:
+    """Change private XLM environment-information material without new counts."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.XLM.GET.WORKBOOK"]
+    if definition.attr_text != "=LAMBDA(workbook_name,GET.WORKBOOK(4,workbook_name))":
+        raise ValueError(
+            "Fixture does not contain the expected XLM environment-information call"
+        )
+    definition.attr_text = "=LAMBDA(workbook_name,GET.WORKBOOK(1,workbook_name))"
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_environment_information_input(path: Path) -> Path:
+    """Change a static input used by a formula-defined XLM environment call."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-XLM-ENVIRONMENT-INPUT-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_python_in_excel_model(path: Path) -> Path:
     """Create a workbook with stored Python-in-Excel package code.
 

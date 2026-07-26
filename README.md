@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.74.0/formulafence-0.74.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.75.0/formulafence-0.75.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -121,6 +121,7 @@ rules:
   no_formula_defined_xlm_registration_changes: true
   no_formula_defined_xlm_evaluation_changes: true
   no_formula_defined_xlm_get_cell_changes: true
+  no_formula_defined_xlm_environment_information_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -150,6 +151,7 @@ allowed_changes:
 | Namespaced Office custom-function boundary | Material namespaced formula-call candidates and statically visible inputs, without loading an add-in, executing a formula, or exposing names and arguments in the private ledger |
 | Formula-defined XLM registration boundary | Stored legacy XLM `REGISTER` calls in formula-defined names/named `LAMBDA`s and their statically visible inputs, without executing a macro, evaluating a formula, or loading a DLL/XLL |
 | Formula-defined XLM cell-information boundary | Stored legacy XLM GET.CELL calls in formula-defined names/named LAMBDAs and their statically visible inputs, without evaluating a call, resolving dynamic references, or simulating Excel state |
+| Formula-defined XLM environment-information boundary | Stored legacy XLM GET.WORKBOOK, GET.WORKSPACE, and GET.DOCUMENT calls in formula-defined names/named LAMBDAs and their statically visible inputs, without evaluating a call, resolving dynamic references, or simulating Excel state |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
 | CI output | Deterministic JSON, reviewer-friendly Markdown, and SARIF |
@@ -519,6 +521,34 @@ not resolve dynamic references, render formatting or display text, inspect
 comments/protection, or simulate Excel state. Direct worksheet GET.CELL calls
 and raw XLM macro-sheet parts are deliberately outside this narrow
 stored-definition boundary. Enable no_formula_defined_xlm_get_cell_changes to
+block this boundary in CI.
+
+FormulaFence also keeps a separate **formula-defined XLM environment-information
+ledger** for selected GET.WORKBOOK, GET.WORKSPACE, and GET.DOCUMENT calls
+stored in formula-defined names and named LAMBDA bodies. Microsoft's [C API
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel)
+identifies workspace information functions such as GET.CELL and GET.WORKBOOK;
+the [GET.WORKSPACE example](https://learn.microsoft.com/en-us/office/client-developer/excel/xlfree)
+shows that it can return platform information, and the [expression-evaluation
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/excel-worksheet-and-expression-evaluation)
+documents GET.DOCUMENT as an XLM information function. A stored call can
+therefore depend on workbook, workspace/client, or document state outside an
+ordinary formula's visible cell dependencies.
+
+The ledger propagates selected stored calls through nested and sheet-local
+formula names to invoking cells. Profiles and FF071/FFP071 details expose only
+invocation-cell, call, and relevant formula-defined-name counts; information
+types, references, formulas, arguments, cells, and name identities remain
+private. Same-count definition or invocation changes, uninvoked stored names,
+and ordinary edits that reach a stored call through a statically visible
+argument edge remain reviewable through private signatures.
+
+FormulaFence does not determine which information type is requested, resolve a
+dynamic reference, simulate workbook/workspace/document/client/add-in/printer
+state, or infer dependencies from that state. A state-only workbook change is
+not asserted to change a stored call. Direct worksheet calls and raw XLM
+macro-sheet parts are deliberately outside this narrow stored-definition
+boundary. Enable no_formula_defined_xlm_environment_information_changes to
 block this boundary in CI.
 
 FormulaFence separately inventories **Excel 4.0 / XLM macro sheets**. Unlike

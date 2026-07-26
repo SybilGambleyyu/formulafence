@@ -586,6 +586,24 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     formula_defined_xlm_get_cell_calls = profile[
         "formula_defined_xlm_get_cell_calls"
     ]
+    formula_defined_xlm_environment_information_calls = profile[
+        "formula_defined_xlm_environment_information_calls"
+    ]
+    environment_information_formula_cell_count = (
+        formula_defined_xlm_environment_information_calls[
+            "environment_information_formula_cell_count"
+        ]
+    )
+    environment_information_function_count = (
+        formula_defined_xlm_environment_information_calls[
+            "environment_information_function_count"
+        ]
+    )
+    environment_information_defined_name_count = (
+        formula_defined_xlm_environment_information_calls[
+            "environment_information_defined_name_count"
+        ]
+    )
     formula_external_action_call_count = sum(
         (
             formula_external_actions["hyperlink_function_count"],
@@ -1083,6 +1101,37 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     "references, or simulate formatting, display, protection, comments, "
                     "or other Excel state. Direct worksheet GET.CELL calls and raw XLM "
                     "macro-sheet parts are outside this narrow boundary."
+                ),
+            ]
+        )
+    if formula_defined_xlm_environment_information_calls["present"]:
+        lines.extend(
+            [
+                "",
+                "## Formula-defined XLM environment information",
+                "",
+                (
+                    "- **Invoking formula cells / information calls / formula-defined names:** "
+                    f"{environment_information_formula_cell_count} / "
+                    f"{environment_information_function_count} / "
+                    f"{environment_information_defined_name_count}"
+                ),
+                (
+                    "FormulaFence inventories selected XLM GET.WORKBOOK, "
+                    "GET.WORKSPACE, and GET.DOCUMENT calls stored in "
+                    "formula-defined names and named LAMBDAs, then records cells "
+                    "that statically invoke them. Information types, references, "
+                    "formulas, arguments, locations, and name identities are "
+                    "compared privately and intentionally omitted; no formula is "
+                    "evaluated."
+                ),
+                (
+                    "Only ordinary static argument edges are traced. FormulaFence "
+                    "does not determine which information type is requested, "
+                    "resolve dynamic references, or simulate workbook, workspace, "
+                    "document, client, add-in, printer, or other Excel state. "
+                    "Direct worksheet calls and raw XLM macro-sheet parts are "
+                    "outside this narrow boundary."
                 ),
             ]
         )

@@ -64,6 +64,7 @@ from formulafence.models import (
     FontSnapshot,
     FormulaCachedResultEntry,
     FormulaCachedResultSnapshot,
+    FormulaExternalActionSnapshot,
     IgnoredErrorSnapshot,
     LegacyCommentSnapshot,
     NamedSheetViewSnapshot,
@@ -41411,6 +41412,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     reverse_dependencies: dict[CellKey, set[CellKey]] = defaultdict(set)
     range_dependencies: list[RangeDependency] = []
     external_references: set[CellKey] = set()
+    formula_external_action_cells: set[CellKey] = set()
+    formula_external_action_counts: Counter[str] = Counter()
+    formula_external_action_entries: list[tuple[str, str]] = []
     broken_references: set[CellKey] = set()
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = {}
@@ -41482,6 +41486,15 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             if inspection.dynamic_reference_functions:
                 dynamic_reference_functions[snapshot.location] = (
                     inspection.dynamic_reference_functions
+                )
+            if inspection.external_action_functions:
+                formula_external_action_cells.add(snapshot.location)
+                formula_external_action_counts.update(inspection.external_action_functions)
+                formula_external_action_entries.append(
+                    (
+                        f"{snapshot.location[0]}!{snapshot.location[1]}",
+                        repr((inspection.external_action_functions, snapshot.formula)),
+                    )
                 )
             if inspection.three_d_reference_tokens:
                 three_d_reference_tokens[snapshot.location] = inspection.three_d_reference_tokens
@@ -41588,6 +41601,17 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         pivot_cache_refresh_controls=external_data_metadata.pivot_caches,
         external_link_packages=external_data_metadata.external_link_packages,
         external_relationships=external_relationship_metadata.relationships,
+        formula_external_actions=FormulaExternalActionSnapshot(
+            formula_external_action_cell_count=len(formula_external_action_cells),
+            hyperlink_function_count=formula_external_action_counts["HYPERLINK"],
+            webservice_function_count=formula_external_action_counts["WEBSERVICE"],
+            image_function_count=formula_external_action_counts["IMAGE"],
+            rtd_function_count=formula_external_action_counts["RTD"],
+            action_signature=_private_external_data_signature(
+                tuple(sorted(formula_external_action_entries))
+            ),
+            action_cells=frozenset(formula_external_action_cells),
+        ),
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
@@ -41687,6 +41711,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         ],
         "external_link_packages": snapshot.external_link_packages.profile_dict(),
         "external_relationships": snapshot.external_relationships.profile_dict(),
+        "formula_external_actions": snapshot.formula_external_actions.profile_dict(),
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
@@ -41747,6 +41772,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_vba": snapshot.macro_hash is not None,
             "has_xlm_macro_sheets": snapshot.xlm_macro_sheets.present,
             "has_external_relationships": snapshot.external_relationships.present,
+            "has_formula_external_actions": snapshot.formula_external_actions.present,
             "has_ribbon_customization": snapshot.ribbon_customization.present,
             "has_office_web_addins": snapshot.office_web_addins.present,
             "has_pivot_table_definitions": snapshot.pivot_table_definitions.present,

@@ -16,6 +16,11 @@ from openpyxl.utils.cell import (
 MAX_EXCEL_ROW = 1_048_576
 MAX_EXCEL_COLUMN = 16_384
 _DYNAMIC_REFERENCE_FUNCTIONS = {"INDIRECT", "OFFSET"}
+# These functions can cause a workbook to navigate a reviewer, request content,
+# or bind to a host-side data provider.  HYPERLINK also supports in-workbook
+# destinations, but its link location may be dynamically computed, so retain
+# every call as a reviewable action surface rather than evaluating arguments.
+_EXTERNAL_ACTION_FUNCTIONS = {"HYPERLINK", "WEBSERVICE", "IMAGE", "RTD"}
 
 _CELL_REFERENCE = re.compile(
     r"(?<![A-Z0-9_])(?P<column_absolute>\$?)(?P<column>[A-Z]{1,3})"
@@ -83,11 +88,12 @@ class ParsedReference:
 
 @dataclass(frozen=True)
 class FormulaInspection:
-    """Static-reference coverage collected from one formula without evaluation."""
+    """Static formula coverage collected from one formula without evaluation."""
 
     references: tuple[ParsedReference, ...]
     unresolved_range_tokens: tuple[str, ...]
     dynamic_reference_functions: tuple[str, ...]
+    external_action_functions: tuple[str, ...] = ()
     three_d_reference_tokens: tuple[str, ...] = ()
     tokenization_failed: bool = False
     spill_reference_tokens: tuple[str, ...] = ()
@@ -1235,6 +1241,7 @@ def inspect_formula(
     references: list[ParsedReference] = []
     unresolved_range_tokens: list[str] = []
     dynamic_reference_functions: list[str] = []
+    external_action_functions: list[str] = []
     three_d_reference_tokens: list[str] = []
     spill_reference_tokens: list[str] = list(literal_spill_tokens)
     implicit_intersection_tokens: list[str] = list(literal_implicit_intersection_tokens)
@@ -1284,6 +1291,11 @@ def inspect_formula(
             function_name = _function_name(token)
             if function_name in _DYNAMIC_REFERENCE_FUNCTIONS:
                 dynamic_reference_functions.append(function_name)
+            if (
+                position not in local_variable_indexes
+                and function_name in _EXTERNAL_ACTION_FUNCTIONS
+            ):
+                external_action_functions.append(function_name)
             if function_name == _SPILL_REFERENCE_FUNCTION:
                 spill_reference_tokens.append(raw_function_name)
             if raw_function_name.startswith("@"):
@@ -1294,6 +1306,7 @@ def inspect_formula(
         references=tuple(references),
         unresolved_range_tokens=tuple(dict.fromkeys(unresolved_range_tokens)),
         dynamic_reference_functions=tuple(dict.fromkeys(dynamic_reference_functions)),
+        external_action_functions=tuple(external_action_functions),
         three_d_reference_tokens=tuple(dict.fromkeys(three_d_reference_tokens)),
         spill_reference_tokens=tuple(dict.fromkeys(spill_reference_tokens)),
         implicit_intersection_tokens=tuple(dict.fromkeys(implicit_intersection_tokens)),

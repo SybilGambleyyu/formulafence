@@ -55,6 +55,24 @@ def test_formula_inspection_resolves_names_and_marks_static_coverage_gaps() -> N
     assert inspection.dynamic_reference_functions == ("INDIRECT",)
 
 
+def test_formula_inspection_inventories_external_action_functions_without_evaluation() -> None:
+    inspection = inspect_formula(
+        '=_xlfn.IMAGE("https://private.example.test/image.png")'
+        '&HYPERLINK("#Inputs!A1","Internal")'
+        '&WEBSERVICE("https://private.example.test/service")'
+        '&RTD("Private.Provider","PrivateServer","Topic")'
+        '&HYPERLINK("https://private.example.test/second","External")'
+    )
+
+    assert inspection.external_action_functions == (
+        "IMAGE",
+        "HYPERLINK",
+        "WEBSERVICE",
+        "RTD",
+        "HYPERLINK",
+    )
+
+
 def test_formula_inspection_recognises_a_known_named_constant() -> None:
     inspection = inspect_formula("=StaticRate", {"staticrate": ()})
 

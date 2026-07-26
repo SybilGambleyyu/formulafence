@@ -917,6 +917,46 @@ class ExternalRelationshipSnapshot:
 
 
 @dataclass(frozen=True)
+class FormulaExternalActionSnapshot:
+    """Safe aggregate of formula calls that can cross workbook or host boundaries.
+
+    ``HYPERLINK`` can be in-workbook, while ``WEBSERVICE``, ``IMAGE``, and
+    ``RTD`` can use dynamic expressions or host-side providers.  FormulaFence
+    inventories the known action functions without evaluating an argument,
+    resolving a destination, requesting content, or starting an automation
+    server. Private signatures retain cell and formula material so same-count
+    endpoint or provider changes remain visible without exposing them. Private
+    action-cell identities allow the diff to guard statically visible inputs.
+    """
+
+    formula_external_action_cell_count: int = 0
+    hyperlink_function_count: int = 0
+    webservice_function_count: int = 0
+    image_function_count: int = 0
+    rtd_function_count: int = 0
+    action_signature: str | None = field(default=None, repr=False)
+    action_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(self.formula_external_action_cell_count)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return function counts without formulas, locations, or arguments."""
+        return {
+            "present": self.present,
+            "formula_external_action_cell_count": self.formula_external_action_cell_count,
+            "hyperlink_function_count": self.hyperlink_function_count,
+            "webservice_function_count": self.webservice_function_count,
+            "image_function_count": self.image_function_count,
+            "rtd_function_count": self.rtd_function_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class XlmMacroSheetSnapshot:
     """Safe aggregate of raw Excel 4.0 / XLM macro-sheet package parts.
 
@@ -3592,6 +3632,9 @@ class WorkbookSnapshot:
     external_relationships: ExternalRelationshipSnapshot = field(
         default_factory=ExternalRelationshipSnapshot
     )
+    formula_external_actions: FormulaExternalActionSnapshot = field(
+        default_factory=FormulaExternalActionSnapshot
+    )
     xlm_macro_sheets: XlmMacroSheetSnapshot = field(
         default_factory=XlmMacroSheetSnapshot
     )
@@ -4036,6 +4079,22 @@ class WorkbookSnapshot:
                 self.external_relationships.external_image_relationship_count
             ),
             "has_external_relationships": self.external_relationships.present,
+            "formula_external_action_cell_count": (
+                self.formula_external_actions.formula_external_action_cell_count
+            ),
+            "formula_hyperlink_function_count": (
+                self.formula_external_actions.hyperlink_function_count
+            ),
+            "formula_webservice_function_count": (
+                self.formula_external_actions.webservice_function_count
+            ),
+            "formula_image_function_count": (
+                self.formula_external_actions.image_function_count
+            ),
+            "formula_rtd_function_count": (
+                self.formula_external_actions.rtd_function_count
+            ),
+            "has_formula_external_actions": self.formula_external_actions.present,
             "xlm_macro_sheet_count": self.xlm_macro_sheets.macro_sheet_count,
             "xlm_macro_formula_cell_count": self.xlm_macro_sheets.formula_cell_count,
             "xlm_related_part_payload_count": (

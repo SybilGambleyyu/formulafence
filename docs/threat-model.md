@@ -523,12 +523,36 @@ review prompt, not proof of an error.
   receives a hyperlink-removed temporary copy only after raw inspection, so
   malformed markup cannot suppress the evidence. FormulaFence does **not**
   render, resolve, fetch, follow, or test a link; inspect linked content; infer
-  reputation/trust-zone/client behavior; or interpret `HYPERLINK()` formulas
-  beyond ordinary formula comparison. This boundary follows the Open XML
+  reputation/trust-zone/client behavior; or evaluate a `HYPERLINK()` formula.
+  Stored `HYPERLINK()` calls are separately covered by `FF064`, still without
+  evaluating an argument or following its result. This raw worksheet-hyperlink
+  boundary follows the Open XML
   [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.hyperlink?view=openxml-3.0.1)
   and Office 2016
   [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2016.excel.hyperlink?view=openxml-3.0.1)
   definitions.
+- A formula can create a link without a stored worksheet `hyperlink` element,
+  request data from an intranet or Internet service, render a URL-sourced image,
+  or bind a real-time provider. FormulaFence inventories stored `HYPERLINK`,
+  `WEBSERVICE`, `IMAGE`, and `RTD` calls (including `_xlfn.` compatibility
+  spellings) and privately fingerprints the cell, function inventory, and
+  formula material. Public profiles and `FF064` details expose only action-cell
+  and per-function counts, so an argument-only or same-count retarget remains
+  reviewable without disclosing an endpoint, provider, formula, or location.
+  A normal cell change that reaches an action cell through FormulaFence's static
+  dependency graph also emits `FF064`, covering a static source such as
+  `HYPERLINK(A1, ...)` without reading `A1` as an endpoint. Dynamic or
+  unresolved sources remain explicit formula-coverage limits.
+  `HYPERLINK` is deliberately included even when an argument appears internal:
+  it can be dynamically calculated, and the ledger does not evaluate it to
+  decide that. FormulaFence does **not** calculate a formula, resolve/open/fetch
+  a destination, click/follow a link, authenticate, load a COM object, start an
+  RTD server, or execute a provider. A material change emits `FF064`; enable
+  `no_formula_external_action_changes` for `FFP064`. This boundary follows
+  Microsoft's [link guidance](https://support.microsoft.com/en-US/Excel/work-with-links-in-excel),
+  [`WEBSERVICE` reference](https://support.microsoft.com/en-US/Excel/functions/webservice-function),
+  [`IMAGE` reference](https://support.microsoft.com/en-us/excel/functions/image-function),
+  and [`RTD` reference](https://support.microsoft.com/en-us/excel/functions/rtd-function).
 - Office 2010 worksheet sparklines live in `x14:sparklineGroups` worksheet
   extensions, outside ordinary cell values. A group can be retargeted, moved,
   or have its type, axes, display, marker, line-weight, or colour controls

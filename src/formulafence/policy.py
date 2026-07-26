@@ -69,6 +69,7 @@ _RULE_FIELDS = {
     "no_external_data_connection_changes",
     "no_external_link_package_changes",
     "no_external_relationship_changes",
+    "no_formula_external_action_changes",
     "no_power_query_changes",
     "no_3d_reference_scope_changes",
     "no_sheet_visibility_changes",
@@ -156,6 +157,7 @@ class Policy:
     no_external_data_connection_changes: bool = False
     no_external_link_package_changes: bool = False
     no_external_relationship_changes: bool = False
+    no_formula_external_action_changes: bool = False
     no_power_query_changes: bool = False
     no_3d_reference_scope_changes: bool = False
     no_sheet_visibility_changes: bool = False
@@ -225,6 +227,7 @@ rules:
   no_external_data_connection_changes: true
   no_external_link_package_changes: true
   no_external_relationship_changes: true
+  no_formula_external_action_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -425,6 +428,9 @@ def parse_policy(data: object) -> Policy:
         ),
         no_external_relationship_changes=_boolean_rule(
             rules, "no_external_relationship_changes"
+        ),
+        no_formula_external_action_changes=_boolean_rule(
+            rules, "no_formula_external_action_changes"
         ),
         no_power_query_changes=_boolean_rule(rules, "no_power_query_changes"),
         no_3d_reference_scope_changes=_boolean_rule(
@@ -689,6 +695,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP063",
                     "high",
                     "Policy forbids package-wide external relationship changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_formula_external_action_changes:
+        for finding in _rule_triggered(report, "FF064"):
+            violations.append(
+                Finding(
+                    "FFP064",
+                    "high",
+                    "Policy forbids formula external-action changes.",
                     details=finding.details,
                 )
             )

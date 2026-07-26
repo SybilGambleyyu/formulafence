@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.66.0/formulafence-0.66.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.67.0/formulafence-0.67.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -114,6 +114,7 @@ rules:
   no_external_data_connection_changes: true
   no_external_link_package_changes: true
   no_external_relationship_changes: true
+  no_formula_external_action_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -138,6 +139,7 @@ allowed_changes:
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
+| Formula external-action surfaces | Material stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, or `RTD` call changes, including same-count destination/provider swaps, without evaluating formulas or exposing their arguments in the action ledger |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
 | CI output | Deterministic JSON, reviewer-friendly Markdown, and SARIF |
@@ -328,6 +330,33 @@ Enable `no_external_relationship_changes` for `FFP063`. Relationship XML reads
 are bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts. Duplicate,
 orphaned, malformed, unsafe, oversized, unreadable, or over-budget relationship
 metadata remains explicit coverage evidence rather than silently disappearing.
+
+FormulaFence also keeps a private **formula external-action ledger** for stored
+`HYPERLINK`, `WEBSERVICE`, `IMAGE`, and `RTD` calls, including their `_xlfn.`
+compatibility spelling. Microsoft documents that `HYPERLINK` can use a text
+link location or a cell reference, that
+[`WEBSERVICE`](https://support.microsoft.com/en-US/Excel/functions/webservice-function)
+calls a web-service URL, that
+[`IMAGE`](https://support.microsoft.com/en-us/excel/functions/image-function)
+uses an HTTPS image source, and that
+[`RTD`](https://support.microsoft.com/en-us/excel/functions/rtd-function)
+retrieves data through a COM-automation provider. `HYPERLINK` calls are all
+inventoried—including known in-workbook links—because their destination can be
+computed dynamically and a later formula edit can retarget a reviewer.
+
+Profiles and `FF064`/`FFP064` details expose only formula-cell and per-function
+counts. Private signatures retain the stored formula and cell identity so a
+destination, provider, argument, or call-location change stays visible even
+when public counts do not move. FormulaFence also raises `FF064` when an
+ordinary cell edit can reach an action formula through its static dependency
+graph, catching `=HYPERLINK(A1, ...)`-style input retargeting without evaluating
+`A1`. Dynamic or unresolvable arguments remain explicit parser-coverage limits.
+The ordinary semantic cell diff intentionally continues to show changed
+formulas to reviewers; its general payload is not a redacted formula vault.
+FormulaFence does not calculate, resolve, fetch, open, click, follow,
+authenticate to, or execute any formula action, and it does not decide whether
+a dynamic `HYPERLINK` destination is local or remote. Enable
+`no_formula_external_action_changes` to block this boundary in CI.
 
 FormulaFence separately inventories **Excel 4.0 / XLM macro sheets**. Unlike
 VBA, this executable automation is stored in raw macro-sheet XML parts (usually
@@ -1113,8 +1142,10 @@ temporary copy so a malformed declaration cannot erase the review evidence.
 This is a stored-declaration boundary, not link execution or reputation
 analysis. FormulaFence does not render a hyperlink, resolve or fetch a target,
 test availability, follow redirects, inspect linked content, infer trust-zone
-or client behavior, or treat a `HYPERLINK()` formula as more than the ordinary
-formula diff. The scope follows the Open XML
+or client behavior. Stored `HYPERLINK()` calls are separately covered by the
+formula external-action ledger (`FF064`), but FormulaFence still never evaluates
+their arguments or follows a resulting link. The raw worksheet-hyperlink scope
+follows the Open XML
 [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.hyperlink?view=openxml-3.0.1)
 and Office 2016
 [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2016.excel.hyperlink?view=openxml-3.0.1)

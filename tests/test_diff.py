@@ -57,6 +57,8 @@ from .helpers import (
     change_font_definition,
     change_formula_cached_result,
     change_formula_cached_result_with_visible_precedent,
+    change_formula_external_action_input,
+    change_formula_external_action_target,
     change_gradient_fill_definition,
     change_ignored_error_extension_target,
     change_ignored_error_target,
@@ -219,6 +221,7 @@ from .helpers import (
     make_filter_visibility_model,
     make_font_model,
     make_formula_cached_result_model,
+    make_formula_external_action_model,
     make_ignored_error_model,
     make_implicit_intersection_model,
     make_in_content_office_web_addin_model,
@@ -1950,6 +1953,111 @@ def test_package_wide_external_relationships_are_profiled_and_diffed_privately(
         json.dumps(report_to_sarif(report)),
     )
     for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_formula_external_actions_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_formula_external_action_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_external_action_model(tmp_path / "candidate.xlsx")
+    change_formula_external_action_target(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    expected_actions = {
+        "present": True,
+        "formula_external_action_cell_count": 8,
+        "hyperlink_function_count": 5,
+        "webservice_function_count": 1,
+        "image_function_count": 2,
+        "rtd_function_count": 1,
+    }
+    assert baseline_snapshot.formula_external_actions.to_dict() == expected_actions
+    assert baseline_snapshot.summary()["formula_external_action_cell_count"] == 8
+    assert baseline_snapshot.summary()["formula_hyperlink_function_count"] == 5
+    assert baseline_snapshot.summary()["formula_webservice_function_count"] == 1
+    assert baseline_snapshot.summary()["formula_image_function_count"] == 2
+    assert baseline_snapshot.summary()["formula_rtd_function_count"] == 1
+    assert baseline_snapshot.summary()["has_formula_external_actions"] is True
+    assert profile["formula_external_actions"] == expected_actions
+    assert "## Formula external-action surfaces" in markdown
+    assert "**Formula cells / function calls:** 8 / 9" in markdown
+    assert "**HYPERLINK / WEBSERVICE / IMAGE / RTD:** 5 / 1 / 2 / 1" in markdown
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    action_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_external_actions_changed"
+    )
+    action_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF064"
+    )
+    assert action_change.details["before"] == expected_actions
+    assert action_change.details["after"] == expected_actions
+    assert action_change.details["formula_external_action_material_changed"] is True
+    assert action_finding.details == action_change.details
+    assert "FF004" not in {finding.rule_id for finding in report.findings}
+    assert "FF047" not in {finding.rule_id for finding in report.findings}
+    assert "FF063" not in {finding.rule_id for finding in report.findings}
+
+    # The ordinary semantic-cell diff deliberately retains changed formulas for
+    # reviewers. The action ledger, its profile, Markdown/SARIF findings, and
+    # policy-facing details do not retain the formula's private arguments.
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(action_change.details),
+        json.dumps(action_finding.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-LINK-BASELINE",
+        "PRIVATE-LINK-CANDIDATE",
+        "PRIVATE-WEBSERVICE",
+        "PRIVATE-IMAGE.png",
+        "PRIVATE-NAMESPACED-IMAGE.png",
+        "PRIVATE.FormulaFence.Provider",
+        "PRIVATE-SERVER",
+        "PRIVATE-SECOND-LINK",
+        "PRIVATE-THIRD-LINK",
+        "PRIVATE-REFERENCED-LINK-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_formula_external_action_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_formula_external_action_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_external_action_model(tmp_path / "candidate.xlsx")
+    change_formula_external_action_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.formula_external_actions == candidate_snapshot.formula_external_actions
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    action_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_external_actions_changed"
+    )
+    assert action_change.details["formula_external_action_static_input_changed"] is True
+    assert action_change.details["formula_external_action_static_input_change_count"] == 1
+    assert "formula_external_action_material_changed" not in action_change.details
+    assert "FF064" in {finding.rule_id for finding in report.findings}
+
+    rendered_artifacts = (
+        json.dumps(action_change.details),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "PRIVATE-REFERENCED-LINK-BASELINE",
+        "PRIVATE-REFERENCED-LINK-CANDIDATE",
+    ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
 
 

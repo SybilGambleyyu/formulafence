@@ -64,6 +64,7 @@ rules:
   no_external_data_connection_changes: true
   no_external_link_package_changes: true
   no_external_relationship_changes: true
+  no_formula_external_action_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
@@ -154,6 +155,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_external_data_connection_changes` | boolean | A workbook-wide external-data refresh flag, connection, linked query-table refresh control, or pivot-cache source/refresh control changes. |
 | `no_external_link_package_changes` | boolean | An external-workbook, DDE, or OLE `externalLink` package definition, source binding, cached material, item behavior, or retained extension fragment changes. |
 | `no_external_relationship_changes` | boolean | Any root or part-level OPC relationship with an external target changes, including an opaque relationship that no feature-specific scanner recognizes. Source parts, types, IDs, targets, unknown metadata, and raw XML are compared privately. |
+| `no_formula_external_action_changes` | boolean | A stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, or `RTD` formula call, argument, call location, function inventory, or statically visible input changes. FormulaFence uses private signatures and static dependency paths; it never evaluates a formula, resolves a destination, requests content, or starts a provider. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
@@ -312,6 +314,34 @@ unsafe, unreadable, oversized, or over-budget relationship metadata stays
 visible as coverage evidence. FormulaFence does not resolve, open, fetch, or
 trust any target; it bounds relationship XML to 16 MiB per part, 64 MiB per
 workbook, and 512 parts.
+
+FormulaFence separately inventories stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`,
+and `RTD` formula calls (including `_xlfn.` compatibility spellings) as formula
+external-action surfaces. This is intentionally broader than proven remote
+access: a `HYPERLINK` destination may be in the current workbook and a function
+argument may be calculated. Microsoft documents a HYPERLINK destination as a
+text string or cell reference in its
+[link guidance](https://support.microsoft.com/en-US/Excel/work-with-links-in-excel),
+while `WEBSERVICE` calls a URL,
+[`IMAGE`](https://support.microsoft.com/en-us/excel/functions/image-function)
+uses an HTTPS source, and
+[`RTD`](https://support.microsoft.com/en-us/excel/functions/rtd-function)
+uses a COM-automation data provider.
+
+The public profile and `FF064` details contain only action-cell and function
+counts; formulas, arguments, destinations, provider names, results, and cell
+locations stay in private comparison signatures. A destination-only change can
+therefore emit `FF064` when every public count is unchanged.
+FormulaFence also emits `FF064` when a normal cell change reaches one of these
+formula cells through its static dependency graph, covering a source such as
+`=HYPERLINK(A1, ...)` without reading or evaluating an effective URL. Dynamic
+or unresolved arguments remain parser-coverage boundaries rather than a claim
+that every indirect source is tracked.
+`no_formula_external_action_changes` makes this `FFP064` in CI. FormulaFence
+does not calculate, resolve, fetch, open, follow, click, authenticate to, or
+execute any function. Its ordinary semantic diff intentionally remains a
+review artifact with changed formulas, so it is not a substitute for the
+ledger's minimised action details.
 
 Excel 4.0 / XLM macro sheets are separate from the VBA binary: their executable
 commands live in Macro Sheet XML package parts, typically under
@@ -906,8 +936,9 @@ cannot turn the package evidence into a reader failure.
 
 FormulaFence does not render, resolve, fetch, or follow a link; test target
 availability; inspect linked content; infer trust-zone or client behavior; or
-interpret a `HYPERLINK()` formula beyond the ordinary formula diff. This scope
-follows the Open XML
+evaluate a `HYPERLINK()` formula. Formula calls themselves are separately
+covered by `FF064`, still without evaluating an argument or following its
+result. This raw worksheet-hyperlink scope follows the Open XML
 [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.hyperlink?view=openxml-3.0.1)
 and Office 2016
 [Hyperlink](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.office2016.excel.hyperlink?view=openxml-3.0.1)

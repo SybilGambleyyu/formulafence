@@ -5,6 +5,47 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Formula external-action ledger — 2026-07-26
+
+FormulaFence 0.67.0 was checked against Microsoft's documented formula
+semantics for [`HYPERLINK`](https://support.microsoft.com/en-US/Excel/work-with-links-in-excel),
+[`WEBSERVICE`](https://support.microsoft.com/en-US/Excel/functions/webservice-function),
+[`IMAGE`](https://support.microsoft.com/en-us/excel/functions/image-function),
+and [`RTD`](https://support.microsoft.com/en-us/excel/functions/rtd-function).
+Those references establish the review boundary: link destinations can be text
+or cell references, `WEBSERVICE` calls a URL, `IMAGE` uses an HTTPS image
+source, and `RTD` requests a COM-automation provider.
+
+A controlled `.xlsx` pair was then built outside this repository from that
+documented syntax using a clean openpyxl 3.1.5 environment. The baseline
+(SHA-256 `8a407fd18ea30ddb80a128dd670bfe08a9ca7a9257e205b9f2ba749a6d085ddf`)
+contains `HYPERLINK`, `WEBSERVICE`, `IMAGE`, namespaced `_xlfn.IMAGE`, `RTD`,
+and `HYPERLINK(A9, ...)`. Its public ledger reports six formula cells, two
+HYPERLINK calls, one WEBSERVICE call, two IMAGE calls, and one RTD call.
+
+Changing only a literal HYPERLINK destination produced a candidate with SHA-256
+`b9ac5b8c215ca61f85133b2d0bfe61cb6439ed179365435f19d8829e62fdf1d6`.
+The public counts stayed fixed but FormulaFence emitted exactly
+`formula_external_actions_changed` with `FF064` and its private-material flag.
+Changing only the A9 value used by the unchanged `HYPERLINK(A9, ...)` formula
+produced SHA-256
+`ee88b14fda1d16e3a8182396cbdf1486c185a490f4a2752bab54d05c1f817ec2`.
+The action snapshot remained equal, while the static dependency graph emitted
+the same change and `FF064` with a static-input count of one. A policy enabling
+`no_formula_external_action_changes` exited `1` with `FFP064`.
+
+A fresh virtual environment installed the staged
+`formulafence-0.67.0-py3-none-any.whl` after archive-integrity checks (SHA-256
+`a445a2db2899665eac2a58559883120e37206d15cce3bb3b079ee06a53ba7510`); the
+source archive passed the same integrity check.
+The installed CLI returned `FormulaFence 0.67.0`. Profiles and FF064 details
+were verified not to contain any test URL, image location, provider name,
+server name, or referenced-source value. The normal full semantic diff
+continues to include changed formulas by design, so the privacy assertion is
+limited to the ledger and finding details. No formula was calculated and no
+endpoint, image, link, or RTD provider was opened, fetched, followed, or
+executed during validation.
+
 ## Package-wide external relationship ledger — 2026-07-26
 
 FormulaFence 0.66.0 was checked against the Open Packaging Conventions

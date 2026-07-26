@@ -165,6 +165,46 @@ def make_model(path: Path) -> Path:
     return path
 
 
+def make_formula_external_action_model(path: Path) -> Path:
+    """Create stored formulas with known external-action function surfaces."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Stored formula action controls"
+    inputs["B2"] = '=HYPERLINK("https://private.example.test/PRIVATE-LINK-BASELINE", "Open")'
+    inputs["B3"] = '=WEBSERVICE("https://private.example.test/PRIVATE-WEBSERVICE")'
+    inputs["B4"] = '=IMAGE("https://private.example.test/PRIVATE-IMAGE.png", "Image")'
+    inputs["B5"] = '=RTD("PRIVATE.FormulaFence.Provider", "PRIVATE-SERVER", "Topic")'
+    inputs["B6"] = '=_xlfn.IMAGE("https://private.example.test/PRIVATE-NAMESPACED-IMAGE.png")'
+    inputs["B7"] = '=HYPERLINK("#Inputs!A1", "Internal")'
+    inputs["B8"] = (
+        '=IF(TRUE,HYPERLINK("https://private.example.test/PRIVATE-SECOND-LINK", "One"),'
+        'HYPERLINK("https://private.example.test/PRIVATE-THIRD-LINK", "Two"))'
+    )
+    inputs["A9"] = "https://private.example.test/PRIVATE-REFERENCED-LINK-BASELINE"
+    inputs["B9"] = '=HYPERLINK(A9, "Referenced")'
+    workbook.save(path)
+    return path
+
+
+def change_formula_external_action_target(path: Path) -> Path:
+    """Change a formula action destination without changing its call inventory."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["B2"] = (
+        '=HYPERLINK("https://private.example.test/PRIVATE-LINK-CANDIDATE", "Open")'
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_external_action_input(path: Path) -> Path:
+    """Change a statically referenced action input without editing its formula."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "https://private.example.test/PRIVATE-REFERENCED-LINK-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_legacy_comment_model(path: Path) -> Path:
     """Create a real Excel Note whose data lives outside worksheet cells."""
     make_model(path)

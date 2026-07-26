@@ -32,6 +32,7 @@ from formulafence.models import (
     Finding,
     FontSnapshot,
     FormulaCachedResultSnapshot,
+    FormulaExternalActionSnapshot,
     IgnoredErrorSnapshot,
     LegacyCommentSnapshot,
     NamedSheetViewSnapshot,
@@ -2231,6 +2232,53 @@ def _formula_cached_result_changes(
     return [change], [finding]
 
 
+def _formula_external_action_changes(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+    static_input_change_locations: set[CellKey],
+) -> tuple[list[Change], list[Finding]]:
+    """Flag changed stored action calls and their statically visible inputs.
+
+    Formula arguments are never evaluated. Instead, a normal cell edit is
+    treated as action-relevant only when FormulaFence's existing static
+    dependency graph can reach a known action formula in either snapshot.
+    Dynamic or unresolved arguments remain ordinary parser-coverage limits.
+    """
+    old_actions: FormulaExternalActionSnapshot = before.formula_external_actions
+    new_actions: FormulaExternalActionSnapshot = after.formula_external_actions
+    if old_actions == new_actions and not static_input_change_locations:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_actions.to_dict(),
+        "after": new_actions.to_dict(),
+    }
+    if old_actions.action_signature != new_actions.action_signature:
+        details["formula_external_action_material_changed"] = True
+    if static_input_change_locations:
+        details["formula_external_action_static_input_changed"] = True
+        details["formula_external_action_static_input_change_count"] = len(
+            static_input_change_locations
+        )
+    change = Change(
+        "formula_external_actions_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF064",
+        "high",
+        (
+            "Formula external-action functions or a statically visible input changed; "
+            "a formula may now redirect a reviewer, request content, or invoke a "
+            "real-time data provider."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _rich_text_run_entry_map(
     snapshot: RichTextRunSnapshot,
 ) -> dict[CellKey, RichTextRunEntry]:
@@ -2893,6 +2941,11 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     findings: list[Finding] = []
     formula_changed_locations: set[CellKey] = set()
     semantic_cell_changes: list[Change] = []
+    formula_external_action_static_input_changes: set[CellKey] = set()
+    formula_external_action_cells = (
+        before.formula_external_actions.action_cells
+        | after.formula_external_actions.action_cells
+    )
 
     all_locations = sorted(set(before.cells) | set(after.cells), key=_location_sort_key)
     for location in all_locations:
@@ -2924,6 +2977,8 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         )
         changes.append(change)
         semantic_cell_changes.append(change)
+        if formula_external_action_cells & impact:
+            formula_external_action_static_input_changes.add(location)
         if new_cell is not None and new_cell.is_formula:
             formula_changed_locations.add(location)
         if old_cell is not None and old_cell.is_formula:
@@ -2960,6 +3015,16 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(formula_cached_result_changes)
     findings.extend(formula_cached_result_findings)
+
+    formula_external_action_changes, formula_external_action_findings = (
+        _formula_external_action_changes(
+            before,
+            after,
+            formula_external_action_static_input_changes,
+        )
+    )
+    changes.extend(formula_external_action_changes)
+    findings.extend(formula_external_action_findings)
 
     rich_text_run_changes, rich_text_run_findings = _rich_text_run_controls_changed(
         before,

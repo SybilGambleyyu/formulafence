@@ -559,6 +559,15 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     pivot_caches = profile["pivot_cache_refresh_controls"]
     external_link_packages = profile["external_link_packages"]
     external_relationships = profile["external_relationships"]
+    formula_external_actions = profile["formula_external_actions"]
+    formula_external_action_call_count = sum(
+        (
+            formula_external_actions["hyperlink_function_count"],
+            formula_external_actions["webservice_function_count"],
+            formula_external_actions["image_function_count"],
+            formula_external_actions["rtd_function_count"],
+        )
+    )
     has_nondefault_external_settings = external_settings != {
         "update_links": "user_set",
         "allow_refresh_query": False,
@@ -857,6 +866,31 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "Relationship source parts, types, identifiers, targets, and raw XML are "
             "compared privately and intentionally omitted."
+        )
+    if formula_external_actions["present"]:
+        lines.extend(
+            [
+                "",
+                "## Formula external-action surfaces",
+                "",
+                (
+                    "- **Formula cells / function calls:** "
+                    f"{formula_external_actions['formula_external_action_cell_count']} / "
+                    f"{formula_external_action_call_count}"
+                ),
+                (
+                    "- **HYPERLINK / WEBSERVICE / IMAGE / RTD:** "
+                    f"{formula_external_actions['hyperlink_function_count']} / "
+                    f"{formula_external_actions['webservice_function_count']} / "
+                    f"{formula_external_actions['image_function_count']} / "
+                    f"{formula_external_actions['rtd_function_count']}"
+                ),
+                (
+                    "FormulaFence inventories stored function calls only. Formula cells, "
+                    "arguments, destinations, provider names, and results are compared "
+                    "privately and intentionally omitted; no formula is evaluated or action taken."
+                ),
+            ]
         )
     xlm_macro_sheets = profile["xlm_macro_sheets"]
     if xlm_macro_sheets["present"]:

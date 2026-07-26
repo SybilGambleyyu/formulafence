@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.67.0 — 2026-07-26
+
+- Add `FF064`, a private ledger for stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`,
+  and `RTD` formula calls, including `_xlfn.` compatibility spellings. Public
+  profiles and finding details expose only safe action-cell and per-function
+  counts; formulas, arguments, destinations, provider names, results, and
+  locations remain private action evidence.
+- Flag same-count call/argument/provider changes and ordinary edits that reach
+  an action formula through FormulaFence's static dependency graph, covering
+  source-cell retargeting such as `=HYPERLINK(A1, ...)` without evaluating it.
+  Dynamic or unresolved argument sources remain explicit parser-coverage
+  boundaries rather than ungrounded reachability claims.
+- Add the fail-closed `no_formula_external_action_changes` policy rule
+  (`FFP064`). FormulaFence never calculates, resolves, fetches, opens, clicks,
+  follows, authenticates to, or executes an action function or RTD provider.
+
 ## 0.66.0 — 2026-07-26
 
 - Add `FF063`, a bounded package-wide ledger for every canonical OPC root or

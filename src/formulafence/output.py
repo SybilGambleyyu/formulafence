@@ -8,6 +8,7 @@ from typing import Any
 
 from formulafence import __version__
 from formulafence.models import DiffReport, Finding, display_location
+from formulafence.portfolio import PortfolioReport
 
 
 def as_json(payload: dict[str, Any]) -> str:
@@ -3207,24 +3208,14 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def report_to_markdown(report: DiffReport, extra_findings: Iterable[Finding] = ()) -> str:
-    policy_findings = list(extra_findings)
-    payload = report.to_dict(policy_findings)
-    summary = payload["summary"]
-    lines = [
-        "# FormulaFence change report",
-        "",
-        f"- **Baseline:** `{payload['before']['path']}`",
-        f"- **Candidate:** `{payload['after']['path']}`",
-        f"- **Changes:** {summary['change_count']}",
-        f"- **Findings:** {summary['finding_count']}",
-        f"- **Highest severity:** `{summary['highest_severity']}`",
-        "",
-    ]
+def _append_report_markdown_sections(
+    lines: list[str], payload: dict[str, Any], heading: str
+) -> None:
+    """Append reusable finding/change tables at the requested heading level."""
     if payload["findings"]:
         lines.extend(
             [
-                "## Findings",
+                f"{heading} Findings",
                 "",
                 "| Severity | Rule | Location | Finding |",
                 "| --- | --- | --- | --- |",
@@ -3242,7 +3233,7 @@ def report_to_markdown(report: DiffReport, extra_findings: Iterable[Finding] = (
         lines.append("")
     lines.extend(
         [
-            "## Semantic changes",
+            f"{heading} Semantic changes",
             "",
             "| Risk | Change | Location | Downstream formulas |",
             "| --- | --- | --- | ---: |",
@@ -3262,7 +3253,7 @@ def report_to_markdown(report: DiffReport, extra_findings: Iterable[Finding] = (
             )
     impacted = [change for change in payload["changes"] if change["impacted_cells"]]
     if impacted:
-        lines.extend(["", "## Impact samples", ""])
+        lines.extend(["", f"{heading} Impact samples", ""])
         for change in impacted:
             sample = ", ".join(f"`{cell}`" for cell in change["impacted_cells"])
             lines.append(f"- `{change['location']}` affects: {sample}")
@@ -3272,10 +3263,27 @@ def report_to_markdown(report: DiffReport, extra_findings: Iterable[Finding] = (
             for path in change["details"].get("impact_paths", [])
         ]
         if path_samples:
-            lines.extend(["", "## Dependency paths", ""])
+            lines.extend(["", f"{heading} Dependency paths", ""])
             for _, path_sample in path_samples:
                 path = " → ".join(f"`{step}`" for step in path_sample["path"])
                 lines.append(f"- {path}")
+
+
+def report_to_markdown(report: DiffReport, extra_findings: Iterable[Finding] = ()) -> str:
+    policy_findings = list(extra_findings)
+    payload = report.to_dict(policy_findings)
+    summary = payload["summary"]
+    lines = [
+        "# FormulaFence change report",
+        "",
+        f"- **Baseline:** `{payload['before']['path']}`",
+        f"- **Candidate:** `{payload['after']['path']}`",
+        f"- **Changes:** {summary['change_count']}",
+        f"- **Findings:** {summary['finding_count']}",
+        f"- **Highest severity:** `{summary['highest_severity']}`",
+        "",
+    ]
+    _append_report_markdown_sections(lines, payload, "##")
     return "\n".join(lines) + "\n"
 
 
@@ -3322,6 +3330,140 @@ def report_to_sarif(report: DiffReport, extra_findings: Iterable[Finding] = ()) 
                 }
             ]
         results.append(result)
+    return {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "FormulaFence",
+                        "version": __version__,
+                        "informationUri": "https://github.com/SybilGambleyyu/formulafence",
+                        "rules": rules,
+                    }
+                },
+                "results": results,
+            }
+        ],
+    }
+
+
+def _markdown_code(value: object) -> str:
+    """Render a short untrusted logical path safely inside a Markdown code span."""
+    escaped = _markdown_escape(value).replace("`", "\\`")
+    return f"`{escaped}`"
+
+
+def portfolio_to_markdown(report: PortfolioReport) -> str:
+    """Render a complete multi-workbook review without absolute filesystem paths."""
+    payload = report.to_dict()
+    summary = payload["summary"]
+    lines = [
+        "# FormulaFence portfolio report",
+        "",
+        (
+            "- **Baseline / candidate workbooks:** "
+            f"{payload['before']['workbook_count']} / {payload['after']['workbook_count']}"
+        ),
+        f"- **Matched workbooks:** {summary['matched_workbook_count']}",
+        (
+            "- **Added / removed / unreadable:** "
+            f"{summary['added_workbook_count']} / {summary['removed_workbook_count']} / "
+            f"{summary['unreadable_workbook_count']}"
+        ),
+        f"- **Semantic changes:** {summary['change_count']}",
+        f"- **Findings:** {summary['finding_count']}",
+        f"- **Highest severity:** `{summary['highest_severity']}`",
+        "",
+        (
+            "Relative workbook paths are the comparison identity. A move is deliberately "
+            "reported as a removal plus an addition rather than inferred as a rename."
+        ),
+        "",
+        "## Workbook summary",
+        "",
+        "| Workbook | Status | Changes | Findings | Highest severity |",
+        "| --- | --- | ---: | ---: | --- |",
+    ]
+    for entry in payload["workbooks"]:
+        entry_summary = entry["summary"]
+        lines.append(
+            "| {path} | `{status}` | {changes} | {findings} | `{severity}` |".format(
+                path=_markdown_code(entry["path"]),
+                status=_markdown_escape(entry["status"]),
+                changes=entry_summary["change_count"],
+                findings=entry_summary["finding_count"],
+                severity=_markdown_escape(entry_summary["highest_severity"]),
+            )
+        )
+
+    lines.extend(["", "## Workbook details", ""])
+    for entry in payload["workbooks"]:
+        entry_summary = entry["summary"]
+        lines.extend(
+            [
+                f"### {_markdown_code(entry['path'])}",
+                "",
+                f"- **Status:** `{_markdown_escape(entry['status'])}`",
+                (
+                    "- **Baseline / candidate present:** "
+                    f"{'yes' if entry['baseline_present'] else 'no'} / "
+                    f"{'yes' if entry['candidate_present'] else 'no'}"
+                ),
+                f"- **Changes / findings:** {entry_summary['change_count']} / "
+                f"{entry_summary['finding_count']}",
+                "",
+            ]
+        )
+        _append_report_markdown_sections(lines, entry, "####")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def portfolio_to_sarif(report: PortfolioReport) -> dict[str, Any]:
+    """Render every portfolio finding in one SARIF run with relative artifacts."""
+    rule_ids = sorted(
+        {
+            finding.rule_id
+            for workbook in report.workbooks
+            for finding in workbook.findings
+        }
+    )
+    rules = [
+        {
+            "id": rule_id,
+            "name": rule_id,
+            "shortDescription": {"text": "FormulaFence spreadsheet-control finding"},
+        }
+        for rule_id in rule_ids
+    ]
+    results: list[dict[str, Any]] = []
+    for workbook in report.workbooks:
+        for finding in workbook.findings:
+            location: dict[str, Any] = {
+                "physicalLocation": {"artifactLocation": {"uri": workbook.path}},
+            }
+            if finding.location is not None:
+                location["logicalLocations"] = [
+                    {
+                        "kind": "excel-cell",
+                        "name": display_location(finding.location),
+                    }
+                ]
+            results.append(
+                {
+                    "ruleId": finding.rule_id,
+                    "level": _SARIF_LEVELS.get(finding.severity, "warning"),
+                    "message": {"text": finding.message},
+                    "properties": {
+                        **finding.details,
+                        "severity": finding.severity,
+                        "portfolio_status": workbook.status,
+                    },
+                    "locations": [location],
+                }
+            )
     return {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",

@@ -5,6 +5,51 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Portfolio change-control boundary — 2026-07-26
+
+FormulaFence 0.85.0 was exercised against the independently maintained public
+[Python in Excel course workbooks](https://github.com/LinkedInLearning/python-in-excel-quick-start-4551222)
+at commit `cbf3219e864a1816adb8019d9ca4683de7429dae`. The portfolio contract is
+also motivated by the spreadsheet change-review workflow described in
+[Governance of Spreadsheets through Spreadsheet Change Reviews](https://arxiv.org/abs/1211.7100):
+inventory and an auditable structural-change boundary are practical controls
+for a group of critical spreadsheets. No workbook content was executed,
+uploaded, or copied into this repository.
+
+A temporary baseline contained four unmodified public workbooks. The candidate
+kept two files byte-identical, placed the course's corresponding finished
+workbook at the same relative path as one start workbook, removed one public
+workbook, and added another public workbook. `formulafence portfolio` reported
+five relative paths: three matched, one semantically changed, two unchanged,
+one added, one removed, and zero unreadable. The changed real workbook produced
+13 semantic changes and nine stored-control findings; FormulaFence did not
+calculate any formula or Python code. The added and removed paths each emitted
+exactly one `FF077` record, while a narrow
+`no_portfolio_membership_changes` policy added `FFP077` for each and exited 1.
+
+The same real-corpus run with `--fail-on high --format sarif` exited 1 and
+produced 11 SARIF results. Every physical artifact URI was a relative workbook
+path (never the temporary directory), including the added/removed records.
+The external run therefore verifies actual recursive inventory, matching,
+single-workbook comparison, membership policy, threshold enforcement, and
+SARIF attribution in one local-only workflow. It intentionally does not infer
+a rename or compare any workbook that cannot be read.
+
+A freshly created virtual environment installed the built 0.85.0 wheel with
+its declared dependencies, returned `FormulaFence 0.85.0`, and reproduced the
+five-workbook public portfolio report plus the expected membership-policy exit
+code of 1 without importing the source checkout. Both wheel and source
+distribution passed `twine check` before this smoke run.
+
+Controlled fixtures separately cover a same-path formula-to-value edit with
+per-workbook policy enforcement, additions/removals, an unreadable archive that
+still yields redacted `FF078` evidence and exit 2, membership evidence retained
+when an unreadable file is newly added or removed, safe JSON/Markdown/SARIF
+output for a new workbook containing a private sentinel, default inventory
+limits, unsupported Excel formats, Office lock-file skipping, case-portable
+identity, symlink refusal, and report-output protection. The full suite passed
+**594 tests in 82.20 seconds**, followed by a clean Ruff check.
+
 ## PythonScripts compatibility boundary — 2026-07-26
 
 FormulaFence 0.84.0 was checked against Microsoft's [Python in Excel

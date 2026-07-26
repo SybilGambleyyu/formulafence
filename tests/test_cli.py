@@ -55,6 +55,26 @@ def test_profile_does_not_expose_cell_values(tmp_path) -> None:
     assert '"formula_cells"' in profile
 
 
+def test_cli_refuses_to_overwrite_an_input_workbook(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    original = baseline.read_bytes()
+
+    assert (
+        main(
+            [
+                "diff",
+                str(baseline),
+                str(candidate),
+                "--output",
+                str(baseline),
+            ]
+        )
+        == 2
+    )
+    assert baseline.read_bytes() == original
+
+
 def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None:
     policy = tmp_path / "formulafence.yml"
 
@@ -118,4 +138,5 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
     assert "no_worksheet_image_changes: true" in content
     assert "no_worksheet_embedded_control_changes: true" in content
     assert "no_power_query_changes: true" in content
+    assert "no_portfolio_membership_changes: true" in content
     assert "no_new_tokenization_failures: true" in content

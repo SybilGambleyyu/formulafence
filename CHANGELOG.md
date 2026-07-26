@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.85.0 — 2026-07-26
+
+- Add a bounded, local-first `formulafence portfolio` command for recursive
+  `.xlsx` / `.xlsm` directory comparison. It uses a relative path as the
+  workbook identity, produces consolidated JSON, Markdown, and SARIF evidence,
+  and deliberately reports a move as a removal plus an addition rather than
+  guessing a rename.
+- Add high-severity `FF077` for a supported workbook added to or removed from a
+  portfolio and `FFP077` through the new
+  `no_portfolio_membership_changes` policy. Existing policy controls apply
+  independently to each matched workbook.
+- Fail closed for unsupported spreadsheet formats, control-character or
+  case-colliding paths, symlinks, inventory limits, and empty dual portfolios.
+  Transient Office lock files are ignored. An unreadable supported workbook
+  yields redacted critical `FF078` evidence plus exit status 2 while the report
+  preserves all other portfolio results; a newly added or removed unreadable
+  workbook also retains its known `FF077` / `FFP077` membership evidence.
+- Extend the public composite GitHub Action to detect matching directory inputs
+  automatically and expose a validated `max-workbooks` bound (512 by default).
+  Portfolio SARIF carries relative workbook artifact URIs and per-cell logical
+  locations without emitting an absolute runner path. The CLI and Action refuse
+  report paths that would overwrite an input or write inside a portfolio root.
+
 ## 0.84.0 — 2026-07-26
 
 - Extend the existing `FF065` / `FFP065` Python-in-Excel boundary to recognize

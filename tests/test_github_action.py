@@ -30,6 +30,7 @@ def _run_action_script(
     policy: Path | None = None,
     output: str = "reports/formulafence.md",
     report_format: str = "markdown",
+    max_workbooks: str = "512",
     upload_artifact: str = "true",
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     outputs = tmp_path / "outputs.txt"
@@ -54,6 +55,7 @@ def _run_action_script(
             "INPUT_FORMAT": report_format,
             "INPUT_OUTPUT": output,
             "INPUT_FAIL_ON": "none",
+            "INPUT_MAX_WORKBOOKS": max_workbooks,
             "INPUT_INSTALL": "false",
             "INPUT_UPLOAD_ARTIFACT": upload_artifact,
             "PYTHONPATH": str(REPOSITORY_ROOT / "src"),
@@ -75,7 +77,7 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
     action = yaml.safe_load(ACTION_PATH.read_text(encoding="utf-8"))
 
     assert action["runs"]["using"] == "composite"
-    assert {"baseline", "candidate", "policy", "format", "output"} <= set(
+    assert {"baseline", "candidate", "policy", "format", "output", "max-workbooks"} <= set(
         action["inputs"]
     )
     assert {"report-path", "exit-code"} <= set(action["outputs"])
@@ -171,3 +173,72 @@ def test_action_rejects_an_ambiguous_artifact_switch(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "Unsupported upload-artifact value" in result.stderr
+
+
+def test_action_runs_a_directory_portfolio_and_preserves_membership_evidence(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    baseline.mkdir()
+    candidate.mkdir()
+    _workbook(baseline / "model.xlsx", "=1+1")
+    _workbook(candidate / "model.xlsx", "=1+1")
+    _workbook(candidate / "added.xlsx", "=1+1")
+    policy = tmp_path / "formulafence.yml"
+    policy.write_text(
+        "version: 1\nrules:\n  no_portfolio_membership_changes: true\n",
+        encoding="utf-8",
+    )
+
+    result, outputs, summary = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        policy=policy,
+    )
+
+    assert result.returncode == 0
+    assert "exit-code=1" in outputs.read_text(encoding="utf-8")
+    report = tmp_path / "reports" / "formulafence.md"
+    assert "FF077" in report.read_text(encoding="utf-8")
+    assert "FFP077" in summary.read_text(encoding="utf-8")
+
+
+def test_action_rejects_an_invalid_portfolio_limit(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    baseline.mkdir()
+    candidate.mkdir()
+    _workbook(baseline / "model.xlsx", "=1+1")
+    _workbook(candidate / "model.xlsx", "=1+1")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        max_workbooks="0",
+    )
+
+    assert result.returncode == 2
+    assert "max-workbooks must be a positive integer" in result.stderr
+
+
+def test_action_refuses_a_report_inside_a_portfolio_input(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    baseline.mkdir()
+    candidate.mkdir()
+    _workbook(baseline / "model.xlsx", "=1+1")
+    _workbook(candidate / "model.xlsx", "=1+1")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        output="baseline/report.md",
+    )
+
+    assert result.returncode == 2
+    assert "report output must not be written inside an input directory" in result.stderr
+    assert not (baseline / "report.md").exists()

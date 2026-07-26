@@ -1,9 +1,9 @@
 # Policy reference
 
 FormulaFence keeps controls in a small YAML file so that the rule itself is
-reviewable alongside the model. A policy is evaluated by `formulafence check`;
-each violation is emitted as a `FFP…` finding and makes the command exit with
-status `1`.
+reviewable alongside the model. A policy is evaluated by `formulafence check`
+or `formulafence portfolio --policy`; each violation is emitted as a `FFP…`
+finding and makes the command exit with status `1`.
 
 ```yaml
 version: 1
@@ -77,6 +77,7 @@ rules:
   no_formula_defined_xlm_environment_information_changes: true
   no_formula_environment_information_changes: true
   no_power_query_changes: true
+  no_portfolio_membership_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
   max_changed_formulas: 20
@@ -180,6 +181,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | no_formula_defined_xlm_environment_information_changes | boolean | A selected legacy XLM GET.WORKBOOK, GET.WORKSPACE, or GET.DOCUMENT call stored in a formula-defined name or named LAMBDA, its relevant definition chain/private invocation inventory, or a statically visible argument input changes. Information types, references, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates the call, determines its requested information type, resolves dynamic references, or simulates workbook, workspace, document, client, add-in, printer, or other Excel state. |
 | no_formula_environment_information_changes | boolean | A native CELL, INFO, SHEET, or SHEETS call stored in a worksheet formula, formula-defined name, or named LAMBDA; its relevant definition chain/private invocation inventory; or a statically visible argument input changes. Profiles separately aggregate CELL calls without an explicit reference, SHEET calls, SHEETS calls, and SHEETS calls without an explicit reference. When a complete raw OOXML tab catalog changes, FormulaFence also raises FF072 for stored SHEET or omitted-reference SHEETS calls; all declared tabs, including hidden, chart, macro, and dialog sheets, are in scope, while visibility-only changes are not this condition. Information types, references, formulas, arguments, locations, name identities, and raw tab-catalog comparison material are compared privately; ordinary sheet inventory remains normal reviewer context. FormulaFence never evaluates the call, resolves dynamic arguments, infers a selected cell, or simulates file, folder, client, workspace, workbook, or other Excel state. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
+| `no_portfolio_membership_changes` | boolean | A `formulafence portfolio` run finds a supported workbook relative path only in the baseline or only in the candidate directory. This blocks `FF077` as `FFP077`; it does not infer that same-content files with different paths are a rename. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
@@ -1661,6 +1663,25 @@ change emits `FF024`; enable `no_power_query_changes` to make it `FFP024` in CI.
 FormulaFence does not execute M, refresh a connection, assess a source, or infer
 the data a query would return.
 
+## Portfolio policies
+
+`formulafence portfolio BASELINE_DIRECTORY CANDIDATE_DIRECTORY --policy
+formulafence.yml` applies the same YAML policy independently to each pair of
+supported workbook files at the same relative path. `protected_cells`,
+`allowed_changes`, and formula/impact limits are therefore per workbook, not a
+portfolio-wide aggregate. This supports a repository of structurally similar
+models; path-specific policy routing is deliberately not guessed.
+
+An added or removed relative path emits `FF077` even without a policy. Enable
+`no_portfolio_membership_changes` to convert it to `FFP077`. A supported file
+that cannot be inspected emits redacted `FF078` evidence and makes the portfolio
+command return `2`, because no semantic comparison can safely be claimed for
+that entry. If that file is also newly added or removed, its known `FF077` /
+`FFP077` membership evidence remains present. The report still records the
+remaining files. Office `~$` lock
+files are ignored; legacy `.xls`, `.xlsb`, templates, add-ins, and `.ods` files
+cause an explicit unsupported-format error rather than being omitted.
+
 When a formula cannot be tokenized at all, FormulaFence records its location in
 the profile and emits `FF016` for a new instance. Enable
 `no_new_tokenization_failures` to turn that into `FFP016`.
@@ -1691,7 +1712,7 @@ assigned to a synthetic sheet.
 | --- | --- |
 | `0` | No policy violation (and no selected `--fail-on` threshold reached). |
 | `1` | One or more policy violations, or `--fail-on` was reached. |
-| `2` | Invalid policy, unreadable workbook, unsupported format, or output error. |
+| `2` | Invalid policy, unreadable workbook (including a portfolio entry), unsupported format, incomplete portfolio scan, or output error. |
 
 ## Suggested rollout
 

@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.84.0
+        uses: SybilGambleyyu/formulafence@v0.85.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -40,9 +40,10 @@ jobs:
           artifact-name: formulafence-report
 ```
 
-`baseline` and `candidate` are required. Supplying `policy` selects
-`formulafence check`; omitting it selects `formulafence diff`. `format` accepts
-`markdown`, `json`, or `sarif`; `fail-on` accepts the CLI's severity values.
+`baseline` and `candidate` are required. When both are files, supplying
+`policy` selects `formulafence check`; omitting it selects `formulafence diff`.
+`format` accepts `markdown`, `json`, or `sarif`; `fail-on` accepts the CLI's
+severity values.
 The Action exposes `steps.formulafence.outputs.report-path` and
 `steps.formulafence.outputs.exit-code`. It confines the report plus every
 workbook and policy input to the workspace and refuses to overwrite an input.
@@ -61,6 +62,45 @@ For systems that ingest SARIF, set `format: sarif` and consume the path output
 with the repository's chosen SARIF uploader. FormulaFence uses logical
 locations such as `Dashboard!B12`; consumers that do not understand Excel
 coordinates can still show the workbook path, rule, and message.
+
+## Directory portfolios
+
+When both Action inputs are directories, the Action automatically runs
+`formulafence portfolio` rather than guessing a single workbook. It recursively
+matches `.xlsx` and `.xlsm` files by relative path and retains one review record
+per workbook in the consolidated artifact.
+
+```yaml
+- id: formulafence-portfolio
+  uses: SybilGambleyyu/formulafence@v0.85.0
+  with:
+    baseline: models/approved
+    candidate: build/models
+    policy: models/formulafence.yml
+    max-workbooks: '200'
+    format: sarif
+    output: reports/formulafence-portfolio.sarif
+```
+
+The same policy is applied independently to every matched workbook. The
+portfolio-only `no_portfolio_membership_changes` rule converts an added or
+removed relative path from `FF077` into `FFP077`; this is useful for a
+controlled model inventory. A move is deliberately represented as a removal
+plus an addition, not guessed from a name or content similarity. Transient
+Office `~$` lock files are ignored. Unsupported Excel formats, files that
+differ only by case, symlinked paths, and inventories above
+`max-workbooks` fail before comparison. The default bound is 512 supported
+workbooks per directory.
+
+An unreadable `.xlsx`/`.xlsm` file produces a redacted `FF078` entry in the
+report and makes the CLI result `2`, so the Action still uploads the evidence
+before its final step fails. Portfolio SARIF uses each relative workbook path
+as the physical artifact URI and Excel cells as logical locations. No supplied
+directory root or absolute runner path is emitted. If that unreadable file is
+also newly added or removed, its known `FF077` / `FFP077` membership evidence
+remains present. The Action refuses an output
+path inside either portfolio input directory, so creating a report cannot alter
+the set of workbooks being reviewed.
 
 ## Manual integration
 
@@ -83,7 +123,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.84.0/formulafence-0.84.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.85.0/formulafence-0.85.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

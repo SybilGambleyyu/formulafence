@@ -85,6 +85,18 @@ financial correctness or replace model review.
   declared used rectangle.
 - Parser warnings from unsupported OOXML extensions are captured in the profile
   as coverage notes; FormulaFence does not silently discard them from its report.
+- Portfolio comparison recursively inventories only `.xlsx` and `.xlsm` files
+  under each supplied directory, identifies a workbook solely by its relative
+  path, and reports additions/removals rather than guessing renames. It keeps
+  roots and absolute worker paths out of portfolio output, ignores transient
+  Office `~$` lock files, rejects symlinked paths and paths that
+  differ only by case, and bounds each directory to 512 supported workbooks by
+  default. A malformed supported file produces redacted `FF078` evidence and a
+  final incomplete exit status, while remaining paths are still reported.
+- CLI report output is refused when it resolves to an inspected workbook or
+  policy, and portfolio output is refused inside either input directory. This
+  keeps a reporting request from mutating evidence or changing a portfolio's
+  inventory during review.
 
 ## What a finding means
 
@@ -103,6 +115,13 @@ review prompt, not proof of an error.
   password-to-open workbooks are outside scope. Workbook and worksheet
   protection flags inside an otherwise readable OOXML workbook are inspected as
   operational controls, not treated as encryption.
+- Portfolio mode intentionally does not support legacy `.xls`, `.xlsb`,
+  templates, add-ins, or `.ods` files, infer a rename/content match across
+  different paths, recursively follow a symlinked workbook, or combine cell
+  dependencies between workbooks. A policy is applied independently to every
+  matched path; selectors and formula/impact limits are not a portfolio-wide
+  policy language. The scanner is sequential to keep resource use bounded; an
+  incomplete entry is not treated as unchanged.
 - Ordinary workbook and sheet-local names with static A1 destinations are
   resolved into the dependency graph. It also expands formula-defined names
   whose whole definition is statically visible and internal, including nested

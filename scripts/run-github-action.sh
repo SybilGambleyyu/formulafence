@@ -16,6 +16,7 @@ policy=${INPUT_POLICY:-}
 format=${INPUT_FORMAT:-markdown}
 output=${INPUT_OUTPUT:-formulafence-report.md}
 fail_on=${INPUT_FAIL_ON:-none}
+max_workbooks=${INPUT_MAX_WORKBOOKS:-512}
 install=${INPUT_INSTALL:-true}
 upload_artifact=${INPUT_UPLOAD_ARTIFACT:-true}
 
@@ -36,6 +37,10 @@ case "$fail_on" in
   *) fail "Unsupported fail-on level: $fail_on." ;;
 esac
 
+if ! [[ "$max_workbooks" =~ ^[1-9][0-9]*$ ]]; then
+  fail 'max-workbooks must be a positive integer.'
+fi
+
 case "$install" in
   true|false) ;;
   *) fail "Unsupported install value: $install (expected true or false)." ;;
@@ -51,8 +56,13 @@ case "$output" in
 esac
 
 cd "$workspace"
-[[ -f "$baseline" ]] || fail "Baseline workbook does not exist: $baseline"
-[[ -f "$candidate" ]] || fail "Candidate workbook does not exist: $candidate"
+if [[ -f "$baseline" && -f "$candidate" ]]; then
+  comparison_mode=workbook
+elif [[ -d "$baseline" && -d "$candidate" ]]; then
+  comparison_mode=portfolio
+else
+  fail 'Baseline and candidate must both be workbook files or both be directories.'
+fi
 if [[ -n "$policy" ]]; then
   [[ -f "$policy" ]] || fail "Policy file does not exist: $policy"
 fi
@@ -86,7 +96,14 @@ for key in ("INPUT_BASELINE", "INPUT_CANDIDATE", "INPUT_POLICY"):
         path.relative_to(workspace)
     except ValueError:
         sys.exit(f"{key} must stay inside GITHUB_WORKSPACE")
-    if path == output:
+    if path.is_dir():
+        try:
+            output.relative_to(path)
+        except ValueError:
+            pass
+        else:
+            sys.exit("report output must not be written inside an input directory")
+    elif path == output:
         sys.exit("report output must not overwrite an input workbook or policy")
 
 print(output)
@@ -99,7 +116,12 @@ if [[ "$install" == true ]]; then
 fi
 
 command=(python -m formulafence.cli)
-if [[ -n "$policy" ]]; then
+if [[ "$comparison_mode" == portfolio ]]; then
+  command+=(portfolio "$baseline" "$candidate" --max-workbooks "$max_workbooks")
+  if [[ -n "$policy" ]]; then
+    command+=(--policy "$policy")
+  fi
+elif [[ -n "$policy" ]]; then
   command+=(check "$baseline" "$candidate" --policy "$policy")
 else
   command+=(diff "$baseline" "$candidate")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,7 @@ _RULE_FIELDS = {
     "no_formula_defined_xlm_environment_information_changes",
     "no_formula_environment_information_changes",
     "no_power_query_changes",
+    "no_portfolio_membership_changes",
     "no_3d_reference_scope_changes",
     "no_sheet_visibility_changes",
     "max_changed_formulas",
@@ -183,6 +185,7 @@ class Policy:
     no_formula_defined_xlm_environment_information_changes: bool = False
     no_formula_environment_information_changes: bool = False
     no_power_query_changes: bool = False
+    no_portfolio_membership_changes: bool = False
     no_3d_reference_scope_changes: bool = False
     no_sheet_visibility_changes: bool = False
     max_changed_formulas: int | None = None
@@ -265,6 +268,7 @@ rules:
   no_formula_defined_xlm_environment_information_changes: true
   no_formula_environment_information_changes: true
   no_power_query_changes: true
+  no_portfolio_membership_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -503,6 +507,9 @@ def parse_policy(data: object) -> Policy:
             rules, "no_formula_environment_information_changes"
         ),
         no_power_query_changes=_boolean_rule(rules, "no_power_query_changes"),
+        no_portfolio_membership_changes=_boolean_rule(
+            rules, "no_portfolio_membership_changes"
+        ),
         no_3d_reference_scope_changes=_boolean_rule(
             rules, "no_3d_reference_scope_changes"
         ),
@@ -527,6 +534,30 @@ def load_policy(path: str | Path) -> Policy:
 
 def _rule_triggered(report: DiffReport, rule_id: str) -> list[Finding]:
     return [finding for finding in report.findings if finding.rule_id == rule_id]
+
+
+def evaluate_portfolio_membership_policy(
+    findings: Iterable[Finding], policy: Policy
+) -> list[Finding]:
+    """Apply the portfolio-only membership guard without widening a file diff.
+
+    A normal ``DiffReport`` cannot contain an added or removed workbook because
+    it always has two snapshots.  Keeping this policy check separate avoids
+    manufacturing a fake workbook snapshot just to reuse the single-file rule
+    evaluator.
+    """
+    if not policy.no_portfolio_membership_changes:
+        return []
+    return [
+        Finding(
+            "FFP077",
+            "high",
+            "Policy forbids workbook additions and removals in a portfolio.",
+            details=finding.details,
+        )
+        for finding in findings
+        if finding.rule_id == "FF077"
+    ]
 
 
 def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:

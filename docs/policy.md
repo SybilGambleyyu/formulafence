@@ -183,7 +183,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | no_formula_environment_information_changes | boolean | A native CELL, INFO, SHEET, or SHEETS call stored in a worksheet formula, formula-defined name, or named LAMBDA; its relevant definition chain/private invocation inventory; or a statically visible argument input changes. Profiles separately aggregate CELL calls without an explicit reference, SHEET calls, SHEETS calls, and SHEETS calls without an explicit reference. When a complete raw OOXML tab catalog changes, FormulaFence also raises FF072 for stored SHEET or omitted-reference SHEETS calls; all declared tabs, including hidden, chart, macro, and dialog sheets, are in scope, while visibility-only changes are not this condition. Information types, references, formulas, arguments, locations, name identities, and raw tab-catalog comparison material are compared privately; ordinary sheet inventory remains normal reviewer context. FormulaFence never evaluates the call, resolves dynamic arguments, infers a selected cell, or simulates file, folder, client, workspace, workbook, or other Excel state. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_portfolio_membership_changes` | boolean | A `formulafence portfolio` run finds a supported workbook relative path only in the baseline or only in the candidate directory. This blocks `FF077` as `FFP077`; it does not infer that same-content files with different paths are a rename. |
-| `no_cross_workbook_impacts` | boolean | A changed candidate cell has one or more statically reachable formula cells in another candidate workbook through FormulaFence's exact, safely relative external-A1, direct workbook-scoped-name, or validated package-indexed-A1/name portfolio graph. An indexed form must traverse one document-order `externalReference`, one `externalBook`, and one external `externalLinkPath` relationship; an indexed name's source must expand completely to static internal A1 destinations in the already-inspected candidate. This blocks `FF079` as `FFP079` without resolving a file, trusting a cache, evaluating a formula, or inferring an unresolved target. |
+| `no_cross_workbook_impacts` | boolean | A changed candidate cell has one or more statically reachable formula cells in another candidate workbook through FormulaFence's exact, safely relative external-A1, direct workbook-scoped-name or sheet-local-name, or validated package-indexed-A1/name portfolio graph. An indexed form must traverse one document-order `externalReference`, one `externalBook`, and one external `externalLinkPath` relationship; any source name must expand completely to static internal A1 destinations in the already-inspected candidate, and an explicit source sheet selects only that local scope. This blocks `FF079` as `FFP079` without resolving a file, trusting a cache, evaluating a formula, or inferring an unresolved target. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
@@ -1686,35 +1686,38 @@ cause an explicit unsupported-format error rather than being omitted.
 
 Candidate-only portfolio analysis also builds a separate static dependency graph
 across a deliberately narrow subset of external A1 formulas, direct
-workbook-scoped external names, and package-indexed external A1/name forms. An
-A1 link such as `=[Inputs.xlsx]Data!B2`, a name link such as
-`=[Inputs.xlsx]InputRange`, or Excel package links such as
-`=[1]Data!B2` and `=[1]!InputRange` are eligible only when their workbook
-spelling is an exact relative path from the consuming workbook to another
-already-inspected candidate path. For the package forms, `[1]` is not a
-filename: FormulaFence requires it to select one document-order
+workbook-scoped or sheet-local external names, and package-indexed external
+A1/name forms. An A1 link such as `=[Inputs.xlsx]Data!B2`, a workbook-scoped
+name link such as `=[Inputs.xlsx]InputRange`, a sheet-local name link such as
+`=[Inputs.xlsx]Data!LocalInput`, or Excel package links such as
+`=[1]Data!B2`, `=[1]!InputRange`, and `=[1]Data!LocalInput` are eligible only
+when their workbook spelling is an exact relative path from the consuming
+workbook to another already-inspected candidate path. For the package forms,
+`[1]` is not a filename: FormulaFence requires it to select one document-order
 `externalReference`, one declared `externalLink` part with exactly one
 `externalBook`, and one external `externalLinkPath` relationship before
 treating that private target as the workbook spelling. A direct
-workbook-scoped consumer alias whose stored definition is exactly one static
-`[N]Sheet!A1` or `[N]!Name` spelling can use the same boundary. An indexed
-name's source must be workbook-scoped and must expand completely to static
-internal A1 destinations in the source candidate; this may include a safely
-resolved formula-defined source alias, but never evaluates the name. Backslash
-and slash relative forms are normalized only in memory; path resolution never
-touches the filesystem. Case is matched in the same case-insensitive way Excel
-uses for workbook and sheet names. Direct A1 cells, ranges, whole rows, whole
-columns, and safe name destinations remain lazy edges, so a range is not
-expanded into millions of cells.
+workbook-scoped consumer alias may retain one exact indexed static spelling,
+and may retain one exact direct sheet-local spelling. A source name must expand
+completely to static internal A1 destinations in the source candidate; a
+sheet-local spelling selects only the exact source sheet's local-name scope,
+with no global or other-sheet fallback. This may include a safely resolved
+formula-defined source alias, but never evaluates the name. Backslash and slash
+relative forms are normalized only in memory; path resolution never touches the
+filesystem. Case is matched in the same case-insensitive way Excel uses for
+workbook and sheet names. Direct A1 cells, ranges, whole rows, whole columns,
+and safe name destinations remain lazy edges, so a range is not expanded into
+millions of cells.
 
 Absolute, UNC, URI, or portfolio-escaping paths; malformed or ambiguous
 package declarations; DDE/OLE/non-workbook package links; package A1 forms
 that are not one static destination; sheet-scoped or formula-defined consumer
-aliases; external-link cache values; sheet-scoped, missing, dynamic, relative,
-cyclic, external, 3-D, malformed, or otherwise non-statically-expanded source
-names; direct structured references; unknown source sheets; unreadable targets;
-and basename-only near matches are not resolved or guessed. FormulaFence never opens, downloads,
-calculates, refreshes, trusts a cache, or otherwise follows an external link.
+aliases; external-link cache values; missing, dynamic, relative, cyclic,
+external, 3-D, malformed, otherwise non-statically-expanded, unknown-scope, or
+wrong-scope source names; direct structured references; unknown source sheets;
+unreadable targets; and basename-only near matches are not resolved or guessed.
+FormulaFence never opens, downloads, calculates, refreshes, trusts a cache, or
+otherwise follows an external link.
 When a changed source cell reaches a formula in another candidate workbook,
 `FF079` supplies only reviewed relative workbook identities, logical Excel
 cells, counts, and bounded shortest-path samples; stored external paths and

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.90.0 — 2026-07-26
+
+- Extend the candidate-only `FF079` portfolio graph to static external
+  sheet-local defined names: direct forms such as
+  `=[Inputs.xlsx]Data!LocalInput` and documented package-indexed forms such as
+  `=[N]Data!LocalInput`. Direct or package-indexed workbook-scoped consumer
+  aliases can retain the same exact static spelling. The source sheet selects
+  only that candidate workbook's matching local-name scope; a safely expanded
+  local formula alias may resolve to fixed internal A1 destinations, but no
+  global-name fallback is inferred.
+- Preserve the existing no-following boundary. Indexed `N` is resolved only
+  through the validated one-based document order of `externalReferences`, one
+  declared `externalLink` part, one `externalBook`, and one external
+  `externalLinkPath` relationship; a target must still normalize to an
+  already-inspected relative candidate workbook. Raw source paths, indexes,
+  sheet/name identities, and consumer aliases remain private in portfolio
+  evidence; no target is opened, fetched, refreshed, cached, or evaluated.
+- Fail closed for malformed/ambiguous quoting or indexes, A1/whole-row/
+  whole-column/structured payloads in the name path, 3-D forms, unknown source
+  sheets, source global fallbacks, different-sheet locals, dynamic/relative/
+  cyclic/external/non-static source definitions, consumer sheet-local or
+  formula aliases, unsafe paths, and every unvalidated package shape. Add
+  parser, direct/package-alias, static-local-alias, scope-collision, dynamic,
+  and JSON/Markdown/SARIF-redaction coverage.
+
 ## 0.89.0 — 2026-07-26
 
 - Extend the candidate-only `FF079` portfolio graph to Excel's documented

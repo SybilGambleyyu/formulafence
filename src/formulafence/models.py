@@ -39,16 +39,19 @@ class ExternalWorkbookReference:
 
 @dataclass(frozen=True)
 class ExternalWorkbookDefinedNameReference:
-    """One direct workbook-scoped name reference to another workbook.
+    """One direct external defined-name reference to another workbook.
 
     Both the external source spelling and the source defined-name identity can
     disclose a model's private layout, so they remain private implementation
-    data. Portfolio analysis may expose only a resolved candidate workbook and
-    logical cell locations that it already inspected.
+    data. ``scope_sheet`` distinguishes the Excel sheet-local form from a
+    workbook-scoped name; it too remains private. Portfolio analysis may expose
+    only a resolved candidate workbook and logical cell locations that it
+    already inspected.
     """
 
     source_path: str = field(repr=False)
     name_key: str = field(repr=False)
+    scope_sheet: str | None = field(default=None, repr=False)
 
 
 def display_location(location: CellKey | None) -> str | None:
@@ -4377,13 +4380,16 @@ class WorkbookSnapshot:
     ] = field(default_factory=dict, repr=False)
     # Direct external workbook-defined names are retained separately from
     # external A1 ranges. Both their source spelling and the name itself stay
-    # private, and portfolio comparison resolves only a statically expanded,
-    # workbook-scoped candidate-name index below.
+    # private, and portfolio comparison resolves only statically expanded,
+    # candidate-name indexes below.
     external_workbook_defined_name_references: dict[
         CellKey, tuple[ExternalWorkbookDefinedNameReference, ...]
     ] = field(default_factory=dict, repr=False)
     static_global_defined_name_references: dict[
         str, tuple[ParsedReference, ...]
+    ] = field(default_factory=dict, repr=False)
+    static_local_defined_name_references: dict[
+        str, dict[str, tuple[ParsedReference, ...]]
     ] = field(default_factory=dict, repr=False)
     unclassified_array_formula_cells: set[CellKey] = field(default_factory=set)
     array_formula_output_dependents: dict[CellKey, set[CellKey]] = field(

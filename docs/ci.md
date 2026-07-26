@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.89.0
+        uses: SybilGambleyyu/formulafence@v0.90.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -72,7 +72,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.89.0
+  uses: SybilGambleyyu/formulafence@v0.90.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -96,22 +96,25 @@ candidate-only static cross-workbook graph; its default is 100,000
 source-to-node states across the portfolio.
 
 When an exact relative external A1 link, direct workbook-scoped name such as
-`=[Inputs.xlsx]InputRange`, or package-indexed cell/range or name such as
-`=[1]Data!$B$2:$B$4` or `=[1]!InputRange` connects a changed source cell to a
-formula in another candidate workbook, the report emits `FF079` with safe
-relative workbook identities, logical cells, and shortest-path samples. An
-indexed form is eligible only when its document-order `externalReference`
-reaches exactly one external workbook part and external `externalLinkPath`
-relationship; a direct workbook-scoped consumer alias may use the same static
-A1 or name spelling. The matched source candidate must expand an indexed name
-completely to static internal A1 destinations. `no_cross_workbook_impacts`
-converts this to `FFP079`. The Action never follows a link on disk or over the
-network, trusts package caches, evaluates a formula, or guesses a basename,
-rename, absolute path, URI, malformed/ambiguous package declaration,
-sheet-scoped/formula alias, non-static package-A1/direct structured/3-D
-reference, or other unresolved target. If the global graph bound is reached,
-it emits critical `FF080`, marks the evidence incomplete, and preserves the
-report with exit code `2`.
+`=[Inputs.xlsx]InputRange`, direct sheet-local name such as
+`=[Inputs.xlsx]Data!LocalInput`, or package-indexed cell/range or name such as
+`=[1]Data!$B$2:$B$4`, `=[1]!InputRange`, or `=[1]Data!LocalInput` connects a
+changed source cell to a formula in another candidate workbook, the report
+emits `FF079` with safe relative workbook identities, logical cells, and
+shortest-path samples. An indexed form is eligible only when its document-order
+`externalReference` reaches exactly one external workbook part and external
+`externalLinkPath` relationship. Direct sheet-local and package-indexed forms
+may each be retained through one direct workbook-scoped consumer alias. The
+matched source candidate must expand a name completely to static internal A1
+destinations. An explicit source sheet uses only that sheet's local name scope,
+never a global fallback.
+`no_cross_workbook_impacts` converts this to `FFP079`. The Action never follows
+a link on disk or over the network, trusts package caches, evaluates a formula,
+or guesses a basename, rename, absolute path, URI, malformed/ambiguous package
+declaration, sheet-scoped/formula consumer alias, non-static package-A1/direct
+structured/3-D reference, wrong-scope source local, or other unresolved target.
+If the global graph bound is reached, it emits critical `FF080`, marks the
+evidence incomplete, and preserves the report with exit code `2`.
 
 An unreadable `.xlsx`/`.xlsm` file produces a redacted `FF078` entry in the
 report and makes the CLI result `2`, so the Action still uploads the evidence
@@ -144,7 +147,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.89.0/formulafence-0.89.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.90.0/formulafence-0.90.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

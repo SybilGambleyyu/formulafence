@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.89.0/formulafence-0.89.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.90.0/formulafence-0.90.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.89.0
+  uses: SybilGambleyyu/formulafence@v0.90.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -93,18 +93,21 @@ guesses renames, so a move remains a visible removal plus addition.
 
 When a changed candidate cell is read through a direct static external A1
 reference, the documented workbook-scoped name form such as
-`=[Inputs.xlsx]InputRange`, or Excel's package-indexed cell/range or name
-forms such as `=[1]Data!$B$2:$B$4` and `=[1]!InputRange` (including one direct
-workbook-scoped consumer alias), by a formula in another candidate workbook,
+`=[Inputs.xlsx]InputRange`, the sheet-local name form such as
+`=[Inputs.xlsx]Data!LocalInput`, or Excel's package-indexed cell/range or name
+forms such as `=[1]Data!$B$2:$B$4`, `=[1]!InputRange`, and
+`=[1]Data!LocalInput`, by a formula in another candidate workbook,
 FormulaFence emits high-severity `FF079` with relative workbook/cell paths and
-deterministic shortest-path samples. An indexed form is eligible only when its
-one-based `externalReferences` declaration identifies exactly one
-`externalBook` and external `externalLinkPath` relationship whose target
-resolves to one exact relative candidate. An indexed A1 form must be one static
-cell/range/whole-row/whole-column destination; an indexed name's source must
-also be workbook-scoped and fully expand to static internal A1 destinations
-without evaluating a formula. Enable `no_cross_workbook_impacts` to make that
-evidence `FFP079`.
+deterministic shortest-path samples. The direct sheet-local and package-indexed
+forms may each be retained through one direct workbook-scoped consumer alias.
+An indexed form is eligible only when its one-based
+`externalReferences` declaration identifies exactly one `externalBook` and
+external `externalLinkPath` relationship whose target resolves to one exact
+relative candidate. An indexed A1 form must be one static
+cell/range/whole-row/whole-column destination. A source name must fully expand
+to static internal A1 destinations without evaluation; a sheet-local spelling
+uses only the matching source sheet's local scope, never a same-named global
+fallback. Enable `no_cross_workbook_impacts` to make that evidence `FFP079`.
 
 This is deliberately a narrow local graph: it never opens or fetches a link
 target, guesses by filename, evaluates a formula, or trusts an external-link
@@ -114,10 +117,11 @@ defined-name declarations remain normal defined-name review context. Absolute,
 URI, escaping,
 malformed/ambiguous package declarations, non-workbook package links,
 non-static package-A1 forms, sheet-scoped or formula-defined consumer aliases,
-missing, direct structured, 3-D, dynamic, or otherwise non-statically-expanded
-name forms remain ordinary external-link coverage rather than being
-approximated. A defined-name declaration change remains its ordinary
-defined-name review event; `FF079` roots are changed candidate cells.
+missing/unknown/wrong-scope source locals, direct structured, 3-D, dynamic, or
+otherwise non-statically-expanded name forms remain ordinary external-link
+coverage rather than being approximated. A defined-name declaration change
+remains its ordinary defined-name review event; `FF079` roots are changed
+candidate cells.
 
 The command applies an optional policy independently to every matched workbook,
 keeps paths relative in portfolio output, skips transient Office `~$` lock

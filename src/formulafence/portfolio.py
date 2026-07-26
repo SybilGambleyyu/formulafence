@@ -337,9 +337,27 @@ def _build_candidate_impact_graph(
                 if source_workbook is None:
                     continue
                 source_snapshot = snapshots[source_workbook]
-                for source_reference in source_snapshot.static_global_defined_name_references.get(
-                    reference.name_key, ()
-                ):
+                if reference.scope_sheet is None:
+                    source_references = (
+                        source_snapshot.static_global_defined_name_references.get(
+                            reference.name_key, ()
+                        )
+                    )
+                else:
+                    source_scope = _canonical_sheet_name(
+                        source_snapshot, reference.scope_sheet
+                    )
+                    if source_scope is None:
+                        continue
+                    # Explicit external sheet qualification selects only that
+                    # source sheet's local-name scope. Never guess a global
+                    # fallback or another local definition with the same key.
+                    source_references = (
+                        source_snapshot.static_local_defined_name_references.get(
+                            source_scope.casefold(), {}
+                        ).get(reference.name_key, ())
+                    )
+                for source_reference in source_references:
                     if (
                         source_reference.sheet is None
                         or None

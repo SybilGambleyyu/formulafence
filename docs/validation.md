@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## External sheet-local-name portfolio boundary — 2026-07-26
+
+Microsoft's [name grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a469e5f5-a102-49bd-9642-8a8e8aaf1623)
+define an external name as a `single-sheet-prefix` plus a name, while its
+[cell-reference grammar](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/e531ebe0-a152-4978-a876-28e2a68f746e)
+defines that prefix and the nonzero package-index meaning. Excel's
+[Name Manager guidance](https://support.microsoft.com/en-us/excel/use-the-name-manager-in-excel)
+also distinguishes worksheet and workbook scope. FormulaFence 0.90.0 therefore
+recognizes only static direct `[Book.xlsx]Sheet!LocalName` and validated
+package-indexed `[N]Sheet!LocalName` forms. The named source must resolve only
+inside the explicitly named source sheet's local scope to fixed internal A1
+destinations; it never substitutes a same-named global or different-sheet
+local name. A direct or package-indexed workbook-scoped consumer alias can
+retain that exact static spelling, but no target is opened, fetched, refreshed,
+cached, or evaluated.
+
+An independently maintained
+[MullinsLab external-data workbook](https://github.com/MullinsLab/excel-external-data/blob/5b4d55319c2eab3ad25408a85de025bdffa35e8b/external-data-blank.xlsx)
+was downloaded at commit `5b4d55319c2eab3ad25408a85de025bdffa35e8b` into a
+temporary directory outside this repository. Its OOXML has a real static
+worksheet-local `External_data` name scoped to `External data` and covering
+`A1:N9592`. A temporary baseline/candidate copy gained one controlled `A1`
+value change; a separate temporary consumer used the quoted direct local-name
+form. FormulaFence emitted `FF079` and policy `FFP079` for the one reachable
+consumer formula, with exit status `1`. JSON contained only relative workbook
+paths and logical cells: the source-name identity, upstream filename, and
+repository identity were absent. The upstream workbook was neither executed,
+refreshed, changed in place, nor copied into this repository.
+
+The final source checkout passed **613 tests in 80.13 seconds**, a clean Ruff
+check, `git diff --check`, and GitHub Action shell syntax validation. Fresh
+0.90.0 source and wheel distributions passed `twine check`. An isolated virtual
+environment installed the exact final wheel and reran the temporary independent
+portfolio with `no_cross_workbook_impacts`; it returned policy exit `1` with
+both `FF079` and `FFP079`, while `External_data`, the upstream filename, and
+the repository identity remained absent from JSON.
+
 ## Package-indexed external-A1 portfolio boundary — 2026-07-26
 
 Microsoft's [cell-reference grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/e531ebe0-a152-4978-a876-28e2a68f746e)

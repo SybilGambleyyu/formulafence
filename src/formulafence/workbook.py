@@ -36,7 +36,9 @@ from formulafence.formulas import (
     inspect_formula,
     lambda_parameter_count,
     parse_external_link_indexed_defined_name_reference,
+    parse_external_link_indexed_sheet_defined_name_reference,
     parse_external_link_indexed_workbook_reference,
+    parse_external_workbook_sheet_defined_name_reference,
     parse_reference_token,
     reference_lookup_key,
 )
@@ -43991,6 +43993,24 @@ def _named_reference_maps(
     )
 
 
+def _has_static_defined_name_destinations(
+    references: tuple[ParsedReference, ...],
+) -> bool:
+    """Return whether every expanded destination is a fixed internal range."""
+    return bool(references) and all(
+        not reference.is_external
+        and reference.sheet is not None
+        and None
+        not in {
+            reference.min_column,
+            reference.min_row,
+            reference.max_column,
+            reference.max_row,
+        }
+        for reference in references
+    )
+
+
 def _static_global_defined_name_references(
     named_references: Mapping[str, tuple[ParsedReference, ...]],
 ) -> dict[str, tuple[ParsedReference, ...]]:
@@ -44005,21 +44025,31 @@ def _static_global_defined_name_references(
     return {
         name_key: references
         for name_key, references in named_references.items()
-        if "!" not in name_key
-        and references
-        and all(
-            not reference.is_external
-            and reference.sheet is not None
-            and None
-            not in {
-                reference.min_column,
-                reference.min_row,
-                reference.max_column,
-                reference.max_row,
-            }
-            for reference in references
-        )
+        if "!" not in name_key and _has_static_defined_name_destinations(references)
     }
+
+
+def _static_local_defined_name_references(
+    named_references: Mapping[str, Mapping[str, tuple[ParsedReference, ...]]],
+) -> dict[str, dict[str, tuple[ParsedReference, ...]]]:
+    """Keep only static source-local names, indexed by their exact scope.
+
+    An external ``[Book]Sheet!Name`` explicitly selects the local scope of the
+    source sheet.  Do not fall back to a same-named global definition or a
+    different sheet's local name, and do not retain a formula/name that did
+    not resolve entirely to fixed internal destinations.
+    """
+    result: dict[str, dict[str, tuple[ParsedReference, ...]]] = {}
+    for scope, definitions in named_references.items():
+        static_definitions = {
+            name_key: references
+            for name_key, references in definitions.items()
+            if "!" not in name_key
+            and _has_static_defined_name_destinations(references)
+        }
+        if static_definitions:
+            result[scope] = static_definitions
+    return result
 
 
 def _package_indexed_external_name_references(
@@ -44060,6 +44090,81 @@ def _package_indexed_external_name_references(
             result[name_key] = (
                 ExternalWorkbookDefinedNameReference(source_path, source_name_key),
             )
+    return result
+
+
+def _package_indexed_external_sheet_defined_name_references(
+    workbook: object,
+    indexed_external_workbook_paths: Mapping[int, str],
+) -> dict[str, tuple[ExternalWorkbookDefinedNameReference, ...]]:
+    """Resolve only direct workbook-scoped aliases for indexed local names.
+
+    A consuming workbook-defined name can store ``[1]Data!LocalInput`` while
+    an ordinary formula uses only the consumer alias.  The source sheet is a
+    local-name scope, not a candidate A1 destination.  Require the same exact
+    validated package target as every other indexed form, and leave local
+    consumer aliases, formula aliases, invalid indexes, and ambiguous package
+    metadata outside the graph.
+    """
+    if not indexed_external_workbook_paths:
+        return {}
+    names = getattr(workbook, "defined_names", {})
+    try:
+        items = names.items()
+    except AttributeError:
+        return {}
+    result: dict[str, tuple[ExternalWorkbookDefinedNameReference, ...]] = {}
+    for name, definition in items:
+        if getattr(definition, "localSheetId", None) is not None:
+            continue
+        indexed_reference = parse_external_link_indexed_sheet_defined_name_reference(
+            _definition_text(definition)
+        )
+        if indexed_reference is None:
+            continue
+        index, scope_sheet, source_name_key = indexed_reference
+        source_path = indexed_external_workbook_paths.get(index)
+        if source_path is None:
+            continue
+        name_key = reference_lookup_key(str(name))
+        if name_key:
+            result[name_key] = (
+                ExternalWorkbookDefinedNameReference(
+                    source_path,
+                    source_name_key,
+                    scope_sheet,
+                ),
+            )
+    return result
+
+
+def _direct_external_sheet_defined_name_references(
+    workbook: object,
+) -> dict[str, tuple[ExternalWorkbookDefinedNameReference, ...]]:
+    """Keep direct workbook-scoped aliases for static source-local names.
+
+    Direct textual paths can be resolved later only through the supplied
+    portfolio root.  This loader performs no path lookup and deliberately
+    ignores consumer-local and formula aliases so an explicit source scope is
+    never inferred from workbook state.
+    """
+    names = getattr(workbook, "defined_names", {})
+    try:
+        items = names.items()
+    except AttributeError:
+        return {}
+    result: dict[str, tuple[ExternalWorkbookDefinedNameReference, ...]] = {}
+    for name, definition in items:
+        if getattr(definition, "localSheetId", None) is not None:
+            continue
+        reference = parse_external_workbook_sheet_defined_name_reference(
+            _definition_text(definition)
+        )
+        if reference is None:
+            continue
+        name_key = reference_lookup_key(str(name))
+        if name_key:
+            result[name_key] = (reference,)
     return result
 
 
@@ -44557,6 +44662,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     static_global_defined_name_references = _static_global_defined_name_references(
         global_named_references
     )
+    static_local_defined_name_references = _static_local_defined_name_references(
+        local_named_references
+    )
     indexed_external_workbook_paths = dict(
         external_data_metadata.indexed_external_workbook_paths
     )
@@ -44566,6 +44674,20 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             indexed_external_workbook_paths,
         )
     )
+    package_indexed_external_sheet_defined_name_references = (
+        _package_indexed_external_sheet_defined_name_references(
+            workbook,
+            indexed_external_workbook_paths,
+        )
+    )
+    direct_external_sheet_defined_name_references = (
+        _direct_external_sheet_defined_name_references(workbook)
+    )
+    named_external_workbook_defined_name_references = {
+        **package_indexed_external_name_references,
+        **package_indexed_external_sheet_defined_name_references,
+        **direct_external_sheet_defined_name_references,
+    }
     package_indexed_external_workbook_references = (
         _package_indexed_external_workbook_references(
             workbook,
@@ -44747,7 +44869,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 snapshot.formula,
                 named_references=named_references,
                 named_external_workbook_defined_name_references=(
-                    package_indexed_external_name_references
+                    named_external_workbook_defined_name_references
                 ),
                 indexed_external_workbook_paths=indexed_external_workbook_paths,
                 named_external_workbook_references=(
@@ -45317,6 +45439,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             external_workbook_defined_name_references
         ),
         static_global_defined_name_references=static_global_defined_name_references,
+        static_local_defined_name_references=static_local_defined_name_references,
         unclassified_array_formula_cells=array_formula_classification.unclassified_cells,
         array_formula_output_dependents=array_formula_output_dependents,
         tokenization_failure_cells=tokenization_failure_cells,

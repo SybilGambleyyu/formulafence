@@ -9,9 +9,11 @@ from formulafence.formulas import (
     inspect_formula,
     lambda_parameter_count,
     parse_external_link_indexed_defined_name_reference,
+    parse_external_link_indexed_sheet_defined_name_reference,
     parse_external_link_indexed_workbook_reference,
     parse_external_workbook_defined_name_reference,
     parse_external_workbook_reference,
+    parse_external_workbook_sheet_defined_name_reference,
 )
 from formulafence.models import ExternalWorkbookReference
 
@@ -136,6 +138,61 @@ def test_external_workbook_defined_name_references_keep_private_lookup_data() ->
     ]
 
 
+def test_external_workbook_sheet_defined_names_keep_scope_private_and_static() -> None:
+    direct = parse_external_workbook_sheet_defined_name_reference(
+        "[Inputs.xlsx]Data!LocalInput"
+    )
+    relative = parse_external_workbook_sheet_defined_name_reference(
+        "'..\\shared\\[Inputs.xlsx]Input Sheet'!Private.Input"
+    )
+    escaped_quote = parse_external_workbook_sheet_defined_name_reference(
+        "'[Inputs.xlsx]O''Brien'!LocalInput"
+    )
+
+    assert direct is not None
+    assert (direct.source_path, direct.scope_sheet, direct.name_key) == (
+        "Inputs.xlsx",
+        "Data",
+        "localinput",
+    )
+    assert relative is not None
+    assert (relative.source_path, relative.scope_sheet, relative.name_key) == (
+        "..\\shared\\Inputs.xlsx",
+        "Input Sheet",
+        "private.input",
+    )
+    assert escaped_quote is not None
+    assert (escaped_quote.scope_sheet, escaped_quote.name_key) == ("O'Brien", "localinput")
+    assert parse_external_workbook_sheet_defined_name_reference(
+        "[Inputs.xlsx]Data!A1"
+    ) is None
+    assert parse_external_workbook_sheet_defined_name_reference(
+        "[Inputs.xlsx]Data!A1:B2"
+    ) is None
+    assert parse_external_workbook_sheet_defined_name_reference(
+        "[Inputs.xlsx]Jan:Mar!LocalInput"
+    ) is None
+    assert parse_external_workbook_sheet_defined_name_reference(
+        "[1]Data!LocalInput"
+    ) is None
+    assert parse_external_workbook_sheet_defined_name_reference(
+        "'[Inputs.xlsx]Input Sheet!LocalInput"
+    ) is None
+
+    inspection = inspect_formula(
+        "=SUM([Inputs.xlsx]Data!LocalInput)+'..\\shared\\[Other.xlsx]Input Sheet'!Margin"
+    )
+    assert inspection.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in inspection.references)
+    assert [
+        (reference.source_path, reference.scope_sheet, reference.name_key)
+        for reference in inspection.external_workbook_defined_name_references
+    ] == [
+        ("Inputs.xlsx", "Data", "localinput"),
+        ("..\\shared\\Other.xlsx", "Input Sheet", "margin"),
+    ]
+
+
 def test_package_indexed_external_name_references_require_a_declared_one_based_index() -> None:
     assert parse_external_link_indexed_defined_name_reference("[1]!InputRange") == (
         1,
@@ -174,6 +231,61 @@ def test_package_indexed_external_name_references_require_a_declared_one_based_i
     ] == [("../inputs/source.xlsx", "inputrange")]
 
     unresolved = inspect_formula("=SUM([1]!InputRange)")
+    assert unresolved.external_workbook_defined_name_references == ()
+    assert unresolved.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in unresolved.references)
+
+
+def test_package_indexed_external_sheet_defined_names_require_a_declared_index() -> None:
+    assert parse_external_link_indexed_sheet_defined_name_reference(
+        "[1]Data!LocalInput"
+    ) == (1, "Data", "localinput")
+    assert parse_external_link_indexed_sheet_defined_name_reference(
+        "='[42]Input Sheet'!Private.Input"
+    ) == (42, "Input Sheet", "private.input")
+    assert parse_external_link_indexed_sheet_defined_name_reference(
+        "'[9]O''Brien'!LocalInput"
+    ) == (9, "O'Brien", "localinput")
+    assert parse_external_link_indexed_sheet_defined_name_reference(
+        "[0]Data!LocalInput"
+    ) is None
+    assert parse_external_link_indexed_sheet_defined_name_reference(
+        "[01]Data!LocalInput"
+    ) is None
+    assert parse_external_link_indexed_sheet_defined_name_reference(
+        "[1]!LocalInput"
+    ) is None
+    assert parse_external_link_indexed_sheet_defined_name_reference(
+        "[1]Data!A1"
+    ) is None
+    assert parse_external_link_indexed_sheet_defined_name_reference(
+        "[1]Data!A1:B2"
+    ) is None
+    assert parse_external_link_indexed_sheet_defined_name_reference(
+        "[1]Jan:Mar!LocalInput"
+    ) is None
+    assert parse_external_link_indexed_sheet_defined_name_reference(
+        "'[1]Input Sheet!LocalInput"
+    ) is None
+
+    inspection = inspect_formula(
+        "=SUM([1]Data!LocalInput)+'[2]Input Sheet'!Margin",
+        indexed_external_workbook_paths={
+            1: "../inputs/source.xlsx",
+            2: "../inputs/other.xlsx",
+        },
+    )
+    assert inspection.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in inspection.references)
+    assert [
+        (reference.source_path, reference.scope_sheet, reference.name_key)
+        for reference in inspection.external_workbook_defined_name_references
+    ] == [
+        ("../inputs/source.xlsx", "Data", "localinput"),
+        ("../inputs/other.xlsx", "Input Sheet", "margin"),
+    ]
+
+    unresolved = inspect_formula("=SUM([1]Data!LocalInput)")
     assert unresolved.external_workbook_defined_name_references == ()
     assert unresolved.unresolved_range_tokens == ()
     assert all(reference.is_external for reference in unresolved.references)

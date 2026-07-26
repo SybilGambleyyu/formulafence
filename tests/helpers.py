@@ -6420,6 +6420,40 @@ def make_indexed_external_workbook_a1_link_model(
     )
 
 
+def make_indexed_external_workbook_sheet_defined_name_link_model(
+    path: Path,
+    *,
+    target_paths: tuple[str, ...] = ("../inputs/source.xlsx",),
+    source_sheet: str = "Data",
+    source_name: str = "PrivateLocalInput",
+    link_index: int = 1,
+    consumer_alias_local_sheet_id: int | None = None,
+    include_direct_indexed_formula: bool = True,
+    consumer_formula_alias: bool = False,
+) -> Path:
+    """Create direct and aliased ``[N]Sheet!LocalName`` package links."""
+    escaped_sheet = source_sheet.replace("'", "''")
+    needs_quotes = any(
+        character.isspace() or character in "'+-*/^&=<>%,;(){}!"
+        for character in source_sheet
+    )
+    external_sheet = (
+        f"'[{link_index}]{escaped_sheet}'"
+        if needs_quotes
+        else f"[{link_index}]{source_sheet}"
+    )
+    return make_indexed_external_workbook_name_link_model(
+        path,
+        target_paths=target_paths,
+        link_index=link_index,
+        consumer_alias_local_sheet_id=consumer_alias_local_sheet_id,
+        include_direct_indexed_formula=include_direct_indexed_formula,
+        consumer_formula_alias=consumer_formula_alias,
+        external_reference=f"{external_sheet}!{source_name}",
+        consumer_alias_name="PackageExternalSheetName",
+    )
+
+
 def change_external_link_package_controls(path: Path) -> Path:
     """Change external source, definition, cache, and opaque package material."""
     spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"

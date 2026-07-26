@@ -21,6 +21,7 @@ from .helpers import (
     duplicate_indexed_external_link_part_binding,
     make_indexed_external_workbook_a1_link_model,
     make_indexed_external_workbook_name_link_model,
+    make_indexed_external_workbook_sheet_defined_name_link_model,
     make_model,
     rewrite,
 )
@@ -493,6 +494,121 @@ def test_portfolio_resolves_declared_package_indexed_external_a1_links_privately
     ]
     assert all("PackageExternalCell" not in value for value in report_rendered)
     assert "PackageExternalCell" in profile_rendered
+
+
+def test_portfolio_resolves_static_external_sheet_local_names_privately(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    source_path = _write_workbook(
+        baseline / "inputs" / "source.xlsx",
+        "Data",
+        {"B2": 10, "B3": 20, "B4": 30},
+    )
+    source = load_workbook(source_path)
+    other = source.create_sheet("Other")
+    other["B2"] = 999
+    source["Data"].defined_names.add(
+        DefinedName(
+            "PrivateLocalSource",
+            attr_text="Data!$B$2:$B$4",
+            localSheetId=0,
+        )
+    )
+    source["Data"].defined_names.add(
+        DefinedName(
+            "PrivateLocalAlias",
+            attr_text="=PrivateLocalSource",
+            localSheetId=0,
+        )
+    )
+    source["Data"].defined_names.add(
+        DefinedName(
+            "PrivateDynamicLocal",
+            attr_text="=OFFSET(Data!$B$2,0,0,3,1)",
+            localSheetId=0,
+        )
+    )
+    source["Other"].defined_names.add(
+        DefinedName(
+            "PrivateWrongScope",
+            attr_text="Other!$B$2",
+            localSheetId=1,
+        )
+    )
+    source.defined_names.add(
+        DefinedName("PrivateGlobalOnly", attr_text="Data!$B$2:$B$4")
+    )
+    source.save(source_path)
+
+    direct_path = _write_workbook(
+        baseline / "reports" / "direct.xlsx",
+        "Summary",
+        {
+            "D2": "=SUM('..\\inputs\\[SOURCE.XLSX]data'!privatelocalalias)",
+            "D3": "=SUM(DirectLocalAlias)",
+            "D4": "=SUM('..\\inputs\\[SOURCE.XLSX]Data'!PrivateDynamicLocal)",
+            "D5": "=SUM('..\\inputs\\[SOURCE.XLSX]Data'!PrivateGlobalOnly)",
+            "D6": "=SUM('..\\inputs\\[SOURCE.XLSX]Data'!PrivateWrongScope)",
+        },
+    )
+    direct = load_workbook(direct_path)
+    direct.defined_names.add(
+        DefinedName(
+            "DirectLocalAlias",
+            attr_text="'..\\inputs\\[SOURCE.XLSX]Data'!PrivateLocalAlias",
+        )
+    )
+    direct.save(direct_path)
+    make_indexed_external_workbook_sheet_defined_name_link_model(
+        baseline / "reports" / "package.xlsx",
+        source_name="PrivateLocalAlias",
+    )
+
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs" / "source.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B3"], "value", 21),
+    )
+
+    report = compare_portfolios(
+        baseline,
+        candidate,
+        policy=parse_policy(
+            {"version": 1, "rules": {"no_cross_workbook_impacts": True}}
+        ),
+    )
+    source_entry = next(
+        entry for entry in report.workbooks if entry.path == "inputs/source.xlsx"
+    )
+    finding = next(
+        finding for finding in source_entry.findings if finding.rule_id == "FF079"
+    )
+    report_rendered = (
+        as_json(report.to_dict()),
+        portfolio_to_markdown(report),
+        as_json(portfolio_to_sarif(report)),
+    )
+
+    assert not report.incomplete
+    assert finding.details["impacted_workbook_count"] == 2
+    assert finding.details["impacted_formula_count"] == 4
+    assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
+    assert {
+        (impact["workbook"], impact["location"])
+        for impact in finding.details["sample_impacts"]
+    } == {
+        ("reports/direct.xlsx", "Summary!D2"),
+        ("reports/direct.xlsx", "Summary!D3"),
+        ("reports/package.xlsx", "Model!D2"),
+        ("reports/package.xlsx", "Model!E2"),
+    }
+    assert all("PrivateLocalSource" not in value for value in report_rendered)
+    assert all("PrivateLocalAlias" not in value for value in report_rendered)
+    assert all("PrivateDynamicLocal" not in value for value in report_rendered)
+    assert all("PrivateGlobalOnly" not in value for value in report_rendered)
+    assert all("PrivateWrongScope" not in value for value in report_rendered)
 
 
 def test_portfolio_fails_closed_for_dynamic_or_absolute_package_indexed_names(

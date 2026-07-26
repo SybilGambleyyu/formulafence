@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.94.0/formulafence-0.94.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.95.0/formulafence-0.95.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.94.0
+  uses: SybilGambleyyu/formulafence@v0.95.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -109,7 +109,17 @@ such as a defined name storing `'..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4`,
 `'..\\inputs\\[Inputs.xlsx]InputRange'`, or
 `'..\\inputs\\source.xlsx'!Sales[Amount]`; every intermediate definition
 must be exactly one unqualified, non-A1 name identity, with or without its
-leading `=`.
+leading `=`. It may also be reached through an eligible workbook-scoped,
+non-`LAMBDA` formula-defined name, for example
+`=SUM(ExternalInput)` or `=SUM('..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4)`.
+FormulaFence does not calculate that expression: it retains its input endpoint
+only when every external token is one already parsed static direct or
+package-validated endpoint, every remaining reference is static, and the
+definition has no broken reference, unresolved token, tokenizer failure,
+dynamic-reference function, relative internal A1 reference, local 3-D form,
+spill reference, or explicit implicit intersection. Eligible formula names can
+call another eligible workbook-scoped formula name; local names and named
+`LAMBDA`s never enter this bridge.
 An indexed form is eligible only when its one-based
 `externalReferences` declaration identifies exactly one `externalBook` and
 external `externalLinkPath` relationship whose target resolves to one exact
@@ -134,8 +144,10 @@ defined-name declarations remain normal defined-name review context. Absolute,
 URI, escaping,
 malformed/ambiguous package declarations, non-workbook package links,
 non-static package-A1 forms, sheet-scoped consumer aliases, and consumer
-formula wrappers, expressions, ranges, or cyclic/missing alias chains (and a
-sheet-local consumer name shadows a same-named workbook alias),
+formula definitions that do not meet the static bridge above (including
+dynamic, relative, local-3-D, spilled, explicitly intersected, unresolved, or
+tokenizer-failed forms), or cyclic/missing exact alias chains (and a sheet-local
+consumer name shadows a same-named workbook alias),
 missing/unknown/wrong-scope source locals, bare or sheet-qualified table names,
 `@`/`#This Row`, unsupported/missing/colliding source tables, dynamic or
 otherwise non-statically-expanded name forms, and 3-D spans with missing,

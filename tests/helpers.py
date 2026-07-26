@@ -6258,6 +6258,7 @@ def make_indexed_external_workbook_name_link_model(
     consumer_alias_local_sheet_id: int | None = None,
     include_direct_indexed_formula: bool = True,
     consumer_formula_alias: bool = False,
+    consumer_static_formula_name: str | None = None,
     external_reference: str | None = None,
     consumer_alias_name: str = "PackageExternalInput",
 ) -> Path:
@@ -6296,6 +6297,14 @@ def make_indexed_external_workbook_name_link_model(
             DefinedName(
                 "PackageExternalFormulaAlias",
                 attr_text=f"={consumer_alias_name}",
+            )
+        )
+    if consumer_static_formula_name is not None:
+        workbook["Model"]["F2"] = f"=SUM({consumer_static_formula_name})"
+        workbook.defined_names.add(
+            DefinedName(
+                consumer_static_formula_name,
+                attr_text=f"=SUM({consumer_formula_name})",
             )
         )
     workbook.save(path)

@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.94.0
+        uses: SybilGambleyyu/formulafence@v0.95.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -72,7 +72,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.94.0
+  uses: SybilGambleyyu/formulafence@v0.95.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -111,7 +111,15 @@ finite, acyclic chain of workbook-scoped consumer aliases. Its terminal is one
 exact direct external A1, workbook-scoped-name, or selector-bearing table
 definition (or the corresponding validated package form), and every
 intermediate definition is exactly one unqualified, non-A1 name identity with
-or without its leading `=`.
+or without its leading `=`. A workbook-scoped non-`LAMBDA` formula-defined
+name can also retain one or more of those endpoints, for example
+`=SUM(ExternalInput)` or `=SUM('..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4)`.
+FormulaFence extracts only the static input edges: every external token must
+be an existing direct or package-validated endpoint, and the definition must
+have no broken/unresolved/tokenizer-failed, dynamic, relative, local-3-D,
+spill, or explicit-intersection reference. Eligible global formula names may
+call another eligible global formula name; local names and named `LAMBDA`s do
+not enter this portfolio bridge.
 The matched source candidate must expand a name completely to static internal A1
 destinations. An explicit source sheet uses only that sheet's local name scope,
 never a global fallback. An external 3-D span may use the matching indexed form
@@ -123,8 +131,10 @@ source candidate, using its static column/item bounds.
 `no_cross_workbook_impacts` converts this to `FFP079`. The Action never follows
 a link on disk or over the network, trusts package caches, evaluates a formula,
 or guesses a basename, rename, absolute path, URI, malformed/ambiguous package
-declaration, sheet-scoped consumer alias, formula wrapper/expression, cyclic
-or missing alias chain (or a workbook alias shadowed by a local consumer name),
+declaration, sheet-scoped consumer alias, or a formula-defined consumer bridge
+with dynamic, relative, local-3-D, spilled, explicitly intersected, broken,
+unresolved, or tokenizer-failed semantics; it also rejects cyclic or missing
+exact alias chains (or a workbook alias shadowed by a local consumer name),
 non-static package-A1 form, bare/source-sheet-qualified table name,
 `@`/`#This Row`, unsupported or missing/colliding source table, 3-D span with
 missing/reversed/non-worksheet/inconsistent tab-catalog endpoints, wrong-scope
@@ -163,7 +173,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.94.0/formulafence-0.94.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.95.0/formulafence-0.95.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

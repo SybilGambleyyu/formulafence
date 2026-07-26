@@ -346,14 +346,30 @@ def test_portfolio_resolves_relative_external_workbook_defined_names_privately(
         )
     )
     source.save(source_path)
-    _write_workbook(
+    consumer_path = _write_workbook(
         baseline / "reports" / "summary.xlsx",
         "Summary",
         {
             "D2": "=SUM('..\\inputs\\[SOURCE.XLSX]privateinputalias')",
             "D3": "=SUM('..\\inputs\\[SOURCE.XLSX]dynamicinputrange')",
+            "D4": "=SUM(ExternalNameFormula)",
+            "D5": "=SUM(ExternalNameDynamicFormula)",
         },
     )
+    consumer = load_workbook(consumer_path)
+    consumer.defined_names.add(
+        DefinedName(
+            "ExternalNameFormula",
+            attr_text="=SUM('..\\inputs\\[SOURCE.XLSX]privateinputalias')",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "ExternalNameDynamicFormula",
+            attr_text="=OFFSET('..\\inputs\\[SOURCE.XLSX]privateinputalias',0,0,1,1)",
+        )
+    )
+    consumer.save(consumer_path)
     shutil.copytree(baseline, candidate)
     rewrite(
         candidate / "inputs" / "source.xlsx",
@@ -383,19 +399,17 @@ def test_portfolio_resolves_relative_external_workbook_defined_names_privately(
     rendered = (*report_rendered, profile_rendered)
 
     assert finding.details["impacted_workbook_count"] == 1
-    assert finding.details["impacted_formula_count"] == 1
+    assert finding.details["impacted_formula_count"] == 2
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
-    assert finding.details["sample_impacts"][0] == {
-        "workbook": "reports/summary.xlsx",
-        "location": "Summary!D2",
-        "path": [
-            {"workbook": "inputs/source.xlsx", "location": "Data!B3"},
-            {"workbook": "reports/summary.xlsx", "location": "Summary!D2"},
-        ],
-    }
+    assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
+        "Summary!D2",
+        "Summary!D4",
+    ]
     assert all("PrivateInputRange" not in value for value in rendered)
     assert all("PrivateInputAlias" not in value for value in rendered)
     assert all("DynamicInputRange" not in value for value in rendered)
+    assert all("ExternalNameFormula" not in value for value in report_rendered)
+    assert all("ExternalNameDynamicFormula" not in value for value in report_rendered)
 
 
 def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> None:
@@ -416,6 +430,10 @@ def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> 
             "K2": "=SUM('[source.xlsx]Data'!Sales[Amount])",
             "L2": "=SUM('C:\\Private\\source.xlsx'!Sales[Amount])",
             "M2": "=SUM(DirectExternalTableShadowed)",
+            "N2": "=SUM(DirectExternalTableFormula)",
+            "O2": "=SUM(DirectExternalTableDynamicFormula)",
+            "P2": "=SUM(DirectExternalTableLocalFormula)",
+            "Q2": "=SUM(DirectExternalTableRelativeFormula)",
         },
     )
     consumer = load_workbook(consumer_path)
@@ -433,6 +451,24 @@ def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> 
     )
     consumer.defined_names.add(
         DefinedName(
+            "DirectExternalTableFormula",
+            attr_text="=SUM(DirectExternalTableBridge)",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalTableDynamicFormula",
+            attr_text="=OFFSET(DirectExternalTable,0,0,1,1)",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalTableRelativeFormula",
+            attr_text="=SUM(DirectExternalTable,A1)",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
             "DirectExternalTableShadowed",
             attr_text="'..\\inputs\\source.xlsx'!Sales[Amount]",
         )
@@ -441,6 +477,13 @@ def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> 
         DefinedName(
             "DirectExternalTableShadowed",
             attr_text="Summary!$A$1",
+            localSheetId=0,
+        )
+    )
+    consumer["Summary"].defined_names.add(
+        DefinedName(
+            "DirectExternalTableLocalFormula",
+            attr_text="=SUM(DirectExternalTable)",
             localSheetId=0,
         )
     )
@@ -527,12 +570,13 @@ def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> 
     assert not report.incomplete
     assert finding.location == ("Data", "B3")
     assert finding.details["impacted_workbook_count"] == 1
-    assert finding.details["impacted_formula_count"] == 4
+    assert finding.details["impacted_formula_count"] == 5
     assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
         "Summary!D2",
         "Summary!E2",
         "Summary!F2",
         "Summary!G2",
+        "Summary!N2",
     ]
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
     snapshot_repr = repr(consumer_entry.after.external_workbook_structured_references)
@@ -549,6 +593,10 @@ def test_portfolio_resolves_static_external_tables_privately(tmp_path: Path) -> 
     for private_alias in (
         "DirectExternalTable",
         "DirectExternalTableBridge",
+        "DirectExternalTableFormula",
+        "DirectExternalTableDynamicFormula",
+        "DirectExternalTableLocalFormula",
+        "DirectExternalTableRelativeFormula",
         "DirectExternalTableShadowed",
     ):
         assert all(private_alias not in value for value in report_rendered)
@@ -568,6 +616,7 @@ def test_portfolio_resolves_declared_package_indexed_external_tables_privately(
         external_reference="[2]!Sales[Amount]",
         consumer_alias_name="PackageExternalTable",
         consumer_formula_alias=True,
+        consumer_static_formula_name="PackageExternalTableFormula",
     )
     shutil.copytree(baseline, candidate)
     rewrite(
@@ -601,10 +650,11 @@ def test_portfolio_resolves_declared_package_indexed_external_tables_privately(
 
     assert not report.incomplete
     assert finding.details["impacted_workbook_count"] == 1
-    assert finding.details["impacted_formula_count"] == 2
+    assert finding.details["impacted_formula_count"] == 3
     assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
         "Model!D2",
         "Model!E2",
+        "Model!F2",
     ]
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
     for private_value in ("Sales[Amount]", "../inputs/source.xlsx"):
@@ -612,6 +662,8 @@ def test_portfolio_resolves_declared_package_indexed_external_tables_privately(
         assert private_value not in profile_rendered
     assert all("PackageExternalTable" not in value for value in report_rendered)
     assert "PackageExternalTable" in profile_rendered
+    assert all("PackageExternalTableFormula" not in value for value in report_rendered)
+    assert "PackageExternalTableFormula" in profile_rendered
 
 
 def test_portfolio_resolves_declared_package_indexed_external_names_privately(
@@ -1000,6 +1052,9 @@ def test_portfolio_resolves_static_direct_external_alias_chains_privately(
             "P2": "=SUM(DirectExternalUnresolvedAlias)",
             "Q2": "=SUM(DirectExternalChainedShadowed)",
             "R2": "=SUM(DirectExternalLocalFormulaAlias)",
+            "S2": "=SUM(DirectExternalFormulaWrapperSecond)",
+            "T2": "=SUM(DirectExternalUnresolvedFormula)",
+            "U2": "=SUM(DirectExternalFormulaDuplicate)",
         },
     )
     consumer = load_workbook(consumer_path)
@@ -1043,6 +1098,24 @@ def test_portfolio_resolves_static_direct_external_alias_chains_privately(
         DefinedName(
             "DirectExternalFormulaWrapper",
             attr_text="=SUM(DirectExternalCell)",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalFormulaWrapperSecond",
+            attr_text="=SUM(DirectExternalFormulaWrapper)",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalUnresolvedFormula",
+            attr_text="=SUM(DirectExternalCell,NoSuchExternalFormulaName)",
+        )
+    )
+    consumer.defined_names.add(
+        DefinedName(
+            "DirectExternalFormulaDuplicate",
+            attr_text="=SUM(DirectExternalCell,DirectExternalCell)",
         )
     )
     consumer.defined_names.add(
@@ -1144,15 +1217,19 @@ def test_portfolio_resolves_static_direct_external_alias_chains_privately(
 
     assert not report.incomplete
     assert finding.details["impacted_workbook_count"] == 1
-    assert finding.details["impacted_formula_count"] == 6
+    assert finding.details["impacted_formula_count"] == 10
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
     assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
         "Summary!D2",
         "Summary!E2",
         "Summary!F2",
         "Summary!G2",
+        "Summary!J2",
         "Summary!L2",
         "Summary!M2",
+        "Summary!N2",
+        "Summary!S2",
+        "Summary!U2",
     ]
     for private_value in (
         "PrivateDirectSourceRange",
@@ -1163,6 +1240,9 @@ def test_portfolio_resolves_static_direct_external_alias_chains_privately(
         "DirectExternalChainedCellAlias",
         "DirectExternalChainedNameAlias",
         "DirectExternalFormulaWrapper",
+        "DirectExternalFormulaWrapperSecond",
+        "DirectExternalUnresolvedFormula",
+        "DirectExternalFormulaDuplicate",
         "DirectExternalAliasCycleA",
         "DirectExternalUnresolvedAlias",
         "DirectExternalChainedShadowed",
@@ -1253,6 +1333,7 @@ def test_portfolio_resolves_static_external_three_d_a1_spans_privately(
             "H2": "=SUM(DirectExternalThreeDShadowed)",
             "I2": "=SUM(DirectExternalThreeDLocal)",
             "J2": "=SUM('..\\inputs\\[SOURCE.XLSX]Jan:Missing'!$B$2:$B$4)",
+            "K2": "=SUM(DirectExternalThreeDFormula)",
         },
     )
     direct = load_workbook(direct_path)
@@ -1266,6 +1347,12 @@ def test_portfolio_resolves_static_external_three_d_a1_spans_privately(
         DefinedName(
             "DirectExternalThreeDBridge",
             attr_text="=DirectExternalThreeD",
+        )
+    )
+    direct.defined_names.add(
+        DefinedName(
+            "DirectExternalThreeDFormula",
+            attr_text="=SUM(DirectExternalThreeDBridge)",
         )
     )
     direct.defined_names.add(
@@ -1337,7 +1424,7 @@ def test_portfolio_resolves_static_external_three_d_a1_spans_privately(
 
     assert not report.incomplete
     assert finding.details["impacted_workbook_count"] == 2
-    assert finding.details["impacted_formula_count"] == 5
+    assert finding.details["impacted_formula_count"] == 6
     assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
     assert {
         (impact["workbook"], impact["location"])
@@ -1346,6 +1433,7 @@ def test_portfolio_resolves_static_external_three_d_a1_spans_privately(
         ("reports/direct.xlsx", "Summary!D2"),
         ("reports/direct.xlsx", "Summary!E2"),
         ("reports/direct.xlsx", "Summary!F2"),
+        ("reports/direct.xlsx", "Summary!K2"),
         ("reports/package.xlsx", "Model!D2"),
         ("reports/package.xlsx", "Model!E2"),
     }
@@ -1365,6 +1453,7 @@ def test_portfolio_resolves_static_external_three_d_a1_spans_privately(
     for private_value in (
         "DirectExternalThreeD",
         "DirectExternalThreeDBridge",
+        "DirectExternalThreeDFormula",
         "DirectExternalThreeDLeadingEquals",
         "DirectExternalThreeDReverse",
         "DirectExternalThreeDShadowed",

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.95.0 — 2026-07-26
+
+- Extend the candidate-only `FF079` portfolio graph through safely eligible,
+  workbook-scoped non-`LAMBDA` formula-defined names. A definition such as
+  `=SUM(ExternalInput)` or `=SUM('..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4)`
+  may retain each static direct or package-validated external A1, 3-D,
+  workbook/sheet-local-name, or book-only table-selector endpoint to a calling
+  worksheet formula. Eligible formula names can call another eligible global
+  formula name without repeatedly rescanning unrelated definitions.
+- Treat this as static input-edge extraction rather than formula evaluation.
+  Require every external token to map to an existing validated endpoint and
+  reject definitions with broken, unresolved, dynamic, relative, local-3-D,
+  spill, explicit-intersection, tokenization-failed, sheet-local, or named
+  `LAMBDA` semantics. Keep raw paths, source identities/selectors, and
+  consumer bridge identities private in `FF079` evidence, while ordinary
+  defined-name declarations remain normal review context.
+- Add direct/package, A1/name/table/3-D, nested-formula, duplicate-endpoint,
+  dynamic/relative/local/unresolved, scope-shadowing, and JSON/Markdown/SARIF
+  redaction coverage.
+
 ## 0.94.0 — 2026-07-26
 
 - Extend the candidate-only `FF079` portfolio graph through exact static

@@ -108,11 +108,22 @@ financial correctness or replace model review.
   sheet-local, or selector-bearing table spelling. It may reach that terminal
   through a finite, acyclic chain whose intermediate definitions are each one
   unqualified non-A1 name identity; a same-named sheet-local consumer
-  definition shadows the workbook alias. A 3-D span is expanded only when its
+  definition shadows the workbook alias. A workbook-scoped non-`LAMBDA`
+  formula-defined name may also retain static endpoint inputs, such as
+  `=SUM(ExternalInput)` or
+  `=SUM('..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4)`. This extracts input
+  edges rather than calculating a name: every external token must already be
+  a direct/package-validated endpoint, every other reference must be static,
+  and broken, unresolved, tokenizer-failed, dynamic, relative, local-3-D,
+  spilled, explicitly intersected, local, and named-`LAMBDA` definitions stay
+  outside the bridge. Eligible global formula names may call another eligible
+  global formula name. A 3-D span is expanded only when its
   source candidate has a complete raw OOXML tab catalog consistent with the
   inspected ordinary-worksheet order, and only from exact forward endpoints.
-  Sheet-scoped aliases, formula wrappers/expressions, missing or cyclic bridges,
-  caches, non-static package A1 forms, ambiguous package shapes, bare or
+  Sheet-scoped aliases, formula-defined bridges with broken, unresolved,
+  tokenizer-failed, dynamic, relative, local-3-D, spilled, or explicitly
+  intersected semantics, missing or cyclic exact aliases, caches, non-static
+  package A1 forms, ambiguous package shapes, bare or
   source-sheet-qualified table forms, `@`/`#This Row`, unsupported selectors,
   missing/colliding source tables, and spans with missing, reversed,
   non-worksheet, or inconsistent-tab-catalog endpoints are not expanded. A

@@ -183,7 +183,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | no_formula_environment_information_changes | boolean | A native CELL, INFO, SHEET, or SHEETS call stored in a worksheet formula, formula-defined name, or named LAMBDA; its relevant definition chain/private invocation inventory; or a statically visible argument input changes. Profiles separately aggregate CELL calls without an explicit reference, SHEET calls, SHEETS calls, and SHEETS calls without an explicit reference. When a complete raw OOXML tab catalog changes, FormulaFence also raises FF072 for stored SHEET or omitted-reference SHEETS calls; all declared tabs, including hidden, chart, macro, and dialog sheets, are in scope, while visibility-only changes are not this condition. Information types, references, formulas, arguments, locations, name identities, and raw tab-catalog comparison material are compared privately; ordinary sheet inventory remains normal reviewer context. FormulaFence never evaluates the call, resolves dynamic arguments, infers a selected cell, or simulates file, folder, client, workspace, workbook, or other Excel state. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_portfolio_membership_changes` | boolean | A `formulafence portfolio` run finds a supported workbook relative path only in the baseline or only in the candidate directory. This blocks `FF077` as `FFP077`; it does not infer that same-content files with different paths are a rename. |
-| `no_cross_workbook_impacts` | boolean | A changed candidate cell has one or more statically reachable formula cells in another candidate workbook through FormulaFence's exact, safely relative external-A1, external-3-D-A1, book-only external-table selector, direct workbook-scoped-name or sheet-local-name, or validated package-indexed-A1/name/table portfolio graph. A table must have an explicit static selector and exactly one case-insensitive source-table match; FormulaFence maps only its static cells. A 3-D span uses exact forward ordinary-worksheet endpoints and expands only when the inspected source candidate has a complete raw OOXML tab catalog consistent with its worksheet order. A workbook-scoped consumer alias may terminate in one supported static spelling through a finite, acyclic chain of exact unqualified non-A1 name identities, unless a same-named local consumer name shadows it. An indexed form must traverse one document-order `externalReference`, one `externalBook`, and one external `externalLinkPath` relationship; any source name must expand completely to static internal A1 destinations in the already-inspected candidate, and an explicit source sheet selects only that local scope. This blocks `FF079` as `FFP079` without resolving a file, trusting a cache, evaluating a formula, or inferring an unresolved target. |
+| `no_cross_workbook_impacts` | boolean | A changed candidate cell has one or more statically reachable formula cells in another candidate workbook through FormulaFence's exact, safely relative external-A1, external-3-D-A1, book-only external-table selector, direct workbook-scoped-name or sheet-local-name, or validated package-indexed-A1/name/table portfolio graph. A table must have an explicit static selector and exactly one case-insensitive source-table match; FormulaFence maps only its static cells. A 3-D span uses exact forward ordinary-worksheet endpoints and expands only when the inspected source candidate has a complete raw OOXML tab catalog consistent with its worksheet order. A workbook-scoped consumer alias may terminate in one supported static spelling through a finite, acyclic chain of exact unqualified non-A1 name identities, unless a same-named local consumer name shadows it. A workbook-scoped non-`LAMBDA` formula-defined name may also retain static endpoint inputs only when every external token is already a direct/package-validated endpoint and all other references are static; broken, unresolved, dynamic, relative, local-3-D, spilled, explicitly intersected, tokenizer-failed, and local formula names remain outside the bridge. An indexed form must traverse one document-order `externalReference`, one `externalBook`, and one external `externalLinkPath` relationship; any source name must expand completely to static internal A1 destinations in the already-inspected candidate, and an explicit source sheet selects only that local scope. This blocks `FF079` as `FFP079` without resolving a file, trusting a cache, evaluating a formula, or inferring an unresolved target. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
@@ -1705,8 +1705,15 @@ consumer alias may terminate in one exact indexed static spelling, or one exact
 direct A1, workbook-scoped-name, sheet-local, or selector-bearing table
 spelling. It may reach that terminal through a finite, acyclic chain whose
 intermediate definitions are exactly one unqualified, non-A1 name identity
-(with or without a leading `=`). A same-named sheet-local consumer definition
-shadows the workbook alias. A source name must expand
+(with or without a leading `=`). A workbook-scoped non-`LAMBDA`
+formula-defined name can also retain static endpoint inputs, such as
+`=SUM(ExternalInput)` or `=SUM('..\\inputs\\[Inputs.xlsx]Data'!$B$2:$B$4)`.
+This is input-edge extraction, not calculation: each external token must be an
+already parsed direct or package-validated endpoint; every remaining reference
+must be static; and the definition must have no broken/unresolved/tokenizer-
+failed, dynamic, relative, local-3-D, spill, or explicit-intersection form.
+Eligible global formula names may call another eligible global formula name. A
+same-named sheet-local consumer definition shadows the workbook alias. A source name must expand
 completely to static internal A1 destinations in the source candidate; a
 sheet-local spelling selects only the exact source sheet's local-name scope,
 with no global or other-sheet fallback. This may include a safely resolved
@@ -1727,8 +1734,9 @@ Absolute, UNC, URI, or portfolio-escaping paths; malformed or ambiguous
 package declarations; DDE/OLE/non-workbook package links; package A1 forms
 that are not one static destination; bare or source-sheet-qualified table
 forms, `@`/`#This Row`, unsupported selectors, missing/colliding source tables;
-sheet-scoped consumer aliases; consumer
-formula wrappers, expressions, ranges, missing bridges, or cyclic bridges;
+sheet-scoped consumer aliases; consumer formula-defined bridges with broken,
+unresolved, tokenizer-failed, dynamic, relative, local-3-D, spilled, or
+explicit-intersection semantics; missing bridges, or cyclic exact aliases;
 external-link cache values; missing, dynamic, relative, cyclic, external, 3-D,
 malformed, otherwise non-statically-expanded, unknown-scope, or
 wrong-scope source names; unknown source sheets;

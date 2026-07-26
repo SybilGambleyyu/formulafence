@@ -5,6 +5,45 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Static external endpoints inside formula-defined names — 2026-07-26
+
+Excel permits a defined name to contain a formula, and Microsoft's
+[workbook-link guidance](https://support.microsoft.com/en-us/office/create-workbook-links-c98d1803-dd75-4668-ac6a-d7cca2a9b95f)
+shows that a formula can use a reference in another workbook. Its
+[defined-name guidance](https://support.microsoft.com/en-US/Excel/names-in-formulas)
+also describes names as formula references. FormulaFence 0.95.0 therefore
+extracts only a narrow static input edge from a workbook-scoped non-`LAMBDA`
+formula-defined name such as
+`=SUM('..\\inputs\\source.xlsx'!Table1[Column2])` or a second name that calls
+it. It does not calculate either formula: every external token must already
+be a parsed static direct or package-validated endpoint, every other reference
+must be static, and dynamic, relative, local-3-D, spill, explicit-intersection,
+broken, unresolved, tokenizer-failed, local, and `LAMBDA` definitions remain
+outside the portfolio graph.
+
+The independently maintained [XlsxWriter table comparison fixture](https://github.com/jmcnamara/XlsxWriter/blob/main/xlsxwriter/test/comparison/xlsx_files/table09.xlsx)
+was again downloaded to a disposable directory outside this repository
+(SHA-256 `bf30d9a6b8b94cd5f75c15316a41d54c4063a5745e32ff2f89eb39d252605a04`).
+It supplies `Table1` on `Sheet1!B3:K6`. A separate consumer used
+`ExternalTableFormula = =SUM('..\\inputs\\source.xlsx'!Table1[Column2])` and
+`ExternalTableFormulaSecond = =SUM(ExternalTableFormula)`, then called those
+names from `Summary!D2` and `Summary!E2`. Changing only the disposable source
+copy's `Sheet1!C4` produced source SHA-256
+`1ed8b78dc667c0690ce4554d1a6d1c5f4f9742af228e1cec9e2145a04156df90`
+and exactly two `FF079` impacts plus `FFP079` at those two cells. The consumer
+was unchanged (SHA-256
+`b70c8b5b431e408fa3872990ef2b6f5584aaec68ad6a1de173758931fe96b05f`).
+The JSON report omitted both controlled formula-name identities, the raw table
+selector, and the relative external path. The upstream workbook was never
+executed, refreshed, modified in place, or copied into this repository.
+
+The 0.95.0 source tree passed **624 tests in 82.23 seconds**, a clean Ruff
+check, and `git diff --check`. Fresh source and wheel distributions passed
+`twine check`. An isolated environment installed the release wheel and reran
+the temporary portfolio through its CLI; it returned policy exit `1` with
+`FF079` and `FFP079`, while the controlled name and selector material remained
+absent from JSON.
+
 ## Candidate-only external structured-table selectors — 2026-07-26
 
 Microsoft's [structured-reference grammar](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/089fbdef-ed49-4a14-9509-794c95651b17)

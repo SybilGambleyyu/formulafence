@@ -25,6 +25,14 @@ _EXTERNAL_ACTION_FUNCTIONS = {"HYPERLINK", "WEBSERVICE", "IMAGE", "RTD"}
 # stores its executable code in a workbook-level Python part, so callers need a
 # dedicated code boundary that can fingerprint both the formula and that part.
 _PYTHON_FUNCTIONS = {"PY"}
+# ``REGISTER.ID`` is the worksheet-capable member of Excel's legacy
+# DLL/code-resource registration family.  Microsoft documents that it
+# registers the resource when needed, then returns its registration ID.  Keep
+# it separate from generic external-action calls: the module, procedure, type
+# string, and arguments are sensitive implementation material, and the
+# surrounding XLM-only ``CALL`` / ``REGISTER`` forms are covered by the raw
+# macro-sheet boundary instead.
+_WORKSHEET_CODE_RESOURCE_REGISTRATION_FUNCTIONS = {"REGISTER.ID"}
 # Excel's native function catalog includes a small but important set of dotted
 # names.  A namespace separator is also how Office Add-in custom functions are
 # displayed (for example, ``CONTOSO.ADD``), so keep these known native names out
@@ -179,6 +187,7 @@ class FormulaInspection:
     external_action_functions: tuple[str, ...] = ()
     python_functions: tuple[str, ...] = ()
     office_custom_function_candidates: tuple[str, ...] = ()
+    worksheet_code_resource_registration_functions: tuple[str, ...] = ()
     three_d_reference_tokens: tuple[str, ...] = ()
     tokenization_failed: bool = False
     spill_reference_tokens: tuple[str, ...] = ()
@@ -1061,6 +1070,22 @@ def _office_custom_function_candidate(token: object) -> str | None:
     return upper_candidate
 
 
+def _worksheet_code_resource_registration_function(token: object) -> str | None:
+    """Return a documented worksheet code-resource registration call, if present.
+
+    ``_function_name`` deliberately drops dotted namespace prefixes for broad
+    native-function handling, so this narrow classifier works from the raw
+    callable spelling instead.  A defined name with the same spelling is
+    resolved before this classifier runs; FormulaFence will not assert that a
+    user-defined callable is Excel's legacy registration primitive.
+    """
+    raw_name = str(getattr(token, "value", "")).rstrip("(").strip()
+    normalized = raw_name.removeprefix("@").upper()
+    if normalized in _WORKSHEET_CODE_RESOURCE_REGISTRATION_FUNCTIONS:
+        return normalized
+    return None
+
+
 def _fingerprint_token_value(token: object) -> str:
     """Normalize OOXML spellings of the two dynamic-array compatibility functions."""
     if (
@@ -1337,6 +1362,12 @@ def inspect_formula(
     named_function_custom_function_candidates: (
         Mapping[str, Sequence[str]] | None
     ) = None,
+    named_worksheet_code_resource_registration_functions: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
+    named_function_worksheet_code_resource_registration_functions: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
 ) -> FormulaInspection:
     """Inspect static reference coverage while resolving known named ranges.
 
@@ -1368,6 +1399,12 @@ def inspect_formula(
     resolved_named_function_custom_functions = (
         named_function_custom_function_candidates or {}
     )
+    resolved_named_worksheet_code_resource_registrations = (
+        named_worksheet_code_resource_registration_functions or {}
+    )
+    resolved_named_function_worksheet_code_resource_registrations = (
+        named_function_worksheet_code_resource_registration_functions or {}
+    )
     resolved_tables = structured_tables or {}
     references: list[ParsedReference] = []
     unresolved_range_tokens: list[str] = []
@@ -1375,6 +1412,7 @@ def inspect_formula(
     external_action_functions: list[str] = []
     python_functions: list[str] = []
     office_custom_function_candidates: list[str] = []
+    worksheet_code_resource_registration_functions: list[str] = []
     three_d_reference_tokens: list[str] = []
     spill_reference_tokens: list[str] = list(literal_spill_tokens)
     implicit_intersection_tokens: list[str] = list(literal_implicit_intersection_tokens)
@@ -1406,9 +1444,22 @@ def inspect_formula(
                 office_custom_function_candidates.extend(
                     resolved_named_custom_functions.get(named_key, ())
                 )
+                worksheet_code_resource_registration_functions.extend(
+                    resolved_named_worksheet_code_resource_registrations.get(
+                        named_key, ()
+                    )
+                )
                 continue
             if named_custom_functions := resolved_named_custom_functions.get(named_key):
                 office_custom_function_candidates.extend(named_custom_functions)
+            if (
+                named_worksheet_code_resource_registrations := (
+                    resolved_named_worksheet_code_resource_registrations.get(named_key)
+                )
+            ):
+                worksheet_code_resource_registration_functions.extend(
+                    named_worksheet_code_resource_registrations
+                )
             table_reference = resolve_structured_reference(
                 token.value, resolved_tables, origin
             )
@@ -1429,6 +1480,11 @@ def inspect_formula(
                     office_custom_function_candidates.extend(
                         resolved_named_function_custom_functions.get(function_key, ())
                     )
+                    worksheet_code_resource_registration_functions.extend(
+                        resolved_named_function_worksheet_code_resource_registrations.get(
+                            function_key, ()
+                        )
+                    )
                 if (
                     function_key not in resolved_names
                     and function_key not in resolved_named_functions
@@ -1440,6 +1496,19 @@ def inspect_formula(
                     is not None
                 ):
                     office_custom_function_candidates.append(custom_function_candidate)
+                if (
+                    function_key not in resolved_names
+                    and function_key not in resolved_named_functions
+                    and (
+                        worksheet_code_resource_registration_function := (
+                            _worksheet_code_resource_registration_function(token)
+                        )
+                    )
+                    is not None
+                ):
+                    worksheet_code_resource_registration_functions.append(
+                        worksheet_code_resource_registration_function
+                    )
             function_name = _function_name(token)
             if function_name in _DYNAMIC_REFERENCE_FUNCTIONS:
                 dynamic_reference_functions.append(function_name)
@@ -1466,6 +1535,9 @@ def inspect_formula(
         external_action_functions=tuple(external_action_functions),
         python_functions=tuple(python_functions),
         office_custom_function_candidates=tuple(office_custom_function_candidates),
+        worksheet_code_resource_registration_functions=tuple(
+            worksheet_code_resource_registration_functions
+        ),
         three_d_reference_tokens=tuple(dict.fromkeys(three_d_reference_tokens)),
         spill_reference_tokens=tuple(dict.fromkeys(spill_reference_tokens)),
         implicit_intersection_tokens=tuple(dict.fromkeys(implicit_intersection_tokens)),

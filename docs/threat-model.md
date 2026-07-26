@@ -603,6 +603,21 @@ review prompt, not proof of an error.
   follows Microsoft's [custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview),
   [tutorial](https://learn.microsoft.com/en-us/office/dev/add-ins/tutorials/excel-tutorial-create-custom-functions),
   and [web-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).
+- Excel's worksheet-capable `REGISTER.ID` function can register a DLL or code
+  resource when needed and return its registration ID. FormulaFence keeps a
+  dedicated private ledger for stored worksheet and formula-defined `REGISTER.ID` calls,
+  including calls held in formula-defined names and named `LAMBDA` bodies. A
+  call, relevant named-definition change, or ordinary static input change emits
+  `FF067`; enable `no_worksheet_code_resource_registration_changes` for
+  `FFP067`. Public output exposes only formula-cell, call, and relevant
+  formula-defined-name counts; module paths, procedure names, type strings,
+  formulas, arguments, cells, and name identities stay private. FormulaFence
+  does not evaluate a formula, resolve a path, load a DLL/XLL, inspect trust
+  settings, or determine whether registration succeeds. Dynamic or unresolved
+  inputs remain static-coverage limits. This is separate from raw XLM macro
+  sheet program scanning: Microsoft's [`CALL` reference](https://support.microsoft.com/en-us/office/call-function-32d58445-e646-4ffd-8d5e-b45077a5e995)
+  states that `CALL` is macro-sheet only. The worksheet boundary follows
+  Microsoft's [`REGISTER.ID` reference](https://support.microsoft.com/en-us/office/register-id-function-f8f0af0f-fd66-4704-a0f2-87b27b175b50).
 - Office 2010 worksheet sparklines live in `x14:sparklineGroups` worksheet
   extensions, outside ordinary cell values. A group can be retargeted, moved,
   or have its type, axes, display, marker, line-weight, or colour controls

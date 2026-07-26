@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.69.0/formulafence-0.69.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.70.0/formulafence-0.70.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -117,6 +117,7 @@ rules:
   no_formula_external_action_changes: true
   no_python_in_excel_changes: true
   no_office_custom_function_changes: true
+  no_worksheet_code_resource_registration_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -422,6 +423,30 @@ reviewer context; it is not a redacted add-in ledger. Enable
 follows Microsoft's [custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview),
 [tutorial](https://learn.microsoft.com/en-us/office/dev/add-ins/tutorials/excel-tutorial-create-custom-functions),
 and [external-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).
+
+FormulaFence separately inventories **worksheet code-resource registrations**
+through `REGISTER.ID`. Microsoft's [function reference](https://support.microsoft.com/en-us/office/register-id-function-f8f0af0f-fd66-4704-a0f2-87b27b175b50)
+documents that it returns a DLL or code-resource registration ID and registers
+the resource when needed; unlike `REGISTER`, it can be used from a worksheet.
+That makes a stored `REGISTER.ID` expression a distinct boundary from an
+ordinary namespaced add-in candidate.
+
+The `REGISTER.ID` ledger propagates calls inside formula-defined names and
+named `LAMBDA` bodies to their invoking worksheet formulas. Profiles and
+`FF067`/`FFP067` details expose only formula-cell, call, and relevant
+formula-defined-name counts. Module paths, procedure names, type strings,
+cells, formulas, arguments, and name identities remain private, including for
+same-count changes. `FF067` also covers ordinary cell edits that statically
+reach a registration expression. FormulaFence does not evaluate a formula,
+resolve a path, load a DLL/XLL, inspect the host's trust settings, or determine
+whether registration succeeds. Dynamic or unresolved inputs remain explicit
+coverage limits. Enable `no_worksheet_code_resource_registration_changes` to
+block this boundary in CI.
+
+This does not reinterpret raw XLM macro-sheet programs: Microsoft's
+[`CALL` reference](https://support.microsoft.com/en-us/office/call-function-32d58445-e646-4ffd-8d5e-b45077a5e995)
+places `CALL` on macro sheets, and FormulaFence continues to guard complete raw
+XLM macro-sheet material through its separate `FF026` boundary below.
 
 FormulaFence separately inventories **Excel 4.0 / XLM macro sheets**. Unlike
 VBA, this executable automation is stored in raw macro-sheet XML parts (usually

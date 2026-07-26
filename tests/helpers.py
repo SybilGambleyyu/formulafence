@@ -325,6 +325,102 @@ def change_named_office_custom_function_input(path: Path) -> Path:
     return path
 
 
+def make_worksheet_code_resource_registration_model(path: Path) -> Path:
+    """Create inert stored ``REGISTER.ID`` expressions for boundary tests.
+
+    The workbook is never opened in Excel. Private module/procedure sentinels
+    exist solely to prove FormulaFence keeps code-resource registration material
+    out of its public profile, findings, and SARIF output.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Worksheet code-resource registration controls"
+    inputs["A9"] = "PRIVATE-REGISTRATION-MODULE-BASELINE"
+    inputs["A10"] = "PRIVATE-REGISTRATION-PROCEDURE-BASELINE"
+    inputs["B2"] = '=REGISTER.ID(A9,A10,"J!")'
+    inputs["B3"] = (
+        '=REGISTER.ID("PRIVATE-REGISTRATION-MODULE-LITERAL-BASELINE",'
+        '"PRIVATE-REGISTRATION-PROCEDURE-LITERAL-BASELINE","J!")'
+    )
+    inputs["B4"] = '=REGISTER.ID(A9,A10,"J!")'
+    workbook.save(path)
+    return path
+
+
+def change_worksheet_code_resource_registration_call(path: Path) -> Path:
+    """Rewrite private registration material without changing public counts."""
+    workbook = load_workbook(path)
+    formula = workbook["Inputs"]["B3"].value
+    if not isinstance(formula, str) or "LITERAL-BASELINE" not in formula:
+        raise ValueError("Fixture does not contain the expected registration call")
+    workbook["Inputs"]["B3"] = formula.replace("LITERAL-BASELINE", "LITERAL-CANDIDATE")
+    workbook.save(path)
+    return path
+
+
+def change_worksheet_code_resource_registration_input(path: Path) -> Path:
+    """Change a static module source without rewriting a registration formula."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-REGISTRATION-MODULE-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
+def make_named_worksheet_code_resource_registration_model(path: Path) -> Path:
+    """Create registrations reached through formula names and named LAMBDAs."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Named worksheet code-resource registration controls"
+    inputs["A9"] = "PRIVATE-NAMED-REGISTRATION-MODULE-BASELINE"
+    inputs["A10"] = "PRIVATE-NAMED-REGISTRATION-PROCEDURE-BASELINE"
+    inputs["B2"] = "=FENCE.REGISTER(A9,A10)"
+    inputs["B3"] = "=FENCE.DIRECT"
+    inputs["B4"] = "=FENCE.CHAIN(A9,A10)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.REGISTER",
+            attr_text='=LAMBDA(module,procedure,REGISTER.ID(module,procedure,"J!"))',
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.CHAIN",
+            attr_text="=LAMBDA(module,procedure,FENCE.REGISTER(module,procedure))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.DIRECT",
+            attr_text='=REGISTER.ID(Inputs!$A$9,Inputs!$A$10,"J!")',
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_named_worksheet_code_resource_registration_definition(path: Path) -> Path:
+    """Change a named registration type string without changing public counts."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.REGISTER"]
+    if definition.attr_text != (
+        '=LAMBDA(module,procedure,REGISTER.ID(module,procedure,"J!"))'
+    ):
+        raise ValueError("Fixture does not contain the expected named registration")
+    definition.attr_text = '=LAMBDA(module,procedure,REGISTER.ID(module,procedure,"K!"))'
+    workbook.save(path)
+    return path
+
+
+def change_named_worksheet_code_resource_registration_input(path: Path) -> Path:
+    """Change a static input used by named registration expressions."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-NAMED-REGISTRATION-MODULE-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_python_in_excel_model(path: Path) -> Path:
     """Create a workbook with stored Python-in-Excel package code.
 

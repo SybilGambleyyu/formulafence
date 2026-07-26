@@ -99,6 +99,7 @@ from formulafence.models import (
     WorkbookProtectionSnapshot,
     WorkbookSnapshot,
     WorkbookThemeSnapshot,
+    WorksheetCodeResourceRegistrationSnapshot,
     WorksheetDimensionSnapshot,
     WorksheetDisplaySnapshot,
     WorksheetDrawingShapeSnapshot,
@@ -41394,16 +41395,21 @@ def _named_reference_maps(
     dict[str, dict[str, tuple[str, ...]]],
     dict[str, tuple[str, ...]],
     dict[str, dict[str, tuple[str, ...]]],
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
+    tuple[tuple[str, str], ...],
 ]:
-    """Build dependency and custom-call maps for formula-defined names.
+    """Build dependency and sensitive-call maps for formula-defined names.
 
     Formula-valued names are expanded only when every dependency is statically
     visible and internal. Relative references, dynamic functions, unresolved
     tokens, recursive LAMBDAs, external links, and 3-D spans remain unresolved
     at a use site instead of producing a guessed graph edge. Namespaced custom
-    function candidates are propagated separately through those definitions so
-    a named LAMBDA cannot hide a stored custom-function invocation from the
-    formula-cell ledger.
+    function candidates and worksheet ``REGISTER.ID`` calls are propagated
+    separately through those definitions so a named LAMBDA cannot hide either
+    stored boundary from the formula-cell ledgers.
     """
     workbook_names = getattr(workbook, "defined_names", {})
     global_references: dict[str, tuple[ParsedReference, ...]] = {}
@@ -41633,49 +41639,63 @@ def _named_reference_maps(
     definition_indexes = {
         identity: index for index, identity in enumerate(definition_identities)
     }
-    candidate_markers = {
+    custom_function_markers = {
         identity: f"FORMULAFENCE_OFFICE_CUSTOM_MARKER_{index}"
         for index, identity in enumerate(definition_identities)
     }
+    code_resource_registration_markers = {
+        identity: f"FORMULAFENCE_CODE_RESOURCE_REGISTRATION_MARKER_{index}"
+        for index, identity in enumerate(definition_identities)
+    }
     identities_by_marker = {
-        marker: identity for identity, marker in candidate_markers.items()
+        marker: identity
+        for markers in (
+            custom_function_markers,
+            code_resource_registration_markers,
+        )
+        for identity, marker in markers.items()
     }
 
-    def visible_named_custom_function_markers(
+    def visible_named_markers(
         scope: str | None,
+        markers_by_definition: Mapping[tuple[str | None, str], str],
     ) -> dict[str, tuple[str, ...]]:
         markers = {
-            key: (candidate_markers[identity_for(definition)],)
+            key: (markers_by_definition[identity_for(definition)],)
             for key, definition in global_formulas.items()
         }
         for local_scope, definitions in local_formulas.items():
             for key, definition in definitions.items():
                 markers[_qualified_name_key(sheet_titles[local_scope], key)] = (
-                    candidate_markers[identity_for(definition)],
+                    markers_by_definition[identity_for(definition)],
                 )
         if scope is not None:
             for key, definition in local_formulas.get(scope, {}).items():
-                markers[key] = (candidate_markers[identity_for(definition)],)
+                markers[key] = (markers_by_definition[identity_for(definition)],)
         return markers
 
-    def visible_named_function_custom_function_markers(
+    def visible_named_function_markers(
         scope: str | None,
+        markers_by_definition: Mapping[tuple[str | None, str], str],
     ) -> dict[str, tuple[str, ...]]:
         markers = {
-            key: (candidate_markers[identity_for(definition)],)
+            key: (markers_by_definition[identity_for(definition)],)
             for key, definition in global_lambdas.items()
         }
         for local_scope, definitions in local_lambdas.items():
             for key, definition in definitions.items():
                 markers[_qualified_name_key(sheet_titles[local_scope], key)] = (
-                    candidate_markers[identity_for(definition)],
+                    markers_by_definition[identity_for(definition)],
                 )
         if scope is not None:
             for key, definition in local_lambdas.get(scope, {}).items():
-                markers[key] = (candidate_markers[identity_for(definition)],)
+                markers[key] = (markers_by_definition[identity_for(definition)],)
         return markers
 
     direct_custom_function_candidates: dict[tuple[str | None, str], tuple[str, ...]] = {}
+    direct_code_resource_registration_functions: dict[
+        tuple[str | None, str], tuple[str, ...]
+    ] = {}
     definition_dependencies: dict[
         tuple[str | None, str], tuple[tuple[str | None, str], ...]
     ] = {}
@@ -41686,11 +41706,21 @@ def _named_reference_maps(
             structured_tables=structured_tables,
             sheet_order=sheet_order,
             named_function_references=visible_named_functions(definition.scope),
-            named_custom_function_candidates=visible_named_custom_function_markers(
-                definition.scope
+            named_custom_function_candidates=visible_named_markers(
+                definition.scope, custom_function_markers
             ),
-            named_function_custom_function_candidates=(
-                visible_named_function_custom_function_markers(definition.scope)
+            named_function_custom_function_candidates=visible_named_function_markers(
+                definition.scope, custom_function_markers
+            ),
+            named_worksheet_code_resource_registration_functions=(
+                visible_named_markers(
+                    definition.scope, code_resource_registration_markers
+                )
+            ),
+            named_function_worksheet_code_resource_registration_functions=(
+                visible_named_function_markers(
+                    definition.scope, code_resource_registration_markers
+                )
             ),
         )
         identity = identity_for(definition)
@@ -41699,10 +41729,20 @@ def _named_reference_maps(
             for candidate in inspection.office_custom_function_candidates
             if candidate not in identities_by_marker
         )
+        direct_code_resource_registration_functions[identity] = tuple(
+            function
+            for function in inspection.worksheet_code_resource_registration_functions
+            if function not in identities_by_marker
+        )
         definition_dependencies[identity] = tuple(
-            identities_by_marker[candidate]
-            for candidate in inspection.office_custom_function_candidates
-            if candidate in identities_by_marker
+            dict.fromkeys(
+                identities_by_marker[marker]
+                for marker in (
+                    inspection.office_custom_function_candidates
+                    + inspection.worksheet_code_resource_registration_functions
+                )
+                if marker in identities_by_marker
+            )
         )
 
     # Collapse recursive definition groups before expanding their candidates.
@@ -41755,11 +41795,19 @@ def _named_reference_maps(
 
     component_dependencies: dict[int, tuple[int, ...]] = {}
     component_direct_candidates: dict[int, tuple[str, ...]] = {}
+    component_direct_code_resource_registration_functions: dict[
+        int, tuple[str, ...]
+    ] = {}
     for component, members in enumerate(components):
         component_direct_candidates[component] = tuple(
             candidate
             for identity in members
             for candidate in direct_custom_function_candidates[identity]
+        )
+        component_direct_code_resource_registration_functions[component] = tuple(
+            function
+            for identity in members
+            for function in direct_code_resource_registration_functions[identity]
         )
         component_dependencies[component] = tuple(
             dependency_component
@@ -41784,6 +41832,7 @@ def _named_reference_maps(
         if not dependencies
     )
     component_custom_function_candidates: dict[int, tuple[str, ...]] = {}
+    component_code_resource_registration_functions: dict[int, tuple[str, ...]] = {}
     while ready_components:
         component = ready_components.pop(0)
         component_custom_function_candidates[component] = (
@@ -41794,6 +41843,14 @@ def _named_reference_maps(
                 for candidate in component_custom_function_candidates[dependency]
             )
         )
+        component_code_resource_registration_functions[component] = (
+            component_direct_code_resource_registration_functions[component]
+            + tuple(
+                function
+                for dependency in component_dependencies[component]
+                for function in component_code_resource_registration_functions[dependency]
+            )
+        )
         for dependent in sorted(component_dependents[component]):
             remaining_component_dependencies[dependent].remove(component)
             if not remaining_component_dependencies[dependent]:
@@ -41802,6 +41859,10 @@ def _named_reference_maps(
 
     custom_function_candidates_by_definition = {
         identity: component_custom_function_candidates[component]
+        for identity, component in component_by_definition.items()
+    }
+    code_resource_registration_functions_by_definition = {
+        identity: component_code_resource_registration_functions[component]
         for identity, component in component_by_definition.items()
     }
 
@@ -41890,6 +41951,78 @@ def _named_reference_maps(
         if candidates:
             local_function_custom_result[scope] = candidates
 
+    global_code_resource_registration_result: dict[str, tuple[str, ...]] = {
+        key: code_resource_registration_functions_by_definition[
+            identity_for(definition)
+        ]
+        for key, definition in global_formulas.items()
+    }
+    for scope, definitions in local_formulas.items():
+        for key, definition in definitions.items():
+            global_code_resource_registration_result[
+                _qualified_name_key(sheet_titles[scope], key)
+            ] = code_resource_registration_functions_by_definition[
+                identity_for(definition)
+            ]
+
+    local_code_resource_registration_result: dict[
+        str, dict[str, tuple[str, ...]]
+    ] = {}
+    for scope, definitions in local_formulas.items():
+        functions = {
+            key: code_resource_registration_functions_by_definition[
+                identity_for(definition)
+            ]
+            for key, definition in definitions.items()
+        }
+        if functions:
+            local_code_resource_registration_result[scope] = functions
+
+    global_function_code_resource_registration_result: dict[str, tuple[str, ...]] = {
+        key: code_resource_registration_functions_by_definition[
+            identity_for(definition)
+        ]
+        for key, definition in global_lambdas.items()
+    }
+    for scope, definitions in local_lambdas.items():
+        for key, definition in definitions.items():
+            global_function_code_resource_registration_result[
+                _qualified_name_key(sheet_titles[scope], key)
+            ] = code_resource_registration_functions_by_definition[
+                identity_for(definition)
+            ]
+
+    local_function_code_resource_registration_result: dict[
+        str, dict[str, tuple[str, ...]]
+    ] = {}
+    for scope, definitions in local_lambdas.items():
+        functions = {
+            key: code_resource_registration_functions_by_definition[
+                identity_for(definition)
+            ]
+            for key, definition in definitions.items()
+        }
+        if functions:
+            local_function_code_resource_registration_result[scope] = functions
+
+    code_resource_registration_definition_entries = tuple(
+        sorted(
+            (
+                repr((definition.scope, definition.key)),
+                repr(
+                    (
+                        code_resource_registration_functions_by_definition[
+                            identity_for(definition)
+                        ],
+                        definition.formula,
+                    )
+                ),
+            )
+            for definition in all_definitions
+            if code_resource_registration_functions_by_definition[identity_for(definition)]
+        )
+    )
+
     return (
         global_result,
         local_result,
@@ -41899,6 +42032,11 @@ def _named_reference_maps(
         local_custom_result,
         global_function_custom_result,
         local_function_custom_result,
+        global_code_resource_registration_result,
+        local_code_resource_registration_result,
+        global_function_code_resource_registration_result,
+        local_function_code_resource_registration_result,
+        code_resource_registration_definition_entries,
     )
 
 
@@ -42229,6 +42367,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     office_custom_function_call_count = 0
     office_custom_function_namespaces: set[str] = set()
     office_custom_function_formula_entries: list[tuple[str, str]] = []
+    worksheet_code_resource_registration_cells: set[CellKey] = set()
+    worksheet_code_resource_registration_function_count = 0
+    worksheet_code_resource_registration_formula_entries: list[tuple[str, str]] = []
     broken_references: set[CellKey] = set()
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = {}
@@ -42249,6 +42390,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         local_named_custom_function_candidates,
         global_named_function_custom_function_candidates,
         local_named_function_custom_function_candidates,
+        global_named_worksheet_code_resource_registration_functions,
+        local_named_worksheet_code_resource_registration_functions,
+        global_named_function_worksheet_code_resource_registration_functions,
+        local_named_function_worksheet_code_resource_registration_functions,
+        worksheet_code_resource_registration_definition_entries,
     ) = _named_reference_maps(workbook, structured_tables, sheet_order)
 
     for worksheet in workbook.worksheets:
@@ -42269,6 +42415,18 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         named_function_custom_function_candidates = {
             **global_named_function_custom_function_candidates,
             **local_named_function_custom_function_candidates.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
+        named_worksheet_code_resource_registration_functions = {
+            **global_named_worksheet_code_resource_registration_functions,
+            **local_named_worksheet_code_resource_registration_functions.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
+        named_function_worksheet_code_resource_registration_functions = {
+            **global_named_function_worksheet_code_resource_registration_functions,
+            **local_named_function_worksheet_code_resource_registration_functions.get(
                 worksheet.title.casefold(), {}
             ),
         }
@@ -42312,6 +42470,12 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 named_function_custom_function_candidates=(
                     named_function_custom_function_candidates
                 ),
+                named_worksheet_code_resource_registration_functions=(
+                    named_worksheet_code_resource_registration_functions
+                ),
+                named_function_worksheet_code_resource_registration_functions=(
+                    named_function_worksheet_code_resource_registration_functions
+                ),
             )
             if inspection.unresolved_range_tokens:
                 unresolved_reference_tokens[snapshot.location] = inspection.unresolved_range_tokens
@@ -42354,6 +42518,22 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                         repr(
                             (
                                 inspection.office_custom_function_candidates,
+                                snapshot.formula,
+                            )
+                        ),
+                    )
+                )
+            if inspection.worksheet_code_resource_registration_functions:
+                worksheet_code_resource_registration_cells.add(snapshot.location)
+                worksheet_code_resource_registration_function_count += len(
+                    inspection.worksheet_code_resource_registration_functions
+                )
+                worksheet_code_resource_registration_formula_entries.append(
+                    (
+                        f"{snapshot.location[0]}!{snapshot.location[1]}",
+                        repr(
+                            (
+                                inspection.worksheet_code_resource_registration_functions,
                                 snapshot.formula,
                             )
                         ),
@@ -42467,6 +42647,26 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         ),
         call_cells=frozenset(office_custom_function_cells),
     )
+    worksheet_code_resource_registrations = (
+        WorksheetCodeResourceRegistrationSnapshot(
+            registration_formula_cell_count=len(
+                worksheet_code_resource_registration_cells
+            ),
+            register_id_function_count=(
+                worksheet_code_resource_registration_function_count
+            ),
+            registration_defined_name_count=len(
+                worksheet_code_resource_registration_definition_entries
+            ),
+            call_signature=_private_external_data_signature(
+                tuple(sorted(worksheet_code_resource_registration_formula_entries))
+            ),
+            definition_signature=_private_external_data_signature(
+                worksheet_code_resource_registration_definition_entries
+            ),
+            registration_cells=frozenset(worksheet_code_resource_registration_cells),
+        )
+    )
 
     return WorkbookSnapshot(
         path=source,
@@ -42518,6 +42718,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         ),
         python_in_excel=python_in_excel,
         office_custom_functions=office_custom_functions,
+        worksheet_code_resource_registrations=worksheet_code_resource_registrations,
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
@@ -42620,6 +42821,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "formula_external_actions": snapshot.formula_external_actions.profile_dict(),
         "python_in_excel": snapshot.python_in_excel.profile_dict(),
         "office_custom_functions": snapshot.office_custom_functions.profile_dict(),
+        "worksheet_code_resource_registrations": (
+            snapshot.worksheet_code_resource_registrations.profile_dict()
+        ),
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),

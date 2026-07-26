@@ -30,6 +30,7 @@ from .helpers import (
     change_legacy_vml_control_controls,
     change_named_office_custom_function_definition,
     change_named_sheet_view_criterion,
+    change_named_worksheet_code_resource_registration_definition,
     change_number_format_code,
     change_office_custom_function_call,
     change_office_custom_function_input,
@@ -50,6 +51,7 @@ from .helpers import (
     change_threaded_comment_reply,
     change_what_if_data_table_input,
     change_workbook_theme_colour,
+    change_worksheet_code_resource_registration_call,
     change_worksheet_dimension_controls,
     change_worksheet_display_controls,
     change_worksheet_drawing_connector_attachment,
@@ -88,6 +90,7 @@ from .helpers import (
     make_model,
     make_named_office_custom_function_model,
     make_named_sheet_view_model,
+    make_named_worksheet_code_resource_registration_model,
     make_number_format_model,
     make_office_custom_function_model,
     make_office_web_addin_model,
@@ -108,6 +111,7 @@ from .helpers import (
     make_three_d_model,
     make_what_if_data_table_model,
     make_workbook_theme_image_model,
+    make_worksheet_code_resource_registration_model,
     make_worksheet_dimension_model,
     make_worksheet_display_model,
     make_worksheet_drawing_connector_model,
@@ -457,6 +461,46 @@ def test_policy_can_block_named_office_custom_function_changes(tmp_path) -> None
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP066"}
+
+
+def test_policy_can_block_worksheet_code_resource_registration_changes(tmp_path) -> None:
+    baseline = make_worksheet_code_resource_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_worksheet_code_resource_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_worksheet_code_resource_registration_call(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_worksheet_code_resource_registration_changes": True},
+        }
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP067"}
+
+
+def test_policy_blocks_named_worksheet_code_resource_registration_changes(tmp_path) -> None:
+    baseline = make_named_worksheet_code_resource_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_named_worksheet_code_resource_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_named_worksheet_code_resource_registration_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_worksheet_code_resource_registration_changes": True},
+        }
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP067"}
 
 
 def test_policy_can_block_xlm_macro_sheet_changes(tmp_path) -> None:

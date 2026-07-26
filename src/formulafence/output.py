@@ -574,6 +574,9 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     formula_external_actions = profile["formula_external_actions"]
     python_in_excel = profile["python_in_excel"]
     office_custom_functions = profile["office_custom_functions"]
+    worksheet_code_resource_registrations = profile[
+        "worksheet_code_resource_registrations"
+    ]
     formula_external_action_call_count = sum(
         (
             formula_external_actions["hyperlink_function_count"],
@@ -961,6 +964,31 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     "A matching call is not proof that an Office Add-in is installed or "
                     "runnable: its manifest, code, and runtime are outside the workbook. "
                     "Unqualified VBA, COM, and XLL UDF calls are outside this boundary."
+                ),
+            ]
+        )
+    if worksheet_code_resource_registrations["present"]:
+        lines.extend(
+            [
+                "",
+                "## Worksheet code-resource registrations",
+                "",
+                (
+                    "- **Formula cells / REGISTER.ID calls / formula-defined names:** "
+                    f"{worksheet_code_resource_registrations['registration_formula_cell_count']} / "
+                    f"{worksheet_code_resource_registrations['register_id_function_count']} / "
+                    f"{worksheet_code_resource_registrations['registration_defined_name_count']}"
+                ),
+                (
+                    "FormulaFence inventories stored worksheet and formula-defined "
+                    "REGISTER.ID calls, including named "
+                    "LAMBDAs. Module paths, procedure names, type strings, cells, "
+                    "formulas, and arguments are compared privately and intentionally "
+                    "omitted; no formula is evaluated and no DLL or code resource is loaded."
+                ),
+                (
+                    "This is distinct from XLM macro-sheet CALL/REGISTER behavior, "
+                    "which remains covered by the raw XLM macro-sheet boundary below."
                 ),
             ]
         )

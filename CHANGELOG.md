@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.70.0 — 2026-07-26
+
+- Add `FF067`, a private ledger for stored worksheet and formula-defined
+  `REGISTER.ID` calls.
+  Microsoft documents this legacy worksheet function as returning a DLL or
+  code-resource registration ID and registering the resource when required.
+  Public profiles and finding details expose only formula-cell, call, and
+  relevant formula-defined-name counts; module paths, procedure names, type
+  strings, formulas, arguments, locations, and name identities remain private.
+- Propagate registrations held in formula-defined names and named `LAMBDA`
+  bodies to their invoking worksheet formulas. Same-count formula or
+  named-definition changes remain visible via private signatures, and ordinary
+  cell edits that statically reach a registration emit `FF067`. Recursive and
+  sheet-local named definitions remain cycle-safe and scope-aware.
+- Add the fail-closed `no_worksheet_code_resource_registration_changes` policy
+  rule (`FFP067`). FormulaFence does not evaluate a formula, resolve or load a
+  DLL/XLL, inspect host trust settings, or determine whether registration
+  succeeds. The separate XLM macro-sheet boundary continues to cover raw
+  macro-sheet `CALL`/`REGISTER` program material.
+
 ## 0.69.0 — 2026-07-26
 
 - Add `FF066`, a private ledger for namespaced Office custom-function call

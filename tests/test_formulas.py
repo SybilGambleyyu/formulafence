@@ -135,6 +135,52 @@ def test_formula_inspection_propagates_candidates_from_named_definitions() -> No
     assert named_formula.unresolved_range_tokens == ()
 
 
+def test_formula_inspection_inventories_worksheet_code_resource_registrations() -> None:
+    inspection = inspect_formula(
+        '=REGISTER.ID(A1,A2,"J!")+@REGISTER.ID(A3,A4,"J!")+ECMA.CEILING(A5,1)'
+    )
+    shadowed = inspect_formula(
+        "=REGISTER.ID(A1,A2)",
+        named_function_references={"register.id": ()},
+    )
+
+    assert inspection.worksheet_code_resource_registration_functions == (
+        "REGISTER.ID",
+        "REGISTER.ID",
+    )
+    assert inspection.office_custom_function_candidates == ()
+    assert shadowed.worksheet_code_resource_registration_functions == ()
+
+
+def test_formula_inspection_propagates_worksheet_code_resource_registrations() -> None:
+    named_lambda = inspect_formula(
+        "=FENCE.REGISTER(A1,A2)",
+        named_function_references={"fence.register": ()},
+        named_function_worksheet_code_resource_registration_functions={
+            "fence.register": ("REGISTER.ID",)
+        },
+    )
+    named_formula = inspect_formula(
+        "=FENCE.DIRECT",
+        named_references={"fence.direct": ()},
+        named_worksheet_code_resource_registration_functions={
+            "fence.direct": ("REGISTER.ID",)
+        },
+    )
+
+    assert named_lambda.worksheet_code_resource_registration_functions == (
+        "REGISTER.ID",
+    )
+    assert named_lambda.references == (
+        ParsedReference(None, 1, 1, 1, 1, raw="A1"),
+        ParsedReference(None, 1, 2, 1, 2, raw="A2"),
+    )
+    assert named_formula.worksheet_code_resource_registration_functions == (
+        "REGISTER.ID",
+    )
+    assert named_formula.unresolved_range_tokens == ()
+
+
 def test_formula_inspection_recognises_a_known_named_constant() -> None:
     inspection = inspect_formula("=StaticRate", {"staticrate": ()})
 

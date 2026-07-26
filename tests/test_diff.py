@@ -73,6 +73,8 @@ from .helpers import (
     change_named_office_custom_function_definition,
     change_named_office_custom_function_input,
     change_named_sheet_view_criterion,
+    change_named_worksheet_code_resource_registration_definition,
+    change_named_worksheet_code_resource_registration_input,
     change_number_format_code,
     change_number_format_default_style,
     change_office_custom_function_call,
@@ -116,6 +118,8 @@ from .helpers import (
     change_what_if_data_table_input,
     change_workbook_theme_colour,
     change_workbook_theme_image_payload,
+    change_worksheet_code_resource_registration_call,
+    change_worksheet_code_resource_registration_input,
     change_worksheet_dimension_controls,
     change_worksheet_display_controls,
     change_worksheet_drawing_connector_attachment,
@@ -244,6 +248,7 @@ from .helpers import (
     make_named_lambda_model,
     make_named_office_custom_function_model,
     make_named_sheet_view_model,
+    make_named_worksheet_code_resource_registration_model,
     make_number_format_model,
     make_office_custom_function_model,
     make_office_web_addin_model,
@@ -278,6 +283,7 @@ from .helpers import (
     make_three_d_model,
     make_what_if_data_table_model,
     make_workbook_theme_image_model,
+    make_worksheet_code_resource_registration_model,
     make_worksheet_dimension_model,
     make_worksheet_display_model,
     make_worksheet_drawing_connector_model,
@@ -2377,6 +2383,311 @@ def test_named_custom_function_static_inputs_are_guarded(tmp_path) -> None:
     assert function_change.details["office_custom_function_static_input_change_count"] == 1
     assert "office_custom_function_material_changed" not in function_change.details
     assert "FF066" in {finding.rule_id for finding in report.findings}
+
+
+def test_worksheet_code_resource_registrations_are_profiled_diffed_and_private(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_code_resource_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_worksheet_code_resource_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_worksheet_code_resource_registration_call(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_registrations = {
+        "present": True,
+        "registration_formula_cell_count": 3,
+        "register_id_function_count": 3,
+        "registration_defined_name_count": 0,
+    }
+    assert (
+        baseline_snapshot.worksheet_code_resource_registrations.to_dict()
+        == expected_registrations
+    )
+    assert baseline_snapshot.worksheet_code_resource_registrations.registration_cells == (
+        frozenset({("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")})
+    )
+    assert baseline_snapshot.office_custom_functions.present is False
+    assert profile["worksheet_code_resource_registrations"] == expected_registrations
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    registration_change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_code_resource_registrations_changed"
+    )
+    registration_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF067"
+    )
+    assert registration_change.details["before"] == expected_registrations
+    assert registration_change.details["after"] == expected_registrations
+    assert (
+        registration_change.details[
+            "worksheet_code_resource_registration_formula_material_changed"
+        ]
+        is True
+    )
+    assert registration_finding.details == registration_change.details
+
+    ff067_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF067"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["worksheet_code_resource_registrations"]),
+        profile_to_markdown(profile),
+        json.dumps(registration_change.details),
+        json.dumps(registration_finding.to_dict()),
+        json.dumps(ff067_sarif_result),
+    )
+    for sensitive_value in (
+        "PRIVATE-REGISTRATION-MODULE-BASELINE",
+        "PRIVATE-REGISTRATION-PROCEDURE-BASELINE",
+        "PRIVATE-REGISTRATION-MODULE-LITERAL-BASELINE",
+        "PRIVATE-REGISTRATION-PROCEDURE-LITERAL-BASELINE",
+        "PRIVATE-REGISTRATION-MODULE-LITERAL-CANDIDATE",
+        "PRIVATE-REGISTRATION-PROCEDURE-LITERAL-CANDIDATE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_worksheet_code_resource_registration_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_worksheet_code_resource_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_worksheet_code_resource_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_worksheet_code_resource_registration_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.worksheet_code_resource_registrations
+        == candidate_snapshot.worksheet_code_resource_registrations
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    registration_change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_code_resource_registrations_changed"
+    )
+    assert (
+        registration_change.details[
+            "worksheet_code_resource_registration_static_input_changed"
+        ]
+        is True
+    )
+    assert (
+        registration_change.details[
+            "worksheet_code_resource_registration_static_input_change_count"
+        ]
+        == 1
+    )
+    assert (
+        "worksheet_code_resource_registration_formula_material_changed"
+        not in registration_change.details
+    )
+    assert "FF067" in {finding.rule_id for finding in report.findings}
+
+
+def test_uninvoked_formula_defined_code_resource_registration_is_profiled(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "stored-name.xlsx")
+
+    def add_stored_registration(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.STORED.REGISTRATION",
+                attr_text='=REGISTER.ID("PRIVATE-STORED-MODULE","PRIVATE-STORED-PROCEDURE","J!")',
+            )
+        )
+
+    rewrite(workbook_path, add_stored_registration)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.worksheet_code_resource_registrations.to_dict() == {
+        "present": True,
+        "registration_formula_cell_count": 0,
+        "register_id_function_count": 0,
+        "registration_defined_name_count": 1,
+    }
+    assert snapshot.worksheet_code_resource_registrations.registration_cells == frozenset()
+
+
+def test_named_worksheet_code_resource_registrations_are_propagated_and_private(
+    tmp_path,
+) -> None:
+    baseline = make_named_worksheet_code_resource_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_named_worksheet_code_resource_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_named_worksheet_code_resource_registration_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_registrations = {
+        "present": True,
+        "registration_formula_cell_count": 3,
+        "register_id_function_count": 3,
+        "registration_defined_name_count": 3,
+    }
+    assert (
+        baseline_snapshot.worksheet_code_resource_registrations.to_dict()
+        == expected_registrations
+    )
+    assert baseline_snapshot.worksheet_code_resource_registrations.registration_cells == (
+        frozenset({("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")})
+    )
+    assert profile["worksheet_code_resource_registrations"] == expected_registrations
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    registration_change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_code_resource_registrations_changed"
+    )
+    assert registration_change.details["before"] == expected_registrations
+    assert registration_change.details["after"] == expected_registrations
+    assert (
+        registration_change.details[
+            "worksheet_code_resource_registration_definition_material_changed"
+        ]
+        is True
+    )
+
+    ff067_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF067"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["worksheet_code_resource_registrations"]),
+        profile_to_markdown(profile),
+        json.dumps(registration_change.details),
+        json.dumps(ff067_sarif_result),
+    )
+    for sensitive_value in (
+        "FENCE",
+        "PRIVATE-NAMED-REGISTRATION-MODULE-BASELINE",
+        "PRIVATE-NAMED-REGISTRATION-PROCEDURE-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_named_worksheet_code_resource_registration_static_inputs_are_guarded(
+    tmp_path,
+) -> None:
+    baseline = make_named_worksheet_code_resource_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_named_worksheet_code_resource_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_named_worksheet_code_resource_registration_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.worksheet_code_resource_registrations
+        == candidate_snapshot.worksheet_code_resource_registrations
+    )
+    assert {("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")} <= set(
+        baseline_snapshot.reverse_dependencies[("Inputs", "A9")]
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    registration_change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_code_resource_registrations_changed"
+    )
+    assert (
+        registration_change.details[
+            "worksheet_code_resource_registration_static_input_changed"
+        ]
+        is True
+    )
+    assert (
+        registration_change.details[
+            "worksheet_code_resource_registration_static_input_change_count"
+        ]
+        == 1
+    )
+    assert "FF067" in {finding.rule_id for finding in report.findings}
+
+
+def test_recursive_named_worksheet_code_resource_registrations_are_cycle_safe(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "recursive.xlsx")
+
+    def add_recursive_registration(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.LOOP",
+                attr_text=(
+                    '=LAMBDA(module,procedure,REGISTER.ID(module,procedure,"J!")'
+                    "+FENCE.LOOP(module,procedure))"
+                ),
+            )
+        )
+        workbook["Model"]["D2"] = "=FENCE.LOOP(Inputs!B2,Inputs!B3)"
+
+    rewrite(workbook_path, add_recursive_registration)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.worksheet_code_resource_registrations.to_dict() == {
+        "present": True,
+        "registration_formula_cell_count": 1,
+        "register_id_function_count": 1,
+        "registration_defined_name_count": 1,
+    }
+    assert snapshot.worksheet_code_resource_registrations.registration_cells == frozenset(
+        {("Model", "D2")}
+    )
+    assert snapshot.unresolved_reference_tokens[("Model", "D2")] == ("FENCE.LOOP",)
+
+
+def test_scoped_named_worksheet_code_resource_registrations_follow_local_precedence(
+    tmp_path,
+) -> None:
+    workbook_path = make_scoped_named_lambda_model(tmp_path / "scoped.xlsx")
+    workbook = load_workbook(workbook_path)
+    model = workbook["Model"]
+    report = workbook["Report"]
+    model["D2"] = "=FENCE.REGISTER(A2,A3)"
+    report["D2"] = "=Model!FENCE.REGISTER(A2,A3)"
+    model.defined_names.add(
+        DefinedName(
+            "FENCE.REGISTER",
+            attr_text='=LAMBDA(module,procedure,REGISTER.ID(module,procedure,"J!"))',
+            localSheetId=1,
+        )
+    )
+    workbook.save(workbook_path)
+
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.worksheet_code_resource_registrations.to_dict() == {
+        "present": True,
+        "registration_formula_cell_count": 2,
+        "register_id_function_count": 2,
+        "registration_defined_name_count": 1,
+    }
+    assert snapshot.worksheet_code_resource_registrations.registration_cells == frozenset(
+        {("Model", "D2"), ("Report", "D2")}
+    )
+    assert snapshot.unresolved_reference_tokens == {}
 
 
 def test_recursive_named_custom_function_candidates_are_cycle_safe(tmp_path) -> None:

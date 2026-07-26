@@ -5,6 +5,56 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Worksheet code-resource registration boundary — 2026-07-26
+
+FormulaFence 0.70.0 was checked against Microsoft's current
+[`REGISTER.ID` reference](https://support.microsoft.com/en-us/office/register-id-function-f8f0af0f-fd66-4704-a0f2-87b27b175b50).
+It documents `REGISTER.ID(module_text, procedure, [type_text])`, states that
+the function registers a DLL or code resource when it has not already been
+registered, and explicitly distinguishes worksheet-capable `REGISTER.ID` from
+`REGISTER`. Microsoft's [`CALL` reference](https://support.microsoft.com/en-us/office/call-function-32d58445-e646-4ffd-8d5e-b45077a5e995)
+places `CALL` on macro sheets, supporting the release's intentionally narrow
+scope: inspect stored worksheet and formula-defined `REGISTER.ID` expressions while leaving raw
+macro-sheet program material to the existing XLM scanner.
+
+Six fresh, controlled `.xlsx` artifacts were generated without opening Excel.
+The direct baseline (SHA-256
+`3ece94fc58f6f3b345179229a463762eafcda57d7814e5ea7d26eeb42b5717b4`)
+reported three registration formula cells, three `REGISTER.ID` calls, and zero
+relevant formula-defined names. Its same-count call-material variant (SHA-256
+`246d09e7b2e68df0a5858ad88620fd5063dee96c11d05dd548a39d7d5624275d`)
+emitted `worksheet_code_resource_registrations_changed` with `FF067` and the
+private formula-material flag. Changing only a static input (SHA-256
+`0f2517337c837391ea79ccd1ac0f119d399b0a88af94ccec46179608029f692d`)
+emitted `FF067` with a static-input count of one.
+
+The named baseline (SHA-256
+`e5a95f696e9fb5de6996f05b027bba7e389e625ab6508e62f55ecbd7fd82f72e`)
+used a formula-defined value, a named `LAMBDA`, and a nested named `LAMBDA` to
+reach the stored registration. It reported three formula cells, three calls,
+and three relevant formula-defined names. Changing only the inner definition
+(SHA-256 `3ebae9afec68e956cf1a9bc7acb20e4a312a758e29e3425f61f924c465a0322d`)
+emitted the private named-definition flag without changing its callers;
+changing only the shared input (SHA-256
+`40e6f743b0f86744e6a85023433b783c6e8e67c77049d3deea796afb9bc6bd89`)
+emitted a static-input count of one. The suite additionally verifies local
+name precedence and cycle-safe recursive named `LAMBDA` propagation.
+
+The new policy caused `formulafence check` to exit `1` and emit `FFP067` for
+the direct same-count change. The controlled module/procedure values were
+absent from the profile and dedicated `FF067` SARIF result. Ordinary semantic
+diffs deliberately preserve normal reviewer context, so that privacy assertion
+is limited to the dedicated ledger and policy-facing result. No formula was
+evaluated, no DLL/XLL was loaded, and no trust configuration was inspected.
+
+The staged wheel `formulafence-0.70.0-py3-none-any.whl` (SHA-256
+`fb8e12eff0bb2727c479c89f925cbd005e15f2236ad64ec2d335adacdd45b9db`) was
+built locally. The exact wheel was installed into a fresh virtual environment
+with declared dependencies. Its CLI returned `FormulaFence 0.70.0`, its starter
+policy included `no_worksheet_code_resource_registration_changes: true`, and
+the controlled check exited `1` with both `FF067` and `FFP067`; the profile and
+dedicated SARIF result remained redacted.
+
 ## Namespaced Office custom-function boundary — 2026-07-26
 
 FormulaFence 0.69.0 was checked against Microsoft's [custom-functions

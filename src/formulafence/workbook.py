@@ -60,6 +60,7 @@ from formulafence.models import (
     ExternalDataRefreshSettingsSnapshot,
     ExternalLinkPackageSnapshot,
     ExternalRelationshipSnapshot,
+    ExternalWorkbookReference,
     FillSnapshot,
     FilterVisibilitySnapshot,
     FontSnapshot,
@@ -44091,6 +44092,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     reverse_dependencies: dict[CellKey, set[CellKey]] = defaultdict(set)
     range_dependencies: list[RangeDependency] = []
     external_references: set[CellKey] = set()
+    external_workbook_references: dict[
+        CellKey, tuple[ExternalWorkbookReference, ...]
+    ] = {}
     formula_external_action_cells: set[CellKey] = set()
     formula_external_action_counts: Counter[str] = Counter()
     formula_external_action_entries: list[tuple[str, str]] = []
@@ -44659,6 +44663,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 implicit_intersection_tokens[snapshot.location] = (
                     inspection.implicit_intersection_tokens
                 )
+            if inspection.external_workbook_references:
+                external_workbook_references[snapshot.location] = (
+                    inspection.external_workbook_references
+                )
             for reference in inspection.references:
                 if reference.is_external:
                     external_references.add(snapshot.location)
@@ -44930,6 +44938,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         dynamic_array_formula_cells=array_formula_classification.dynamic_cells,
         dynamic_array_formula_ranges=array_formula_classification.dynamic_ranges,
         dynamic_array_output_references=dynamic_array_output_references,
+        external_workbook_references=external_workbook_references,
         unclassified_array_formula_cells=array_formula_classification.unclassified_cells,
         array_formula_output_dependents=array_formula_output_dependents,
         tokenization_failure_cells=tokenization_failure_cells,

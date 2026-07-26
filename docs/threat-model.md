@@ -93,6 +93,15 @@ financial correctness or replace model review.
   differ only by case, and bounds each directory to 512 supported workbooks by
   default. A malformed supported file produces redacted `FF078` evidence and a
   final incomplete exit status, while remaining paths are still reported.
+- Cross-workbook portfolio impact evidence is candidate-only and local to the
+  supplied inventory. FormulaFence retains raw external formula spellings only
+  as private parser state, then resolves a link only when a direct static A1
+  source normalizes to one exact relative candidate path. It never opens a
+  target path, searches by basename, follows an absolute/UNC/URI/escaping path,
+  fetches anything, evaluates a formula, or emits the stored external spelling.
+  Static ranges stay lazy. A global 100,000-state default bound emits `FF080`
+  and exit status 2 rather than presenting incomplete `FF079` impact evidence
+  as exhaustive.
 - CLI report output is refused when it resolves to an inspected workbook or
   policy, and portfolio output is refused inside either input directory. This
   keeps a reporting request from mutating evidence or changing a portfolio's
@@ -108,6 +117,12 @@ are explicit static dependencies, not proof of runtime evaluation. A
 formula-pattern finding means both immediate peers have the same relative
 formula fingerprint while the changed middle cell does not; it is a focused
 review prompt, not proof of an error.
+
+For a portfolio `FF079`, the same distinction applies across candidate
+workbooks: it records that a changed source cell can reach a formula through a
+bounded, explicit static graph. It does not prove that Excel can update the
+link, that a workbook is open, that a source is trusted, or what value any
+formula will produce.
 
 ## Deliberate limits
 

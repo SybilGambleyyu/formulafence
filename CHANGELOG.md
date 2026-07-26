@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.86.0 — 2026-07-26
+
+- Add `FF079`, a high-severity candidate-only static cross-workbook impact
+  boundary for directory portfolios. It follows local formula dependencies and
+  only direct external A1 cells/ranges whose exact relative workbook spelling
+  resolves to an already-inspected candidate path; evidence contains relative
+  workbook identities, Excel logical cells, counts, and deterministic shortest
+  paths. The raw external source spelling stays private.
+- Add `FFP079` through `no_cross_workbook_impacts`, including the generated
+  starter policy. FormulaFence does not open, download, evaluate, refresh, or
+  otherwise follow an external link; it does not guess basename matches or
+  resolve absolute, UNC, URI, escaping, named, table, 3-D, or dynamic forms.
+- Add a global `--max-link-impact` bound (100,000 source-to-node states by
+  default) to the portfolio CLI and composite GitHub Action. Reaching the bound
+  emits redacted critical `FF080`, retains partial evidence, and exits 2 rather
+  than claiming complete impact coverage.
+- Extend portfolio JSON, Markdown, and SARIF with safe cross-workbook evidence,
+  and add fixture coverage for relative/case-insensitive links, lazy ranges,
+  transitive local/cross-workbook paths, unresolved-path privacy, policy
+  enforcement, and fail-closed traversal bounds.
+
 ## 0.85.0 — 2026-07-26
 
 - Add a bounded, local-first `formulafence portfolio` command for recursive

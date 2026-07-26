@@ -10,24 +10,29 @@ portfolio report.
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict, deque
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+
+from openpyxl.utils.cell import coordinate_to_tuple
 
 from formulafence.diff import compare_snapshots
 from formulafence.models import (
     SEVERITY_ORDER,
+    CellKey,
     Change,
     DiffReport,
     Finding,
     FormulaFenceError,
     WorkbookSnapshot,
+    display_location,
 )
 from formulafence.policy import (
     Policy,
     evaluate_policy,
+    evaluate_portfolio_link_policy,
     evaluate_portfolio_membership_policy,
 )
 from formulafence.workbook import load_snapshot
@@ -37,6 +42,10 @@ _UNSUPPORTED_EXCEL_SUFFIXES = frozenset(
     {".xls", ".xlsb", ".xlt", ".xltx", ".xltm", ".xlam", ".ods"}
 )
 _DEFAULT_MAX_WORKBOOKS = 512
+DEFAULT_MAX_LINK_IMPACT = 100_000
+_LINK_IMPACT_SAMPLE_LIMIT = 10
+
+PortfolioNode = tuple[str, CellKey]
 
 
 class PortfolioError(FormulaFenceError):
@@ -45,6 +54,71 @@ class PortfolioError(FormulaFenceError):
 
 def _path_sort_key(value: str) -> tuple[str, str]:
     return value.casefold(), value
+
+
+def _location_sort_key(location: CellKey) -> tuple[str, str, int, int, str]:
+    sheet, coordinate = location
+    row, column = coordinate_to_tuple(coordinate)
+    return sheet.casefold(), sheet, row, column, coordinate
+
+
+def _node_sort_key(node: PortfolioNode) -> tuple[str, str, str, str, int, int, str]:
+    workbook, location = node
+    return (*_path_sort_key(workbook), *_location_sort_key(location))
+
+
+@dataclass(frozen=True)
+class _ExternalPortfolioDependency:
+    """A safely resolved external range pointing to one candidate formula."""
+
+    source_workbook: str
+    source_sheet: str
+    min_column: int
+    min_row: int
+    max_column: int
+    max_row: int
+    dependent: PortfolioNode
+
+    def contains(self, location: CellKey) -> bool:
+        sheet, coordinate = location
+        if sheet.casefold() != self.source_sheet.casefold():
+            return False
+        row, column = coordinate_to_tuple(coordinate)
+        return (
+            self.min_column <= column <= self.max_column
+            and self.min_row <= row <= self.max_row
+        )
+
+
+@dataclass(frozen=True)
+class _PortfolioImpactGraph:
+    """Candidate-only local and safely resolved cross-workbook dependency graph."""
+
+    snapshots: dict[str, WorkbookSnapshot]
+    external_dependents: dict[
+        tuple[str, str], tuple[_ExternalPortfolioDependency, ...]
+    ]
+
+    def direct_dependents(self, node: PortfolioNode) -> tuple[PortfolioNode, ...]:
+        workbook, location = node
+        snapshot = self.snapshots[workbook]
+        dependents: set[PortfolioNode] = {
+            (workbook, dependent) for dependent in snapshot.direct_dependents(location)
+        }
+        for dependency in self.external_dependents.get(
+            (workbook, location[0].casefold()), ()
+        ):
+            if dependency.contains(location):
+                dependents.add(dependency.dependent)
+        return tuple(sorted(dependents, key=_node_sort_key))
+
+
+@dataclass(frozen=True)
+class _PortfolioImpactTraversal:
+    """Bounded source-to-downstream evidence for changed candidate cells."""
+
+    paths_by_root: dict[PortfolioNode, tuple[tuple[PortfolioNode, ...], ...]]
+    incomplete_root: PortfolioNode | None = None
 
 
 def _safe_relative_path(path: Path, root: Path) -> str:
@@ -155,6 +229,319 @@ def discover_workbooks(
     return workbooks
 
 
+def _resolve_relative_external_workbook(
+    consumer_workbook: str,
+    source_path: str,
+    candidate_paths: dict[str, str],
+) -> str | None:
+    """Resolve only an exact, safely relative external path in this portfolio.
+
+    Excel stores several link spellings, including paths relative to the
+    consuming workbook.  This resolver is intentionally narrower than Excel:
+    it never follows a path on disk, expands a URI, or searches by basename.
+    A spelling must normalize to an already-inspected candidate relative path.
+    """
+    normalized = source_path.replace("\\", "/")
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or ":" in normalized
+        or any(ord(character) < 32 or ord(character) == 127 for character in normalized)
+    ):
+        return None
+
+    components = consumer_workbook.split("/")[:-1]
+    for component in normalized.split("/"):
+        if component == ".":
+            continue
+        if not component:
+            return None
+        if component == "..":
+            if not components:
+                return None
+            components.pop()
+            continue
+        if "[" in component or "]" in component:
+            return None
+        components.append(component)
+
+    if not components or Path(components[-1]).suffix.casefold() not in _SUPPORTED_SUFFIXES:
+        return None
+    return candidate_paths.get("/".join(components).casefold())
+
+
+def _canonical_sheet_name(snapshot: WorkbookSnapshot, requested_sheet: str) -> str | None:
+    """Return one exact candidate sheet identity without guessing collisions."""
+    matches = [
+        title for title in snapshot.sheets if title.casefold() == requested_sheet.casefold()
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _build_candidate_impact_graph(
+    entries: Iterable[PortfolioWorkbookReport],
+) -> _PortfolioImpactGraph:
+    """Build the in-portfolio candidate graph without resolving any external file."""
+    snapshots = {
+        entry.path: entry.after
+        for entry in entries
+        if entry.candidate_present and entry.after is not None
+    }
+    candidate_paths = {path.casefold(): path for path in snapshots}
+    external_dependents: defaultdict[
+        tuple[str, str], list[_ExternalPortfolioDependency]
+    ] = defaultdict(list)
+
+    for dependent_workbook in sorted(snapshots, key=_path_sort_key):
+        snapshot = snapshots[dependent_workbook]
+        for dependent_location in sorted(
+            snapshot.external_workbook_references, key=_location_sort_key
+        ):
+            for reference in snapshot.external_workbook_references[dependent_location]:
+                source_workbook = _resolve_relative_external_workbook(
+                    dependent_workbook,
+                    reference.source_path,
+                    candidate_paths,
+                )
+                if source_workbook is None:
+                    continue
+                source_snapshot = snapshots[source_workbook]
+                source_sheet = _canonical_sheet_name(source_snapshot, reference.sheet)
+                if source_sheet is None:
+                    continue
+                dependency = _ExternalPortfolioDependency(
+                    source_workbook=source_workbook,
+                    source_sheet=source_sheet,
+                    min_column=reference.min_column,
+                    min_row=reference.min_row,
+                    max_column=reference.max_column,
+                    max_row=reference.max_row,
+                    dependent=(dependent_workbook, dependent_location),
+                )
+                external_dependents[
+                    (source_workbook, source_sheet.casefold())
+                ].append(dependency)
+
+    return _PortfolioImpactGraph(
+        snapshots=snapshots,
+        external_dependents={
+            key: tuple(
+                sorted(
+                    dependencies,
+                    key=lambda dependency: (
+                        *_node_sort_key(dependency.dependent),
+                        dependency.min_column,
+                        dependency.min_row,
+                        dependency.max_column,
+                        dependency.max_row,
+                    ),
+                )
+            )
+            for key, dependencies in external_dependents.items()
+        },
+    )
+
+
+def _changed_candidate_roots(
+    entries: Iterable[PortfolioWorkbookReport],
+) -> tuple[PortfolioNode, ...]:
+    """Return candidate cells whose semantic change can have downstream impact."""
+    roots = {
+        (entry.path, change.location)
+        for entry in entries
+        if entry.after is not None
+        for change in entry.changes
+        if change.location is not None
+    }
+    return tuple(sorted(roots, key=_node_sort_key))
+
+
+def _materialize_impact_paths(
+    roots: tuple[PortfolioNode, ...],
+    nodes_by_root: dict[PortfolioNode, set[PortfolioNode]],
+    parents: dict[tuple[PortfolioNode, PortfolioNode], tuple[PortfolioNode, PortfolioNode]],
+) -> dict[PortfolioNode, tuple[tuple[PortfolioNode, ...], ...]]:
+    """Reconstruct deterministic shortest paths after the bounded graph walk."""
+    paths_by_root: dict[PortfolioNode, tuple[tuple[PortfolioNode, ...], ...]] = {}
+    for root in roots:
+        cross_workbook_nodes = sorted(
+            (
+                node
+                for node in nodes_by_root.get(root, set())
+                if node[0] != root[0]
+            ),
+            key=_node_sort_key,
+        )
+        paths: list[tuple[PortfolioNode, ...]] = []
+        for node in cross_workbook_nodes:
+            state = (root, node)
+            path: list[PortfolioNode] = []
+            while True:
+                path.append(state[1])
+                parent = parents.get(state)
+                if parent is None:
+                    break
+                state = parent
+            paths.append(tuple(reversed(path)))
+        if paths:
+            paths_by_root[root] = tuple(paths)
+    return paths_by_root
+
+
+def _traverse_cross_workbook_impacts(
+    graph: _PortfolioImpactGraph,
+    roots: tuple[PortfolioNode, ...],
+    *,
+    max_link_impact: int,
+) -> _PortfolioImpactTraversal:
+    """Follow candidate dependency states once, stopping before the configured cap.
+
+    A state is a ``(changed-source, reachable-node)`` pair.  Counting pairs
+    keeps evidence correct when two changed cells independently reach the same
+    downstream formula, while the single global cap bounds the full portfolio
+    run rather than each workbook in isolation.
+    """
+    queue: deque[tuple[PortfolioNode, PortfolioNode]] = deque()
+    nodes_by_root: defaultdict[PortfolioNode, set[PortfolioNode]] = defaultdict(set)
+    parents: dict[
+        tuple[PortfolioNode, PortfolioNode], tuple[PortfolioNode, PortfolioNode]
+    ] = {}
+    state_count = 0
+
+    for root in roots:
+        if state_count >= max_link_impact:
+            return _PortfolioImpactTraversal(
+                _materialize_impact_paths(roots, nodes_by_root, parents), root
+            )
+        nodes_by_root[root].add(root)
+        queue.append((root, root))
+        state_count += 1
+
+    while queue:
+        root, node = queue.popleft()
+        for dependent in graph.direct_dependents(node):
+            if dependent in nodes_by_root[root]:
+                continue
+            if state_count >= max_link_impact:
+                return _PortfolioImpactTraversal(
+                    _materialize_impact_paths(roots, nodes_by_root, parents), root
+                )
+            nodes_by_root[root].add(dependent)
+            parents[(root, dependent)] = (root, node)
+            queue.append((root, dependent))
+            state_count += 1
+
+    return _PortfolioImpactTraversal(
+        _materialize_impact_paths(roots, nodes_by_root, parents)
+    )
+
+
+def _cross_workbook_impact_finding(
+    root: PortfolioNode,
+    paths: tuple[tuple[PortfolioNode, ...], ...],
+) -> Finding:
+    """Render only audited relative identities, never the original link spelling."""
+    _, root_location = root
+    return Finding(
+        "FF079",
+        "high",
+        "A changed workbook cell has statically reachable formulas in another portfolio workbook.",
+        root_location,
+        details={
+            "impacted_workbook_count": len({path[-1][0] for path in paths}),
+            "impacted_formula_count": len(paths),
+            "sample_impacts": [
+                {
+                    "workbook": path[-1][0],
+                    "location": display_location(path[-1][1]),
+                    "path": [
+                        {
+                            "workbook": workbook,
+                            "location": display_location(location),
+                        }
+                        for workbook, location in path
+                    ],
+                }
+                for path in paths[:_LINK_IMPACT_SAMPLE_LIMIT]
+            ],
+        },
+    )
+
+
+def _cross_workbook_impact_limit_finding(
+    root: PortfolioNode, max_link_impact: int
+) -> Finding:
+    """Make a capped traversal explicit instead of claiming complete evidence."""
+    _, root_location = root
+    return Finding(
+        "FF080",
+        "critical",
+        (
+            "Cross-workbook impact analysis reached its configured bound; "
+            "portfolio impact evidence is incomplete."
+        ),
+        root_location,
+        details={"max_link_impact": max_link_impact},
+    )
+
+
+def _add_cross_workbook_impact_evidence(
+    entries: tuple[PortfolioWorkbookReport, ...],
+    policy: Policy | None,
+    *,
+    max_link_impact: int,
+) -> tuple[PortfolioWorkbookReport, ...]:
+    """Attach bounded candidate-graph evidence to changed source workbooks."""
+    graph = _build_candidate_impact_graph(entries)
+    roots = _changed_candidate_roots(entries)
+    if not graph.snapshots or not roots:
+        return entries
+
+    traversal = _traverse_cross_workbook_impacts(
+        graph,
+        roots,
+        max_link_impact=max_link_impact,
+    )
+    raw_findings_by_workbook: defaultdict[str, list[Finding]] = defaultdict(list)
+    policy_findings_by_workbook: defaultdict[str, list[Finding]] = defaultdict(list)
+    for root, paths in traversal.paths_by_root.items():
+        finding = _cross_workbook_impact_finding(root, paths)
+        raw_findings_by_workbook[root[0]].append(finding)
+        if policy is not None:
+            policy_findings_by_workbook[root[0]].extend(
+                evaluate_portfolio_link_policy((finding,), policy)
+            )
+    if traversal.incomplete_root is not None:
+        root = traversal.incomplete_root
+        raw_findings_by_workbook[root[0]].append(
+            _cross_workbook_impact_limit_finding(root, max_link_impact)
+        )
+
+    return tuple(
+        replace(
+            entry,
+            status=(
+                "changed"
+                if entry.status == "unchanged"
+                and (
+                    raw_findings_by_workbook[entry.path]
+                    or policy_findings_by_workbook[entry.path]
+                )
+                else entry.status
+            ),
+            portfolio_findings=(
+                *entry.portfolio_findings,
+                *raw_findings_by_workbook[entry.path],
+            ),
+            policy_findings=(
+                *entry.policy_findings,
+                *policy_findings_by_workbook[entry.path],
+            ),
+        )
+        for entry in entries
+    )
+
+
 def _safe_workbook_summary(snapshot: WorkbookSnapshot | None, path: str) -> dict[str, Any] | None:
     if snapshot is None:
         return None
@@ -205,6 +592,7 @@ class PortfolioWorkbookReport:
     report: DiffReport | None = None
     standalone_changes: tuple[Change, ...] = ()
     standalone_findings: tuple[Finding, ...] = ()
+    portfolio_findings: tuple[Finding, ...] = ()
     policy_findings: tuple[Finding, ...] = ()
 
     @property
@@ -216,8 +604,8 @@ class PortfolioWorkbookReport:
     @property
     def raw_findings(self) -> tuple[Finding, ...]:
         if self.report is not None:
-            return tuple(self.report.findings)
-        return self.standalone_findings
+            return (*self.report.findings, *self.portfolio_findings)
+        return (*self.standalone_findings, *self.portfolio_findings)
 
     @property
     def findings(self) -> tuple[Finding, ...]:
@@ -225,14 +613,18 @@ class PortfolioWorkbookReport:
 
     @property
     def incomplete(self) -> bool:
-        return self.status == "unreadable"
+        return self.status == "unreadable" or any(
+            finding.rule_id == "FF080" for finding in self.portfolio_findings
+        )
 
     def to_dict(self) -> dict[str, Any]:
         if self.report is not None:
-            payload = self.report.to_dict(self.policy_findings)
+            payload = self.report.to_dict(
+                (*self.portfolio_findings, *self.policy_findings)
+            )
             payload["before"]["path"] = self.path
             payload["after"]["path"] = self.path
-            payload["summary"]["raw_finding_count"] = len(self.report.findings)
+            payload["summary"]["raw_finding_count"] = len(self.raw_findings)
             payload["summary"]["policy_finding_count"] = len(self.policy_findings)
         else:
             payload = {
@@ -240,7 +632,7 @@ class PortfolioWorkbookReport:
                 "after": _safe_workbook_summary(self.after, self.path),
                 "summary": _summary_for(
                     self.standalone_changes,
-                    self.standalone_findings,
+                    self.raw_findings,
                     self.policy_findings,
                 ),
                 "changes": [change.to_dict() for change in self.standalone_changes],
@@ -285,6 +677,17 @@ class PortfolioReport:
     def to_dict(self) -> dict[str, Any]:
         entries = [entry.to_dict() for entry in self.workbooks]
         findings = [finding for entry in self.workbooks for finding in entry.findings]
+        cross_workbook_findings = [
+            finding
+            for entry in self.workbooks
+            for finding in entry.raw_findings
+            if finding.rule_id == "FF079"
+        ]
+        cross_workbook_analysis_incomplete = any(
+            finding.rule_id == "FF080"
+            for entry in self.workbooks
+            for finding in entry.raw_findings
+        )
         counts = Counter(finding.severity for finding in findings)
         highest = (
             max(findings, key=lambda finding: SEVERITY_ORDER[finding.severity]).severity
@@ -316,6 +719,12 @@ class PortfolioReport:
                 "change_count": sum(len(entry.changes) for entry in self.workbooks),
                 "finding_count": len(findings),
                 "policy_finding_count": len(self.policy_findings),
+                "cross_workbook_impact_source_count": len(cross_workbook_findings),
+                "cross_workbook_impacted_formula_count": sum(
+                    finding.details["impacted_formula_count"]
+                    for finding in cross_workbook_findings
+                ),
+                "cross_workbook_impact_incomplete": cross_workbook_analysis_incomplete,
                 "highest_severity": highest,
                 "findings_by_severity": {
                     severity: counts[severity] for severity in SEVERITY_ORDER if counts[severity]
@@ -430,13 +839,17 @@ def compare_portfolios(
     *,
     policy: Policy | None = None,
     max_workbooks: int = _DEFAULT_MAX_WORKBOOKS,
+    max_link_impact: int = DEFAULT_MAX_LINK_IMPACT,
 ) -> PortfolioReport:
     """Compare every workbook at the same relative path in two directories.
 
     The scan is deliberately sequential and bounded.  A folder-wide run should
-    be deterministic, memory-safe for CI, and explicit about unsupported or
-    unreadable material rather than silently treating it as unchanged.
+    be deterministic, memory-safe for CI, and explicit about unsupported,
+    unreadable, or cross-workbook impact material rather than silently treating
+    it as unchanged.
     """
+    if max_link_impact < 1:
+        raise PortfolioError("max_link_impact must be at least 1.")
     baseline = discover_workbooks(
         baseline_directory, label="baseline", max_workbooks=max_workbooks
     )
@@ -495,6 +908,13 @@ def compare_portfolios(
             )
         )
 
+    entries = list(
+        _add_cross_workbook_impact_evidence(
+            tuple(entries),
+            policy,
+            max_link_impact=max_link_impact,
+        )
+    )
     return PortfolioReport(
         baseline_workbook_count=len(baseline),
         candidate_workbook_count=len(candidate),

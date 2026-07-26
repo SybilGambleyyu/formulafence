@@ -5,6 +5,36 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Cross-workbook portfolio impact boundary — 2026-07-26
+
+FormulaFence 0.86.0 implements the direct external-A1 forms documented in
+Microsoft's [workbook-link guidance](https://support.microsoft.com/en-us/excel/create-workbook-links)
+only when an exact relative source path maps to an already-inspected candidate
+workbook. It never opens, refreshes, calculates, or downloads a link target.
+
+The independently maintained public
+[openpyexcel external-link fixtures](https://github.com/sciris/openpyexcel/tree/1fde667a1adc2f4988279fd73a2ac2660706b5ce/openpyexcel/workbook/external_link/tests/data)
+were inspected at commit `1fde667a1adc2f4988279fd73a2ac2660706b5ce`.
+`book1.xlsx` and `book2.xlsx` are real OOXML workbooks: the first contains one
+explicit external-reference formula and one external-link package, but no
+direct static external A1 cell/range. FormulaFence recorded zero resolvable
+portfolio edges rather than guessing that its external name/package target was
+the paired filename. Neither workbook was executed, refreshed, altered, copied
+into this repository, nor emitted in a report.
+
+A clean virtual environment then installed the built 0.86.0 wheel outside the
+source checkout. A disposable source/summary pair used the
+documented direct form `=[source.xlsx]Data!A1`; changing the source produced
+`FF079` and `FFP079`, with two reachable summary formulas and exit code 1. The
+same summary also contained an absolute-link sentinel. JSON, Markdown, and
+SARIF output retained only relative workbook identities and logical cells: the
+temporary root and sentinel did not appear. The source distribution and wheel
+both passed `twine check`.
+
+The final source checkout passed **602 tests in 87.67 seconds**, a clean Ruff
+check, shell syntax validation, `git diff --check`, and another isolated
+wheel/source-distribution build.
+
 ## Portfolio change-control boundary — 2026-07-26
 
 FormulaFence 0.85.0 was exercised against the independently maintained public

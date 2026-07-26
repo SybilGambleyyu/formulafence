@@ -1186,6 +1186,31 @@ def test_external_defined_name_is_tracked_as_an_external_reference(tmp_path) -> 
     assert snapshot.unresolved_reference_tokens == {}
 
 
+def test_static_external_a1_references_are_retained_privately_for_portfolios(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "external-a1.xlsx")
+    private_source = "PRIVATE-EXTERNAL-SOURCE-PATH"
+
+    def add_external_a1_formula(workbook) -> None:
+        workbook["Model"]["D2"] = (
+            "='C:\\" + private_source + "\\[Inputs.xlsx]Data'!$B$2:$B$4"
+        )
+
+    rewrite(workbook_path, add_external_a1_formula)
+    snapshot = load_snapshot(workbook_path)
+
+    references = snapshot.external_workbook_references[("Model", "D2")]
+    assert len(references) == 1
+    assert references[0].source_path == f"C:\\{private_source}\\Inputs.xlsx"
+    assert references[0].sheet == "Data"
+    assert (
+        references[0].min_column,
+        references[0].min_row,
+        references[0].max_column,
+        references[0].max_row,
+    ) == (2, 2, 2, 4)
+    assert private_source not in json.dumps(profile_snapshot(snapshot))
+
+
 def test_static_table_references_feed_dependency_paths_and_profiles(tmp_path) -> None:
     workbook_path = make_table_model(tmp_path / "table.xlsx")
     snapshot = load_snapshot(workbook_path)

@@ -139,4 +139,5 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
     assert "no_worksheet_embedded_control_changes: true" in content
     assert "no_power_query_changes: true" in content
     assert "no_portfolio_membership_changes: true" in content
+    assert "no_cross_workbook_impacts: true" in content
     assert "no_new_tokenization_failures: true" in content

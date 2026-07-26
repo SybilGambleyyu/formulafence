@@ -14,7 +14,7 @@ inputs:
     description: Candidate .xlsx/.xlsm workbook, or a directory portfolio, inside the workspace.
     required: true
   policy:
-    description: Optional FormulaFence policy inside the workspace. A directory run applies it to matched workbooks and membership changes.
+    description: Optional FormulaFence policy inside the workspace. A directory run applies it to matched workbooks, membership changes, and static cross-workbook impact evidence.
     required: false
     default: ''
   format:
@@ -33,6 +33,10 @@ inputs:
     description: Maximum supported .xlsx/.xlsm workbooks per directory portfolio before the action fails closed.
     required: false
     default: '512'
+  max-link-impact:
+    description: Maximum static cross-workbook dependency graph states for a directory portfolio before the action fails closed.
+    required: false
+    default: '100000'
   install:
     description: Install FormulaFence from this pinned action before running it.
     required: false
@@ -68,6 +72,7 @@ runs:
         INPUT_OUTPUT: ${{ inputs.output }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_MAX_WORKBOOKS: ${{ inputs.max-workbooks }}
+        INPUT_MAX_LINK_IMPACT: ${{ inputs.max-link-impact }}
         INPUT_INSTALL: ${{ inputs.install }}
         INPUT_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
       run: bash "$GITHUB_ACTION_PATH/scripts/run-github-action.sh"

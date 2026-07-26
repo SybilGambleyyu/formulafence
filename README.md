@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.85.0/formulafence-0.85.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.86.0/formulafence-0.86.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.85.0
+  uses: SybilGambleyyu/formulafence@v0.86.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -91,12 +91,25 @@ present on only one side emits high-severity `FF077`; enable
 `no_portfolio_membership_changes` to fail it as `FFP077`. FormulaFence never
 guesses renames, so a move remains a visible removal plus addition.
 
+When a changed candidate cell is read through a direct static external A1
+reference by a formula in another candidate workbook, FormulaFence emits
+high-severity `FF079` with relative workbook/cell paths and deterministic
+shortest-path samples. Enable `no_cross_workbook_impacts` to make that evidence
+`FFP079`. This is deliberately a narrow local graph: it resolves only an exact
+relative link spelling against an already-inspected candidate path, never opens
+or fetches a link target, never guesses by filename, and does not evaluate a
+formula. Absolute, URI, escaping, non-A1, named, table, 3-D, and dynamic link
+forms remain ordinary external-link coverage rather than being approximated.
+
 The command applies an optional policy independently to every matched workbook,
 keeps paths relative in portfolio output, skips transient Office `~$` lock
 files, and fails closed for unsupported Excel formats, case-colliding paths,
 symlinked paths, over-limit inventories, or an unreadable workbook.
 The default bound is 512 supported workbooks per directory and can be changed
-with `--max-workbooks`. An unreadable workbook still receives a redacted
+with `--max-workbooks`. Cross-workbook traversal has a separate global bound of
+100,000 source-to-node graph states, configurable with `--max-link-impact`; an
+exhausted bound emits critical `FF080` and returns exit code `2` rather than
+claiming complete impact evidence. An unreadable workbook still receives a redacted
 `FF078` report entry, then returns exit code `2` because the comparison is
 incomplete. A newly added or removed unreadable workbook also retains its
 known `FF077` / `FFP077` membership evidence. New or removed workbook contents
@@ -182,6 +195,7 @@ rules:
   no_formula_environment_information_changes: true
   no_power_query_changes: true
   no_portfolio_membership_changes: true
+  no_cross_workbook_impacts: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -203,7 +217,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Portfolio control | Recursive, relative-path workbook matching with per-file semantic reports, explicit additions/removals, unreadable-file evidence, bounded inventory, and consolidated JSON/Markdown/SARIF for CI |
+| Portfolio control | Recursive, relative-path workbook matching with per-file semantic reports, explicit additions/removals, bounded static cross-workbook impact evidence, unreadable-file evidence, bounded inventory/traversal, and consolidated JSON/Markdown/SARIF for CI |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function candidates, worksheet and formula-defined code-resource registration calls, formula-defined XLM `REGISTER`/`EVALUATE` calls, XLM macro-sheet programs and automatic-macro bindings, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Formula external-action and data-provider surfaces | Material stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, `RTD`, `STOCKHISTORY`, or documented `CUBE*` call changes in cells, formula-defined names, or named `LAMBDA`s, including same-count destination, market-provider, connection, or query swaps, without evaluating formulas or exposing their arguments in the private ledger |

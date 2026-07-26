@@ -8,6 +8,7 @@ from formulafence.formulas import (
     formula_fingerprint,
     inspect_formula,
     lambda_parameter_count,
+    parse_external_workbook_reference,
 )
 
 
@@ -39,6 +40,56 @@ def test_extract_references_keeps_external_workbooks_separate() -> None:
     assert references[1].is_external
     assert references[2].sheet is None
     assert references[2].is_range
+
+
+def test_external_workbook_a1_references_keep_private_source_spelling_for_portfolios() -> None:
+    direct = parse_external_workbook_reference("[Inputs.xlsx]Data!$B$2:$B$4")
+    relative = parse_external_workbook_reference("'..\\shared\\[Inputs.xlsx]Data Sheet'!A1")
+    absolute = parse_external_workbook_reference("'C:\\Reports\\[Inputs.xlsx]Data'!A1")
+
+    assert direct is not None
+    assert direct.source_path == "Inputs.xlsx"
+    assert direct.sheet == "Data"
+    assert (direct.min_column, direct.min_row, direct.max_column, direct.max_row) == (
+        2,
+        2,
+        2,
+        4,
+    )
+    assert relative is not None
+    assert relative.source_path == "..\\shared\\Inputs.xlsx"
+    assert relative.sheet == "Data Sheet"
+    assert absolute is not None
+    assert absolute.source_path == "C:\\Reports\\Inputs.xlsx"
+    assert parse_external_workbook_reference("[Inputs.xlsx]ExternalName") is None
+    assert parse_external_workbook_reference("[Inputs.xlsx]Jan:Mar!A1") is None
+    whole_column = parse_external_workbook_reference("[Inputs.xlsx]Data!A:A")
+    whole_row = parse_external_workbook_reference("[Inputs.xlsx]Data!2:2")
+    assert whole_column is not None
+    assert (
+        whole_column.min_column,
+        whole_column.min_row,
+        whole_column.max_column,
+        whole_column.max_row,
+    ) == (1, 1, 1, 1_048_576)
+    assert whole_row is not None
+    assert (
+        whole_row.min_column,
+        whole_row.min_row,
+        whole_row.max_column,
+        whole_row.max_row,
+    ) == (1, 2, 16_384, 2)
+
+    inspection = inspect_formula(
+        "=SUM([Inputs.xlsx]Data!A1:A3)+'..\\shared\\[Other.xlsx]Data'!B2"
+    )
+    assert [
+        (reference.source_path, reference.sheet)
+        for reference in inspection.external_workbook_references
+    ] == [
+        ("Inputs.xlsx", "Data"),
+        ("..\\shared\\Other.xlsx", "Data"),
+    ]
 
 
 def test_formula_inspection_resolves_names_and_marks_static_coverage_gaps() -> None:

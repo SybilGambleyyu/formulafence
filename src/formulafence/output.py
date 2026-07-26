@@ -3355,6 +3355,38 @@ def _markdown_code(value: object) -> str:
     return f"`{escaped}`"
 
 
+def _append_cross_workbook_impact_samples(
+    lines: list[str], entry: dict[str, Any], heading: str
+) -> None:
+    """Render safe portfolio impact paths without exposing external link spellings."""
+    findings = [
+        finding for finding in entry["findings"] if finding["rule_id"] == "FF079"
+    ]
+    if not findings:
+        return
+    lines.extend([f"{heading} Static cross-workbook impacts", ""])
+    for finding in findings:
+        details = finding.get("details", {})
+        lines.append(
+            "- Source {location} reaches {formula_count} formula(s) in {workbook_count} "
+            "other workbook(s).".format(
+                location=_markdown_code(finding["location"] or "workbook"),
+                formula_count=details["impacted_formula_count"],
+                workbook_count=details["impacted_workbook_count"],
+            )
+        )
+        for impact in details["sample_impacts"]:
+            path = " → ".join(
+                "{} {}".format(
+                    _markdown_code(step["workbook"]),
+                    _markdown_code(step["location"]),
+                )
+                for step in impact["path"]
+            )
+            lines.append(f"  - {path}")
+    lines.append("")
+
+
 def portfolio_to_markdown(report: PortfolioReport) -> str:
     """Render a complete multi-workbook review without absolute filesystem paths."""
     payload = report.to_dict()
@@ -3373,6 +3405,15 @@ def portfolio_to_markdown(report: PortfolioReport) -> str:
             f"{summary['unreadable_workbook_count']}"
         ),
         f"- **Semantic changes:** {summary['change_count']}",
+        (
+            "- **Cross-workbook impact sources / impacted formulas:** "
+            f"{summary['cross_workbook_impact_source_count']} / "
+            f"{summary['cross_workbook_impacted_formula_count']}"
+        ),
+        (
+            "- **Cross-workbook impact analysis:** `"
+            f"{'incomplete' if summary['cross_workbook_impact_incomplete'] else 'complete'}`"
+        ),
         f"- **Findings:** {summary['finding_count']}",
         f"- **Highest severity:** `{summary['highest_severity']}`",
         "",
@@ -3417,6 +3458,7 @@ def portfolio_to_markdown(report: PortfolioReport) -> str:
             ]
         )
         _append_report_markdown_sections(lines, entry, "####")
+        _append_cross_workbook_impact_samples(lines, entry, "####")
         lines.append("")
     return "\n".join(lines) + "\n"
 

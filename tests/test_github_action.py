@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,7 @@ def _run_action_script(
     output: str = "reports/formulafence.md",
     report_format: str = "markdown",
     max_workbooks: str = "512",
+    max_link_impact: str = "100000",
     upload_artifact: str = "true",
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     outputs = tmp_path / "outputs.txt"
@@ -56,6 +58,7 @@ def _run_action_script(
             "INPUT_OUTPUT": output,
             "INPUT_FAIL_ON": "none",
             "INPUT_MAX_WORKBOOKS": max_workbooks,
+            "INPUT_MAX_LINK_IMPACT": max_link_impact,
             "INPUT_INSTALL": "false",
             "INPUT_UPLOAD_ARTIFACT": upload_artifact,
             "PYTHONPATH": str(REPOSITORY_ROOT / "src"),
@@ -77,9 +80,15 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
     action = yaml.safe_load(ACTION_PATH.read_text(encoding="utf-8"))
 
     assert action["runs"]["using"] == "composite"
-    assert {"baseline", "candidate", "policy", "format", "output", "max-workbooks"} <= set(
-        action["inputs"]
-    )
+    assert {
+        "baseline",
+        "candidate",
+        "policy",
+        "format",
+        "output",
+        "max-workbooks",
+        "max-link-impact",
+    } <= set(action["inputs"])
     assert {"report-path", "exit-code"} <= set(action["outputs"])
     steps = action["runs"]["steps"]
     upload_index = next(
@@ -205,6 +214,42 @@ def test_action_runs_a_directory_portfolio_and_preserves_membership_evidence(
     assert "FFP077" in summary.read_text(encoding="utf-8")
 
 
+def test_action_enforces_static_cross_workbook_portfolio_impacts(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    baseline.mkdir()
+    source = baseline / "source.xlsx"
+    summary_workbook = baseline / "summary.xlsx"
+    _workbook(source, 1)
+    _workbook(summary_workbook, "=[source.xlsx]Model!A1")
+    shutil.copytree(baseline, candidate)
+    workbook = Workbook()
+    workbook.active.title = "Model"
+    workbook.active["A1"] = 2
+    workbook.save(candidate / "source.xlsx")
+    policy = tmp_path / "formulafence.yml"
+    policy.write_text(
+        "version: 1\nrules:\n  no_cross_workbook_impacts: true\n",
+        encoding="utf-8",
+    )
+
+    result, outputs, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        policy=policy,
+    )
+
+    assert result.returncode == 0
+    assert "exit-code=1" in outputs.read_text(encoding="utf-8")
+    assert "FF079" in (tmp_path / "reports" / "formulafence.md").read_text(
+        encoding="utf-8"
+    )
+    assert "FFP079" in (tmp_path / "reports" / "formulafence.md").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_action_rejects_an_invalid_portfolio_limit(tmp_path: Path) -> None:
     baseline = tmp_path / "baseline"
     candidate = tmp_path / "candidate"
@@ -222,6 +267,25 @@ def test_action_rejects_an_invalid_portfolio_limit(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "max-workbooks must be a positive integer" in result.stderr
+
+
+def test_action_rejects_an_invalid_cross_workbook_impact_limit(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    baseline.mkdir()
+    candidate.mkdir()
+    _workbook(baseline / "model.xlsx", "=1+1")
+    _workbook(candidate / "model.xlsx", "=1+1")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        max_link_impact="0",
+    )
+
+    assert result.returncode == 2
+    assert "max-link-impact must be a positive integer" in result.stderr
 
 
 def test_action_refuses_a_report_inside_a_portfolio_input(tmp_path: Path) -> None:

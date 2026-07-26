@@ -17,6 +17,7 @@ format=${INPUT_FORMAT:-markdown}
 output=${INPUT_OUTPUT:-formulafence-report.md}
 fail_on=${INPUT_FAIL_ON:-none}
 max_workbooks=${INPUT_MAX_WORKBOOKS:-512}
+max_link_impact=${INPUT_MAX_LINK_IMPACT:-100000}
 install=${INPUT_INSTALL:-true}
 upload_artifact=${INPUT_UPLOAD_ARTIFACT:-true}
 
@@ -39,6 +40,9 @@ esac
 
 if ! [[ "$max_workbooks" =~ ^[1-9][0-9]*$ ]]; then
   fail 'max-workbooks must be a positive integer.'
+fi
+if ! [[ "$max_link_impact" =~ ^[1-9][0-9]*$ ]]; then
+  fail 'max-link-impact must be a positive integer.'
 fi
 
 case "$install" in
@@ -117,7 +121,11 @@ fi
 
 command=(python -m formulafence.cli)
 if [[ "$comparison_mode" == portfolio ]]; then
-  command+=(portfolio "$baseline" "$candidate" --max-workbooks "$max_workbooks")
+  command+=(
+    portfolio "$baseline" "$candidate"
+    --max-workbooks "$max_workbooks"
+    --max-link-impact "$max_link_impact"
+  )
   if [[ -n "$policy" ]]; then
     command+=(--policy "$policy")
   fi

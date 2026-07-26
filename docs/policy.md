@@ -78,6 +78,7 @@ rules:
   no_formula_environment_information_changes: true
   no_power_query_changes: true
   no_portfolio_membership_changes: true
+  no_cross_workbook_impacts: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
   max_changed_formulas: 20
@@ -182,6 +183,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | no_formula_environment_information_changes | boolean | A native CELL, INFO, SHEET, or SHEETS call stored in a worksheet formula, formula-defined name, or named LAMBDA; its relevant definition chain/private invocation inventory; or a statically visible argument input changes. Profiles separately aggregate CELL calls without an explicit reference, SHEET calls, SHEETS calls, and SHEETS calls without an explicit reference. When a complete raw OOXML tab catalog changes, FormulaFence also raises FF072 for stored SHEET or omitted-reference SHEETS calls; all declared tabs, including hidden, chart, macro, and dialog sheets, are in scope, while visibility-only changes are not this condition. Information types, references, formulas, arguments, locations, name identities, and raw tab-catalog comparison material are compared privately; ordinary sheet inventory remains normal reviewer context. FormulaFence never evaluates the call, resolves dynamic arguments, infers a selected cell, or simulates file, folder, client, workspace, workbook, or other Excel state. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_portfolio_membership_changes` | boolean | A `formulafence portfolio` run finds a supported workbook relative path only in the baseline or only in the candidate directory. This blocks `FF077` as `FFP077`; it does not infer that same-content files with different paths are a rename. |
+| `no_cross_workbook_impacts` | boolean | A changed candidate cell has one or more statically reachable formula cells in another candidate workbook through FormulaFence's exact, safely relative external-A1 portfolio graph. This blocks `FF079` as `FFP079`; it does not resolve a file, evaluate a formula, or infer an unresolved link target. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
 | `max_changed_formulas` | non-negative integer | More formula-bearing cells change than allowed. |
@@ -1681,6 +1683,32 @@ that entry. If that file is also newly added or removed, its known `FF077` /
 remaining files. Office `~$` lock
 files are ignored; legacy `.xls`, `.xlsb`, templates, add-ins, and `.ods` files
 cause an explicit unsupported-format error rather than being omitted.
+
+Candidate-only portfolio analysis also builds a separate static dependency graph
+across a deliberately narrow subset of external A1 formulas. A link such as
+`=[Inputs.xlsx]Data!B2` is eligible only when its workbook spelling is an exact
+relative path from the consuming workbook to another already-inspected candidate
+path. Backslash and slash relative forms are normalized only in memory; path
+resolution never touches the filesystem. Case is matched in the same
+case-insensitive way Excel uses for workbook and sheet names. Direct A1 cells,
+ranges, whole rows, and whole columns remain lazy edges, so a range is not
+expanded into millions of cells.
+
+Absolute, UNC, URI, or portfolio-escaping paths; external names, tables, 3-D
+and dynamic references; unknown source sheets; unreadable targets; and
+basename-only near matches are not resolved or guessed. FormulaFence never
+opens, downloads, calculates, refreshes, or otherwise follows an external
+link. When a changed source cell reaches a formula in another candidate
+workbook, `FF079` supplies only reviewed relative workbook identities, logical
+Excel cells, counts, and bounded shortest-path samples; the stored external
+path spelling stays private. Enable `no_cross_workbook_impacts` to make each
+such item `FFP079`.
+
+The graph has one global `--max-link-impact` bound for source-to-node traversal
+states (100,000 by default). Reaching it emits critical `FF080` with the bound,
+makes the portfolio report incomplete, and returns status `2`; any partial
+`FF079` evidence remains visible. This is separate from the per-workbook
+`max_downstream_impact` policy rule.
 
 When a formula cannot be tokenized at all, FormulaFence records its location in
 the profile and emits `FF016` for a new instance. Enable

@@ -13,6 +13,8 @@ from openpyxl.utils.cell import (
     range_boundaries,
 )
 
+from formulafence.models import ExternalWorkbookReference
+
 MAX_EXCEL_ROW = 1_048_576
 MAX_EXCEL_COLUMN = 16_384
 _DYNAMIC_REFERENCE_FUNCTIONS = {"INDIRECT", "OFFSET"}
@@ -357,6 +359,7 @@ class FormulaInspection:
     references: tuple[ParsedReference, ...]
     unresolved_range_tokens: tuple[str, ...]
     dynamic_reference_functions: tuple[str, ...]
+    external_workbook_references: tuple[ExternalWorkbookReference, ...] = ()
     external_action_functions: tuple[str, ...] = ()
     formula_dde_link_markers: tuple[str, ...] = ()
     python_functions: tuple[str, ...] = ()
@@ -543,6 +546,43 @@ def parse_reference_token(value: str) -> ParsedReference | None:
         max_column,
         max_row,
         value,
+    )
+
+
+def parse_external_workbook_reference(value: str) -> ExternalWorkbookReference | None:
+    """Parse a direct external A1 token without resolving its filesystem path.
+
+    Excel formulas may spell an external reference as ``[Book.xlsx]Sheet!A1``
+    or include a relative/absolute source path before the workbook name. The
+    path is intentionally retained only for a later, bounded portfolio-root
+    resolver. External names, structured references, 3-D spans, and malformed
+    A1 syntax return ``None`` rather than being approximated.
+    """
+    sheet_prefix, address = _split_sheet_reference(value)
+    if sheet_prefix is None:
+        return None
+    prefix = sheet_prefix.strip()
+    if len(prefix) >= 2 and prefix[0] == "'" and prefix[-1] == "'":
+        prefix = prefix[1:-1].replace("''", "'")
+    opening = prefix.find("[")
+    closing = prefix.find("]", opening + 1)
+    if opening < 0 or closing < 0:
+        return None
+    workbook_name = prefix[opening + 1 : closing].strip()
+    sheet = prefix[closing + 1 :].strip()
+    if not workbook_name or not sheet or ":" in sheet:
+        return None
+    try:
+        min_column, min_row, max_column, max_row = range_boundaries(address)
+    except ValueError:
+        return None
+    return ExternalWorkbookReference(
+        source_path=f"{prefix[:opening]}{workbook_name}",
+        sheet=sheet,
+        min_column=min_column or 1,
+        min_row=min_row or 1,
+        max_column=max_column or MAX_EXCEL_COLUMN,
+        max_row=max_row or MAX_EXCEL_ROW,
     )
 
 
@@ -2104,6 +2144,7 @@ def inspect_formula(
     references: list[ParsedReference] = []
     unresolved_range_tokens: list[str] = []
     dynamic_reference_functions: list[str] = []
+    external_workbook_references: list[ExternalWorkbookReference] = []
     external_action_functions: list[str] = []
     formula_dde_link_markers: list[str] = list(direct_formula_dde_link_markers)
     python_functions: list[str] = []
@@ -2151,6 +2192,12 @@ def inspect_formula(
             reference = parse_reference_token(token.value)
             if reference is not None:
                 references.append(reference)
+                if reference.is_external and (
+                    external_workbook_reference := parse_external_workbook_reference(
+                        token.value
+                    )
+                ) is not None:
+                    external_workbook_references.append(external_workbook_reference)
                 continue
             three_d_reference = resolve_3d_reference(token.value, sheet_order)
             if three_d_reference is not None:
@@ -2499,6 +2546,7 @@ def inspect_formula(
         references=tuple(references),
         unresolved_range_tokens=tuple(dict.fromkeys(unresolved_range_tokens)),
         dynamic_reference_functions=tuple(dict.fromkeys(dynamic_reference_functions)),
+        external_workbook_references=tuple(dict.fromkeys(external_workbook_references)),
         external_action_functions=tuple(external_action_functions),
         formula_dde_link_markers=tuple(formula_dde_link_markers),
         python_functions=tuple(python_functions),

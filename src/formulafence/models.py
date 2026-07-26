@@ -13,6 +13,27 @@ CellKey: TypeAlias = tuple[str, str]
 SEVERITY_ORDER = {"note": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
+@dataclass(frozen=True)
+class ExternalWorkbookReference:
+    """One static A1 reference to another workbook, retained for portfolio use.
+
+    The source spelling can contain a user's local or network path, so it is
+    deliberately private implementation data: portfolio renderers may expose
+    only a safely resolved relative workbook identity.
+    """
+
+    source_path: str = field(repr=False)
+    sheet: str
+    min_column: int
+    min_row: int
+    max_column: int
+    max_row: int
+
+    @property
+    def is_range(self) -> bool:
+        return self.min_column != self.max_column or self.min_row != self.max_row
+
+
 def display_location(location: CellKey | None) -> str | None:
     """Return an Excel-friendly cell location."""
     if location is None:
@@ -4331,6 +4352,12 @@ class WorkbookSnapshot:
     dynamic_array_output_references: dict[
         CellKey, tuple[DynamicArrayOutputReference, ...]
     ] = field(default_factory=dict)
+    # Formula spellings for external workbooks can disclose an author's local
+    # filesystem or network layout. Keep them private; portfolio comparison
+    # resolves only a narrow, relative subset against supplied input roots.
+    external_workbook_references: dict[
+        CellKey, tuple[ExternalWorkbookReference, ...]
+    ] = field(default_factory=dict, repr=False)
     unclassified_array_formula_cells: set[CellKey] = field(default_factory=set)
     array_formula_output_dependents: dict[CellKey, set[CellKey]] = field(
         default_factory=dict

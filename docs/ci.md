@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.85.0
+        uses: SybilGambleyyu/formulafence@v0.86.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -72,12 +72,13 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.85.0
+  uses: SybilGambleyyu/formulafence@v0.86.0
   with:
     baseline: models/approved
     candidate: build/models
     policy: models/formulafence.yml
     max-workbooks: '200'
+    max-link-impact: '100000'
     format: sarif
     output: reports/formulafence-portfolio.sarif
 ```
@@ -90,7 +91,19 @@ plus an addition, not guessed from a name or content similarity. Transient
 Office `~$` lock files are ignored. Unsupported Excel formats, files that
 differ only by case, symlinked paths, and inventories above
 `max-workbooks` fail before comparison. The default bound is 512 supported
-workbooks per directory.
+workbooks per directory. The Action also passes `max-link-impact` to the
+candidate-only static cross-workbook graph; its default is 100,000
+source-to-node states across the portfolio.
+
+When an exact relative external A1 link connects a changed source cell to a
+formula in another candidate workbook, the report emits `FF079` with safe
+relative workbook identities, logical cells, and shortest-path samples.
+`no_cross_workbook_impacts` converts this to `FFP079`. The Action never follows
+that link on disk or over the network, evaluates a formula, or guesses a
+basename, rename, absolute path, URI, external name, table, 3-D reference, or
+dynamic reference. If the global graph bound is reached, it emits critical
+`FF080`, marks the evidence incomplete, and preserves the report with exit code
+`2`.
 
 An unreadable `.xlsx`/`.xlsm` file produces a redacted `FF078` entry in the
 report and makes the CLI result `2`, so the Action still uploads the evidence
@@ -123,7 +136,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.85.0/formulafence-0.85.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.86.0/formulafence-0.86.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

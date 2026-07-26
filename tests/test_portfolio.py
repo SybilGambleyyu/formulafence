@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 from formulafence.cli import main
 from formulafence.output import as_json, portfolio_to_markdown, portfolio_to_sarif
@@ -22,6 +22,17 @@ def _copy_workbook(source: Path, destination: Path) -> None:
     shutil.copyfile(source, destination)
 
 
+def _write_workbook(path: Path, sheet_name: str, cells: dict[str, object]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = sheet_name
+    for coordinate, value in cells.items():
+        worksheet[coordinate] = value
+    workbook.save(path)
+    return path
+
+
 def _portfolio_pair(tmp_path: Path) -> tuple[Path, Path]:
     baseline = tmp_path / "baseline"
     candidate = tmp_path / "candidate"
@@ -30,6 +41,34 @@ def _portfolio_pair(tmp_path: Path) -> tuple[Path, Path]:
     (baseline / "models").mkdir()
     source = make_model(baseline / "models" / "shared.xlsx")
     _copy_workbook(source, candidate / "models" / "shared.xlsx")
+    return baseline, candidate
+
+
+def _cross_workbook_portfolio_pair(tmp_path: Path) -> tuple[Path, Path]:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    _write_workbook(baseline / "inputs.xlsx", "Data", {"B2": 100})
+    _write_workbook(
+        baseline / "calculation.xlsx",
+        "Model",
+        {
+            "D2": "=[inputs.xlsx]Data!B2",
+            "E2": "=D2*2",
+        },
+    )
+    _write_workbook(
+        baseline / "reports" / "summary.xlsx",
+        "Summary",
+        {
+            "D2": "='..\\[calculation.xlsx]Model'!E2",
+            "E2": "=D2*2",
+        },
+    )
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B2"], "value", 200),
+    )
     return baseline, candidate
 
 
@@ -118,6 +157,190 @@ def test_portfolio_policy_applies_per_workbook_and_blocks_membership(tmp_path: P
         == 1
     )
     assert "FFP077" in output.read_text(encoding="utf-8")
+
+
+def test_portfolio_reports_transitive_static_cross_workbook_impacts(tmp_path: Path) -> None:
+    baseline, candidate = _cross_workbook_portfolio_pair(tmp_path)
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_cross_workbook_impacts": True}}
+    )
+
+    report = compare_portfolios(baseline, candidate, policy=policy)
+    source = next(entry for entry in report.workbooks if entry.path == "inputs.xlsx")
+    finding = next(finding for finding in source.findings if finding.rule_id == "FF079")
+
+    assert finding.location == ("Data", "B2")
+    assert finding.details["impacted_workbook_count"] == 2
+    assert finding.details["impacted_formula_count"] == 4
+    assert finding.details["sample_impacts"] == [
+        {
+            "workbook": "calculation.xlsx",
+            "location": "Model!D2",
+            "path": [
+                {"workbook": "inputs.xlsx", "location": "Data!B2"},
+                {"workbook": "calculation.xlsx", "location": "Model!D2"},
+            ],
+        },
+        {
+            "workbook": "calculation.xlsx",
+            "location": "Model!E2",
+            "path": [
+                {"workbook": "inputs.xlsx", "location": "Data!B2"},
+                {"workbook": "calculation.xlsx", "location": "Model!D2"},
+                {"workbook": "calculation.xlsx", "location": "Model!E2"},
+            ],
+        },
+        {
+            "workbook": "reports/summary.xlsx",
+            "location": "Summary!D2",
+            "path": [
+                {"workbook": "inputs.xlsx", "location": "Data!B2"},
+                {"workbook": "calculation.xlsx", "location": "Model!D2"},
+                {"workbook": "calculation.xlsx", "location": "Model!E2"},
+                {"workbook": "reports/summary.xlsx", "location": "Summary!D2"},
+            ],
+        },
+        {
+            "workbook": "reports/summary.xlsx",
+            "location": "Summary!E2",
+            "path": [
+                {"workbook": "inputs.xlsx", "location": "Data!B2"},
+                {"workbook": "calculation.xlsx", "location": "Model!D2"},
+                {"workbook": "calculation.xlsx", "location": "Model!E2"},
+                {"workbook": "reports/summary.xlsx", "location": "Summary!D2"},
+                {"workbook": "reports/summary.xlsx", "location": "Summary!E2"},
+            ],
+        },
+    ]
+    assert {finding.rule_id for finding in source.findings} >= {"FF079", "FFP079"}
+    assert not report.incomplete
+
+    payload = report.to_dict()
+    source_payload = next(
+        entry for entry in payload["workbooks"] if entry["path"] == "inputs.xlsx"
+    )
+    assert source_payload["summary"]["raw_finding_count"] == 1
+    assert source_payload["summary"]["policy_finding_count"] == 1
+    assert payload["summary"]["cross_workbook_impact_source_count"] == 1
+    assert payload["summary"]["cross_workbook_impacted_formula_count"] == 4
+    assert not payload["summary"]["cross_workbook_impact_incomplete"]
+    markdown = portfolio_to_markdown(report)
+    assert "FF079" in markdown
+    assert "`inputs.xlsx` `Data!B2` → `calculation.xlsx` `Model!D2`" in markdown
+    sarif_results = portfolio_to_sarif(report)["runs"][0]["results"]
+    assert any(result["ruleId"] == "FFP079" for result in sarif_results)
+    sarif_finding = next(result for result in sarif_results if result["ruleId"] == "FF079")
+    assert sarif_finding["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == (
+        "inputs.xlsx"
+    )
+    assert sarif_finding["locations"][0]["logicalLocations"][0]["name"] == "Data!B2"
+    assert sarif_finding["properties"]["sample_impacts"][0]["workbook"] == (
+        "calculation.xlsx"
+    )
+
+
+def test_portfolio_resolves_relative_ranges_case_insensitively_without_basename_guessing(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    _write_workbook(
+        baseline / "inputs" / "shared.xlsx",
+        "Data",
+        {"B2": 10, "B3": 20, "B4": 30},
+    )
+    _write_workbook(
+        baseline / "reports" / "summary.xlsx",
+        "Summary",
+        {"D2": "=SUM('..\\INPUTS\\[SHARED.XLSX]data'!B2:B4)"},
+    )
+    _write_workbook(baseline / "other" / "shared.xlsx", "Data", {"B3": 999})
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs" / "shared.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B3"], "value", 21),
+    )
+
+    report = compare_portfolios(baseline, candidate)
+    source = next(entry for entry in report.workbooks if entry.path == "inputs/shared.xlsx")
+    finding = next(finding for finding in source.findings if finding.rule_id == "FF079")
+
+    assert finding.details["impacted_workbook_count"] == 1
+    assert finding.details["impacted_formula_count"] == 1
+    assert finding.details["sample_impacts"][0]["workbook"] == "reports/summary.xlsx"
+    assert finding.details["sample_impacts"][0]["location"] == "Summary!D2"
+
+
+def test_portfolio_never_guesses_or_discloses_unresolved_external_link_paths(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    private_source = "PRIVATE-EXTERNAL-LINK-PATH"
+    _write_workbook(baseline / "inputs.xlsx", "Data", {"B2": 100})
+    _write_workbook(
+        baseline / "reports" / "summary.xlsx",
+        "Summary",
+        {
+            "D2": "=[inputs.xlsx]Data!B2",
+            "E2": f"='C:\\{private_source}\\[inputs.xlsx]Data'!B2",
+            "F2": "='..\\..\\[inputs.xlsx]Data'!B2",
+            "G2": "='..\\[inputs.xlsx]Data'!B2",
+            "H2": "=[inputs.xlsx]ExternalName",
+        },
+    )
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B2"], "value", 200),
+    )
+
+    report = compare_portfolios(baseline, candidate)
+    source = next(entry for entry in report.workbooks if entry.path == "inputs.xlsx")
+    rendered = (
+        as_json(report.to_dict()),
+        portfolio_to_markdown(report),
+        as_json(portfolio_to_sarif(report)),
+    )
+
+    finding = next(finding for finding in source.findings if finding.rule_id == "FF079")
+    assert finding.details["impacted_formula_count"] == 1
+    assert finding.details["sample_impacts"][0]["location"] == "Summary!G2"
+    assert all(private_source not in value for value in rendered)
+
+
+def test_portfolio_fails_closed_when_cross_workbook_impact_bound_is_reached(
+    tmp_path: Path,
+) -> None:
+    baseline, candidate = _cross_workbook_portfolio_pair(tmp_path)
+
+    report = compare_portfolios(baseline, candidate, max_link_impact=2)
+    source = next(entry for entry in report.workbooks if entry.path == "inputs.xlsx")
+
+    assert report.incomplete
+    assert {finding.rule_id for finding in source.findings} >= {"FF079", "FF080"}
+    assert next(
+        finding for finding in source.findings if finding.rule_id == "FF080"
+    ).details == {"max_link_impact": 2}
+
+    output = tmp_path / "portfolio.json"
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline),
+                str(candidate),
+                "--max-link-impact",
+                "2",
+                "--format",
+                "json",
+                "--output",
+                str(output),
+            ]
+        )
+        == 2
+    )
+    assert "FF080" in output.read_text(encoding="utf-8")
 
 
 def test_portfolio_added_workbook_outputs_keep_contents_private(tmp_path: Path) -> None:

@@ -85,6 +85,7 @@ _RULE_FIELDS = {
     "no_formula_environment_information_changes",
     "no_power_query_changes",
     "no_portfolio_membership_changes",
+    "no_cross_workbook_impacts",
     "no_3d_reference_scope_changes",
     "no_sheet_visibility_changes",
     "max_changed_formulas",
@@ -186,6 +187,7 @@ class Policy:
     no_formula_environment_information_changes: bool = False
     no_power_query_changes: bool = False
     no_portfolio_membership_changes: bool = False
+    no_cross_workbook_impacts: bool = False
     no_3d_reference_scope_changes: bool = False
     no_sheet_visibility_changes: bool = False
     max_changed_formulas: int | None = None
@@ -269,6 +271,7 @@ rules:
   no_formula_environment_information_changes: true
   no_power_query_changes: true
   no_portfolio_membership_changes: true
+  no_cross_workbook_impacts: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
   max_downstream_impact: 100
@@ -510,6 +513,7 @@ def parse_policy(data: object) -> Policy:
         no_portfolio_membership_changes=_boolean_rule(
             rules, "no_portfolio_membership_changes"
         ),
+        no_cross_workbook_impacts=_boolean_rule(rules, "no_cross_workbook_impacts"),
         no_3d_reference_scope_changes=_boolean_rule(
             rules, "no_3d_reference_scope_changes"
         ),
@@ -557,6 +561,28 @@ def evaluate_portfolio_membership_policy(
         )
         for finding in findings
         if finding.rule_id == "FF077"
+    ]
+
+
+def evaluate_portfolio_link_policy(findings: Iterable[Finding], policy: Policy) -> list[Finding]:
+    """Apply the portfolio-only static cross-workbook impact guard.
+
+    Cross-workbook links are resolved only when their exact relative spelling
+    maps to an inspected candidate workbook; this evaluator simply turns that
+    bounded evidence into a policy violation when the guard is enabled.
+    """
+    if not policy.no_cross_workbook_impacts:
+        return []
+    return [
+        Finding(
+            "FFP079",
+            "high",
+            "Policy forbids changes with static cross-workbook portfolio impacts.",
+            finding.location,
+            details=finding.details,
+        )
+        for finding in findings
+        if finding.rule_id == "FF079"
     ]
 
 

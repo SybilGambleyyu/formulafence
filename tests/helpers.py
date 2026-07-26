@@ -97,6 +97,13 @@ _RICH_DATA_WEB_IMAGE_NS = (
 _RICH_VALUE_REL_NS = (
     "http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel"
 )
+_PYTHON_IN_EXCEL_NS = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2023/python"
+)
+_PYTHON_IN_EXCEL_CONTENT_TYPE = "application/vnd.ms-excel.python+xml"
+_PYTHON_IN_EXCEL_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2023/09/relationships/Python"
+)
 _RICH_DATA_METADATA_EXTENSION_URI = "{3E2802C4-A4D2-4D8B-9148-E3BE6C30E623}"
 _DRAWINGML_MAIN_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _DRAWINGML_STRICT_MAIN_NS = "http://purl.oclc.org/ooxml/drawingml/main"
@@ -203,6 +210,192 @@ def change_formula_external_action_input(path: Path) -> Path:
     workbook["Inputs"]["A9"] = "https://private.example.test/PRIVATE-REFERENCED-LINK-CANDIDATE"
     workbook.save(path)
     return path
+
+
+def make_python_in_excel_model(path: Path) -> Path:
+    """Create a workbook with stored Python-in-Excel package code.
+
+    ``openpyxl`` does not write Python-in-Excel parts, so the controlled
+    package-only declarations below mirror Excel's workbook relationship and
+    content-type wiring. The source-code sentinels must remain package-private:
+    tests assert that FormulaFence never reports them.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Python in Excel controls"
+    inputs["A9"] = 7
+    inputs["B2"] = "=_xlfn._xlws.PY(0,0,A9)"
+    inputs["B3"] = "=_xlws.PY(1,1,A9)"
+    workbook.save(path)
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        python = ElementTree.Element(f"{{{_PYTHON_IN_EXCEL_NS}}}python")
+        environment = ElementTree.SubElement(
+            python,
+            f"{{{_PYTHON_IN_EXCEL_NS}}}environmentDefinition",
+            {"id": "{11111111-2222-3333-4444-555555555555}"},
+        )
+        initialization = ElementTree.SubElement(
+            environment,
+            f"{{{_PYTHON_IN_EXCEL_NS}}}initialization",
+        )
+        initialization_code = ElementTree.SubElement(
+            initialization,
+            f"{{{_PYTHON_IN_EXCEL_NS}}}code",
+        )
+        initialization_code.text = "PRIVATE-PYTHON-INIT-BASELINE"
+        scripts = ElementTree.SubElement(
+            python,
+            f"{{{_PYTHON_IN_EXCEL_NS}}}pythonScripts",
+        )
+        for code in (
+            "PRIVATE-PYTHON-SCRIPT-BASELINE = xl(\"A9\")",
+            "PRIVATE-PYTHON-SCRIPT-SECOND = xl(\"A9\")",
+        ):
+            script = ElementTree.SubElement(
+                scripts,
+                f"{{{_PYTHON_IN_EXCEL_NS}}}pythonScript",
+            )
+            script_code = ElementTree.SubElement(
+                script,
+                f"{{{_PYTHON_IN_EXCEL_NS}}}code",
+            )
+            script_code.text = code
+        contents["xl/python.xml"] = serialize(python)
+
+        relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        ElementTree.SubElement(
+            relationships,
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship",
+            {
+                "Id": "rIdFencePython",
+                "Type": _PYTHON_IN_EXCEL_RELATIONSHIP,
+                "Target": "python.xml",
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(relationships)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        ElementTree.SubElement(
+            content_types,
+            f"{{{_CONTENT_TYPES_NS}}}Override",
+            {
+                "PartName": "/xl/python.xml",
+                "ContentType": _PYTHON_IN_EXCEL_CONTENT_TYPE,
+            },
+        )
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+    return _rewrite_archive(path, mutate, ".python-in-excel-model.tmp.xlsx")
+
+
+def change_python_in_excel_script(path: Path) -> Path:
+    """Change stored Python code without changing a PY formula placeholder."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = ElementTree.fromstring(contents["xl/python.xml"])
+        script = root.find(
+            f"{{{_PYTHON_IN_EXCEL_NS}}}pythonScripts/"
+            f"{{{_PYTHON_IN_EXCEL_NS}}}pythonScript/"
+            f"{{{_PYTHON_IN_EXCEL_NS}}}code"
+        )
+        if script is None:
+            raise ValueError("Fixture does not contain a Python-in-Excel script")
+        script.text = "PRIVATE-PYTHON-SCRIPT-CANDIDATE = xl(\"A9\")"
+        contents["xl/python.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".python-in-excel-script.tmp.xlsx")
+
+
+def change_python_in_excel_input(path: Path) -> Path:
+    """Change a static PY source cell without rewriting package declarations."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = _inputs_worksheet_root(contents)
+        cell = next(
+            (
+                current
+                for current in worksheet.iter(f"{{{_SPREADSHEETML_NS}}}c")
+                if current.get("r") == "A9"
+            ),
+            None,
+        )
+        if cell is None:
+            raise ValueError("Fixture does not contain Python-in-Excel input A9")
+        value = cell.find(f"{{{_SPREADSHEETML_NS}}}v")
+        if value is None:
+            raise ValueError("Fixture Python-in-Excel input A9 has no numeric value")
+        value.text = "8"
+        _save_inputs_worksheet(contents, worksheet)
+
+    return _rewrite_archive(path, mutate, ".python-in-excel-input.tmp.xlsx")
+
+
+def change_python_in_excel_formula_binding(path: Path) -> Path:
+    """Change the PY script binding without altering stored package code."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = _inputs_worksheet_root(contents)
+        cell = next(
+            (
+                current
+                for current in worksheet.iter(f"{{{_SPREADSHEETML_NS}}}c")
+                if current.get("r") == "B2"
+            ),
+            None,
+        )
+        formula = (
+            cell.find(f"{{{_SPREADSHEETML_NS}}}f") if cell is not None else None
+        )
+        if formula is None or formula.text is None:
+            raise ValueError("Fixture does not contain Python-in-Excel formula B2")
+        formula.text = formula.text.replace("PY(0,0,A9)", "PY(1,0,A9)")
+        _save_inputs_worksheet(contents, worksheet)
+
+    return _rewrite_archive(path, mutate, ".python-in-excel-binding.tmp.xlsx")
+
+
+def renumber_python_in_excel_relationship_identifier(path: Path) -> Path:
+    """Change only a non-semantic workbook relationship identifier."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        relationship = next(
+            (
+                current
+                for current in relationships.findall(
+                    f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+                )
+                if current.get("Type") == _PYTHON_IN_EXCEL_RELATIONSHIP
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain a Python-in-Excel relationship")
+        relationship.set("Id", "rIdFencePythonRenumbered")
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".python-in-excel-relationship-id.tmp.xlsx")
+
+
+def corrupt_python_in_excel_package(path: Path) -> Path:
+    """Make stored Python metadata malformed to exercise coverage reporting."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        contents["xl/python.xml"] = b"<python"
+
+    return _rewrite_archive(path, mutate, ".python-in-excel-corrupt.tmp.xlsx")
 
 
 def make_legacy_comment_model(path: Path) -> Path:

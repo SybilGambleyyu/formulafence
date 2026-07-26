@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.67.0/formulafence-0.67.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.68.0/formulafence-0.68.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -115,6 +115,7 @@ rules:
   no_external_link_package_changes: true
   no_external_relationship_changes: true
   no_formula_external_action_changes: true
+  no_python_in_excel_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   max_changed_formulas: 20
@@ -137,9 +138,10 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Formula external-action surfaces | Material stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, or `RTD` call changes, including same-count destination/provider swaps, without evaluating formulas or exposing their arguments in the action ledger |
+| Python in Excel boundary | Stored Python code/environment, `PY` formula bindings, and statically visible inputs, without loading Python code, executing it, or contacting its cloud runtime |
 | Coverage changes | New parser warnings, unresolved formula references (including unsupported table syntax), dynamic-reference functions (`INDIRECT`/`OFFSET`), dynamic-array spill references, explicit implicit intersection, and formula-tokenization failures |
 | Policy as code | Protected cells, allowed edit areas, bans, and change/impact limits |
 | CI output | Deterministic JSON, reviewer-friendly Markdown, and SARIF |
@@ -357,6 +359,37 @@ FormulaFence does not calculate, resolve, fetch, open, click, follow,
 authenticate to, or execute any formula action, and it does not decide whether
 a dynamic `HYPERLINK` destination is local or remote. Enable
 `no_formula_external_action_changes` to block this boundary in CI.
+
+FormulaFence separately inventories **Python in Excel** workbooks. Microsoft
+documents that Python in Excel runs through a Microsoft Cloud runtime, while
+the OOXML specification stores a `PY` formula's script in a workbook Python
+part. FormulaFence recognizes stored `PY` formula spellings and the documented
+Python package part, relationship, and content type before the ordinary reader
+can discard that material. It privately fingerprints bounded raw Python XML,
+including code, environment definitions, script ordering, and extensions, then
+compares the stored PY formula binding separately.
+
+Profiles and `FF065`/`FFP065` details expose only package, formula-cell,
+function-call, script, environment, initialization, and coverage counts. Python
+source, environment IDs, script indexes, formula arguments, formula locations,
+and raw XML remain private. A source-code/environment/package change, a changed
+PY formula binding, or an ordinary cell change that reaches a PY formula through
+the static dependency graph emits `FF065`; the latter catches a static source
+such as `=_xlfn._xlws.PY(0,0,A1)` without interpreting `A1` or Python code.
+Relationship-ID-only rewrites normalize. Missing, malformed, unbound,
+oversized, unreadable, or over-budget package material remains visible as a
+coverage gap. The scan is bounded to 16 MiB per XML part, 64 MiB per workbook,
+and 512 parts.
+
+FormulaFence does not parse Python source as Python, run code, evaluate `PY`,
+resolve its result, contact Microsoft Cloud, or verify runtime package support.
+Dynamic or unresolved formula inputs stay explicit parser-coverage limits. The
+ordinary semantic diff deliberately retains changed PY formulas and values for
+review; its general payload is not a redacted code vault. Enable
+`no_python_in_excel_changes` to block this boundary in CI. This scope follows
+Microsoft's [Python in Excel introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel)
+and the [Python part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/151e4bcd-90a0-4d82-8b98-f16bf273e4ff)
+definition.
 
 FormulaFence separately inventories **Excel 4.0 / XLM macro sheets**. Unlike
 VBA, this executable automation is stored in raw macro-sheet XML parts (usually

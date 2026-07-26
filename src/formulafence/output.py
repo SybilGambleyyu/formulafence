@@ -114,6 +114,12 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['workbook_theme_part_count']} / "
             f"{workbook['workbook_theme_image_part_count']}"
         ),
+        (
+            "- **Python-in-Excel parts / PY formula cells / stored scripts:** "
+            f"{workbook['python_in_excel_part_count']} / "
+            f"{workbook['python_in_excel_formula_cell_count']} / "
+            f"{workbook['python_in_excel_script_count']}"
+        ),
         f"- **XLM macro-sheet parts:** {workbook['xlm_macro_sheet_count']}",
         (
             "- **XLM macro-sheet formula cells:** "
@@ -560,6 +566,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     external_link_packages = profile["external_link_packages"]
     external_relationships = profile["external_relationships"]
     formula_external_actions = profile["formula_external_actions"]
+    python_in_excel = profile["python_in_excel"]
     formula_external_action_call_count = sum(
         (
             formula_external_actions["hyperlink_function_count"],
@@ -891,6 +898,37 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     "privately and intentionally omitted; no formula is evaluated or action taken."
                 ),
             ]
+        )
+    if python_in_excel["present"]:
+        lines.extend(
+            [
+                "",
+                "## Python in Excel code",
+                "",
+                (
+                    "- **Package parts / PY formula cells / PY calls:** "
+                    f"{python_in_excel['python_part_count']} / "
+                    f"{python_in_excel['python_formula_cell_count']} / "
+                    f"{python_in_excel['python_function_count']}"
+                ),
+                (
+                    "- **Stored scripts / environment definitions / initializations:** "
+                    f"{python_in_excel['python_script_count']} / "
+                    f"{python_in_excel['python_environment_definition_count']} / "
+                    f"{python_in_excel['python_initialization_count']}"
+                ),
+            ]
+        )
+        if python_in_excel["unrecognized_python_in_excel_count"]:
+            lines.append(
+                "- **Unrecognized or uninspected Python metadata:** "
+                f"{python_in_excel['unrecognized_python_in_excel_count']}"
+            )
+        lines.append(
+            "Python code, environment identifiers, script indexes, and raw XML are "
+            "compared privately and intentionally omitted. Ordinary semantic diffs retain "
+            "changed PY formulas and values by design; no code is loaded or run and no "
+            "cloud runtime is contacted."
         )
     xlm_macro_sheets = profile["xlm_macro_sheets"]
     if xlm_macro_sheets["present"]:

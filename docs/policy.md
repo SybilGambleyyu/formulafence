@@ -65,6 +65,7 @@ rules:
   no_external_link_package_changes: true
   no_external_relationship_changes: true
   no_formula_external_action_changes: true
+  no_python_in_excel_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
@@ -156,6 +157,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_external_link_package_changes` | boolean | An external-workbook, DDE, or OLE `externalLink` package definition, source binding, cached material, item behavior, or retained extension fragment changes. |
 | `no_external_relationship_changes` | boolean | Any root or part-level OPC relationship with an external target changes, including an opaque relationship that no feature-specific scanner recognizes. Source parts, types, IDs, targets, unknown metadata, and raw XML are compared privately. |
 | `no_formula_external_action_changes` | boolean | A stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, or `RTD` formula call, argument, call location, function inventory, or statically visible input changes. FormulaFence uses private signatures and static dependency paths; it never evaluates a formula, resolves a destination, requests content, or starts a provider. |
+| `no_python_in_excel_changes` | boolean | Stored Python-in-Excel package code/environment/XML, a `PY` formula binding, function inventory, or a statically visible input changes. Python source, environment IDs, script indexes, formula arguments, locations, and raw XML are compared privately; FormulaFence never parses or runs Python, evaluates `PY`, or contacts the Microsoft Cloud runtime. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
@@ -342,6 +344,31 @@ does not calculate, resolve, fetch, open, follow, click, authenticate to, or
 execute any function. Its ordinary semantic diff intentionally remains a
 review artifact with changed formulas, so it is not a substitute for the
 ledger's minimised action details.
+
+Python in Excel is a distinct executable-code boundary. Microsoft documents
+that its Python runtime runs in the Microsoft Cloud, and the OOXML standard
+stores code separately from the `PY` formula that references it. FormulaFence
+recognizes `PY` formula spellings and inventories the documented workbook
+Python part, relationship, and content type directly from the package. It
+privately fingerprints bounded source/environment/script XML and the stored PY
+formula binding, while the public profile and `FF065` show only safe package,
+formula-cell, call, script, environment, initialization, and coverage counts.
+
+`FF065` is emitted for a code/environment/package change, a changed PY formula
+binding, or a normal cell edit that reaches a PY formula through the static
+dependency graph. This catches a source such as
+`=_xlfn._xlws.PY(0,0,A1)` without decoding its script index or interpreting
+`A1` as Python input. Relationship-ID-only rewrites normalize. Missing,
+malformed, unbound, oversized, unreadable, or over-budget metadata remains a
+coverage warning; XML reads are bounded to 16 MiB per part, 64 MiB per workbook,
+and 512 parts. `no_python_in_excel_changes` makes this `FFP065` in CI.
+FormulaFence does not parse or execute Python, evaluate a formula, resolve a
+result, contact Microsoft Cloud, or validate runtime package availability.
+Dynamic or unresolved formula inputs remain explicit coverage limits. The
+ordinary semantic diff still displays changed PY formulas and values for review,
+so it is not a redacted code archive. This boundary follows Microsoft's
+[Python in Excel introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel)
+and the OOXML [Python part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/151e4bcd-90a0-4d82-8b98-f16bf273e4ff).
 
 Excel 4.0 / XLM macro sheets are separate from the VBA binary: their executable
 commands live in Macro Sheet XML package parts, typically under

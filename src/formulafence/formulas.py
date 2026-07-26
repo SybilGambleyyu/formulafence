@@ -21,6 +21,10 @@ _DYNAMIC_REFERENCE_FUNCTIONS = {"INDIRECT", "OFFSET"}
 # destinations, but its link location may be dynamically computed, so retain
 # every call as a reviewable action surface rather than evaluating arguments.
 _EXTERNAL_ACTION_FUNCTIONS = {"HYPERLINK", "WEBSERVICE", "IMAGE", "RTD"}
+# ``PY`` is intentionally separate from the remote-content/action ledger. Excel
+# stores its executable code in a workbook-level Python part, so callers need a
+# dedicated code boundary that can fingerprint both the formula and that part.
+_PYTHON_FUNCTIONS = {"PY"}
 
 _CELL_REFERENCE = re.compile(
     r"(?<![A-Z0-9_])(?P<column_absolute>\$?)(?P<column>[A-Z]{1,3})"
@@ -94,6 +98,7 @@ class FormulaInspection:
     unresolved_range_tokens: tuple[str, ...]
     dynamic_reference_functions: tuple[str, ...]
     external_action_functions: tuple[str, ...] = ()
+    python_functions: tuple[str, ...] = ()
     three_d_reference_tokens: tuple[str, ...] = ()
     tokenization_failed: bool = False
     spill_reference_tokens: tuple[str, ...] = ()
@@ -1242,6 +1247,7 @@ def inspect_formula(
     unresolved_range_tokens: list[str] = []
     dynamic_reference_functions: list[str] = []
     external_action_functions: list[str] = []
+    python_functions: list[str] = []
     three_d_reference_tokens: list[str] = []
     spill_reference_tokens: list[str] = list(literal_spill_tokens)
     implicit_intersection_tokens: list[str] = list(literal_implicit_intersection_tokens)
@@ -1296,6 +1302,11 @@ def inspect_formula(
                 and function_name in _EXTERNAL_ACTION_FUNCTIONS
             ):
                 external_action_functions.append(function_name)
+            if (
+                position not in local_variable_indexes
+                and function_name in _PYTHON_FUNCTIONS
+            ):
+                python_functions.append(function_name)
             if function_name == _SPILL_REFERENCE_FUNCTION:
                 spill_reference_tokens.append(raw_function_name)
             if raw_function_name.startswith("@"):
@@ -1307,6 +1318,7 @@ def inspect_formula(
         unresolved_range_tokens=tuple(dict.fromkeys(unresolved_range_tokens)),
         dynamic_reference_functions=tuple(dict.fromkeys(dynamic_reference_functions)),
         external_action_functions=tuple(external_action_functions),
+        python_functions=tuple(python_functions),
         three_d_reference_tokens=tuple(dict.fromkeys(three_d_reference_tokens)),
         spill_reference_tokens=tuple(dict.fromkeys(spill_reference_tokens)),
         implicit_intersection_tokens=tuple(dict.fromkeys(implicit_intersection_tokens)),

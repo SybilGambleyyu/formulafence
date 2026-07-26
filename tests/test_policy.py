@@ -35,6 +35,8 @@ from .helpers import (
     change_pivot_table_definition_material,
     change_power_pivot_data_model_payload,
     change_power_query_controls,
+    change_python_in_excel_input,
+    change_python_in_excel_script,
     change_ribbon_customization_callback,
     change_rich_data_value,
     change_rich_text_run_color,
@@ -88,6 +90,7 @@ from .helpers import (
     make_power_pivot_data_model,
     make_power_query_model,
     make_protection_model,
+    make_python_in_excel_model,
     make_ribbon_customization_model,
     make_rich_data_model,
     make_rich_text_run_model,
@@ -384,6 +387,32 @@ def test_policy_can_block_formula_external_action_static_input_changes(tmp_path)
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP064"}
+
+
+def test_policy_can_block_python_in_excel_code_changes(tmp_path) -> None:
+    baseline = make_python_in_excel_model(tmp_path / "baseline.xlsx")
+    candidate = make_python_in_excel_model(tmp_path / "candidate.xlsx")
+    change_python_in_excel_script(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_python_in_excel_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP065"}
+
+
+def test_policy_can_block_python_in_excel_static_input_changes(tmp_path) -> None:
+    baseline = make_python_in_excel_model(tmp_path / "baseline.xlsx")
+    candidate = make_python_in_excel_model(tmp_path / "candidate.xlsx")
+    change_python_in_excel_input(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_python_in_excel_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP065"}
 
 
 def test_policy_can_block_xlm_macro_sheet_changes(tmp_path) -> None:

@@ -78,6 +78,7 @@ from formulafence.models import (
     ProtectedRangeSnapshot,
     ProtectionCredentialSnapshot,
     ProtectionOpaqueMetadataSnapshot,
+    PythonInExcelSnapshot,
     QueryTableRefreshSnapshot,
     RangeDependency,
     RibbonCustomizationSnapshot,
@@ -161,6 +162,15 @@ _RICH_DATA_WEB_IMAGE_NS = (
 _RICH_VALUE_REL_NS = (
     "http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel"
 )
+_PYTHON_IN_EXCEL_NS = "http://schemas.microsoft.com/office/spreadsheetml/2023/python"
+_PYTHON_IN_EXCEL_CONTENT_TYPE = "application/vnd.ms-excel.python+xml"
+_PYTHON_IN_EXCEL_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2023/09/relationships/python"
+)
+_PYTHON_IN_EXCEL_CANONICAL_MEMBER = "xl/python.xml"
+_PYTHON_IN_EXCEL_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_PYTHON_IN_EXCEL_TOTAL_XML_BYTES = 64 * 1024 * 1024
+_PYTHON_IN_EXCEL_TOTAL_XML_PARTS = 512
 _XML_NAMESPACE_PREFIXES = {
     _SPREADSHEETML_NS: "",
     _OFFICE_2010_SPREADSHEET_NS: "x14:",
@@ -170,6 +180,7 @@ _XML_NAMESPACE_PREFIXES = {
     _OFFICE_2016_REVISION9_NS: "xr9:",
     _EXCEL_2006_MAIN_NS: "xm:",
     _NAMED_SHEET_VIEW_NS: "nsv:",
+    _PYTHON_IN_EXCEL_NS: "py:",
 }
 _GUID_PATTERN = re.compile(
     r"\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -1087,6 +1098,14 @@ class _RichDataMetadata:
     """Raw rich-data evidence retained before the workbook reader omits it."""
 
     rich_data: RichDataSnapshot
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _PythonInExcelMetadata:
+    """Raw Python-in-Excel package evidence retained before reader loss."""
+
+    controls: PythonInExcelSnapshot
     warnings: tuple[str, ...]
 
 
@@ -32388,6 +32407,549 @@ def _digital_signature_metadata(path: Path) -> _DigitalSignatureMetadata:
 
 
 @dataclass
+class _PythonInExcelBudget:
+    """Bound raw reads across Python-in-Excel package declarations."""
+
+    remaining_parts: int = _PYTHON_IN_EXCEL_TOTAL_XML_PARTS
+    remaining_bytes: int = _PYTHON_IN_EXCEL_TOTAL_XML_BYTES
+
+
+def _python_in_excel_issue(
+    issues: list[tuple[str, str]],
+    context: str,
+    detail: object,
+) -> None:
+    """Record private Python-in-Excel coverage evidence without source code."""
+    issues.append((context, repr(detail)))
+
+
+def _python_in_excel_bounded_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _PythonInExcelBudget,
+    *,
+    report_failure: bool = True,
+) -> tuple[bytes | None, str | None]:
+    """Read one Python-in-Excel XML member within fixed scan budgets."""
+    if budget.remaining_parts <= 0:
+        if report_failure:
+            warnings.add(
+                "FormulaFence reached its bounded Python-in-Excel XML part count "
+                "budget; affected Python code was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("python-in-excel-part-budget-exhausted", member),)
+        )
+    budget.remaining_parts -= 1
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not locate a Python-in-Excel package part; "
+                "affected Python code was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("missing-python-in-excel-member", member),)
+        )
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _PYTHON_IN_EXCEL_MAX_XML_PART_BYTES:
+        if report_failure:
+            warnings.add(
+                "FormulaFence did not fully read an oversized Python-in-Excel XML "
+                "part; affected Python code has a coverage gap."
+            )
+        return None, _private_external_data_signature(
+            (("oversized-python-in-excel-part", metadata),)
+        )
+    if info.file_size > budget.remaining_bytes:
+        if report_failure:
+            warnings.add(
+                "FormulaFence reached its bounded Python-in-Excel XML read budget; "
+                "affected Python code was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("python-in-excel-read-budget-exhausted", metadata),)
+        )
+    budget.remaining_bytes -= info.file_size
+    try:
+        return archive.read(member), None
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not read a Python-in-Excel XML package part "
+                f"({type(error).__name__}); affected Python code was not compared."
+            )
+        return None, _private_external_data_signature(
+            (("unreadable-python-in-excel-member", metadata),)
+        )
+
+
+def _python_in_excel_bounded_root(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _PythonInExcelBudget,
+    *,
+    report_failure: bool = True,
+) -> tuple[ElementTree.Element | None, str | None]:
+    """Return one bounded Python-in-Excel XML root or private failure evidence."""
+    payload, fallback_signature = _python_in_excel_bounded_payload(
+        archive,
+        member,
+        warnings,
+        budget,
+        report_failure=report_failure,
+    )
+    if payload is None:
+        return None, fallback_signature
+    try:
+        return _xml_root_from_payload(payload), None
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not parse a Python-in-Excel XML package part "
+                f"({type(error).__name__}); affected Python code was not compared."
+            )
+        return None, _private_payload_signature(payload)
+
+
+def _python_in_excel_content_type_members(
+    archive: ZipFile,
+    warnings: set[str],
+    budget: _PythonInExcelBudget,
+    issues: list[tuple[str, str]],
+) -> tuple[set[str], str | None]:
+    """Discover Python parts declared by content type without exposing paths."""
+    root, fallback_signature = _python_in_excel_bounded_root(
+        archive,
+        "[Content_Types].xml",
+        warnings,
+        budget,
+        report_failure=False,
+    )
+    if root is None:
+        return set(), fallback_signature
+    if (
+        _xml_namespace(root.tag) != _CONTENT_TYPES_NS
+        or _xml_local_name(root.tag) != "Types"
+    ):
+        return set(), _private_external_data_signature(
+            (("unexpected-python-in-excel-content-types-root", _xml_display_name(root.tag)),)
+        )
+
+    members: set[str] = set()
+    override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
+    for child in root:
+        if child.tag != override_tag:
+            continue
+        raw_member = child.get("PartName")
+        raw_content_type = child.get("ContentType")
+        member = (
+            _normalise_content_type_part_name(raw_member)
+            if raw_member is not None
+            else None
+        )
+        content_type = raw_content_type.casefold() if raw_content_type else None
+        canonical_path = bool(
+            raw_member
+            and raw_member.lstrip("/").casefold()
+            == _PYTHON_IN_EXCEL_CANONICAL_MEMBER.casefold()
+        )
+        is_python_content_type = content_type == _PYTHON_IN_EXCEL_CONTENT_TYPE
+        if not canonical_path and not is_python_content_type:
+            continue
+        if member is None or content_type is None:
+            _python_in_excel_issue(
+                issues,
+                "malformed-python-in-excel-content-type-override",
+                (raw_member, raw_content_type),
+            )
+            continue
+        members.add(member)
+        if content_type != _PYTHON_IN_EXCEL_CONTENT_TYPE:
+            _python_in_excel_issue(
+                issues,
+                "unexpected-python-in-excel-content-type",
+                (member, content_type),
+            )
+    return members, None
+
+
+def _python_in_excel_workbook_relationships(
+    archive: ZipFile,
+    members: set[str],
+    warnings: set[str],
+    budget: _PythonInExcelBudget,
+    issues: list[tuple[str, str]],
+) -> tuple[tuple[_PackageRelationship, ...], str | None]:
+    """Read only Python-relevant workbook relationships without following them."""
+    relationship_member = _relationship_part_path("xl/workbook.xml")
+    if relationship_member not in members:
+        return (), None
+    root, fallback_signature = _python_in_excel_bounded_root(
+        archive,
+        relationship_member,
+        warnings,
+        budget,
+        report_failure=False,
+    )
+    if root is None:
+        return (), fallback_signature
+    if (
+        _xml_namespace(root.tag) != _PACKAGE_RELATIONSHIP_NS
+        or _xml_local_name(root.tag) != "Relationships"
+    ):
+        return (), _private_external_data_signature(
+            (
+                (
+                    "unexpected-python-in-excel-workbook-relationship-root",
+                    _xml_display_name(root.tag),
+                ),
+            )
+        )
+
+    relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+    result: list[_PackageRelationship] = []
+    identifiers: list[str] = []
+    for child in root:
+        if child.tag != relationship_tag:
+            continue
+        relationship_type = child.get("Type")
+        raw_target = child.get("Target")
+        target_mode = child.get("TargetMode", "Internal")
+        target = (
+            _normalise_part_target("xl/workbook.xml", raw_target)
+            if raw_target is not None and target_mode.casefold() == "internal"
+            else None
+        )
+        normalized_type = (relationship_type or "").casefold()
+        canonical_target = bool(
+            target
+            and target.casefold() == _PYTHON_IN_EXCEL_CANONICAL_MEMBER.casefold()
+        )
+        if (
+            normalized_type != _PYTHON_IN_EXCEL_RELATIONSHIP.casefold()
+            and not canonical_target
+        ):
+            continue
+        relationship_id = child.get("Id")
+        if not relationship_id:
+            _python_in_excel_issue(
+                issues,
+                "missing-python-in-excel-workbook-relationship-id",
+                _xml_fragment(child).sort_key(),
+            )
+        else:
+            identifiers.append(relationship_id)
+        if relationship_type is None or raw_target is None:
+            _python_in_excel_issue(
+                issues,
+                "malformed-python-in-excel-workbook-relationship",
+                _xml_fragment(child).sort_key(),
+            )
+        if normalized_type != _PYTHON_IN_EXCEL_RELATIONSHIP.casefold():
+            _python_in_excel_issue(
+                issues,
+                "unexpected-python-in-excel-workbook-relationship-type",
+                relationship_type,
+            )
+        if target_mode.casefold() != "internal" or target is None:
+            _python_in_excel_issue(
+                issues,
+                "unsafe-python-in-excel-workbook-relationship-target",
+                (target_mode, raw_target),
+            )
+        result.append(
+            _PackageRelationship(
+                relationship_id=relationship_id,
+                relationship_type=relationship_type or "",
+                target=target,
+                target_mode=target_mode,
+                raw_target=raw_target,
+            )
+        )
+    if len(identifiers) != len(set(identifiers)):
+        _python_in_excel_issue(
+            issues,
+            "duplicate-python-in-excel-workbook-relationship-id",
+            tuple(sorted(identifiers)),
+        )
+    return tuple(result), None
+
+
+def _python_in_excel_metadata(path: Path) -> _PythonInExcelMetadata:
+    """Inventory stored Python-in-Excel code without executing or exposing it.
+
+    Excel keeps Python code in the workbook-level ``xl/python.xml`` part and
+    connects it to ``PY`` formulas by script index. This scanner fingerprints
+    the full bounded XML semantics privately, while publishing only aggregate
+    part, script, environment, and coverage counts. It never loads the code as
+    Python, contacts the Microsoft Cloud, or evaluates a formula.
+    """
+    warnings: set[str] = set()
+    issues: list[tuple[str, str]] = []
+    definition_entries: list[tuple[str, str]] = []
+    try:
+        with ZipFile(path) as archive:
+            raw_members = archive.namelist()
+            members = set(raw_members)
+            member_counts = Counter(raw_members)
+            budget = _PythonInExcelBudget()
+            probe_issues: list[tuple[str, str]] = []
+            content_type_members, content_type_fallback = (
+                _python_in_excel_content_type_members(
+                    archive,
+                    warnings,
+                    budget,
+                    probe_issues,
+                )
+            )
+            relationship_issues: list[tuple[str, str]] = []
+            workbook_relationships, relationship_fallback = (
+                _python_in_excel_workbook_relationships(
+                    archive,
+                    members,
+                    warnings,
+                    budget,
+                    relationship_issues,
+                )
+            )
+            relationship_members = {
+                relationship.target
+                for relationship in workbook_relationships
+                if relationship.target is not None
+            }
+            python_members = set(content_type_members) | relationship_members
+            if _PYTHON_IN_EXCEL_CANONICAL_MEMBER in members:
+                python_members.add(_PYTHON_IN_EXCEL_CANONICAL_MEMBER)
+            python_evidence = bool(python_members or workbook_relationships)
+            if not python_evidence:
+                return _PythonInExcelMetadata(PythonInExcelSnapshot(), ())
+
+            issues.extend(probe_issues)
+            issues.extend(relationship_issues)
+            if content_type_fallback is not None:
+                _python_in_excel_issue(
+                    issues,
+                    "unreadable-python-in-excel-content-types",
+                    content_type_fallback,
+                )
+            if relationship_fallback is not None:
+                _python_in_excel_issue(
+                    issues,
+                    "unreadable-python-in-excel-workbook-relationships",
+                    relationship_fallback,
+                )
+
+            for member in sorted(content_type_members, key=str.casefold):
+                definition_entries.append(("python-in-excel-content-type", member))
+            relationship_semantics = tuple(
+                sorted(
+                    (
+                        relationship.relationship_type.casefold(),
+                        relationship.target_mode.casefold(),
+                        relationship.target
+                        if relationship.target is not None
+                        else relationship.raw_target,
+                    )
+                    for relationship in workbook_relationships
+                )
+            )
+            if relationship_semantics:
+                definition_entries.append(
+                    ("python-in-excel-workbook-relationships", repr(relationship_semantics))
+                )
+
+            for member in sorted(python_members, key=str.casefold):
+                if member not in members:
+                    _python_in_excel_issue(
+                        issues,
+                        "missing-python-in-excel-package-member",
+                        member,
+                    )
+                    continue
+                if (count := member_counts[member]) > 1:
+                    _python_in_excel_issue(
+                        issues,
+                        "duplicate-python-in-excel-package-member",
+                        (member, count),
+                    )
+
+            if relationship_fallback is None:
+                for member in sorted(python_members, key=str.casefold):
+                    if member in members and member not in relationship_members:
+                        _python_in_excel_issue(
+                            issues,
+                            "unbound-python-in-excel-package-member",
+                            member,
+                        )
+
+            python_part_count = 0
+            python_script_count = 0
+            python_environment_definition_count = 0
+            python_initialization_count = 0
+            root_tag = f"{{{_PYTHON_IN_EXCEL_NS}}}python"
+            environment_tag = f"{{{_PYTHON_IN_EXCEL_NS}}}environmentDefinition"
+            initialization_tag = f"{{{_PYTHON_IN_EXCEL_NS}}}initialization"
+            scripts_tag = f"{{{_PYTHON_IN_EXCEL_NS}}}pythonScripts"
+            script_tag = f"{{{_PYTHON_IN_EXCEL_NS}}}pythonScript"
+            code_tag = f"{{{_PYTHON_IN_EXCEL_NS}}}code"
+            extension_tag = f"{{{_PYTHON_IN_EXCEL_NS}}}extLst"
+
+            for member in sorted(python_members & members, key=str.casefold):
+                python_part_count += 1
+                root, fallback_signature = _python_in_excel_bounded_root(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                )
+                if root is None:
+                    _python_in_excel_issue(
+                        issues,
+                        "unreadable-python-in-excel-package-member",
+                        (member, fallback_signature),
+                    )
+                    continue
+                definition_entries.append(
+                    (
+                        "python-in-excel-package-part",
+                        repr((member, _xml_fragment(root).sort_key())),
+                    )
+                )
+                if root.tag != root_tag:
+                    _python_in_excel_issue(
+                        issues,
+                        "unexpected-python-in-excel-root",
+                        (member, _xml_display_name(root.tag)),
+                    )
+                    continue
+
+                environment_definitions = [
+                    child for child in root if child.tag == environment_tag
+                ]
+                scripts_containers = [child for child in root if child.tag == scripts_tag]
+                python_environment_definition_count += len(environment_definitions)
+                if len(environment_definitions) > 1:
+                    _python_in_excel_issue(
+                        issues,
+                        "duplicate-python-in-excel-environment-definition",
+                        (member, len(environment_definitions)),
+                    )
+                if len(scripts_containers) > 1:
+                    _python_in_excel_issue(
+                        issues,
+                        "duplicate-python-in-excel-script-container",
+                        (member, len(scripts_containers)),
+                    )
+                for child in root:
+                    if child.tag not in {environment_tag, scripts_tag, extension_tag}:
+                        _python_in_excel_issue(
+                            issues,
+                            "unexpected-python-in-excel-root-child",
+                            (member, _xml_display_name(child.tag)),
+                        )
+
+                for environment in environment_definitions:
+                    initializations = [
+                        child for child in environment if child.tag == initialization_tag
+                    ]
+                    python_initialization_count += len(initializations)
+                    if len(initializations) > 1:
+                        _python_in_excel_issue(
+                            issues,
+                            "duplicate-python-in-excel-environment-initialization",
+                            (member, len(initializations)),
+                        )
+                    for child in environment:
+                        if child.tag not in {initialization_tag, extension_tag}:
+                            _python_in_excel_issue(
+                                issues,
+                                "unexpected-python-in-excel-environment-child",
+                                (member, _xml_display_name(child.tag)),
+                            )
+                    for initialization in initializations:
+                        code_children = [
+                            child for child in initialization if child.tag == code_tag
+                        ]
+                        if len(code_children) > 1 or len(code_children) != len(initialization):
+                            _python_in_excel_issue(
+                                issues,
+                                "malformed-python-in-excel-environment-initialization",
+                                (member, _xml_fragment(initialization).sort_key()),
+                            )
+
+                for scripts in scripts_containers:
+                    script_children = [child for child in scripts if child.tag == script_tag]
+                    python_script_count += len(script_children)
+                    if not script_children:
+                        _python_in_excel_issue(
+                            issues,
+                            "empty-python-in-excel-script-container",
+                            member,
+                        )
+                    if len(script_children) != len(scripts):
+                        _python_in_excel_issue(
+                            issues,
+                            "unexpected-python-in-excel-script-container-child",
+                            (member, _xml_fragment(scripts).sort_key()),
+                        )
+                    for script in script_children:
+                        code_children = [child for child in script if child.tag == code_tag]
+                        if (
+                            len(code_children) > 1
+                            or any(
+                                child.tag not in {code_tag, extension_tag}
+                                for child in script
+                            )
+                        ):
+                            _python_in_excel_issue(
+                                issues,
+                                "malformed-python-in-excel-script",
+                                (member, _xml_fragment(script).sort_key()),
+                            )
+
+            if issues:
+                warnings.add(
+                    "FormulaFence found malformed or unsupported Python-in-Excel "
+                    "metadata; affected Python code has a coverage gap."
+                )
+            definition_entries.extend(
+                ("python-in-excel-issue", repr(issue)) for issue in issues
+            )
+            return _PythonInExcelMetadata(
+                PythonInExcelSnapshot(
+                    python_part_count=python_part_count,
+                    python_script_count=python_script_count,
+                    python_environment_definition_count=(
+                        python_environment_definition_count
+                    ),
+                    python_initialization_count=python_initialization_count,
+                    unrecognized_python_in_excel_count=len(issues),
+                    definition_signature=_private_external_data_signature(
+                        tuple(sorted(definition_entries))
+                    ),
+                ),
+                tuple(sorted(warnings)),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _PythonInExcelMetadata(
+            PythonInExcelSnapshot(
+                unrecognized_python_in_excel_count=1,
+                definition_signature=_private_external_data_signature(
+                    (("python-in-excel-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect Python-in-Excel OOXML "
+                f"({type(error).__name__}); affected Python code was not compared.",
+            ),
+        )
+
+
+@dataclass
 class _RichDataBudget:
     """Bound raw XML reads across rich-data package declarations."""
 
@@ -41318,6 +41880,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     chart_definition_metadata = _chart_definition_metadata(source)
     worksheet_embedded_control_metadata = _worksheet_embedded_control_metadata(source)
     external_relationship_metadata = _external_relationship_metadata(source)
+    python_in_excel_metadata = _python_in_excel_metadata(source)
     reader_source, temporary_reader_source, reader_source_warnings = _openpyxl_safe_source(
         source
     )
@@ -41380,6 +41943,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(chart_definition_metadata.warnings)
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     parser_warnings.update(external_relationship_metadata.warnings)
+    parser_warnings.update(python_in_excel_metadata.warnings)
     has_array_formulas = any(
         _is_array_formula(cell)
         for worksheet in workbook.worksheets
@@ -41415,6 +41979,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     formula_external_action_cells: set[CellKey] = set()
     formula_external_action_counts: Counter[str] = Counter()
     formula_external_action_entries: list[tuple[str, str]] = []
+    python_in_excel_cells: set[CellKey] = set()
+    python_in_excel_function_counts: Counter[str] = Counter()
+    python_in_excel_formula_entries: list[tuple[str, str]] = []
     broken_references: set[CellKey] = set()
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
     dynamic_reference_functions: dict[CellKey, tuple[str, ...]] = {}
@@ -41496,6 +42063,15 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                         repr((inspection.external_action_functions, snapshot.formula)),
                     )
                 )
+            if inspection.python_functions:
+                python_in_excel_cells.add(snapshot.location)
+                python_in_excel_function_counts.update(inspection.python_functions)
+                python_in_excel_formula_entries.append(
+                    (
+                        f"{snapshot.location[0]}!{snapshot.location[1]}",
+                        repr((inspection.python_functions, snapshot.formula)),
+                    )
+                )
             if inspection.three_d_reference_tokens:
                 three_d_reference_tokens[snapshot.location] = inspection.three_d_reference_tokens
             if inspection.spill_reference_tokens:
@@ -41563,6 +42139,37 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             | set(dynamic_array_formula_output_dependents)
         )
     }
+    python_in_excel = replace(
+        python_in_excel_metadata.controls,
+        python_formula_cell_count=len(python_in_excel_cells),
+        python_function_count=python_in_excel_function_counts["PY"],
+        formula_signature=_private_external_data_signature(
+            tuple(sorted(python_in_excel_formula_entries))
+        ),
+        python_cells=frozenset(python_in_excel_cells),
+    )
+    if python_in_excel_cells and not python_in_excel.python_part_count:
+        parser_warnings.add(
+            "FormulaFence found PY formula calls without a Python-in-Excel package "
+            "part; affected Python code has a coverage gap."
+        )
+        python_in_excel = replace(
+            python_in_excel,
+            unrecognized_python_in_excel_count=(
+                python_in_excel.unrecognized_python_in_excel_count + 1
+            ),
+        )
+    elif python_in_excel_cells and not python_in_excel.python_script_count:
+        parser_warnings.add(
+            "FormulaFence found PY formula calls without stored Python scripts; "
+            "affected Python code has a coverage gap."
+        )
+        python_in_excel = replace(
+            python_in_excel,
+            unrecognized_python_in_excel_count=(
+                python_in_excel.unrecognized_python_in_excel_count + 1
+            ),
+        )
 
     return WorkbookSnapshot(
         path=source,
@@ -41612,6 +42219,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             ),
             action_cells=frozenset(formula_external_action_cells),
         ),
+        python_in_excel=python_in_excel,
         xlm_macro_sheets=xlm_macro_metadata.macro_sheets,
         ribbon_customization=ribbon_customization_metadata.customization,
         office_web_addins=office_web_addin_metadata.addins,
@@ -41712,6 +42320,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "external_link_packages": snapshot.external_link_packages.profile_dict(),
         "external_relationships": snapshot.external_relationships.profile_dict(),
         "formula_external_actions": snapshot.formula_external_actions.profile_dict(),
+        "python_in_excel": snapshot.python_in_excel.profile_dict(),
         "xlm_macro_sheets": snapshot.xlm_macro_sheets.profile_dict(),
         "ribbon_customization": snapshot.ribbon_customization.profile_dict(),
         "office_web_addins": snapshot.office_web_addins.profile_dict(),
@@ -41773,6 +42382,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_xlm_macro_sheets": snapshot.xlm_macro_sheets.present,
             "has_external_relationships": snapshot.external_relationships.present,
             "has_formula_external_actions": snapshot.formula_external_actions.present,
+            "has_python_in_excel": snapshot.python_in_excel.present,
             "has_ribbon_customization": snapshot.ribbon_customization.present,
             "has_office_web_addins": snapshot.office_web_addins.present,
             "has_pivot_table_definitions": snapshot.pivot_table_definitions.present,

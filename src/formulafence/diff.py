@@ -44,6 +44,7 @@ from formulafence.models import (
     PowerQuerySnapshot,
     ProtectionCredentialSnapshot,
     ProtectionOpaqueMetadataSnapshot,
+    PythonInExcelSnapshot,
     QueryTableRefreshSnapshot,
     RibbonCustomizationSnapshot,
     RichDataSnapshot,
@@ -2279,6 +2280,56 @@ def _formula_external_action_changes(
     return [change], [finding]
 
 
+def _python_in_excel_changes(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+    static_input_change_locations: set[CellKey],
+) -> tuple[list[Change], list[Finding]]:
+    """Flag stored Python code, PY bindings, and statically visible inputs.
+
+    Python-in-Excel code is stored separately from the formula placeholder.
+    FormulaFence compares that package material privately and uses its existing
+    static graph only to identify ordinary cell edits that can reach a PY call.
+    It never parses code as Python, evaluates a formula, or contacts the cloud
+    runtime. Dynamic or unresolved inputs remain normal parser-coverage limits.
+    """
+    old_python: PythonInExcelSnapshot = before.python_in_excel
+    new_python: PythonInExcelSnapshot = after.python_in_excel
+    if old_python == new_python and not static_input_change_locations:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_python.to_dict(),
+        "after": new_python.to_dict(),
+    }
+    if old_python.definition_signature != new_python.definition_signature:
+        details["python_in_excel_definition_changed"] = True
+    if old_python.formula_signature != new_python.formula_signature:
+        details["python_in_excel_formula_binding_changed"] = True
+    if static_input_change_locations:
+        details["python_in_excel_static_input_changed"] = True
+        details["python_in_excel_static_input_change_count"] = len(
+            static_input_change_locations
+        )
+    change = Change(
+        "python_in_excel_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF065",
+        "high",
+        (
+            "Python-in-Excel code, a PY formula binding, or a statically visible "
+            "input changed; the workbook may now run different Python code in the "
+            "Microsoft Cloud."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _rich_text_run_entry_map(
     snapshot: RichTextRunSnapshot,
 ) -> dict[CellKey, RichTextRunEntry]:
@@ -2942,9 +2993,13 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     formula_changed_locations: set[CellKey] = set()
     semantic_cell_changes: list[Change] = []
     formula_external_action_static_input_changes: set[CellKey] = set()
+    python_in_excel_static_input_changes: set[CellKey] = set()
     formula_external_action_cells = (
         before.formula_external_actions.action_cells
         | after.formula_external_actions.action_cells
+    )
+    python_in_excel_cells = (
+        before.python_in_excel.python_cells | after.python_in_excel.python_cells
     )
 
     all_locations = sorted(set(before.cells) | set(after.cells), key=_location_sort_key)
@@ -2979,6 +3034,8 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         semantic_cell_changes.append(change)
         if formula_external_action_cells & impact:
             formula_external_action_static_input_changes.add(location)
+        if python_in_excel_cells & impact:
+            python_in_excel_static_input_changes.add(location)
         if new_cell is not None and new_cell.is_formula:
             formula_changed_locations.add(location)
         if old_cell is not None and old_cell.is_formula:
@@ -3025,6 +3082,14 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(formula_external_action_changes)
     findings.extend(formula_external_action_findings)
+
+    python_in_excel_changes, python_in_excel_findings = _python_in_excel_changes(
+        before,
+        after,
+        python_in_excel_static_input_changes,
+    )
+    changes.extend(python_in_excel_changes)
+    findings.extend(python_in_excel_findings)
 
     rich_text_run_changes, rich_text_run_findings = _rich_text_run_controls_changed(
         before,

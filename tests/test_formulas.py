@@ -73,6 +73,20 @@ def test_formula_inspection_inventories_external_action_functions_without_evalua
     )
 
 
+def test_formula_inspection_inventories_python_in_excel_function_spellings() -> None:
+    inspection = inspect_formula(
+        "=_xlfn._xlws.PY(0,0,A1)+_xlws.PY(1,1,A2)+PY(2,0,A3)",
+        origin=("Inputs", "B2"),
+    )
+
+    assert inspection.python_functions == ("PY", "PY", "PY")
+    assert inspection.references == (
+        ParsedReference(None, 1, 1, 1, 1, raw="A1"),
+        ParsedReference(None, 1, 2, 1, 2, raw="A2"),
+        ParsedReference(None, 1, 3, 1, 3, raw="A3"),
+    )
+
+
 def test_formula_inspection_recognises_a_known_named_constant() -> None:
     inspection = inspect_formula("=StaticRate", {"staticrate": ()})
 

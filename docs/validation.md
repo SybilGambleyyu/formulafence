@@ -5,6 +5,49 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Python in Excel code boundary — 2026-07-26
+
+FormulaFence 0.68.0 was checked against Microsoft's [Python in Excel
+introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel),
+which documents its Microsoft Cloud runtime, and the OOXML [Python
+part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/151e4bcd-90a0-4d82-8b98-f16bf273e4ff)
+and [Python function](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/28f8f9b3-e370-440c-9afc-2a1bba74cde6)
+definitions. Those references establish the split boundary: a `PY` formula
+refers to a separately stored Python script, while the code itself is not a
+normal worksheet-cell formula.
+
+An independently maintained [`xl/python.xml` template at OfficeLib commit
+`7354a320505326be8ef66e47293a8696ecd57eb1`](https://github.com/Gryneon/OfficeLib/blob/7354a320505326be8ef66e47293a8696ecd57eb1/Template/xl/python.xml)
+(SHA-256 `e0e9ad398d696fec0924be61207744a9b672c064951d456ba6c0bb0685b16a75`)
+was placed in a controlled `.xlsx` package with its documented content-type
+and workbook relationship. The public profile reported one Python part, one
+environment definition, one initialization, zero PY formula cells, zero
+scripts, and zero Python coverage gaps. The profile did not expose any source
+text from the public template.
+
+A separate controlled pair with two stored PY formulas, two stored scripts,
+and one environment initialization established code/binding behavior. The
+baseline SHA-256 was
+`feeebaa7a08858d2e07a5f24fd73a859c9cdd0f64098c6d39a52a3c2f1c29722`; changing
+only stored script text produced candidate SHA-256
+`f7bf2780244794a38795905be7383c924cf88899120402eac19221d8f44de66f`.
+Public counts stayed fixed while FormulaFence emitted exactly
+`python_in_excel_changed` with `FF065` and its private-definition flag.
+Changing only a static source cell used by an otherwise unchanged
+`=_xlfn._xlws.PY(0,0,A9)` formula produced SHA-256
+`76a473f6e40640ec36e884c01b2c5b11c121708242f87986d624150751578b28` and
+emitted `FF065` with a static-input count of one.
+
+A fresh virtual environment installed the staged
+`formulafence-0.68.0-py3-none-any.whl`; the installed CLI returned
+`FormulaFence 0.68.0`. Its starter policy exited `1` with `FFP065` for both
+the code-only and static-input candidates. Profiles, JSON reports, and policy
+findings were checked for the private source sentinels and contained none. The
+ordinary semantic diff still intentionally retains changed PY formulas and
+ordinary values; the privacy assertion is limited to the Python ledger and
+finding details. No Python source was loaded as Python, no formula was
+evaluated, and no Microsoft Cloud runtime was contacted during validation.
+
 ## Formula external-action ledger — 2026-07-26
 
 FormulaFence 0.67.0 was checked against Microsoft's documented formula

@@ -957,6 +957,57 @@ class FormulaExternalActionSnapshot:
 
 
 @dataclass(frozen=True)
+class PythonInExcelSnapshot:
+    """Safe aggregate of Python-in-Excel code and its workbook bindings.
+
+    Python-in-Excel stores executable Python code in ``xl/python.xml`` and
+    references it from ``PY`` formula calls. The public model deliberately
+    retains only aggregate counts. Private signatures preserve the code,
+    environment, package binding, formula placeholders, and arguments for
+    comparison; private formula-cell identities support static-input guarding.
+    """
+
+    python_part_count: int = 0
+    python_formula_cell_count: int = 0
+    python_function_count: int = 0
+    python_script_count: int = 0
+    python_environment_definition_count: int = 0
+    python_initialization_count: int = 0
+    unrecognized_python_in_excel_count: int = 0
+    definition_signature: str | None = field(default=None, repr=False)
+    formula_signature: str | None = field(default=None, repr=False)
+    python_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.python_part_count
+            or self.python_formula_cell_count
+            or self.unrecognized_python_in_excel_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return safe counts without source code, cell locations, or arguments."""
+        return {
+            "present": self.present,
+            "python_part_count": self.python_part_count,
+            "python_formula_cell_count": self.python_formula_cell_count,
+            "python_function_count": self.python_function_count,
+            "python_script_count": self.python_script_count,
+            "python_environment_definition_count": (
+                self.python_environment_definition_count
+            ),
+            "python_initialization_count": self.python_initialization_count,
+            "unrecognized_python_in_excel_count": (
+                self.unrecognized_python_in_excel_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class XlmMacroSheetSnapshot:
     """Safe aggregate of raw Excel 4.0 / XLM macro-sheet package parts.
 
@@ -3635,6 +3686,9 @@ class WorkbookSnapshot:
     formula_external_actions: FormulaExternalActionSnapshot = field(
         default_factory=FormulaExternalActionSnapshot
     )
+    python_in_excel: PythonInExcelSnapshot = field(
+        default_factory=PythonInExcelSnapshot
+    )
     xlm_macro_sheets: XlmMacroSheetSnapshot = field(
         default_factory=XlmMacroSheetSnapshot
     )
@@ -4095,6 +4149,21 @@ class WorkbookSnapshot:
                 self.formula_external_actions.rtd_function_count
             ),
             "has_formula_external_actions": self.formula_external_actions.present,
+            "python_in_excel_part_count": self.python_in_excel.python_part_count,
+            "python_in_excel_formula_cell_count": (
+                self.python_in_excel.python_formula_cell_count
+            ),
+            "python_in_excel_function_count": (
+                self.python_in_excel.python_function_count
+            ),
+            "python_in_excel_script_count": self.python_in_excel.python_script_count,
+            "python_in_excel_environment_definition_count": (
+                self.python_in_excel.python_environment_definition_count
+            ),
+            "python_in_excel_initialization_count": (
+                self.python_in_excel.python_initialization_count
+            ),
+            "has_python_in_excel": self.python_in_excel.present,
             "xlm_macro_sheet_count": self.xlm_macro_sheets.macro_sheet_count,
             "xlm_macro_formula_cell_count": self.xlm_macro_sheets.formula_cell_count,
             "xlm_related_part_payload_count": (

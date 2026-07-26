@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.68.0 — 2026-07-26
+
+- Add `FF065`, a private Python-in-Excel ledger for the documented workbook
+  Python part and stored `PY` formulas. FormulaFence fingerprints bounded raw
+  Python XML—including code, environment definitions, script order, and
+  extensions—privately while profiles and finding details expose only safe
+  package, formula-cell, function, script, environment, initialization, and
+  coverage counts.
+- Flag source-code/environment/package changes, stored PY formula-binding
+  changes, and ordinary cell edits that statically reach a PY formula. This
+  catches static source changes such as `=_xlfn._xlws.PY(0,0,A1)` without
+  parsing or evaluating Python, decoding a script index, or contacting the
+  Microsoft Cloud runtime. Relationship-ID-only rewrites normalize; malformed,
+  missing, unbound, oversized, unreadable, and over-budget metadata stays
+  visible as coverage evidence.
+- Add the fail-closed `no_python_in_excel_changes` policy rule (`FFP065`).
+  FormulaFence never loads Python source as Python, runs code, evaluates a PY
+  formula, resolves its result, contacts Microsoft Cloud, or validates runtime
+  package support.
+
 ## 0.67.0 — 2026-07-26
 
 - Add `FF064`, a private ledger for stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`,

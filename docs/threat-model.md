@@ -9,15 +9,20 @@ financial correctness or replace model review.
 - Workbook content stays on the machine running FormulaFence. The CLI makes no
   network requests.
 - It loads formulas as text with `data_only=False`; it does not calculate them.
-- It never executes VBA, XLM macro sheets, RibbonX callbacks, DDE, external
-  links, Power Query, Power Pivot/DAX, Office Web Add-in code, or worksheet
-  ActiveX/OLE code.
+- It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
+  callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
+  Add-in code, or worksheet ActiveX/OLE code; it does not contact a Python in
+  Excel Microsoft Cloud runtime.
 - VBA payloads, XLM macro-sheet source material, RibbonX control/callback
   material, Office Web Add-in task-pane/worksheet/in-content material, and worksheet control/OLE
   material are compared through private fingerprints only.
 - Embedded Power Pivot/Data Model declarations and bounded raw model payloads
   are compared through private fingerprints only; table names, relationships,
   DAX, stored values, and connection details are never emitted.
+- Python-in-Excel source, environment definitions/identifiers, script indexes,
+  formula arguments and locations, and raw XML are compared through private
+  fingerprints only. Public output retains aggregate package, formula-call,
+  script, environment, initialization, and coverage counts.
 - What-If Data Table output ranges, input-cell references, and raw formula
   metadata are compared through a private signature only. Cached scenario-output
   cells remain under the normal cell-diff boundary.
@@ -553,6 +558,25 @@ review prompt, not proof of an error.
   [`WEBSERVICE` reference](https://support.microsoft.com/en-US/Excel/functions/webservice-function),
   [`IMAGE` reference](https://support.microsoft.com/en-us/excel/functions/image-function),
   and [`RTD` reference](https://support.microsoft.com/en-us/excel/functions/rtd-function).
+- Python in Excel keeps executable source separately from its `PY` formula
+  placeholder. FormulaFence recognizes stored `PY` spellings, privately
+  fingerprints the documented workbook Python part, relationship, content type,
+  code/environment/script XML, and stored formula binding, then exposes only
+  safe aggregate counts. A code/package/environment change, formula-binding
+  change, or ordinary cell change that statically reaches a PY formula emits
+  `FF065`; `no_python_in_excel_changes` blocks it as `FFP065`. This includes a
+  source such as `=_xlfn._xlws.PY(0,0,A1)` without decoding the script index,
+  interpreting `A1`, or parsing source as Python. Dynamic or unresolved inputs
+  remain formula-coverage limits. Relationship-ID-only rewrites normalize;
+  missing, malformed, unbound, oversized, unreadable, or over-budget metadata
+  remains coverage evidence. XML reads are bounded to 16 MiB per part, 64 MiB
+  per workbook, and 512 parts. FormulaFence does **not** execute Python,
+  evaluate a PY formula, resolve a result, contact Microsoft Cloud, or validate
+  runtime package availability. Changed PY formulas and values remain in the
+  ordinary semantic diff by design, so it is not a redacted source-code vault.
+  This boundary follows Microsoft's [Python in Excel introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel)
+  and the OOXML [Python part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/151e4bcd-90a0-4d82-8b98-f16bf273e4ff)
+  definition.
 - Office 2010 worksheet sparklines live in `x14:sparklineGroups` worksheet
   extensions, outside ordinary cell values. A group can be retargeted, moved,
   or have its type, axes, display, marker, line-weight, or colour controls

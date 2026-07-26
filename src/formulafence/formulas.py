@@ -357,6 +357,25 @@ class ParsedReference:
 
 
 @dataclass(frozen=True)
+class IndexedExternalWorkbookReference:
+    """One package-indexed external A1 reference without a source path.
+
+    Excel's ``[N]Sheet!A1`` spelling uses ``N`` as a one-based position in
+    the workbook's external-link collection, rather than a workbook filename.
+    Formula parsing cannot safely resolve that position by itself, so this
+    private-lookup intermediary intentionally keeps only the bounded index and
+    static A1 destination until package metadata supplies an exact target.
+    """
+
+    index: int
+    sheet: str
+    min_column: int
+    min_row: int
+    max_column: int
+    max_row: int
+
+
+@dataclass(frozen=True)
 class FormulaInspection:
     """Static formula coverage collected from one formula without evaluation."""
 
@@ -556,6 +575,20 @@ def parse_reference_token(value: str) -> ParsedReference | None:
     )
 
 
+def _parse_external_link_index(value: str) -> int | None:
+    """Parse one bounded, nonzero external-link collection position."""
+    # Bound parsing before converting an untrusted arbitrary-length decimal.
+    if (
+        len(value) > 10
+        or not value.isascii()
+        or not value.isdecimal()
+        or value.startswith("0")
+    ):
+        return None
+    index = int(value)
+    return index if index <= 2_147_483_647 else None
+
+
 def parse_external_workbook_reference(value: str) -> ExternalWorkbookReference | None:
     """Parse a direct external A1 token without resolving its filesystem path.
 
@@ -579,12 +612,95 @@ def parse_external_workbook_reference(value: str) -> ExternalWorkbookReference |
     sheet = prefix[closing + 1 :].strip()
     if not workbook_name or not sheet or ":" in sheet:
         return None
+    if (
+        not prefix[:opening]
+        and workbook_name.isascii()
+        and workbook_name.isdecimal()
+    ):
+        # ``[N]Sheet!A1`` is an external-link collection index, not a file
+        # named ``N``. It needs validated package metadata before it can be
+        # retained as an external-workbook dependency.
+        return None
     try:
         min_column, min_row, max_column, max_row = range_boundaries(address)
     except ValueError:
         return None
     return ExternalWorkbookReference(
         source_path=f"{prefix[:opening]}{workbook_name}",
+        sheet=sheet,
+        min_column=min_column or 1,
+        min_row=min_row or 1,
+        max_column=max_column or MAX_EXCEL_COLUMN,
+        max_row=max_row or MAX_EXCEL_ROW,
+    )
+
+
+def parse_external_link_indexed_workbook_reference(
+    value: str,
+) -> IndexedExternalWorkbookReference | None:
+    """Parse Excel's package-indexed external A1 syntax without resolving it.
+
+    Office stores an external cell reference as ``[N]Sheet!A1`` (or a quoted
+    sheet spelling such as ``'[N]Input Sheet'!A1``), where nonzero ``N`` is a
+    position in the workbook's external-link collection.  This helper accepts
+    only one static A1 destination.  Names, 3-D spans, malformed quoting, and
+    invalid sheet syntax stay outside the static portfolio graph rather than
+    being approximated.
+    """
+    token = value.strip()
+    if token.startswith("="):
+        token = token[1:].strip()
+    sheet_prefix, address = _split_sheet_reference(token)
+    if sheet_prefix is None:
+        return None
+    prefix = sheet_prefix.strip()
+    quoted = prefix.startswith("'")
+    if quoted:
+        if len(prefix) < 2 or not prefix.endswith("'"):
+            return None
+        unescaped: list[str] = []
+        position = 1
+        while position < len(prefix) - 1:
+            character = prefix[position]
+            if character == "'":
+                if position + 1 < len(prefix) - 1 and prefix[position + 1] == "'":
+                    unescaped.append("'")
+                    position += 2
+                    continue
+                return None
+            unescaped.append(character)
+            position += 1
+        prefix = "".join(unescaped)
+    elif "'" in prefix:
+        return None
+    if not prefix.startswith("["):
+        return None
+    closing = prefix.find("]", 1)
+    if closing < 2:
+        return None
+    index = _parse_external_link_index(prefix[1:closing])
+    sheet = prefix[closing + 1 :]
+    if (
+        index is None
+        or not sheet
+        or any(character in "[]\\?*/:" for character in sheet)
+        or any(ord(character) < 32 or ord(character) == 127 for character in sheet)
+        or (
+            not quoted
+            and any(
+                character.isspace()
+                or character in "'+-*/^&=<>%,;(){}!"
+                for character in sheet
+            )
+        )
+    ):
+        return None
+    try:
+        min_column, min_row, max_column, max_row = range_boundaries(address)
+    except ValueError:
+        return None
+    return IndexedExternalWorkbookReference(
+        index=index,
         sheet=sheet,
         min_column=min_column or 1,
         min_row=min_row or 1,
@@ -653,16 +769,8 @@ def parse_external_link_indexed_defined_name_reference(
     if closing < 2 or closing + 1 >= len(token) or token[closing + 1] != "!":
         return None
     index_text = token[1:closing]
-    # Bound parsing before converting an untrusted arbitrary-length decimal.
-    if (
-        len(index_text) > 10
-        or not index_text.isascii()
-        or not index_text.isdecimal()
-        or index_text.startswith("0")
-    ):
-        return None
-    index = int(index_text)
-    if index > 2_147_483_647:
+    index = _parse_external_link_index(index_text)
+    if index is None:
         return None
     name = token[closing + 2 :]
     if (
@@ -2170,6 +2278,9 @@ def inspect_formula(
         Mapping[str, Sequence[ExternalWorkbookDefinedNameReference]] | None
     ) = None,
     indexed_external_workbook_paths: Mapping[int, str] | None = None,
+    named_external_workbook_references: (
+        Mapping[str, Sequence[ExternalWorkbookReference]] | None
+    ) = None,
     *,
     inspect_formula_defined_xlm_registrations: bool = False,
     inspect_formula_defined_xlm_evaluations: bool = False,
@@ -2180,14 +2291,14 @@ def inspect_formula(
     """Inspect static reference coverage while resolving known named ranges.
 
     A caller provides case-folded name and named-LAMBDA maps assembled from the
-    workbook. It may also provide private, package-derived external-name maps;
-    those maps never cause a filesystem lookup. Supported fully qualified table
-    references are resolved from table metadata, context-bound row references
-    require the formula origin, and 3-D references require workbook tab order.
-    Other non-A1 tokens are returned explicitly instead of being silently
-    omitted from the graph. A ``None`` named-function value records a known
-    LAMBDA whose definition is not safe to expand, so its call remains a visible
-    coverage gap.
+    workbook. It may also provide private, package-derived external-name and
+    external-A1 maps; those maps never cause a filesystem lookup. Supported
+    fully qualified table references are resolved from table metadata,
+    context-bound row references require the formula origin, and 3-D references
+    require workbook tab order. Other non-A1 tokens are returned explicitly
+    instead of being silently omitted from the graph. A ``None`` named-function
+    value records a known LAMBDA whose definition is not safe to expand, so its
+    call remains a visible coverage gap.
     """
     direct_formula_dde_link_markers = _formula_dde_link_markers(formula)
     (
@@ -2210,6 +2321,7 @@ def inspect_formula(
         named_external_workbook_defined_name_references or {}
     )
     resolved_indexed_external_workbook_paths = indexed_external_workbook_paths or {}
+    resolved_named_external_workbooks = named_external_workbook_references or {}
     resolved_named_functions = named_function_references or {}
     resolved_named_custom_functions = named_custom_function_candidates or {}
     resolved_named_function_custom_functions = (
@@ -2348,6 +2460,37 @@ def inspect_formula(
                         ExternalWorkbookDefinedNameReference(source_path, name_key)
                     )
                     continue
+            if indexed_external_workbook_reference := (
+                parse_external_link_indexed_workbook_reference(token.value)
+            ):
+                # The formula-level index has no filename semantics.  Only a
+                # separately validated external-link declaration can provide
+                # the private source spelling used by candidate portfolios.
+                references.append(
+                    ParsedReference(
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        token.value,
+                        is_external=True,
+                    )
+                )
+                if source_path := resolved_indexed_external_workbook_paths.get(
+                    indexed_external_workbook_reference.index
+                ):
+                    external_workbook_references.append(
+                        ExternalWorkbookReference(
+                            source_path=source_path,
+                            sheet=indexed_external_workbook_reference.sheet,
+                            min_column=indexed_external_workbook_reference.min_column,
+                            min_row=indexed_external_workbook_reference.min_row,
+                            max_column=indexed_external_workbook_reference.max_column,
+                            max_row=indexed_external_workbook_reference.max_row,
+                        )
+                    )
+                continue
             reference = parse_reference_token(token.value)
             if reference is not None:
                 references.append(reference)
@@ -2385,6 +2528,26 @@ def inspect_formula(
                 three_d_reference_tokens.append(token.value)
                 continue
             named_key = reference_lookup_key(token.value)
+            if named_external_workbook_references := (
+                resolved_named_external_workbooks.get(named_key)
+            ):
+                # A direct workbook-scoped alias can retain the same indexed
+                # external A1 syntax in its OOXML definition.  It reaches this
+                # map only after the package index and target were separately
+                # validated; never infer either from the consumer name.
+                references.append(
+                    ParsedReference(
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        token.value,
+                        is_external=True,
+                    )
+                )
+                external_workbook_references.extend(named_external_workbook_references)
+                continue
             if named_external_references := (
                 resolved_named_external_workbook_defined_names.get(named_key)
             ):

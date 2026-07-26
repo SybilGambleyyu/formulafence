@@ -5,6 +5,47 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Package-indexed external-A1 portfolio boundary — 2026-07-26
+
+Microsoft's [cell-reference grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/e531ebe0-a152-4978-a876-28e2a68f746e)
+describe the package cell form `[N]Sheet!A1` and state that a nonzero index
+identifies an external book in the external-link collection. FormulaFence
+0.89.0 treats that integer as package metadata, never as a filename. It accepts
+only one static A1 cell/range/whole-row/whole-column form, and only after the
+same declaration-order, single-`externalLink`, single-`externalBook`, and
+external-`externalLinkPath` validation used by the indexed-name boundary. A
+direct workbook-scoped consumer alias may store that exact static spelling;
+sheet-local aliases, formula aliases, 3-D forms, names, structured references,
+caches, malformed syntax, and unsafe targets remain unresolved.
+
+A controlled two-link source/consumer portfolio placed the source workbook in
+the second `externalReference` position while workbook relationships were
+written in reverse order. One direct `[2]Data!$B$2:$B$4` formula and one direct
+workbook-scoped alias both produced `FF079` and `FFP079` when the covered source
+cell changed. Whole-column parsing, absolute target rejection, local/formula
+alias rejection, malformed package links, and JSON/Markdown/SARIF redaction
+are covered in the suite. No package target, index spelling, or consumer alias
+identity reaches portfolio evidence.
+
+The independently maintained public
+[openpyexcel external-link fixtures](https://github.com/sciris/openpyexcel/tree/1fde667a1adc2f4988279fd73a2ac2660706b5ce/openpyexcel/workbook/external_link/tests/data)
+were downloaded at commit `1fde667a1adc2f4988279fd73a2ac2660706b5ce` into a
+temporary directory outside this repository. Its `workbook_external_range.xml`
+contains a real workbook-scoped `[1]Sheet1!$A$1` alias. A temporary consumer
+copy was changed only to call that existing alias; changing the paired
+`book2.xlsx` source cell yielded a complete `FF079` graph with paths to the
+consumer formulas and no raw external relationship target in JSON, Markdown,
+or SARIF. Neither upstream workbook was executed, refreshed, changed in place,
+or copied into this repository.
+
+The final source checkout passed **610 tests in 81.62 seconds**, a clean Ruff
+check, `git diff --check`, and GitHub Action shell syntax validation. Fresh
+0.89.0 source and wheel distributions passed `twine check`. An isolated virtual
+environment installed the exact wheel and ran the temporary public-fixture
+portfolio with `no_cross_workbook_impacts`; it returned policy exit `1` with
+both `FF079` and `FFP079`, while the existing external-alias identity remained
+absent from the JSON report.
+
 ## Package-indexed external-name portfolio boundary — 2026-07-26
 
 Microsoft's [name grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a469e5f5-a102-49bd-9642-8a8e8aaf1623)

@@ -96,15 +96,16 @@ financial correctness or replace model review.
 - Cross-workbook portfolio impact evidence is candidate-only and local to the
   supplied inventory. FormulaFence retains raw external source spellings and
   package targets only as private parser state, then resolves a direct static
-  A1 source, a direct workbook-scoped external name, or the narrow
-  package-indexed name form `[N]!Name`. For the indexed form, `N` must select
+  A1 source, a direct workbook-scoped external name, or narrow package-indexed
+  forms `[N]Sheet!A1` and `[N]!Name`. For an indexed form, `N` must select
   exactly one document-order `externalReference`, `externalLink` part,
   `externalBook`, and external `externalLinkPath` relationship before that
   target may normalize to one exact relative candidate. A workbook-scoped
-  consumer alias may use that exact indexed spelling; sheet-scoped/formula
-  aliases, caches, package A1 links, and ambiguous package shapes are not
-  expanded. The source name must also expand completely to static internal A1
-  destinations in that source candidate. It never opens a target path,
+  consumer alias may use one exact static indexed A1 or name spelling;
+  sheet-scoped/formula aliases, caches, non-static package A1 forms, and
+  ambiguous package shapes are not expanded. An indexed name's source must
+  also expand completely to static internal A1 destinations in that source
+  candidate. It never opens a target path,
   searches by basename, follows an absolute/UNC/URI/escaping path, fetches
   anything, evaluates a formula, trusts cached external-link values, or emits
   the stored external path or source-name spelling in portfolio evidence.

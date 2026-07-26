@@ -36,6 +36,7 @@ from formulafence.formulas import (
     inspect_formula,
     lambda_parameter_count,
     parse_external_link_indexed_defined_name_reference,
+    parse_external_link_indexed_workbook_reference,
     parse_reference_token,
     reference_lookup_key,
 )
@@ -6072,15 +6073,16 @@ def _external_link_external_workbook_target(
     """
     if not relationship_id:
         warnings.add(
-            "FormulaFence found an indexed external-name link without an external-book "
-            "relationship id; the affected package-mediated name was not resolved."
+            "FormulaFence found a package-indexed external reference without an "
+            "external-book relationship id; the affected package-mediated reference "
+            "was not resolved."
         )
         return None
     relationships = _external_link_part_root(
         archive,
         _relationship_part_path(member),
         warnings,
-        context="indexed external-name relationship",
+        context="package-indexed external-reference relationship",
     )
     if relationships is None:
         return None
@@ -6089,8 +6091,9 @@ def _external_link_external_workbook_target(
         or _xml_local_name(relationships.tag) != "Relationships"
     ):
         warnings.add(
-            "FormulaFence found an indexed external-name relationship part with an "
-            "unexpected root; the affected package-mediated name was not resolved."
+            "FormulaFence found a package-indexed external-reference relationship part "
+            "with an unexpected root; the affected package-mediated reference was not "
+            "resolved."
         )
         return None
     relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
@@ -6101,8 +6104,9 @@ def _external_link_external_workbook_target(
     ]
     if len(matches) != 1:
         warnings.add(
-            "FormulaFence could not uniquely locate an indexed external-name target "
-            "relationship; the affected package-mediated name was not resolved."
+            "FormulaFence could not uniquely locate a package-indexed external-reference "
+            "target relationship; the affected package-mediated reference was not "
+            "resolved."
         )
         return None
     relationship = matches[0]
@@ -6111,16 +6115,16 @@ def _external_link_external_workbook_target(
         or relationship.get("TargetMode", "Internal").casefold() != "external"
     ):
         warnings.add(
-            "FormulaFence found an indexed external-name target that is not an external "
-            "workbook path relationship; the affected package-mediated name was not "
-            "resolved."
+            "FormulaFence found a package-indexed external-reference target that is not "
+            "an external workbook path relationship; the affected package-mediated "
+            "reference was not resolved."
         )
         return None
     target = relationship.get("Target")
     if not target:
         warnings.add(
-            "FormulaFence found an indexed external-name target relationship without a "
-            "target; the affected package-mediated name was not resolved."
+            "FormulaFence found a package-indexed external-reference target relationship "
+            "without a target; the affected package-mediated reference was not resolved."
         )
         return None
     return target
@@ -6134,10 +6138,10 @@ def _indexed_external_workbook_paths(
 ) -> tuple[tuple[int, str], ...]:
     """Map declared external-reference positions to private workbook targets.
 
-    Excel's ``[N]!Name`` syntax uses the one-based document order of
-    ``externalReference`` declarations, rather than a relationship filename or
-    arbitrary relationship order.  The map is intentionally private and is
-    consumed only while building the candidate-only portfolio graph.
+    Excel's ``[N]!Name`` and ``[N]Sheet!A1`` syntax use the one-based document
+    order of ``externalReference`` declarations, rather than a relationship
+    filename or arbitrary relationship order.  The map is intentionally private
+    and is consumed only while building the candidate-only portfolio graph.
     """
     containers = [
         child
@@ -6150,7 +6154,7 @@ def _indexed_external_workbook_paths(
     if len(containers) != 1:
         warnings.add(
             "FormulaFence found repeated external-link declaration containers; "
-            "package-mediated names were not resolved."
+            "package-mediated external references were not resolved."
         )
         return ()
     identifier_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
@@ -6160,14 +6164,15 @@ def _indexed_external_workbook_paths(
     reference_ids = [reference.get(identifier_attribute) for reference in references]
     if any(relationship_id is None for relationship_id in reference_ids):
         warnings.add(
-            "FormulaFence found an indexed external-name declaration without a "
-            "relationship id; package-mediated names were not resolved."
+            "FormulaFence found a package-indexed external-reference declaration "
+            "without a relationship id; package-mediated external references were not "
+            "resolved."
         )
         return ()
     if len(reference_ids) != len(set(reference_ids)):
         warnings.add(
-            "FormulaFence found repeated indexed external-name declarations; "
-            "package-mediated names were not resolved."
+            "FormulaFence found repeated package-indexed external-reference "
+            "declarations; package-mediated external references were not resolved."
         )
         return ()
     relationships_by_id: defaultdict[str, list[_PackageRelationship]] = defaultdict(list)
@@ -6198,9 +6203,9 @@ def _indexed_external_workbook_paths(
             or external_link_member_counts[matches[0].target] != 1
         ):
             warnings.add(
-                "FormulaFence could not uniquely validate an indexed external-name "
-                "declaration or package part; the affected package-mediated name was "
-                "not resolved."
+                "FormulaFence could not uniquely validate a package-indexed external-"
+                "reference declaration or package part; the affected package-mediated "
+                "reference was not resolved."
             )
             continue
         member = matches[0].target
@@ -6208,7 +6213,7 @@ def _indexed_external_workbook_paths(
             archive,
             member,
             warnings,
-            context="indexed external-name package",
+            context="package-indexed external-reference package",
         )
         if root is None:
             continue
@@ -6217,8 +6222,9 @@ def _indexed_external_workbook_paths(
             or _xml_local_name(root.tag) != "externalLink"
         ):
             warnings.add(
-                "FormulaFence found an indexed external-name package with an unexpected "
-                "root; the affected package-mediated name was not resolved."
+                "FormulaFence found a package-indexed external-reference package with "
+                "an unexpected root; the affected package-mediated reference was not "
+                "resolved."
             )
             continue
         external_books = [
@@ -6235,8 +6241,9 @@ def _indexed_external_workbook_paths(
         ]
         if len(external_books) != 1 or conflicting_links:
             warnings.add(
-                "FormulaFence found an indexed external-name package without exactly one "
-                "external workbook; the affected package-mediated name was not resolved."
+                "FormulaFence found a package-indexed external-reference package without "
+                "exactly one external workbook; the affected package-mediated reference "
+                "was not resolved."
             )
             continue
         target = _external_link_external_workbook_target(
@@ -44056,6 +44063,54 @@ def _package_indexed_external_name_references(
     return result
 
 
+def _package_indexed_external_workbook_references(
+    workbook: object,
+    indexed_external_workbook_paths: Mapping[int, str],
+) -> dict[str, tuple[ExternalWorkbookReference, ...]]:
+    """Resolve only direct workbook-scoped aliases for indexed external A1.
+
+    A workbook-defined name can store ``[1]Data!$B$2`` directly, while a
+    worksheet formula refers only to that workbook-scoped consumer alias. The
+    link index becomes meaningful only after the raw package declaration has
+    established one target. Formula-valued aliases, sheet-local names, 3-D
+    spans, and unresolved indices deliberately remain outside this graph so
+    FormulaFence does not turn an ambiguous package detail into an invented
+    cross-workbook edge.
+    """
+    if not indexed_external_workbook_paths:
+        return {}
+    names = getattr(workbook, "defined_names", {})
+    try:
+        items = names.items()
+    except AttributeError:
+        return {}
+    result: dict[str, tuple[ExternalWorkbookReference, ...]] = {}
+    for name, definition in items:
+        if getattr(definition, "localSheetId", None) is not None:
+            continue
+        indexed_reference = parse_external_link_indexed_workbook_reference(
+            _definition_text(definition)
+        )
+        if indexed_reference is None:
+            continue
+        source_path = indexed_external_workbook_paths.get(indexed_reference.index)
+        if source_path is None:
+            continue
+        name_key = reference_lookup_key(str(name))
+        if name_key:
+            result[name_key] = (
+                ExternalWorkbookReference(
+                    source_path=source_path,
+                    sheet=indexed_reference.sheet,
+                    min_column=indexed_reference.min_column,
+                    min_row=indexed_reference.min_row,
+                    max_column=indexed_reference.max_column,
+                    max_row=indexed_reference.max_row,
+                ),
+            )
+    return result
+
+
 def _table_columns(
     worksheet: object,
     table: object,
@@ -44511,6 +44566,12 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             indexed_external_workbook_paths,
         )
     )
+    package_indexed_external_workbook_references = (
+        _package_indexed_external_workbook_references(
+            workbook,
+            indexed_external_workbook_paths,
+        )
+    )
 
     for worksheet in workbook.worksheets:
         named_references = {
@@ -44689,6 +44750,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                     package_indexed_external_name_references
                 ),
                 indexed_external_workbook_paths=indexed_external_workbook_paths,
+                named_external_workbook_references=(
+                    package_indexed_external_workbook_references
+                ),
                 structured_tables=structured_tables,
                 origin=snapshot.location,
                 sheet_order=sheet_order,

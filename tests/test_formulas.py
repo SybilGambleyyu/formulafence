@@ -9,9 +9,11 @@ from formulafence.formulas import (
     inspect_formula,
     lambda_parameter_count,
     parse_external_link_indexed_defined_name_reference,
+    parse_external_link_indexed_workbook_reference,
     parse_external_workbook_defined_name_reference,
     parse_external_workbook_reference,
 )
+from formulafence.models import ExternalWorkbookReference
 
 
 def test_fingerprint_normalises_relative_copy_patterns() -> None:
@@ -175,6 +177,100 @@ def test_package_indexed_external_name_references_require_a_declared_one_based_i
     assert unresolved.external_workbook_defined_name_references == ()
     assert unresolved.unresolved_range_tokens == ()
     assert all(reference.is_external for reference in unresolved.references)
+
+
+def test_package_indexed_external_a1_references_require_a_declared_one_based_index() -> None:
+    direct = parse_external_link_indexed_workbook_reference("[1]Data!$B$2:$B$4")
+    quoted = parse_external_link_indexed_workbook_reference(
+        "'[42]Input Sheet'!A:A"
+    )
+    escaped_quote = parse_external_link_indexed_workbook_reference(
+        "'[9]O''Brien'!A1"
+    )
+
+    assert direct is not None
+    assert (
+        direct.index,
+        direct.sheet,
+        direct.min_column,
+        direct.min_row,
+        direct.max_column,
+        direct.max_row,
+    ) == (1, "Data", 2, 2, 2, 4)
+    assert quoted is not None
+    assert (
+        quoted.index,
+        quoted.sheet,
+        quoted.min_column,
+        quoted.min_row,
+        quoted.max_column,
+        quoted.max_row,
+    ) == (42, "Input Sheet", 1, 1, 1, 1_048_576)
+    assert escaped_quote is not None
+    assert (escaped_quote.index, escaped_quote.sheet) == (9, "O'Brien")
+    assert parse_external_workbook_reference("[1]Data!A1") is None
+    assert parse_external_link_indexed_workbook_reference("[0]Data!A1") is None
+    assert parse_external_link_indexed_workbook_reference("[01]Data!A1") is None
+    assert (
+        parse_external_link_indexed_workbook_reference("[2147483648]Data!A1")
+        is None
+    )
+    assert parse_external_link_indexed_workbook_reference("[1]!A1") is None
+    assert parse_external_link_indexed_workbook_reference("[1]Data!InputRange") is None
+    assert parse_external_link_indexed_workbook_reference("[1]Jan:Mar!A1") is None
+    assert parse_external_link_indexed_workbook_reference("'[1]Input Sheet!A1") is None
+    assert parse_external_link_indexed_workbook_reference("[1]Data[Other]!A1") is None
+
+    inspection = inspect_formula(
+        "=SUM([1]Data!$B$2:$B$4)+'[2]Input Sheet'!A:A",
+        indexed_external_workbook_paths={
+            1: "../inputs/source.xlsx",
+            2: "../inputs/other.xlsx",
+        },
+    )
+    assert inspection.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in inspection.references)
+    assert [
+        (
+            reference.source_path,
+            reference.sheet,
+            reference.min_column,
+            reference.min_row,
+            reference.max_column,
+            reference.max_row,
+        )
+        for reference in inspection.external_workbook_references
+    ] == [
+        ("../inputs/source.xlsx", "Data", 2, 2, 2, 4),
+        ("../inputs/other.xlsx", "Input Sheet", 1, 1, 1, 1_048_576),
+    ]
+
+    unresolved = inspect_formula("=SUM([1]Data!A1)")
+    assert unresolved.unresolved_range_tokens == ()
+    assert unresolved.external_workbook_references == ()
+    assert all(reference.is_external for reference in unresolved.references)
+
+    alias = inspect_formula(
+        "=PackageExternalCell",
+        named_external_workbook_references={
+            "packageexternalcell": (
+                ExternalWorkbookReference(
+                    source_path="../inputs/source.xlsx",
+                    sheet="Data",
+                    min_column=2,
+                    min_row=2,
+                    max_column=2,
+                    max_row=4,
+                ),
+            )
+        },
+    )
+    assert alias.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in alias.references)
+    assert [
+        (reference.source_path, reference.sheet)
+        for reference in alias.external_workbook_references
+    ] == [("../inputs/source.xlsx", "Data")]
 
 
 def test_formula_inspection_resolves_names_and_marks_static_coverage_gaps() -> None:

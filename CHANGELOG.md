@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.89.0 — 2026-07-26
+
+- Extend the candidate-only `FF079` portfolio graph to Excel's documented
+  package-indexed external-A1 syntax, such as `=[N]Data!$B$2:$B$4`, including
+  a direct workbook-scoped consumer alias whose stored definition is exactly
+  `[N]Data!$B$2:$B$4`. `N` is resolved only through the validated one-based
+  document order of `externalReferences`, one declared `externalLink` part,
+  one `externalBook`, and one external `externalLinkPath` relationship; its
+  target must still normalize to an already-inspected relative candidate
+  workbook. Static cells, ranges, whole rows, and whole columns are supported;
+  no target is opened, fetched, or evaluated.
+- Keep package relationship targets, indexed source spellings, and consumer
+  alias identities out of portfolio evidence. Decimal index zero, malformed or
+  ambiguously quoted syntax, 3-D spans, names/structured references, sheet-
+  scoped aliases, formula-defined aliases, invalid/ambiguous package shapes,
+  unsafe paths, caches, DDE/OLE/non-workbook parts, and every other non-static
+  form remain unresolved rather than creating a guessed edge.
+- Add parser, source-alias, declaration-order, relative-range, whole-column,
+  absolute-path, local/formula-alias, package-ambiguity, and JSON/Markdown/
+  SARIF-redaction coverage. Validate the boundary against an independently
+  maintained OpenPyExcel workbook containing a real `[1]Sheet1!$A$1` alias.
+
 ## 0.88.0 — 2026-07-26
 
 - Extend the candidate-only `FF079` portfolio graph to Excel's package-indexed

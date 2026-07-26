@@ -6258,31 +6258,36 @@ def make_indexed_external_workbook_name_link_model(
     consumer_alias_local_sheet_id: int | None = None,
     include_direct_indexed_formula: bool = True,
     consumer_formula_alias: bool = False,
+    external_reference: str | None = None,
+    consumer_alias_name: str = "PackageExternalInput",
 ) -> Path:
-    """Create a consumer with direct and local package-indexed name links.
+    """Create a consumer with direct and workbook-scoped package links.
 
-    Excel stores ``[N]!Name`` using the document order of ``externalReference``
-    declarations.  Relationships are deliberately emitted in reverse order so
-    portfolio tests prove that a reader uses the declaration sequence rather
-    than ZIP-part names or relationship order.
+    The caller may provide a direct ``[N]!Name`` or ``[N]Sheet!A1`` spelling.
+    Excel uses ``N`` as the document order of ``externalReference`` declarations.
+    Relationships are deliberately emitted in reverse order so portfolio tests
+    prove that a reader uses the declaration sequence rather than ZIP-part names
+    or relationship order.
     """
     if not target_paths or not 1 <= link_index <= len(target_paths):
         raise ValueError("link_index must identify one supplied external target")
+    if external_reference is None:
+        external_reference = f"[{link_index}]!{source_name}"
     path.parent.mkdir(parents=True, exist_ok=True)
     make_model(path)
     workbook = load_workbook(path)
     consumer_formula_name = (
         "PackageExternalFormulaAlias"
         if consumer_formula_alias
-        else "PackageExternalInput"
+        else consumer_alias_name
     )
     workbook["Model"]["D2"] = f"=SUM({consumer_formula_name})"
     if include_direct_indexed_formula:
-        workbook["Model"]["E2"] = f"=SUM([{link_index}]!{source_name})"
+        workbook["Model"]["E2"] = f"=SUM({external_reference})"
     workbook.defined_names.add(
         DefinedName(
-            "PackageExternalInput",
-            attr_text=f"[{link_index}]!{source_name}",
+            consumer_alias_name,
+            attr_text=external_reference,
             localSheetId=consumer_alias_local_sheet_id,
         )
     )
@@ -6290,7 +6295,7 @@ def make_indexed_external_workbook_name_link_model(
         workbook.defined_names.add(
             DefinedName(
                 "PackageExternalFormulaAlias",
-                attr_text="=PackageExternalInput",
+                attr_text=f"={consumer_alias_name}",
             )
         )
     workbook.save(path)
@@ -6379,6 +6384,40 @@ def make_indexed_external_workbook_name_link_model(
         contents["[Content_Types].xml"] = serialize(content_types)
 
     return _rewrite_archive(path, mutate, ".indexed-external-name.tmp.xlsx")
+
+
+def make_indexed_external_workbook_a1_link_model(
+    path: Path,
+    *,
+    target_paths: tuple[str, ...] = ("../inputs/source.xlsx",),
+    source_sheet: str = "Data",
+    source_range: str = "$B$2:$B$4",
+    link_index: int = 1,
+    consumer_alias_local_sheet_id: int | None = None,
+    include_direct_indexed_formula: bool = True,
+    consumer_formula_alias: bool = False,
+) -> Path:
+    """Create direct and aliased ``[N]Sheet!A1`` package-link fixtures."""
+    escaped_sheet = source_sheet.replace("'", "''")
+    needs_quotes = any(
+        character.isspace() or character in "'+-*/^&=<>%,;(){}!"
+        for character in source_sheet
+    )
+    external_sheet = (
+        f"'[{link_index}]{escaped_sheet}'"
+        if needs_quotes
+        else f"[{link_index}]{source_sheet}"
+    )
+    return make_indexed_external_workbook_name_link_model(
+        path,
+        target_paths=target_paths,
+        link_index=link_index,
+        consumer_alias_local_sheet_id=consumer_alias_local_sheet_id,
+        include_direct_indexed_formula=include_direct_indexed_formula,
+        consumer_formula_alias=consumer_formula_alias,
+        external_reference=f"{external_sheet}!{source_range}",
+        consumer_alias_name="PackageExternalCell",
+    )
 
 
 def change_external_link_package_controls(path: Path) -> Path:

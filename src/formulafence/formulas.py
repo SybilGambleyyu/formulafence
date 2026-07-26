@@ -40,6 +40,12 @@ _WORKSHEET_CODE_RESOURCE_REGISTRATION_FUNCTIONS = {"REGISTER.ID"}
 # remain outside this narrow boundary; raw XLM macro sheets have their own
 # package-level scanner.
 _FORMULA_DEFINED_XLM_REGISTRATION_FUNCTIONS = {"REGISTER"}
+# `EVALUATE` is an XLM function that parses a supplied text expression at
+# calculation time. Keep it in its own stored-definition boundary rather than
+# treating the text as a statically visible formula. Direct worksheet calls
+# remain outside this narrow boundary; the caller enables inspection only for
+# formula-defined names and named LAMBDAs.
+_FORMULA_DEFINED_XLM_EVALUATION_FUNCTIONS = {"EVALUATE"}
 # Excel's native function catalog includes a small but important set of dotted
 # names.  A namespace separator is also how Office Add-in custom functions are
 # displayed (for example, ``CONTOSO.ADD``), so keep these known native names out
@@ -196,6 +202,7 @@ class FormulaInspection:
     office_custom_function_candidates: tuple[str, ...] = ()
     worksheet_code_resource_registration_functions: tuple[str, ...] = ()
     formula_defined_xlm_registration_functions: tuple[str, ...] = ()
+    formula_defined_xlm_evaluation_functions: tuple[str, ...] = ()
     three_d_reference_tokens: tuple[str, ...] = ()
     tokenization_failed: bool = False
     spill_reference_tokens: tuple[str, ...] = ()
@@ -1110,6 +1117,21 @@ def _formula_defined_xlm_registration_function(token: object) -> str | None:
     return None
 
 
+def _formula_defined_xlm_evaluation_function(token: object) -> str | None:
+    """Return a defined-name-only XLM `EVALUATE` call, if present.
+
+    The raw-spelling classifier is deliberately opt-in and only used while
+    examining a stored formula-defined name or named LAMBDA. Known defined
+    callables are resolved before it runs, so a workbook-defined `EVALUATE`
+    name is not asserted to be Excel's legacy expression-evaluation primitive.
+    """
+    raw_name = str(getattr(token, "value", "")).rstrip("(").strip()
+    normalized = raw_name.removeprefix("@").upper()
+    if normalized in _FORMULA_DEFINED_XLM_EVALUATION_FUNCTIONS:
+        return normalized
+    return None
+
+
 def _fingerprint_token_value(token: object) -> str:
     """Normalize OOXML spellings of the two dynamic-array compatibility functions."""
     if (
@@ -1404,8 +1426,15 @@ def inspect_formula(
     named_function_formula_defined_xlm_registration_functions: (
         Mapping[str, Sequence[str]] | None
     ) = None,
+    named_formula_defined_xlm_evaluation_functions: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
+    named_function_formula_defined_xlm_evaluation_functions: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
     *,
     inspect_formula_defined_xlm_registrations: bool = False,
+    inspect_formula_defined_xlm_evaluations: bool = False,
 ) -> FormulaInspection:
     """Inspect static reference coverage while resolving known named ranges.
 
@@ -1455,6 +1484,12 @@ def inspect_formula(
     resolved_named_function_formula_defined_xlm_registrations = (
         named_function_formula_defined_xlm_registration_functions or {}
     )
+    resolved_named_formula_defined_xlm_evaluations = (
+        named_formula_defined_xlm_evaluation_functions or {}
+    )
+    resolved_named_function_formula_defined_xlm_evaluations = (
+        named_function_formula_defined_xlm_evaluation_functions or {}
+    )
     resolved_tables = structured_tables or {}
     references: list[ParsedReference] = []
     unresolved_range_tokens: list[str] = []
@@ -1464,6 +1499,7 @@ def inspect_formula(
     office_custom_function_candidates: list[str] = []
     worksheet_code_resource_registration_functions: list[str] = []
     formula_defined_xlm_registration_functions: list[str] = []
+    formula_defined_xlm_evaluation_functions: list[str] = []
     three_d_reference_tokens: list[str] = []
     spill_reference_tokens: list[str] = list(literal_spill_tokens)
     implicit_intersection_tokens: list[str] = list(literal_implicit_intersection_tokens)
@@ -1506,6 +1542,9 @@ def inspect_formula(
                 formula_defined_xlm_registration_functions.extend(
                     resolved_named_formula_defined_xlm_registrations.get(named_key, ())
                 )
+                formula_defined_xlm_evaluation_functions.extend(
+                    resolved_named_formula_defined_xlm_evaluations.get(named_key, ())
+                )
                 continue
             if named_external_actions := resolved_named_formula_external_actions.get(
                 named_key
@@ -1526,6 +1565,12 @@ def inspect_formula(
             ):
                 formula_defined_xlm_registration_functions.extend(
                     named_formula_defined_xlm_registrations
+                )
+            if named_formula_defined_xlm_evaluations := (
+                resolved_named_formula_defined_xlm_evaluations.get(named_key)
+            ):
+                formula_defined_xlm_evaluation_functions.extend(
+                    named_formula_defined_xlm_evaluations
                 )
             table_reference = resolve_structured_reference(
                 token.value, resolved_tables, origin
@@ -1559,6 +1604,11 @@ def inspect_formula(
                     )
                     formula_defined_xlm_registration_functions.extend(
                         resolved_named_function_formula_defined_xlm_registrations.get(
+                            function_key, ()
+                        )
+                    )
+                    formula_defined_xlm_evaluation_functions.extend(
+                        resolved_named_function_formula_defined_xlm_evaluations.get(
                             function_key, ()
                         )
                     )
@@ -1600,6 +1650,20 @@ def inspect_formula(
                     formula_defined_xlm_registration_functions.append(
                         formula_defined_xlm_registration_function
                     )
+                if (
+                    inspect_formula_defined_xlm_evaluations
+                    and function_key not in resolved_names
+                    and function_key not in resolved_named_functions
+                    and (
+                        formula_defined_xlm_evaluation_function := (
+                            _formula_defined_xlm_evaluation_function(token)
+                        )
+                    )
+                    is not None
+                ):
+                    formula_defined_xlm_evaluation_functions.append(
+                        formula_defined_xlm_evaluation_function
+                    )
             function_name = _function_name(token)
             if function_name in _DYNAMIC_REFERENCE_FUNCTIONS:
                 dynamic_reference_functions.append(function_name)
@@ -1633,6 +1697,9 @@ def inspect_formula(
         ),
         formula_defined_xlm_registration_functions=tuple(
             formula_defined_xlm_registration_functions
+        ),
+        formula_defined_xlm_evaluation_functions=tuple(
+            formula_defined_xlm_evaluation_functions
         ),
         three_d_reference_tokens=tuple(dict.fromkeys(three_d_reference_tokens)),
         spill_reference_tokens=tuple(dict.fromkeys(spill_reference_tokens)),

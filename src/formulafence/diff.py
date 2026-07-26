@@ -32,6 +32,7 @@ from formulafence.models import (
     Finding,
     FontSnapshot,
     FormulaCachedResultSnapshot,
+    FormulaDefinedXlmEvaluationSnapshot,
     FormulaDefinedXlmRegistrationSnapshot,
     FormulaExternalActionSnapshot,
     IgnoredErrorSnapshot,
@@ -2492,6 +2493,59 @@ def _formula_defined_xlm_registration_changes(
     return [change], [finding]
 
 
+def _formula_defined_xlm_evaluation_changes(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+    static_input_change_locations: set[CellKey],
+) -> tuple[list[Change], list[Finding]]:
+    """Flag stored XLM `EVALUATE` expressions and visible input changes.
+
+    FormulaFence compares the stored formula-defined expression and its
+    relevant named-definition chain privately. It records an ordinary cell edit
+    only when the existing static dependency graph reaches an invoking
+    formula. It does not evaluate text, parse a runtime-generated expression,
+    execute a macro, or infer dependencies hidden inside that expression.
+    """
+    old_evaluations: FormulaDefinedXlmEvaluationSnapshot = (
+        before.formula_defined_xlm_evaluations
+    )
+    new_evaluations: FormulaDefinedXlmEvaluationSnapshot = (
+        after.formula_defined_xlm_evaluations
+    )
+    if old_evaluations == new_evaluations and not static_input_change_locations:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_evaluations.to_dict(),
+        "after": new_evaluations.to_dict(),
+    }
+    if old_evaluations.invocation_signature != new_evaluations.invocation_signature:
+        details["formula_defined_xlm_evaluation_invocation_material_changed"] = True
+    if old_evaluations.definition_signature != new_evaluations.definition_signature:
+        details["formula_defined_xlm_evaluation_definition_material_changed"] = True
+    if static_input_change_locations:
+        details["formula_defined_xlm_evaluation_static_input_changed"] = True
+        details["formula_defined_xlm_evaluation_static_input_change_count"] = len(
+            static_input_change_locations
+        )
+    change = Change(
+        "formula_defined_xlm_evaluations_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF069",
+        "high",
+        (
+            "A formula-defined XLM EVALUATE call or a statically visible input "
+            "changed; Excel may now calculate a different expression."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _rich_text_run_entry_map(
     snapshot: RichTextRunSnapshot,
 ) -> dict[CellKey, RichTextRunEntry]:
@@ -3159,6 +3213,7 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     office_custom_function_static_input_changes: set[CellKey] = set()
     worksheet_code_resource_registration_static_input_changes: set[CellKey] = set()
     formula_defined_xlm_registration_static_input_changes: set[CellKey] = set()
+    formula_defined_xlm_evaluation_static_input_changes: set[CellKey] = set()
     formula_external_action_cells = (
         before.formula_external_actions.action_cells
         | after.formula_external_actions.action_cells
@@ -3177,6 +3232,10 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     formula_defined_xlm_registration_cells = (
         before.formula_defined_xlm_registrations.registration_cells
         | after.formula_defined_xlm_registrations.registration_cells
+    )
+    formula_defined_xlm_evaluation_cells = (
+        before.formula_defined_xlm_evaluations.evaluation_cells
+        | after.formula_defined_xlm_evaluations.evaluation_cells
     )
 
     all_locations = sorted(set(before.cells) | set(after.cells), key=_location_sort_key)
@@ -3219,6 +3278,8 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
             worksheet_code_resource_registration_static_input_changes.add(location)
         if formula_defined_xlm_registration_cells & impact:
             formula_defined_xlm_registration_static_input_changes.add(location)
+        if formula_defined_xlm_evaluation_cells & impact:
+            formula_defined_xlm_evaluation_static_input_changes.add(location)
         if new_cell is not None and new_cell.is_formula:
             formula_changed_locations.add(location)
         if old_cell is not None and old_cell.is_formula:
@@ -3305,6 +3366,17 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(formula_defined_xlm_registration_changes)
     findings.extend(formula_defined_xlm_registration_findings)
+
+    (
+        formula_defined_xlm_evaluation_changes,
+        formula_defined_xlm_evaluation_findings,
+    ) = _formula_defined_xlm_evaluation_changes(
+        before,
+        after,
+        formula_defined_xlm_evaluation_static_input_changes,
+    )
+    changes.extend(formula_defined_xlm_evaluation_changes)
+    findings.extend(formula_defined_xlm_evaluation_findings)
 
     rich_text_run_changes, rich_text_run_findings = _rich_text_run_controls_changed(
         before,

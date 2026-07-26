@@ -69,6 +69,7 @@ rules:
   no_office_custom_function_changes: true
   no_worksheet_code_resource_registration_changes: true
   no_formula_defined_xlm_registration_changes: true
+  no_formula_defined_xlm_evaluation_changes: true
   no_power_query_changes: true
   no_3d_reference_scope_changes: true
   no_sheet_visibility_changes: true
@@ -164,6 +165,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_office_custom_function_changes` | boolean | A namespaced Office custom-function call candidate, its private formula/call inventory, or a statically visible input changes. A candidate is not proof that an add-in is installed: FormulaFence does not load the add-in manifest or code, execute a formula, or contact a custom-function runtime. Names, namespaces, cells, formulas, and arguments are compared privately. |
 | `no_worksheet_code_resource_registration_changes` | boolean | A stored worksheet or formula-defined `REGISTER.ID` call, relevant formula-defined-name chain, private call inventory, or statically visible input changes. Module paths, procedure names, type strings, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates a formula, resolves a path, loads a DLL/XLL, or determines whether registration succeeds. |
 | `no_formula_defined_xlm_registration_changes` | boolean | A legacy XLM `REGISTER` call stored in a formula-defined name or named `LAMBDA`, its relevant definition chain/private invocation inventory, or a statically visible input changes. Module paths, procedure names, type strings, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates a formula, executes a macro, resolves a path, loads a DLL/XLL, or determines whether registration succeeds. |
+| `no_formula_defined_xlm_evaluation_changes` | boolean | A legacy XLM `EVALUATE` call stored in a formula-defined name or named `LAMBDA`, its relevant definition chain/private invocation inventory, or a statically visible argument input changes. Expressions, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates the text, parses the runtime-generated expression, executes a macro, or infers dependencies inside that expression. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
@@ -458,6 +460,31 @@ path, load a DLL/XLL, inspect host security settings, or determine whether a
 registration succeeds. Direct worksheet `REGISTER` formulas and raw XLM
 macro-sheet parts are deliberately outside this narrow stored-definition
 boundary; the latter remain under `FF026`.
+
+## Formula-defined XLM expression evaluation
+
+Microsoft's [Excel expression-evaluation
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/excel-worksheet-and-expression-evaluation)
+identifies `EVALUATE` as an XLM function that reduces a valid character string
+to a worksheet value. FormulaFence therefore inventories stored `EVALUATE`
+calls only while inspecting formula-defined names and named `LAMBDA` bodies,
+then propagates their private marker through nested and sheet-local names to an
+invoking worksheet formula.
+
+The public profile and `FF069` expose only invocation-cell, call, and relevant
+formula-defined-name counts. Expressions, formulas, arguments, cells, and name
+identities stay private. Same-count definition or invocation changes remain
+visible through private signatures; a normal cell edit that statically reaches
+an invoking formula emits `FF069` as well. Uninvoked stored definitions still
+appear as a count.
+
+`no_formula_defined_xlm_evaluation_changes` turns `FF069` into `FFP069`.
+FormulaFence does not evaluate a formula or its text argument, parse a
+runtime-generated expression, execute a macro, or infer dependencies embedded
+inside that expression. It traces only the stored call's own statically visible
+argument edge. Direct worksheet `EVALUATE` formulas and raw XLM macro-sheet
+parts remain deliberately outside this narrow stored-definition boundary; the
+latter remain under `FF026`.
 
 Excel 4.0 / XLM macro sheets are separate from the VBA binary: their executable
 commands live in Macro Sheet XML package parts, typically under

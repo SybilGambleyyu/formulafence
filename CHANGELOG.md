@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.73.0 — 2026-07-26
+
+- Add `FF069`, a private ledger for legacy XLM `EVALUATE` calls stored in
+  formula-defined names and named `LAMBDA` bodies. Microsoft documents
+  `EVALUATE` as reducing a valid character string to a worksheet value; this
+  captures a stored dynamic-expression surface without claiming that
+  FormulaFence calculates or parses that expression.
+- Propagate stored calls through nested and sheet-local formula names to
+  invoking cells. Same-count invocation or definition changes, uninvoked stored
+  names, and ordinary cell edits that statically reach a stored argument edge
+  remain reviewable through private signatures while profiles expose only safe
+  formula-cell, call, and formula-defined-name counts.
+- Add the fail-closed `no_formula_defined_xlm_evaluation_changes` policy rule
+  (`FFP069`). FormulaFence does not evaluate formula text, infer dependencies
+  inside a runtime-generated expression, execute an XLM macro, or inspect host
+  trust settings. Direct worksheet `EVALUATE` calls and raw XLM macro sheets
+  remain outside this narrow stored-definition boundary.
+
 ## 0.72.0 — 2026-07-26
 
 - Add `FF068`, a private ledger for legacy XLM `REGISTER` calls stored in

@@ -637,6 +637,24 @@ review prompt, not proof of an error.
   settings. Direct worksheet `REGISTER` formulas and raw XLM macro-sheet parts
   are intentionally outside this narrow boundary; dynamic/unresolved inputs
   remain static-coverage limits.
+- Legacy XLM `EVALUATE` can be stored in a formula-defined name or named
+  `LAMBDA`, where it parses a supplied text expression at calculation time.
+  FormulaFence separately inventories only that stored-definition form and
+  propagates it through nested/sheet-local names to invoking formula cells.
+  Microsoft's [Excel expression-evaluation
+  reference](https://learn.microsoft.com/en-us/office/client-developer/excel/excel-worksheet-and-expression-evaluation)
+  identifies `EVALUATE` as the XLM function that reduces a valid character
+  string to a worksheet value. A material stored definition, invocation, or
+  ordinary static argument-input change emits `FF069`; enable
+  `no_formula_defined_xlm_evaluation_changes` for `FFP069`. Public output
+  exposes only invoking-cell, call, and relevant definition counts; expression
+  text, formulas, arguments, locations, and name identities remain private.
+  FormulaFence does not evaluate text, parse a runtime-generated expression,
+  execute an XLM macro, or infer dependencies inside the expression it would
+  produce. It traces only the stored call's own visible static argument edge.
+  Direct worksheet `EVALUATE` formulas and raw XLM macro-sheet parts are
+  intentionally outside this narrow boundary; runtime-text dependencies remain
+  explicit static-coverage limits.
 - Office 2010 worksheet sparklines live in `x14:sparklineGroups` worksheet
   extensions, outside ordinary cell values. A group can be retargeted, moved,
   or have its type, axes, display, marker, line-weight, or colour controls

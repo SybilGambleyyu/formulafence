@@ -539,6 +539,64 @@ def change_formula_defined_xlm_registration_input(path: Path) -> Path:
     return path
 
 
+def make_formula_defined_xlm_evaluation_model(path: Path) -> Path:
+    """Create inert XLM `EVALUATE` calls stored only in defined formulas.
+
+    The workbook is never opened in Excel. The controlled expression text
+    proves FormulaFence compares stored dynamic-evaluation material privately
+    without attempting to evaluate or parse it as an Excel formula.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Formula-defined XLM evaluation controls"
+    inputs["A9"] = "PRIVATE-XLM-EVALUATE-EXPRESSION-BASELINE"
+    inputs["B2"] = "=FENCE.XLM.EVALUATE(A9)"
+    inputs["B3"] = "=FENCE.XLM.EVALUATE.DIRECT"
+    inputs["B4"] = "=FENCE.XLM.EVALUATE.CHAIN(A9)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.EVALUATE",
+            attr_text="=LAMBDA(expression,EVALUATE(expression))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.EVALUATE.CHAIN",
+            attr_text="=LAMBDA(expression,FENCE.XLM.EVALUATE(expression))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.EVALUATE.DIRECT",
+            attr_text="=EVALUATE(Inputs!$A$9)",
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_evaluation_definition(path: Path) -> Path:
+    """Change hidden expression material without changing public counts."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.XLM.EVALUATE"]
+    if definition.attr_text != "=LAMBDA(expression,EVALUATE(expression))":
+        raise ValueError("Fixture does not contain the expected XLM evaluation")
+    definition.attr_text = (
+        '=LAMBDA(expression,EVALUATE("PRIVATE-XLM-EVALUATE-DEFINITION-CANDIDATE"))'
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_evaluation_input(path: Path) -> Path:
+    """Change a static text input used by a formula-defined XLM evaluation."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-XLM-EVALUATE-EXPRESSION-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_python_in_excel_model(path: Path) -> Path:
     """Create a workbook with stored Python-in-Excel package code.
 

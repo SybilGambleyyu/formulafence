@@ -250,6 +250,50 @@ def test_formula_inspection_propagates_formula_defined_xlm_registrations() -> No
     assert named_formula.unresolved_range_tokens == ()
 
 
+def test_formula_inspection_inventories_formula_defined_xlm_evaluations() -> None:
+    ordinary = inspect_formula('=EVALUATE(A1)+@EVALUATE(A2)')
+    definition = inspect_formula(
+        '=EVALUATE(A1)+@EVALUATE(A2)',
+        inspect_formula_defined_xlm_evaluations=True,
+    )
+    shadowed = inspect_formula(
+        "=EVALUATE(A1)",
+        named_function_references={"evaluate": ()},
+        inspect_formula_defined_xlm_evaluations=True,
+    )
+
+    assert ordinary.formula_defined_xlm_evaluation_functions == ()
+    assert definition.formula_defined_xlm_evaluation_functions == (
+        "EVALUATE",
+        "EVALUATE",
+    )
+    assert shadowed.formula_defined_xlm_evaluation_functions == ()
+
+
+def test_formula_inspection_propagates_formula_defined_xlm_evaluations() -> None:
+    named_lambda = inspect_formula(
+        "=FENCE.EVALUATE(A1)",
+        named_function_references={"fence.evaluate": ()},
+        named_function_formula_defined_xlm_evaluation_functions={
+            "fence.evaluate": ("EVALUATE",)
+        },
+    )
+    named_formula = inspect_formula(
+        "=FENCE.DIRECT",
+        named_references={"fence.direct": ()},
+        named_formula_defined_xlm_evaluation_functions={
+            "fence.direct": ("EVALUATE",)
+        },
+    )
+
+    assert named_lambda.formula_defined_xlm_evaluation_functions == ("EVALUATE",)
+    assert named_lambda.references == (
+        ParsedReference(None, 1, 1, 1, 1, raw="A1"),
+    )
+    assert named_formula.formula_defined_xlm_evaluation_functions == ("EVALUATE",)
+    assert named_formula.unresolved_range_tokens == ()
+
+
 def test_formula_inspection_recognises_a_known_named_constant() -> None:
     inspection = inspect_formula("=StaticRate", {"staticrate": ()})
 

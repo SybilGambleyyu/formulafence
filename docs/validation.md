@@ -5,6 +5,53 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Formula-defined XLM `EVALUATE` boundary — 2026-07-26
+
+FormulaFence 0.73.0 was checked against Microsoft's [Excel expression-evaluation
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/excel-worksheet-and-expression-evaluation),
+which identifies `EVALUATE` as the XLM function that reduces a valid character
+string to a worksheet value. The scope is deliberately narrow: FormulaFence
+records `EVALUATE` only when it is stored in a formula-defined name or named
+`LAMBDA`; direct worksheet formulas and raw XLM macro-sheet program parts
+remain separate boundaries.
+
+Three fresh, controlled .xlsx artifacts were generated without opening Excel.
+The baseline (SHA-256
+`ff66659d6e61343c28e0bc39f9d85594f1d2eb9b61dd200461aa7ba8fbc5323e`)
+uses a formula-defined value, a named `LAMBDA`, and a nested named `LAMBDA`
+to reach `EVALUATE`. Its public ledger reports three invoking formula cells,
+three EVALUATE calls, and three relevant formula-defined names; it reports no
+`REGISTER` or raw XLM macro-sheet surface. Changing only the private stored
+expression (SHA-256
+`ab3493faad49689abfaa6c6416c3744f537186fe71752fc926f0fcf19df6db8b`)
+kept every public count fixed while emitting `FF069` with the private
+definition-material flag. Changing only a shared statically visible text input
+(SHA-256
+`b4257c3cf5236ff7d70a3a008644186ff6f658f7c98cc43cbd74db66d7ce7e12`)
+kept the evaluation snapshot equal and emitted `FF069` with a static-input
+count of one.
+
+The suite separately covers uninvoked stored names, recursive named
+`LAMBDA`s, sheet-local precedence, native-name shadowing, direct worksheet
+`EVALUATE` remaining outside the boundary, and the explicit limit that
+FormulaFence does not re-tokenize formula text parsed at runtime. The full
+suite passed with 490 tests. The new policy caused `formulafence check` to
+exit `1` and emit both `FF069` and `FFP069` for the definition-only
+candidate. The public profile and dedicated `FF069`/`FFP069` SARIF results
+excluded controlled name identities and expression values. Ordinary semantic
+diffs deliberately retain changed defined-name context for reviewers, so that
+redaction claim is limited to the dedicated ledger and policy-facing results.
+No formula or text expression was evaluated, no macro was run, and no
+runtime-generated expression was parsed during validation.
+
+The staged `formulafence-0.73.0-py3-none-any.whl` (SHA-256
+`61d47f405ac7b10a47b3e2cd4ea11892e3d64b9e0bf6dafe38df3706dda5d8ae`)
+was installed into a fresh virtual environment with its declared dependencies.
+Its CLI returned FormulaFence 0.73.0; the generated starter policy retained
+`no_formula_defined_xlm_evaluation_changes: true`, and the packaged check
+emitted both `FF069` and `FFP069` for the controlled definition-only
+candidate. The packaged profile and dedicated SARIF results remained redacted.
+
 ## Formula-defined XLM `REGISTER` boundary — 2026-07-26
 
 FormulaFence 0.72.0 was checked against Microsoft's current

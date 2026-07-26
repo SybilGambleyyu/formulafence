@@ -57,6 +57,8 @@ from .helpers import (
     change_font_definition,
     change_formula_cached_result,
     change_formula_cached_result_with_visible_precedent,
+    change_formula_defined_xlm_evaluation_definition,
+    change_formula_defined_xlm_evaluation_input,
     change_formula_defined_xlm_registration_definition,
     change_formula_defined_xlm_registration_input,
     change_formula_external_action_input,
@@ -237,6 +239,7 @@ from .helpers import (
     make_filter_visibility_model,
     make_font_model,
     make_formula_cached_result_model,
+    make_formula_defined_xlm_evaluation_model,
     make_formula_defined_xlm_registration_model,
     make_formula_external_action_model,
     make_ignored_error_model,
@@ -3060,6 +3063,281 @@ def test_direct_worksheet_register_is_outside_formula_defined_xlm_boundary(
         "register_function_count": 0,
         "registration_defined_name_count": 0,
     }
+
+
+def test_formula_defined_xlm_evaluations_are_propagated_diffed_and_private(
+    tmp_path,
+) -> None:
+    baseline = make_formula_defined_xlm_evaluation_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_defined_xlm_evaluation_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_formula_defined_xlm_evaluation_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_evaluations = {
+        "present": True,
+        "evaluation_formula_cell_count": 3,
+        "evaluate_function_count": 3,
+        "evaluation_defined_name_count": 3,
+    }
+    assert baseline_snapshot.formula_defined_xlm_evaluations.to_dict() == (
+        expected_evaluations
+    )
+    assert baseline_snapshot.formula_defined_xlm_evaluations.evaluation_cells == (
+        frozenset({("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")})
+    )
+    assert baseline_snapshot.formula_defined_xlm_registrations.present is False
+    assert baseline_snapshot.xlm_macro_sheets.present is False
+    assert profile["formula_defined_xlm_evaluations"] == expected_evaluations
+    assert "## Formula-defined XLM expression evaluation" in profile_to_markdown(
+        profile
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    evaluation_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_defined_xlm_evaluations_changed"
+    )
+    evaluation_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF069"
+    )
+    assert evaluation_change.details["before"] == expected_evaluations
+    assert evaluation_change.details["after"] == expected_evaluations
+    assert (
+        evaluation_change.details[
+            "formula_defined_xlm_evaluation_definition_material_changed"
+        ]
+        is True
+    )
+    assert evaluation_finding.details == evaluation_change.details
+
+    ff069_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF069"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["formula_defined_xlm_evaluations"]),
+        profile_to_markdown(profile),
+        json.dumps(evaluation_change.details),
+        json.dumps(evaluation_finding.to_dict()),
+        json.dumps(ff069_sarif_result),
+    )
+    for sensitive_value in (
+        "FENCE.XLM.EVALUATE",
+        "PRIVATE-XLM-EVALUATE-EXPRESSION-BASELINE",
+        "PRIVATE-XLM-EVALUATE-DEFINITION-CANDIDATE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_formula_defined_xlm_evaluation_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_formula_defined_xlm_evaluation_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_defined_xlm_evaluation_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_formula_defined_xlm_evaluation_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.formula_defined_xlm_evaluations
+        == candidate_snapshot.formula_defined_xlm_evaluations
+    )
+    assert {("Inputs", "B2"), ("Inputs", "B3"), ("Inputs", "B4")} <= set(
+        baseline_snapshot.reverse_dependencies[("Inputs", "A9")]
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    evaluation_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_defined_xlm_evaluations_changed"
+    )
+    assert (
+        evaluation_change.details[
+            "formula_defined_xlm_evaluation_static_input_changed"
+        ]
+        is True
+    )
+    assert (
+        evaluation_change.details[
+            "formula_defined_xlm_evaluation_static_input_change_count"
+        ]
+        == 1
+    )
+    assert "FF069" in {finding.rule_id for finding in report.findings}
+
+
+def test_uninvoked_formula_defined_xlm_evaluation_is_profiled(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "stored-name.xlsx")
+
+    def add_stored_evaluation(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.STORED.EVALUATION",
+                attr_text='=EVALUATE("PRIVATE-STORED-XLM-EXPRESSION")',
+            )
+        )
+
+    rewrite(workbook_path, add_stored_evaluation)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_evaluations.to_dict() == {
+        "present": True,
+        "evaluation_formula_cell_count": 0,
+        "evaluate_function_count": 0,
+        "evaluation_defined_name_count": 1,
+    }
+    assert snapshot.formula_defined_xlm_evaluations.evaluation_cells == frozenset()
+
+
+def test_recursive_named_formula_defined_xlm_evaluations_are_cycle_safe(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "recursive.xlsx")
+
+    def add_recursive_evaluation(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.EVALUATE.LOOP",
+                attr_text=(
+                    "=LAMBDA(expression,EVALUATE(expression)"
+                    "+FENCE.XLM.EVALUATE.LOOP(expression))"
+                ),
+            )
+        )
+        workbook["Model"]["D2"] = "=FENCE.XLM.EVALUATE.LOOP(Inputs!B2)"
+
+    rewrite(workbook_path, add_recursive_evaluation)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_evaluations.to_dict() == {
+        "present": True,
+        "evaluation_formula_cell_count": 1,
+        "evaluate_function_count": 1,
+        "evaluation_defined_name_count": 1,
+    }
+    assert snapshot.formula_defined_xlm_evaluations.evaluation_cells == frozenset(
+        {("Model", "D2")}
+    )
+    assert snapshot.unresolved_reference_tokens[("Model", "D2")] == (
+        "FENCE.XLM.EVALUATE.LOOP",
+    )
+
+
+def test_scoped_formula_defined_xlm_evaluations_follow_local_precedence(
+    tmp_path,
+) -> None:
+    workbook_path = make_scoped_named_lambda_model(tmp_path / "scoped.xlsx")
+    workbook = load_workbook(workbook_path)
+    model = workbook["Model"]
+    report = workbook["Report"]
+    model["D2"] = "=FENCE.XLM.EVALUATE(A2)"
+    report["D2"] = "=Model!FENCE.XLM.EVALUATE(A2)"
+    model.defined_names.add(
+        DefinedName(
+            "FENCE.XLM.EVALUATE",
+            attr_text="=LAMBDA(expression,EVALUATE(expression))",
+            localSheetId=1,
+        )
+    )
+    workbook.save(workbook_path)
+
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_evaluations.to_dict() == {
+        "present": True,
+        "evaluation_formula_cell_count": 2,
+        "evaluate_function_count": 2,
+        "evaluation_defined_name_count": 1,
+    }
+    assert snapshot.formula_defined_xlm_evaluations.evaluation_cells == frozenset(
+        {("Model", "D2"), ("Report", "D2")}
+    )
+    assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_direct_worksheet_evaluate_is_outside_formula_defined_xlm_boundary(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "direct-evaluate.xlsx")
+
+    def add_direct_evaluate(workbook) -> None:
+        workbook["Model"]["D2"] = '=EVALUATE("PRIVATE-DIRECT-EXPRESSION")'
+
+    rewrite(workbook_path, add_direct_evaluate)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_evaluations.to_dict() == {
+        "present": False,
+        "evaluation_formula_cell_count": 0,
+        "evaluate_function_count": 0,
+        "evaluation_defined_name_count": 0,
+    }
+
+
+def test_formula_defined_xlm_evaluation_respects_named_lambda_shadowing(
+    tmp_path,
+) -> None:
+    workbook_path = make_model(tmp_path / "shadowed-evaluate.xlsx")
+
+    def add_shadowing_lambda(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "EVALUATE",
+                attr_text="=LAMBDA(expression,expression)",
+            )
+        )
+        workbook["Model"]["D2"] = "=EVALUATE(A2)"
+
+    rewrite(workbook_path, add_shadowing_lambda)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_defined_xlm_evaluations.to_dict() == {
+        "present": False,
+        "evaluation_formula_cell_count": 0,
+        "evaluate_function_count": 0,
+        "evaluation_defined_name_count": 0,
+    }
+    assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_formula_defined_xlm_evaluation_text_is_not_retokenized(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+
+    def add_runtime_text_evaluation(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.TEXT.EVALUATE",
+                attr_text='=EVALUATE("=Inputs!$A$10*2")',
+            )
+        )
+        workbook["Model"]["D2"] = "=FENCE.XLM.TEXT.EVALUATE"
+
+    rewrite(baseline, add_runtime_text_evaluation)
+    rewrite(candidate, add_runtime_text_evaluation)
+    rewrite(candidate, lambda workbook: setattr(workbook["Inputs"]["A10"], "value", 5))
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.formula_defined_xlm_evaluations.evaluation_cells == (
+        frozenset({("Model", "D2")})
+    )
+    assert ("Model", "D2") not in baseline_snapshot.reverse_dependencies.get(
+        ("Inputs", "A10"), set()
+    )
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    assert "FF069" not in {finding.rule_id for finding in report.findings}
 
 
 def test_recursive_named_custom_function_candidates_are_cycle_safe(tmp_path) -> None:

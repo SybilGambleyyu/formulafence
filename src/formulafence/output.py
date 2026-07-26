@@ -580,6 +580,9 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     formula_defined_xlm_registrations = profile[
         "formula_defined_xlm_registrations"
     ]
+    formula_defined_xlm_evaluations = profile[
+        "formula_defined_xlm_evaluations"
+    ]
     formula_external_action_call_count = sum(
         (
             formula_external_actions["hyperlink_function_count"],
@@ -1021,6 +1024,34 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     "Direct worksheet REGISTER calls and raw XLM macro-sheet parts are "
                     "outside this narrow boundary; macro-sheet content remains covered by "
                     "the raw XLM macro-sheet boundary below."
+                ),
+            ]
+        )
+    if formula_defined_xlm_evaluations["present"]:
+        lines.extend(
+            [
+                "",
+                "## Formula-defined XLM expression evaluation",
+                "",
+                (
+                    "- **Invoking formula cells / EVALUATE calls / formula-defined names:** "
+                    f"{formula_defined_xlm_evaluations['evaluation_formula_cell_count']} / "
+                    f"{formula_defined_xlm_evaluations['evaluate_function_count']} / "
+                    f"{formula_defined_xlm_evaluations['evaluation_defined_name_count']}"
+                ),
+                (
+                    "FormulaFence inventories XLM EVALUATE calls stored in "
+                    "formula-defined names and named LAMBDAs, then records cells that "
+                    "statically invoke them. Expressions, cells, formulas, arguments, and "
+                    "name identities are compared privately and intentionally omitted; no "
+                    "formula or text expression is evaluated."
+                ),
+                (
+                    "Only a stored call's statically visible argument edge is traced. "
+                    "Formula text parsed by EVALUATE is not re-tokenized, so dependencies "
+                    "inside that text remain an explicit coverage limit. Direct worksheet "
+                    "EVALUATE calls and raw XLM macro-sheet parts are outside this narrow "
+                    "boundary."
                 ),
             ]
         )

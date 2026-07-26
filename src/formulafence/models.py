@@ -1138,6 +1138,46 @@ class FormulaDefinedXlmRegistrationSnapshot:
 
 
 @dataclass(frozen=True)
+class FormulaDefinedXlmEvaluationSnapshot:
+    """Private ledger for XLM `EVALUATE` calls stored in defined formulas.
+
+    Excel's legacy `EVALUATE` function parses a supplied text expression at
+    calculation time. FormulaFence inventories only calls stored in a
+    formula-defined name or named LAMBDA, preserving their stored syntax and
+    definition chain privately. It records worksheet cells that statically
+    invoke a stored evaluation, but does not evaluate its text, infer
+    dependencies from the resulting expression, or expose formulas, arguments,
+    locations, or defined-name identities in public output.
+    """
+
+    evaluation_formula_cell_count: int = 0
+    evaluate_function_count: int = 0
+    evaluation_defined_name_count: int = 0
+    invocation_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    evaluation_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.evaluation_formula_cell_count
+            or self.evaluation_defined_name_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate counts without expression or formula material."""
+        return {
+            "present": self.present,
+            "evaluation_formula_cell_count": self.evaluation_formula_cell_count,
+            "evaluate_function_count": self.evaluate_function_count,
+            "evaluation_defined_name_count": self.evaluation_defined_name_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class XlmMacroSheetSnapshot:
     """Safe aggregate of raw Excel 4.0 / XLM macro-sheet package parts.
 
@@ -3828,6 +3868,9 @@ class WorkbookSnapshot:
     formula_defined_xlm_registrations: FormulaDefinedXlmRegistrationSnapshot = (
         field(default_factory=FormulaDefinedXlmRegistrationSnapshot)
     )
+    formula_defined_xlm_evaluations: FormulaDefinedXlmEvaluationSnapshot = (
+        field(default_factory=FormulaDefinedXlmEvaluationSnapshot)
+    )
     xlm_macro_sheets: XlmMacroSheetSnapshot = field(
         default_factory=XlmMacroSheetSnapshot
     )
@@ -4341,6 +4384,18 @@ class WorkbookSnapshot:
             ),
             "has_formula_defined_xlm_registrations": (
                 self.formula_defined_xlm_registrations.present
+            ),
+            "formula_defined_xlm_evaluation_formula_cell_count": (
+                self.formula_defined_xlm_evaluations.evaluation_formula_cell_count
+            ),
+            "formula_defined_xlm_evaluate_function_count": (
+                self.formula_defined_xlm_evaluations.evaluate_function_count
+            ),
+            "formula_defined_xlm_evaluation_defined_name_count": (
+                self.formula_defined_xlm_evaluations.evaluation_defined_name_count
+            ),
+            "has_formula_defined_xlm_evaluations": (
+                self.formula_defined_xlm_evaluations.present
             ),
             "xlm_macro_sheet_count": self.xlm_macro_sheets.macro_sheet_count,
             "xlm_macro_formula_cell_count": self.xlm_macro_sheets.formula_cell_count,

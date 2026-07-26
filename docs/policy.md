@@ -171,7 +171,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_formula_defined_xlm_evaluation_changes` | boolean | A legacy XLM `EVALUATE` call stored in a formula-defined name or named `LAMBDA`, its relevant definition chain/private invocation inventory, or a statically visible argument input changes. Expressions, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates the text, parses the runtime-generated expression, executes a macro, or infers dependencies inside that expression. |
 | no_formula_defined_xlm_get_cell_changes | boolean | A legacy XLM GET.CELL call stored in a formula-defined name or named LAMBDA, its relevant definition chain/private invocation inventory, or a statically visible argument input changes. Information types, references, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates the call, determines its requested information type, resolves dynamic references, or simulates Excel formatting, display, comments, protection, or other workbook state. |
 | no_formula_defined_xlm_environment_information_changes | boolean | A selected legacy XLM GET.WORKBOOK, GET.WORKSPACE, or GET.DOCUMENT call stored in a formula-defined name or named LAMBDA, its relevant definition chain/private invocation inventory, or a statically visible argument input changes. Information types, references, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates the call, determines its requested information type, resolves dynamic references, or simulates workbook, workspace, document, client, add-in, printer, or other Excel state. |
-| no_formula_environment_information_changes | boolean | A native CELL or INFO call stored in a worksheet formula, formula-defined name, or named LAMBDA; its relevant definition chain/private invocation inventory; or a statically visible argument input changes. Profiles also aggregate CELL calls without an explicit reference, which Excel can calculate from the selected cell. Information types, references, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates the call, resolves dynamic arguments, infers a selected cell, or simulates file, folder, client, workspace, or other Excel state. |
+| no_formula_environment_information_changes | boolean | A native CELL, INFO, SHEET, or SHEETS call stored in a worksheet formula, formula-defined name, or named LAMBDA; its relevant definition chain/private invocation inventory; or a statically visible argument input changes. Profiles separately aggregate CELL calls without an explicit reference, SHEET calls, SHEETS calls, and SHEETS calls without an explicit reference. When a complete raw OOXML tab catalog changes, FormulaFence also raises FF072 for stored SHEET or omitted-reference SHEETS calls; all declared tabs, including hidden, chart, macro, and dialog sheets, are in scope, while visibility-only changes are not this condition. Information types, references, formulas, arguments, locations, name identities, and raw tab-catalog comparison material are compared privately; ordinary sheet inventory remains normal reviewer context. FormulaFence never evaluates the call, resolves dynamic arguments, infers a selected cell, or simulates file, folder, client, workspace, workbook, or other Excel state. |
 | `no_power_query_changes` | boolean | A Power Query Data Mashup formula, package definition, stable query metadata, or formula-firewall permission control changes. |
 | `no_3d_reference_scope_changes` | boolean | The worksheet span of an unchanged static 3-D formula changes because tab order or membership changed. |
 | `no_sheet_visibility_changes` | boolean | A sheet becomes visible, hidden, or very hidden. |
@@ -556,7 +556,7 @@ state-only workbook change is not asserted to change a stored call. Direct
 worksheet calls and raw XLM macro-sheet parts remain deliberately outside this
 narrow stored-definition boundary; the latter remain under FF026.
 
-## Native CELL and INFO environment information
+## Native CELL, INFO, SHEET, and SHEETS information
 
 Microsoft's [CELL function
 documentation](https://support.microsoft.com/en-us/office/cell-function-51bd39a5-f338-4dbe-a33f-955d67c2b2cf)
@@ -565,24 +565,38 @@ an omitted optional reference uses the selected cell at calculation time.
 Microsoft's [INFO function
 documentation](https://support.microsoft.com/en-au/office/info-function-725f259a-0e4b-49b3-8b52-58815c69acae)
 lists operating-environment information such as directory, calculation mode,
-platform, and workbook-count values. FormulaFence inventories native CELL and
-INFO calls in worksheet formulas, formula-defined names, and named LAMBDA
-bodies, then propagates private signals through nested and sheet-local names to
-an invoking formula.
+platform, and workbook-count values. Microsoft's [SHEET function
+documentation](https://support.microsoft.com/en-us/excel/functions/sheet-function)
+documents sheet-number behavior, including its optional value, while the
+[SHEETS function documentation](https://support.microsoft.com/en-us/excel/functions/sheets-function)
+documents that an omitted reference counts the sheets in the containing
+workbook. Both include hidden, very-hidden, macro, chart, and dialog sheets.
+FormulaFence inventories native CELL, INFO, SHEET, and SHEETS calls in worksheet
+formulas, formula-defined names, and named LAMBDA bodies, then propagates
+private signals through nested and sheet-local names to an invoking formula.
 
 The public profile and FF072 expose only formula-cell, call, relevant
-formula-defined-name, and omitted-CELL-reference counts. Information types,
-references, formulas, arguments, cells, and name identities stay private.
-Same-count definition or invocation changes remain visible through private
-signatures; a normal cell edit that statically reaches an invoking formula
-emits FF072 as well. Uninvoked stored definitions still appear as a count.
+formula-defined-name, omitted-CELL-reference, SHEET, SHEETS, and omitted-
+SHEETS-reference counts. Information types, references, formulas, arguments,
+cells, name identities, and raw tab-catalog comparison material stay private;
+ordinary sheet inventory remains normal reviewer context. Same-count definition
+or invocation changes remain visible through private signatures; a normal cell
+edit that statically reaches an invoking formula emits FF072 as well. Uninvoked
+stored definitions still appear as a count.
 
 The no_formula_environment_information_changes rule turns FF072 into FFP072.
 FormulaFence does not evaluate a formula or information call, determine an
 information type, resolve dynamic references or arguments, infer the selected
 cell, inspect a file/folder/client/workspace state, or simulate any of those
-states. It traces only stored, ordinary static argument edges. A state-only
-workbook change is not asserted to change a call.
+states. It traces only stored, ordinary static argument edges. When it can read
+the raw OOXML tab catalog completely, it privately compares its all-tab member
+order for SHEET calls and SHEETS calls whose reference is omitted. An addition,
+removal, reorder, or tab-name change emits FF072 because Excel may then
+calculate from different workbook-structure information. It does not calculate
+an individual result, resolve an explicit SHEET/SHEETS argument, or infer
+whether a non-omitted SHEETS reference is one-sheet or 3-D; visibility-only
+changes are not a tab-catalog condition because Excel includes hidden tabs.
+Incomplete raw tab metadata remains a parser coverage warning.
 
 Excel 4.0 / XLM macro sheets are separate from the VBA binary: their executable
 commands live in Macro Sheet XML package parts, typically under

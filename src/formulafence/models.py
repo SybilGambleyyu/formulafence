@@ -1274,22 +1274,28 @@ class FormulaDefinedXlmEnvironmentInformationSnapshot:
 
 @dataclass(frozen=True)
 class FormulaEnvironmentInformationSnapshot:
-    """Private ledger for native CELL and INFO formula calls.
+    """Private ledger for native workbook and environment information calls.
 
-    Excel's ordinary CELL and INFO functions can observe workbook/file and
-    client environment information outside visible cell precedents. FormulaFence
-    inventories stored calls in worksheet formulas, formula-defined names, and
-    named LAMBDAs. It separately aggregates CELL calls whose optional reference
-    is omitted, because Excel may use the current selection at calculation time.
-    The ledger preserves material only in private signatures; it does not
-    evaluate a formula, determine an information type, resolve dynamic
-    arguments, or simulate file, client, workspace, or selection state.
+    Excel's ordinary CELL, INFO, SHEET, and SHEETS functions can observe
+    workbook/file, client, or tab-catalog information outside visible cell
+    precedents. FormulaFence inventories stored calls in worksheet formulas,
+    formula-defined names, and named LAMBDAs. It separately aggregates CELL
+    calls whose optional reference is omitted, because Excel may use the current
+    selection at calculation time. It reports SHEET/SHEETS calls separately and
+    separately aggregates SHEETS calls with an omitted reference, whose result
+    is documented to depend on the workbook tab count. The ledger preserves
+    material only in private signatures; it does not evaluate a formula,
+    determine an information type, resolve dynamic arguments, or simulate file,
+    client, workspace, selection, or workbook state.
     """
 
     environment_information_formula_cell_count: int = 0
     environment_information_function_count: int = 0
     environment_information_defined_name_count: int = 0
     implicit_cell_reference_function_count: int = 0
+    implicit_sheets_reference_function_count: int = 0
+    sheet_function_count: int = 0
+    sheets_function_count: int = 0
     invocation_signature: str | None = field(default=None, repr=False)
     definition_signature: str | None = field(default=None, repr=False)
     environment_information_cells: frozenset[CellKey] = field(
@@ -1319,6 +1325,11 @@ class FormulaEnvironmentInformationSnapshot:
             "implicit_cell_reference_function_count": (
                 self.implicit_cell_reference_function_count
             ),
+            "implicit_sheets_reference_function_count": (
+                self.implicit_sheets_reference_function_count
+            ),
+            "sheet_function_count": self.sheet_function_count,
+            "sheets_function_count": self.sheets_function_count,
         }
 
     def profile_dict(self) -> dict[str, Any]:
@@ -4130,6 +4141,12 @@ class WorkbookSnapshot:
         default_factory=WorksheetEmbeddedControlSnapshot
     )
     power_query: PowerQuerySnapshot = field(default_factory=PowerQuerySnapshot)
+    # ``SHEET`` and ``SHEETS`` observe all workbook tabs, including chart,
+    # macro, and dialog sheets that are intentionally outside the cell reader.
+    # Keep this raw OOXML catalog private: the formula-information profile only
+    # needs aggregate counts, while ordinary sheet inventory remains separate.
+    workbook_tab_order: tuple[str, ...] = field(default_factory=tuple, repr=False)
+    workbook_tab_order_complete: bool = False
     sheet_order: tuple[str, ...] = ()
     three_d_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
     spill_reference_tokens: dict[CellKey, tuple[str, ...]] = field(default_factory=dict)
@@ -4595,6 +4612,15 @@ class WorkbookSnapshot:
             ),
             "formula_environment_information_implicit_cell_reference_function_count": (
                 self.formula_environment_information_calls.implicit_cell_reference_function_count
+            ),
+            "formula_environment_information_implicit_sheets_reference_function_count": (
+                self.formula_environment_information_calls.implicit_sheets_reference_function_count
+            ),
+            "formula_sheet_function_count": (
+                self.formula_environment_information_calls.sheet_function_count
+            ),
+            "formula_sheets_function_count": (
+                self.formula_environment_information_calls.sheets_function_count
             ),
             "has_formula_environment_information_calls": (
                 self.formula_environment_information_calls.present

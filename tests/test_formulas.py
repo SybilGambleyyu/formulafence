@@ -464,6 +464,39 @@ def test_formula_inspection_propagates_native_environment_information_calls() ->
     assert named_formula.unresolved_range_tokens == ()
 
 
+def test_formula_inspection_inventories_workbook_tab_information_calls() -> None:
+    ordinary = inspect_formula("=SHEET()+SHEETS()+SHEET(A1)+SHEETS(A1)")
+    shadowed = inspect_formula(
+        "=SHEET()+SHEETS()",
+        named_function_references={"sheet": (), "sheets": ()},
+    )
+    propagated = inspect_formula(
+        "=FENCE.TAB.INFORMATION(A1)",
+        named_function_references={"fence.tab.information": ()},
+        named_function_formula_environment_information_functions={
+            "fence.tab.information": (
+                "SHEET",
+                "SHEETS",
+                "FORMULAFENCE_SHEETS_IMPLICIT_REFERENCE_MARKER",
+            )
+        },
+    )
+    malformed = inspect_formula("=SHEETS(,)")
+
+    assert ordinary.formula_environment_information_functions == (
+        "SHEET",
+        "SHEETS",
+        "SHEET",
+        "SHEETS",
+    )
+    assert ordinary.formula_environment_information_implicit_sheets_reference_count == 1
+    assert shadowed.formula_environment_information_functions == ()
+    assert propagated.formula_environment_information_functions == ("SHEET", "SHEETS")
+    assert propagated.formula_environment_information_implicit_sheets_reference_count == 1
+    assert malformed.formula_environment_information_functions == ("SHEETS",)
+    assert malformed.formula_environment_information_implicit_sheets_reference_count == 0
+
+
 def test_formula_inspection_recognises_a_known_named_constant() -> None:
     inspection = inspect_formula("=StaticRate", {"staticrate": ()})
 

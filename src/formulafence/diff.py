@@ -2668,13 +2668,15 @@ def _formula_environment_information_changes(
     after: WorkbookSnapshot,
     static_input_change_locations: set[CellKey],
 ) -> tuple[list[Change], list[Finding]]:
-    """Flag native CELL/INFO formula material and visible inputs.
+    """Flag native workbook/environment formula material and visible inputs.
 
     FormulaFence compares stored calls and their relevant named-definition
     chains privately. It records an ordinary cell edit only when the existing
-    static dependency graph reaches an invoking formula. It does not evaluate
-    a call, determine an information type, resolve a dynamic argument, or
-    simulate file, client, workspace, or selection state.
+    static dependency graph reaches an invoking formula. When a complete raw
+    workbook tab catalog changes, it also records stored SHEET/SHEETS calls
+    that might now observe different tab information. It does not evaluate a
+    call, determine an information type, resolve a dynamic argument, or
+    simulate file, client, workspace, selection, or workbook state.
     """
     old_calls: FormulaEnvironmentInformationSnapshot = (
         before.formula_environment_information_calls
@@ -2682,7 +2684,25 @@ def _formula_environment_information_changes(
     new_calls: FormulaEnvironmentInformationSnapshot = (
         after.formula_environment_information_calls
     )
-    if old_calls == new_calls and not static_input_change_locations:
+    workbook_tab_catalog_changed = (
+        before.workbook_tab_order_complete
+        and after.workbook_tab_order_complete
+        and before.workbook_tab_order != after.workbook_tab_order
+    )
+    has_sheet_catalog_calls = bool(
+        old_calls.sheet_function_count
+        or old_calls.implicit_sheets_reference_function_count
+        or new_calls.sheet_function_count
+        or new_calls.implicit_sheets_reference_function_count
+    )
+    workbook_structure_information_changed = (
+        workbook_tab_catalog_changed and has_sheet_catalog_calls
+    )
+    if (
+        old_calls == new_calls
+        and not static_input_change_locations
+        and not workbook_structure_information_changed
+    ):
         return [], []
 
     details: dict[str, object] = {
@@ -2698,6 +2718,8 @@ def _formula_environment_information_changes(
         details["formula_environment_information_static_input_change_count"] = len(
             static_input_change_locations
         )
+    if workbook_structure_information_changed:
+        details["formula_environment_information_workbook_tab_catalog_changed"] = True
     change = Change(
         "formula_environment_information_calls_changed",
         None,
@@ -2708,9 +2730,10 @@ def _formula_environment_information_changes(
         "FF072",
         "high",
         (
-            "A native CELL or INFO formula call or a statically visible input "
-            "changed; Excel may now calculate from different cell, file, or "
-            "client information."
+            "A native CELL, INFO, SHEET, or SHEETS formula call, a statically "
+            "visible input, or the workbook tab catalog changed; Excel may now "
+            "calculate from different cell, file, client, or workbook-structure "
+            "information."
         ),
         details=details,
     )

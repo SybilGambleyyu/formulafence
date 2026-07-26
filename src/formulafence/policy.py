@@ -844,7 +844,7 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                 Finding(
                     "FFP072",
                     "high",
-                    "Policy forbids native CELL and INFO formula changes.",
+                    "Policy forbids native CELL, INFO, SHEET, and SHEETS formula changes.",
                     details=finding.details,
                 )
             )

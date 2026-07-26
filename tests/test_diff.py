@@ -7,6 +7,7 @@ from xml.etree import ElementTree
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
+from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Protection
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -72,6 +73,8 @@ from .helpers import (
     change_formula_external_data_provider_definition,
     change_formula_external_data_provider_input,
     change_formula_external_data_provider_target,
+    change_formula_workbook_structure_information_definition,
+    change_formula_workbook_structure_information_input,
     change_gradient_fill_definition,
     change_ignored_error_extension_target,
     change_ignored_error_target,
@@ -255,6 +258,7 @@ from .helpers import (
     make_formula_environment_information_model,
     make_formula_external_action_model,
     make_formula_external_data_provider_model,
+    make_formula_workbook_structure_information_model,
     make_ignored_error_model,
     make_implicit_intersection_model,
     make_in_content_office_web_addin_model,
@@ -4064,6 +4068,9 @@ def test_native_environment_information_calls_are_private_and_traced(tmp_path) -
         "environment_information_function_count": 6,
         "environment_information_defined_name_count": 2,
         "implicit_cell_reference_function_count": 3,
+        "implicit_sheets_reference_function_count": 0,
+        "sheet_function_count": 0,
+        "sheets_function_count": 0,
     }
     assert baseline_snapshot.formula_environment_information_calls.to_dict() == expected_calls
     assert (
@@ -4093,7 +4100,7 @@ def test_native_environment_information_calls_are_private_and_traced(tmp_path) -
         )
     )
     assert profile["formula_environment_information_calls"] == expected_calls
-    assert "## Native CELL and INFO environment information" in profile_to_markdown(
+    assert "## Native CELL, INFO, SHEET, and SHEETS information" in profile_to_markdown(
         profile
     )
 
@@ -4252,6 +4259,9 @@ def test_native_environment_information_respects_named_lambda_shadowing(tmp_path
         "environment_information_function_count": 0,
         "environment_information_defined_name_count": 0,
         "implicit_cell_reference_function_count": 0,
+        "implicit_sheets_reference_function_count": 0,
+        "sheet_function_count": 0,
+        "sheets_function_count": 0,
     }
     assert snapshot.unresolved_reference_tokens == {}
 
@@ -4276,6 +4286,9 @@ def test_uninvoked_native_environment_information_is_profiled(tmp_path) -> None:
         "environment_information_function_count": 0,
         "environment_information_defined_name_count": 1,
         "implicit_cell_reference_function_count": 0,
+        "implicit_sheets_reference_function_count": 0,
+        "sheet_function_count": 0,
+        "sheets_function_count": 0,
     }
     assert (
         snapshot.formula_environment_information_calls.environment_information_cells
@@ -4309,6 +4322,9 @@ def test_recursive_named_native_environment_information_calls_are_cycle_safe(
         "environment_information_function_count": 1,
         "environment_information_defined_name_count": 1,
         "implicit_cell_reference_function_count": 1,
+        "implicit_sheets_reference_function_count": 0,
+        "sheet_function_count": 0,
+        "sheets_function_count": 0,
     }
     assert snapshot.formula_environment_information_calls.environment_information_cells == (
         frozenset({("Model", "D2")})
@@ -4344,11 +4360,283 @@ def test_scoped_native_environment_information_calls_follow_local_precedence(
         "environment_information_function_count": 2,
         "environment_information_defined_name_count": 1,
         "implicit_cell_reference_function_count": 2,
+        "implicit_sheets_reference_function_count": 0,
+        "sheet_function_count": 0,
+        "sheets_function_count": 0,
     }
     assert snapshot.formula_environment_information_calls.environment_information_cells == (
         frozenset({("Model", "D2"), ("Report", "D2")})
     )
     assert snapshot.unresolved_reference_tokens == {}
+
+
+def test_native_workbook_tab_information_calls_are_private_and_traced(tmp_path) -> None:
+    baseline = make_formula_workbook_structure_information_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_workbook_structure_information_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_formula_workbook_structure_information_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_calls = {
+        "present": True,
+        "environment_information_formula_cell_count": 6,
+        "environment_information_function_count": 7,
+        "environment_information_defined_name_count": 2,
+        "implicit_cell_reference_function_count": 0,
+        "implicit_sheets_reference_function_count": 3,
+        "sheet_function_count": 3,
+        "sheets_function_count": 4,
+    }
+    assert baseline_snapshot.formula_environment_information_calls.to_dict() == expected_calls
+    assert baseline_snapshot.workbook_tab_order == ("Inputs", "Model", "Report")
+    assert baseline_snapshot.workbook_tab_order_complete is True
+    assert (
+        baseline_snapshot.summary()["formula_sheet_function_count"]
+        == expected_calls["sheet_function_count"]
+    )
+    assert (
+        baseline_snapshot.summary()["formula_sheets_function_count"]
+        == expected_calls["sheets_function_count"]
+    )
+    assert (
+        baseline_snapshot.summary()[
+            "formula_environment_information_implicit_sheets_reference_function_count"
+        ]
+        == expected_calls["implicit_sheets_reference_function_count"]
+    )
+    assert profile["formula_environment_information_calls"] == expected_calls
+    assert "## Native CELL, INFO, SHEET, and SHEETS information" in profile_to_markdown(
+        profile
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    environment_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_environment_information_calls_changed"
+    )
+    assert environment_change.details["before"] == expected_calls
+    assert environment_change.details["after"] == expected_calls
+    assert (
+        environment_change.details[
+            "formula_environment_information_definition_material_changed"
+        ]
+        is True
+    )
+
+    ff072_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF072"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["formula_environment_information_calls"]),
+        profile_to_markdown(profile),
+        json.dumps(environment_change.details),
+        json.dumps(ff072_sarif_result),
+    )
+    for sensitive_value in (
+        "FENCE.TAB.INFORMATION",
+        "PRIVATE-WORKBOOK-TAB-INPUT-BASELINE",
+        "SHEET()",
+        "SHEETS()",
+        "FORMULAFENCE_SHEETS_IMPLICIT_REFERENCE_MARKER",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_native_workbook_tab_information_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_formula_workbook_structure_information_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_workbook_structure_information_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_formula_workbook_structure_information_input(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    environment_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_environment_information_calls_changed"
+    )
+    assert (
+        environment_change.details[
+            "formula_environment_information_static_input_changed"
+        ]
+        is True
+    )
+    assert (
+        environment_change.details[
+            "formula_environment_information_static_input_change_count"
+        ]
+        == 1
+    )
+    assert "FF072" in {finding.rule_id for finding in report.findings}
+
+
+def test_native_workbook_tab_information_detects_all_tab_catalog_changes(tmp_path) -> None:
+    baseline = make_formula_workbook_structure_information_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_workbook_structure_information_model(
+        tmp_path / "candidate.xlsx"
+    )
+    workbook = load_workbook(candidate)
+    inputs = workbook["Inputs"]
+    inputs["D1"] = 1
+    inputs["D2"] = 2
+    chart = BarChart()
+    chart.add_data(Reference(inputs, min_col=4, min_row=1, max_row=2))
+    chart_sheet = workbook.create_chartsheet("Chart", index=1)
+    chart_sheet.add_chart(chart)
+    workbook.save(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.sheet_order == candidate_snapshot.sheet_order
+    assert candidate_snapshot.workbook_tab_order == (
+        "Inputs",
+        "Chart",
+        "Model",
+        "Report",
+    )
+    assert (
+        baseline_snapshot.formula_environment_information_calls
+        == candidate_snapshot.formula_environment_information_calls
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    environment_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_environment_information_calls_changed"
+    )
+    assert (
+        environment_change.details[
+            "formula_environment_information_workbook_tab_catalog_changed"
+        ]
+        is True
+    )
+    assert "formula_environment_information_invocation_material_changed" not in (
+        environment_change.details
+    )
+    assert "formula_environment_information_definition_material_changed" not in (
+        environment_change.details
+    )
+    assert "formula_environment_information_static_input_changed" not in (
+        environment_change.details
+    )
+    assert "FF072" in {finding.rule_id for finding in report.findings}
+    assert "Chart" not in json.dumps(environment_change.details)
+
+
+def test_native_workbook_tab_information_detects_tab_removal_and_reordering(
+    tmp_path,
+) -> None:
+    baseline = make_formula_workbook_structure_information_model(
+        tmp_path / "baseline.xlsx"
+    )
+    baseline_snapshot = load_snapshot(baseline)
+
+    removed = make_formula_workbook_structure_information_model(
+        tmp_path / "removed.xlsx"
+    )
+    workbook = load_workbook(removed)
+    workbook.remove(workbook["Model"])
+    workbook.save(removed)
+    removed_snapshot = load_snapshot(removed)
+    assert removed_snapshot.workbook_tab_order == ("Inputs", "Report")
+
+    removed_report = compare_snapshots(baseline_snapshot, removed_snapshot)
+    removed_change = next(
+        change
+        for change in removed_report.changes
+        if change.kind == "formula_environment_information_calls_changed"
+    )
+    assert (
+        removed_change.details[
+            "formula_environment_information_workbook_tab_catalog_changed"
+        ]
+        is True
+    )
+
+    reordered = make_formula_workbook_structure_information_model(
+        tmp_path / "reordered.xlsx"
+    )
+    workbook = load_workbook(reordered)
+    report_sheet = workbook["Report"]
+    workbook._sheets.remove(report_sheet)  # noqa: SLF001 - exercise tab-order persistence
+    workbook._sheets.insert(0, report_sheet)  # noqa: SLF001 - exercise tab-order persistence
+    workbook.save(reordered)
+    reordered_snapshot = load_snapshot(reordered)
+    assert reordered_snapshot.workbook_tab_order == ("Report", "Inputs", "Model")
+
+    reordered_report = compare_snapshots(baseline_snapshot, reordered_snapshot)
+    reordered_change = next(
+        change
+        for change in reordered_report.changes
+        if change.kind == "formula_environment_information_calls_changed"
+    )
+    assert (
+        reordered_change.details[
+            "formula_environment_information_workbook_tab_catalog_changed"
+        ]
+        is True
+    )
+
+
+def test_native_workbook_tab_information_ignores_visibility_only(tmp_path) -> None:
+    baseline = make_formula_workbook_structure_information_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_workbook_structure_information_model(
+        tmp_path / "candidate.xlsx"
+    )
+    workbook = load_workbook(candidate)
+    workbook["Model"].sheet_state = "hidden"
+    workbook.save(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.workbook_tab_order == candidate_snapshot.workbook_tab_order
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    assert "FF007" in {finding.rule_id for finding in report.findings}
+    assert "FF072" not in {finding.rule_id for finding in report.findings}
+
+
+def test_native_workbook_tab_information_does_not_guess_explicit_sheets_reference(
+    tmp_path,
+) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    for workbook_path in (baseline, candidate):
+        workbook = load_workbook(workbook_path)
+        workbook["Inputs"]["D2"] = "=SHEETS(Inputs!$A$1)"
+        workbook.save(workbook_path)
+    workbook = load_workbook(candidate)
+    workbook.create_sheet("Inserted", 0)
+    workbook.save(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert (
+        baseline_snapshot.formula_environment_information_calls.sheets_function_count
+        == 1
+    )
+    assert (
+        baseline_snapshot.formula_environment_information_calls.implicit_sheets_reference_function_count
+        == 0
+    )
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    assert "FF072" not in {finding.rule_id for finding in report.findings}
 
 
 def test_recursive_named_custom_function_candidates_are_cycle_safe(tmp_path) -> None:

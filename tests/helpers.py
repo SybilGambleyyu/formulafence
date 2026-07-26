@@ -855,6 +855,62 @@ def change_formula_environment_information_input(path: Path) -> Path:
     return path
 
 
+def make_formula_workbook_structure_information_model(path: Path) -> Path:
+    """Create native SHEET/SHEETS calls without calculating workbook state.
+
+    The fixture covers direct calls, explicit references, a named LAMBDA, and a
+    formula-defined name. Its tab titles and static input sentinel must remain
+    private in FormulaFence's public profile, diff, Markdown, and SARIF output.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    workbook.create_sheet("Model")
+    workbook.create_sheet("Report")
+    inputs["A1"] = "Native SHEET and SHEETS workbook-structure controls"
+    inputs["A9"] = "PRIVATE-WORKBOOK-TAB-INPUT-BASELINE"
+    inputs["B2"] = "=SHEET()"
+    inputs["B3"] = "=SHEETS()"
+    inputs["B4"] = "=SHEET(Inputs!$A$1)"
+    inputs["B5"] = "=SHEETS(Inputs!$A$1)"
+    inputs["B6"] = "=FENCE.TAB.INFORMATION(A9)"
+    inputs["B7"] = "=FENCE.TAB.DIRECT"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.TAB.INFORMATION",
+            attr_text="=LAMBDA(value,SHEET()+SHEETS()+value)",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.TAB.DIRECT",
+            attr_text="=SHEETS()",
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_workbook_structure_information_definition(path: Path) -> Path:
+    """Change private SHEET material while retaining public call counts."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.TAB.INFORMATION"]
+    expected = "=LAMBDA(value,SHEET()+SHEETS()+value)"
+    if definition.attr_text != expected:
+        raise ValueError("Fixture does not contain the expected workbook-tab call")
+    definition.attr_text = "=LAMBDA(value,SHEET(Inputs!$A$1)+SHEETS()+value)"
+    workbook.save(path)
+    return path
+
+
+def change_formula_workbook_structure_information_input(path: Path) -> Path:
+    """Change a static input used by a named SHEET/SHEETS formula call."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-WORKBOOK-TAB-INPUT-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_python_in_excel_model(path: Path) -> Path:
     """Create a workbook with stored Python-in-Excel package code.
 

@@ -623,6 +623,13 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     implicit_cell_reference_function_count = formula_environment_information_calls[
         "implicit_cell_reference_function_count"
     ]
+    implicit_sheets_reference_function_count = formula_environment_information_calls[
+        "implicit_sheets_reference_function_count"
+    ]
+    sheet_function_count = formula_environment_information_calls["sheet_function_count"]
+    sheets_function_count = formula_environment_information_calls[
+        "sheets_function_count"
+    ]
     formula_external_action_call_count = sum(
         (
             formula_external_actions["hyperlink_function_count"],
@@ -1165,7 +1172,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "## Native CELL and INFO environment information",
+                "## Native CELL, INFO, SHEET, and SHEETS information",
                 "",
                 (
                     "- **Formula cells / native calls / formula-defined names:** "
@@ -1178,8 +1185,16 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     f"{implicit_cell_reference_function_count}"
                 ),
                 (
-                    "FormulaFence inventories native CELL and INFO calls in "
-                    "worksheet formulas, formula-defined names, and named "
+                    "- **SHEET calls / SHEETS calls:** "
+                    f"{sheet_function_count} / {sheets_function_count}"
+                ),
+                (
+                    "- **SHEETS calls without an explicit reference:** "
+                    f"{implicit_sheets_reference_function_count}"
+                ),
+                (
+                    "FormulaFence inventories native CELL, INFO, SHEET, and SHEETS "
+                    "calls in worksheet formulas, formula-defined names, and named "
                     "LAMBDAs. Information types, references, formulas, arguments, "
                     "locations, and name identities are compared privately and "
                     "intentionally omitted; no formula is evaluated."
@@ -1187,9 +1202,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 (
                     "CELL calls without a stored reference are counted because Excel "
                     "may use the current selection at calculation time. FormulaFence "
-                    "does not determine an information type, resolve dynamic "
-                    "arguments, or simulate file, folder, client, workspace, or "
-                    "selection state."
+                    "also compares the private OOXML workbook tab catalog when SHEET "
+                    "or an omitted-reference SHEETS call is present, including hidden "
+                    "and non-worksheet tabs. It does not determine an information type, "
+                    "resolve dynamic arguments, or simulate file, folder, client, "
+                    "workspace, selection, or workbook state."
                 ),
             ]
         )

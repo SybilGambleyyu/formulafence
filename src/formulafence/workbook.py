@@ -846,6 +846,15 @@ class _XlmMacroMetadata:
 
 
 @dataclass(frozen=True)
+class _WorkbookTabOrderMetadata:
+    """Private raw OOXML tab order used by SHEET and SHEETS safeguards."""
+
+    tab_order: tuple[str, ...]
+    complete: bool
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _RibbonCustomizationMetadata:
     """Raw Office RibbonX evidence retained outside the workbook reader."""
 
@@ -2585,6 +2594,111 @@ def _sheet_xml_parts(archive: ZipFile) -> dict[str, tuple[str, str]]:
         if part := relationship_targets.get(relationship_id):
             sheet_parts[title] = part
     return sheet_parts
+
+
+def _workbook_tab_order_metadata(path: Path) -> _WorkbookTabOrderMetadata:
+    """Read all workbook tab declarations in order without exposing their titles.
+
+    ``openpyxl`` deliberately focuses on worksheet cells and can omit or reject
+    workbook tab types such as macro and dialog sheets. Excel documents that
+    SHEET and SHEETS include those tab types, so compare the raw OOXML ``sheets``
+    catalog instead. Visibility is intentionally excluded: both functions count
+    visible, hidden, and very-hidden tabs alike.
+    """
+    try:
+        with ZipFile(path) as archive:
+            workbook = _xml_root(archive, "xl/workbook.xml")
+    except (BadZipFile, ElementTree.ParseError, KeyError, OSError, ValueError) as error:
+        return _WorkbookTabOrderMetadata(
+            (),
+            False,
+            (
+                "FormulaFence could not inspect the raw OOXML workbook tab catalog "
+                f"({type(error).__name__}); SHEET and SHEETS workbook-structure "
+                "coverage has a gap.",
+            ),
+        )
+
+    if (
+        _xml_local_name(workbook.tag) != "workbook"
+        or _xml_namespace(workbook.tag)
+        not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+    ):
+        return _WorkbookTabOrderMetadata(
+            (),
+            False,
+            (
+                "FormulaFence found an unexpected raw OOXML workbook root; SHEET and "
+                "SHEETS workbook-structure coverage has a gap.",
+            ),
+        )
+
+    sheets = next(
+        (
+            child
+            for child in workbook
+            if (
+                _xml_local_name(child.tag) == "sheets"
+                and _xml_namespace(child.tag)
+                in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+            )
+        ),
+        None,
+    )
+    if sheets is None:
+        return _WorkbookTabOrderMetadata(
+            (),
+            False,
+            (
+                "FormulaFence found no raw OOXML workbook tab catalog; SHEET and SHEETS "
+                "workbook-structure coverage has a gap.",
+            ),
+        )
+
+    tab_order: list[str] = []
+    warnings: set[str] = set()
+    seen_titles: set[str] = set()
+    complete = True
+    for sheet in sheets:
+        if (
+            _xml_local_name(sheet.tag) != "sheet"
+            or _xml_namespace(sheet.tag)
+            not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+        ):
+            complete = False
+            warnings.add(
+                "FormulaFence found an unexpected raw OOXML workbook tab declaration; "
+                "SHEET and SHEETS workbook-structure coverage has a gap."
+            )
+            continue
+        title = sheet.get("name")
+        if not title:
+            complete = False
+            warnings.add(
+                "FormulaFence found a raw OOXML workbook tab without a name; SHEET and "
+                "SHEETS workbook-structure coverage has a gap."
+            )
+            continue
+        title_key = title.casefold()
+        if title_key in seen_titles:
+            complete = False
+            warnings.add(
+                "FormulaFence found duplicate raw OOXML workbook tab names; SHEET and "
+                "SHEETS workbook-structure coverage has a gap."
+            )
+            continue
+        seen_titles.add(title_key)
+        tab_order.append(title)
+
+    if not tab_order:
+        complete = False
+        warnings.add(
+            "FormulaFence found an empty raw OOXML workbook tab catalog; SHEET and SHEETS "
+            "workbook-structure coverage has a gap."
+        )
+    return _WorkbookTabOrderMetadata(
+        tuple(tab_order), complete, tuple(sorted(warnings))
+    )
 
 
 def _worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
@@ -43023,6 +43137,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             f"Unsupported workbook type {source.suffix!r}; supported types: {supported}"
         )
 
+    workbook_tab_order_metadata = _workbook_tab_order_metadata(source)
     xlm_macro_metadata = _xlm_macro_metadata(source)
     ribbon_customization_metadata = _ribbon_customization_metadata(source)
     office_web_addin_metadata = _office_web_addin_metadata(source)
@@ -43128,6 +43243,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(worksheet_embedded_control_metadata.warnings)
     parser_warnings.update(external_relationship_metadata.warnings)
     parser_warnings.update(python_in_excel_metadata.warnings)
+    parser_warnings.update(workbook_tab_order_metadata.warnings)
     has_array_formulas = any(
         _is_array_formula(cell)
         for worksheet in workbook.worksheets
@@ -43190,6 +43306,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     formula_environment_information_cells: set[CellKey] = set()
     formula_environment_information_function_count = 0
     formula_environment_information_implicit_cell_reference_function_count = 0
+    formula_environment_information_implicit_sheets_reference_function_count = 0
+    formula_environment_information_sheet_function_count = 0
+    formula_environment_information_sheets_function_count = 0
     formula_environment_information_invocation_entries: list[tuple[str, str]] = []
     broken_references: set[CellKey] = set()
     unresolved_reference_tokens: dict[CellKey, tuple[str, ...]] = {}
@@ -43572,6 +43691,15 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 formula_environment_information_implicit_cell_reference_function_count += (
                     inspection.formula_environment_information_implicit_cell_reference_count
                 )
+                formula_environment_information_implicit_sheets_reference_function_count += (
+                    inspection.formula_environment_information_implicit_sheets_reference_count
+                )
+                formula_environment_information_sheet_function_count += (
+                    inspection.formula_environment_information_functions.count("SHEET")
+                )
+                formula_environment_information_sheets_function_count += (
+                    inspection.formula_environment_information_functions.count("SHEETS")
+                )
                 formula_environment_information_invocation_entries.append(
                     (
                         f"{snapshot.location[0]}!{snapshot.location[1]}",
@@ -43579,6 +43707,13 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                             (
                                 inspection.formula_environment_information_functions,
                                 inspection.formula_environment_information_implicit_cell_reference_count,
+                                inspection.formula_environment_information_implicit_sheets_reference_count,
+                                inspection.formula_environment_information_functions.count(
+                                    "SHEET"
+                                ),
+                                inspection.formula_environment_information_functions.count(
+                                    "SHEETS"
+                                ),
                                 snapshot.formula,
                             )
                         ),
@@ -43791,6 +43926,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         implicit_cell_reference_function_count=(
             formula_environment_information_implicit_cell_reference_function_count
         ),
+        implicit_sheets_reference_function_count=(
+            formula_environment_information_implicit_sheets_reference_function_count
+        ),
+        sheet_function_count=formula_environment_information_sheet_function_count,
+        sheets_function_count=formula_environment_information_sheets_function_count,
         invocation_signature=_private_external_data_signature(
             tuple(sorted(formula_environment_information_invocation_entries))
         ),
@@ -43799,6 +43939,15 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         ),
         environment_information_cells=frozenset(formula_environment_information_cells),
     )
+    if (
+        formula_environment_information_calls.sheet_function_count
+        or formula_environment_information_calls.implicit_sheets_reference_function_count
+    ) and not workbook_tab_order_metadata.complete:
+        parser_warnings.add(
+            "FormulaFence found native SHEET or SHEETS calls but could not inspect a "
+            "complete raw OOXML workbook tab catalog; workbook-structure change coverage "
+            "has a gap."
+        )
 
     return WorkbookSnapshot(
         path=source,
@@ -43905,6 +44054,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         chart_definitions=chart_definition_metadata.charts,
         worksheet_embedded_controls=worksheet_embedded_control_metadata.controls,
         power_query=external_data_metadata.power_query,
+        workbook_tab_order=workbook_tab_order_metadata.tab_order,
+        workbook_tab_order_complete=workbook_tab_order_metadata.complete,
         sheet_order=sheet_order,
         defined_names=_defined_names(workbook),
         macro_hash=_vba_hash(source),

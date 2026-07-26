@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.77.0/formulafence-0.77.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.78.0/formulafence-0.78.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -148,6 +148,7 @@ allowed_changes:
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function candidates, worksheet and formula-defined code-resource registration calls, formula-defined XLM `REGISTER`/`EVALUATE` calls, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Formula external-action and data-provider surfaces | Material stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, `RTD`, `STOCKHISTORY`, or documented `CUBE*` call changes in cells, formula-defined names, or named `LAMBDA`s, including same-count destination, market-provider, connection, or query swaps, without evaluating formulas or exposing their arguments in the private ledger |
+| Native workbook/environment-information boundary | Stored native `CELL`, `INFO`, `SHEET`, and `SHEETS` calls and statically visible inputs, including a private all-tab catalog comparison when `SHEET` or `SHEETS()` can observe tab position/count, without evaluating formulas or exposing arguments |
 | Python in Excel boundary | Stored Python code/environment, `PY` formula bindings, and statically visible inputs, without loading Python code, executing it, or contacting its cloud runtime |
 | Namespaced Office custom-function boundary | Material namespaced formula-call candidates and statically visible inputs, without loading an add-in, executing a formula, or exposing names and arguments in the private ledger |
 | Formula-defined XLM registration boundary | Stored legacy XLM `REGISTER` calls in formula-defined names/named `LAMBDA`s and their statically visible inputs, without executing a macro, evaluating a formula, or loading a DLL/XLL |
@@ -560,9 +561,9 @@ macro-sheet parts are deliberately outside this narrow stored-definition
 boundary. Enable no_formula_defined_xlm_environment_information_changes to
 block this boundary in CI.
 
-FormulaFence also keeps a separate **native CELL and INFO environment-
-information ledger** for ordinary worksheet formulas, formula-defined names,
-and named LAMBDA bodies. Microsoft's [CELL function
+FormulaFence also keeps a separate **native workbook and environment-information
+ledger** for `CELL`, `INFO`, `SHEET`, and `SHEETS` calls in ordinary worksheet
+formulas, formula-defined names, and named LAMBDA bodies. Microsoft's [CELL function
 documentation](https://support.microsoft.com/en-us/office/cell-function-51bd39a5-f338-4dbe-a33f-955d67c2b2cf)
 explains that CELL can return file, location, formatting, or content
 information and can use the selected cell when its optional reference is
@@ -572,20 +573,41 @@ lists operating-environment values such as the current folder, operating-system
 version, calculation mode, and workbook-count information. Those values can
 change even when visible precedents do not.
 
+Microsoft's [SHEET function
+documentation](https://support.microsoft.com/en-us/excel/functions/sheet-function)
+states that SHEET returns a sheet number and, without its optional value,
+returns the number of the sheet containing the function. Its [SHEETS function
+documentation](https://support.microsoft.com/en-us/excel/functions/sheets-function)
+states that an omitted reference returns the number of sheets in the containing
+workbook. Both document that hidden, very-hidden, macro, chart, and dialog
+sheets are included. A formula can therefore retain identical text while a tab
+is inserted, removed, or moved and its result changes.
+
 The ledger propagates calls through nested and sheet-local formula names to
 invoking cells. Profiles and FF072/FFP072 details expose only formula-cell,
-call, relevant formula-defined-name, and omitted-CELL-reference counts;
-information types, references, formulas, arguments, cells, and name identities
-remain private. Same-count definition or invocation changes, uninvoked stored
-names, and ordinary edits that reach a call through a statically visible
-argument edge remain reviewable through private signatures.
+call, relevant formula-defined-name, omitted-CELL-reference, `SHEET`, `SHEETS`,
+and omitted-SHEETS-reference counts; information types, references, formulas,
+arguments, cells, name identities, and raw tab-catalog comparison material
+remain private. The ordinary per-sheet inventory remains normal reviewer
+context. Same-count definition or invocation changes, uninvoked stored names,
+and ordinary edits that reach a call through a statically visible argument edge
+remain reviewable through private signatures.
 
 FormulaFence does not evaluate a formula or information call, determine an
 information type, resolve a dynamic reference, infer the selected cell,
 inspect a file/folder/client/workspace state, or simulate any of those states.
-A state-only workbook change is not asserted to change a call. The
-no_formula_environment_information_changes rule blocks material call,
-definition, invocation, or statically visible input changes in CI.
+For stored `SHEET` calls and `SHEETS()` calls with an omitted reference, it
+privately compares the raw OOXML workbook tab catalog—not only ordinary
+worksheets—when it can read that catalog completely. A membership, order, or
+tab-name change then emits FF072 because Excel may calculate from different
+workbook-structure information; visibility-only changes do not trigger that
+condition because Excel includes hidden tabs. FormulaFence does not determine
+which explicit `SHEET`/`SHEETS` argument Excel resolves, calculate a particular
+result, or infer whether a non-omitted SHEETS reference is a one-sheet or 3-D
+reference. A malformed or unavailable tab catalog remains a parser coverage
+warning. The no_formula_environment_information_changes rule blocks material
+call, definition, invocation, statically visible input, and applicable tab-
+catalog changes in CI.
 
 FormulaFence separately inventories **Excel 4.0 / XLM macro sheets**. Unlike
 VBA, this executable automation is stored in raw macro-sheet XML parts (usually

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from openpyxl import load_workbook
 
 from formulafence.diff import compare_snapshots
 from formulafence.models import PolicyError
@@ -96,6 +97,7 @@ from .helpers import (
     make_formula_environment_information_model,
     make_formula_external_action_model,
     make_formula_external_data_provider_model,
+    make_formula_workbook_structure_information_model,
     make_ignored_error_model,
     make_legacy_array_model,
     make_legacy_comment_model,
@@ -635,6 +637,30 @@ def test_policy_blocks_native_environment_information_changes(tmp_path) -> None:
     baseline = make_formula_environment_information_model(tmp_path / "baseline.xlsx")
     candidate = make_formula_environment_information_model(tmp_path / "candidate.xlsx")
     change_formula_environment_information_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_formula_environment_information_changes": True},
+        }
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP072"
+    }
+
+
+def test_policy_blocks_native_workbook_tab_information_changes(tmp_path) -> None:
+    baseline = make_formula_workbook_structure_information_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_workbook_structure_information_model(
+        tmp_path / "candidate.xlsx"
+    )
+    workbook = load_workbook(candidate)
+    workbook.create_sheet("Inserted", 0)
+    workbook.save(candidate)
 
     report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
     policy = parse_policy(

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.78.0 — 2026-07-26
+
+- Extend `FF072` / `FFP072` from native `CELL` and `INFO` to native `SHEET`
+  and `SHEETS` calls in worksheet formulas, formula-defined names, and named
+  `LAMBDA` bodies. The existing private definition-chain, sheet-local-name,
+  recursion, static-input, redaction, and fail-closed policy path now protects
+  workbook-structure information without evaluating a formula.
+- Read the private raw OOXML workbook tab catalog so `SHEET` and omitted-
+  reference `SHEETS()` calls are compared against all declared tabs, including
+  hidden, very-hidden, chart, macro, and dialog sheets. A catalog membership,
+  order, or name change emits `FF072`; a visibility-only change does not,
+  matching the documented inclusion of hidden tabs.
+- Add safe `SHEET`, `SHEETS`, and omitted-`SHEETS` aggregate counts to profiles
+  and Markdown. The raw tab-catalog comparison material, formulas, arguments,
+  locations, defined-name identities, and calculated values remain private in
+  the dedicated ledger; ordinary sheet inventory remains normal reviewer
+  context. Explicit `SHEETS(reference)` arguments are inventoried but not
+  evaluated or guessed as single-sheet versus 3-D references.
+
 ## 0.77.0 — 2026-07-26
 
 - Extend the existing `FF064` formula external-action ledger to stored

@@ -5,6 +5,63 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Workbook tab information formula boundary — 2026-07-26
+
+FormulaFence 0.78.0 was checked against Microsoft's [SHEET function
+documentation](https://support.microsoft.com/en-us/excel/functions/sheet-function),
+which documents sheet-number behavior and its optional value, and [SHEETS
+function documentation](https://support.microsoft.com/en-us/excel/functions/sheets-function),
+which documents that an omitted reference counts sheets in the containing
+workbook. Both document that hidden, very-hidden, macro, chart, and dialog
+sheets are included. The scope remains static: FormulaFence inventories native
+`CELL`, `INFO`, `SHEET`, and `SHEETS` calls, and privately compares only the
+raw all-tab catalog relevant to stored `SHEET` and omitted-reference `SHEETS()`
+calls. It does not calculate a formula, resolve an explicit reference, infer a
+3-D reference, or simulate workbook state.
+
+Five fresh controlled `.xlsx` files were generated in a standalone validation
+directory without opening Excel. The baseline (SHA-256
+`8090ef0f9b3d90ff47617916c1493bfc58c4f99812c61ed46835f6fbefa4b971`)
+contains a direct `SHEET()`, a direct `SHEETS()`, a named formula with omitted
+`SHEETS()`, and an explicitly referenced `SHEETS(reference)` control. Its
+dedicated public ledger reports four invoking formula cells, four native calls,
+one relevant formula-defined name, one `SHEET` call, three `SHEETS` calls, and
+two omitted-reference `SHEETS` calls. Inserting a valid chart sheet at tab index
+one (SHA-256
+`4621ab3d3de93f393ecadbb017bbfdadb3f548dc1e4c7959829ccee92a75d29b`)
+kept that ledger unchanged while emitting `FF072` with the private
+workbook-tab-catalog condition; the narrow policy exited 1 with `FFP072`.
+
+The visibility-only candidate (SHA-256
+`0b56ab5eeed3d6366f20e4d2b27e1621e7afbc4ee8ea02d5728b84a4787236db`)
+hid an existing worksheet. It emitted ordinary `FF007` but no `FF072` or
+`FFP072`, and the narrow policy exited 0. An explicit-reference-only baseline
+(SHA-256
+`93af5f41b78341ea279a8fdb094e7ca4f3da40b2b6dc2494351f6a9092ba0e79`)
+and inserted-tab candidate (SHA-256
+`8a3202f0391a00cb9912f4bb265511138e5754064eda2a58d456eb7667f67fc0`)
+produced no `FF072` or `FFP072`; the narrow policy again exited 0. That control
+demonstrates the intentional limit: FormulaFence inventories
+`SHEETS(reference)` but does not guess whether a reference covers one sheet or
+a 3-D span.
+
+Dedicated `formula_environment_information_calls`, `FF072`, and `FFP072`
+artifacts excluded the controlled defined-name identity and static input
+sentinel. Ordinary defined-name and semantic-diff output remains normal
+reviewer context, so that redaction claim is deliberately limited to the
+dedicated ledger and policy-facing results. No formula was evaluated and no
+workbook state was simulated during validation. The full suite passed with 535
+tests.
+
+The staged `formulafence-0.78.0-py3-none-any.whl` (SHA-256
+`fc8b862c5453478e1ece554c5e7d927a6eca916719c55aa1594140f500c3e8b5`)
+and source distribution were built from the release tree. The wheel installed with declared dependencies
+into a fresh virtual environment and returned `FormulaFence 0.78.0`; it
+reproduced the 4 / 4 / 1 / 1 / 3 / 2 ledger counts, emitted `FF072` / `FFP072`
+for the chart-tab candidate, and retained the visibility-only and
+explicit-reference policy controls. Dedicated packaged SARIF results remained
+redacted.
+
 ## Formula data-provider boundary — 2026-07-26
 
 FormulaFence 0.77.0 was checked against Microsoft's

@@ -6249,6 +6249,138 @@ def make_external_link_package_model(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".external-link.tmp.xlsx")
 
 
+def make_indexed_external_workbook_name_link_model(
+    path: Path,
+    *,
+    target_paths: tuple[str, ...] = ("../inputs/source.xlsx",),
+    source_name: str = "PrivateInputAlias",
+    link_index: int = 1,
+    consumer_alias_local_sheet_id: int | None = None,
+    include_direct_indexed_formula: bool = True,
+    consumer_formula_alias: bool = False,
+) -> Path:
+    """Create a consumer with direct and local package-indexed name links.
+
+    Excel stores ``[N]!Name`` using the document order of ``externalReference``
+    declarations.  Relationships are deliberately emitted in reverse order so
+    portfolio tests prove that a reader uses the declaration sequence rather
+    than ZIP-part names or relationship order.
+    """
+    if not target_paths or not 1 <= link_index <= len(target_paths):
+        raise ValueError("link_index must identify one supplied external target")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    make_model(path)
+    workbook = load_workbook(path)
+    consumer_formula_name = (
+        "PackageExternalFormulaAlias"
+        if consumer_formula_alias
+        else "PackageExternalInput"
+    )
+    workbook["Model"]["D2"] = f"=SUM({consumer_formula_name})"
+    if include_direct_indexed_formula:
+        workbook["Model"]["E2"] = f"=SUM([{link_index}]!{source_name})"
+    workbook.defined_names.add(
+        DefinedName(
+            "PackageExternalInput",
+            attr_text=f"[{link_index}]!{source_name}",
+            localSheetId=consumer_alias_local_sheet_id,
+        )
+    )
+    if consumer_formula_alias:
+        workbook.defined_names.add(
+            DefinedName(
+                "PackageExternalFormulaAlias",
+                attr_text="=PackageExternalInput",
+            )
+        )
+    workbook.save(path)
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook_root = ElementTree.fromstring(contents["xl/workbook.xml"])
+        external_references = ElementTree.Element(
+            f"{{{_SPREADSHEETML_NS}}}externalReferences"
+        )
+        for number in range(1, len(target_paths) + 1):
+            ElementTree.SubElement(
+                external_references,
+                f"{{{_SPREADSHEETML_NS}}}externalReference",
+                {f"{{{_DOCUMENT_RELATIONSHIPS_NS}}}id": f"rIdFenceExternal{number}"},
+            )
+        calculation = workbook_root.find(f"{{{_SPREADSHEETML_NS}}}calcPr")
+        workbook_root.insert(
+            list(workbook_root).index(calculation)
+            if calculation is not None
+            else len(workbook_root),
+            external_references,
+        )
+        contents["xl/workbook.xml"] = serialize(workbook_root)
+
+        workbook_relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        for number in range(len(target_paths), 0, -1):
+            ElementTree.SubElement(
+                workbook_relationships,
+                relationship_tag,
+                {
+                    "Id": f"rIdFenceExternal{number}",
+                    "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/externalLink",
+                    "Target": f"externalLinks/externalLink{number}.xml",
+                },
+            )
+        contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
+        for number, target_path in enumerate(target_paths, start=1):
+            ElementTree.SubElement(
+                content_types,
+                override_tag,
+                {
+                    "PartName": f"/xl/externalLinks/externalLink{number}.xml",
+                    "ContentType": (
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml."
+                        "externalLink+xml"
+                    ),
+                },
+            )
+            external_link = ElementTree.Element(
+                f"{{{_SPREADSHEETML_NS}}}externalLink"
+            )
+            ElementTree.SubElement(
+                external_link,
+                f"{{{_SPREADSHEETML_NS}}}externalBook",
+                {f"{{{_DOCUMENT_RELATIONSHIPS_NS}}}id": "rIdFenceExternalTarget"},
+            )
+            contents[f"xl/externalLinks/externalLink{number}.xml"] = serialize(
+                external_link
+            )
+
+            external_relationships = ElementTree.Element(
+                f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships"
+            )
+            ElementTree.SubElement(
+                external_relationships,
+                relationship_tag,
+                {
+                    "Id": "rIdFenceExternalTarget",
+                    "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/externalLinkPath",
+                    "Target": target_path,
+                    "TargetMode": "External",
+                },
+            )
+            contents[
+                f"xl/externalLinks/_rels/externalLink{number}.xml.rels"
+            ] = serialize(external_relationships)
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+    return _rewrite_archive(path, mutate, ".indexed-external-name.tmp.xlsx")
+
+
 def change_external_link_package_controls(path: Path) -> Path:
     """Change external source, definition, cache, and opaque package material."""
     spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -6577,6 +6709,34 @@ def duplicate_external_link_definition(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".external-link-duplicate.tmp.xlsx")
+
+
+def duplicate_indexed_external_link_part_binding(path: Path) -> Path:
+    """Bind two indexed declarations to one link part to make it ambiguous."""
+    package_relationships = _PACKAGE_RELATIONSHIPS_NS
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+        relationship = next(
+            (
+                current
+                for current in relationships.findall(
+                    f"{{{package_relationships}}}Relationship"
+                )
+                if current.get("Id") == "rIdFenceExternal2"
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture needs a second indexed external-link declaration")
+        relationship.set("Target", "externalLinks/externalLink1.xml")
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".indexed-external-link-rebind.tmp.xlsx")
 
 
 def duplicate_external_link_sheet_names(path: Path) -> Path:

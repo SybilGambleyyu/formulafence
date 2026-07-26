@@ -8,6 +8,7 @@ from formulafence.formulas import (
     formula_fingerprint,
     inspect_formula,
     lambda_parameter_count,
+    parse_external_link_indexed_defined_name_reference,
     parse_external_workbook_defined_name_reference,
     parse_external_workbook_reference,
 )
@@ -131,6 +132,49 @@ def test_external_workbook_defined_name_references_keep_private_lookup_data() ->
         ("Inputs.xlsx", "inputrange"),
         ("..\\shared\\Other.xlsx", "margin"),
     ]
+
+
+def test_package_indexed_external_name_references_require_a_declared_one_based_index() -> None:
+    assert parse_external_link_indexed_defined_name_reference("[1]!InputRange") == (
+        1,
+        "inputrange",
+    )
+    assert parse_external_link_indexed_defined_name_reference(
+        "=[42]!Private.Input"
+    ) == (42, "private.input")
+    assert parse_external_link_indexed_defined_name_reference(
+        "[2147483647]!InputRange"
+    ) == (2_147_483_647, "inputrange")
+    assert parse_external_link_indexed_defined_name_reference("[0]!InputRange") is None
+    assert parse_external_link_indexed_defined_name_reference("[01]!InputRange") is None
+    assert parse_external_link_indexed_defined_name_reference(
+        "[2147483648]!InputRange"
+    ) is None
+    assert parse_external_link_indexed_defined_name_reference("[1]Data!A1") is None
+    assert parse_external_link_indexed_defined_name_reference("[1]!A1") is None
+    assert parse_external_link_indexed_defined_name_reference("[1]!A1:B2") is None
+    assert parse_external_link_indexed_defined_name_reference("[1]!Input[Column]") is None
+    assert parse_external_link_indexed_defined_name_reference("[1]!1InputRange") is None
+    assert parse_external_link_indexed_defined_name_reference("[1]!\\InputRange") is None
+    assert parse_external_link_indexed_defined_name_reference("[1]!$InputRange") is None
+    assert parse_external_link_indexed_defined_name_reference("[1]!Input?Range") is None
+    assert parse_external_link_indexed_defined_name_reference("[1]!Input+Range") is None
+
+    inspection = inspect_formula(
+        "=SUM([1]!InputRange)",
+        indexed_external_workbook_paths={1: "../inputs/source.xlsx"},
+    )
+    assert inspection.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in inspection.references)
+    assert [
+        (reference.source_path, reference.name_key)
+        for reference in inspection.external_workbook_defined_name_references
+    ] == [("../inputs/source.xlsx", "inputrange")]
+
+    unresolved = inspect_formula("=SUM([1]!InputRange)")
+    assert unresolved.external_workbook_defined_name_references == ()
+    assert unresolved.unresolved_range_tokens == ()
+    assert all(reference.is_external for reference in unresolved.references)
 
 
 def test_formula_inspection_resolves_names_and_marks_static_coverage_gaps() -> None:

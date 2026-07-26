@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.88.0 — 2026-07-26
+
+- Extend the candidate-only `FF079` portfolio graph to Excel's package-indexed
+  external-name spelling, `=[N]!InputRange`, and to a direct
+  workbook-scoped consumer alias whose stored definition is exactly
+  `[N]!InputRange`. `N` is resolved only through the one-based document order
+  of `externalReferences`, one declared `externalLink` part, one
+  `externalBook`, and one external `externalLinkPath` relationship; its target
+  must still normalize to an already-inspected relative candidate workbook.
+  The candidate source name must fully expand to static internal A1
+  destinations without evaluation.
+- Keep package relationship targets, indexed external source spellings, and any
+  cached `externalLink` material out of portfolio evidence. Ordinary source or
+  consumer defined-name declarations remain normal workbook-review items.
+  FormulaFence neither trusts cached values nor opens a target.
+  Absolute/UNC/URI/escaping paths, malformed
+  or ambiguous declarations, non-workbook/DDE/OLE parts, package external-A1
+  forms, sheet-scoped aliases, consumer formula-name aliases, dynamic/missing
+  source names, and every other non-static form remain unresolved rather than
+  creating a guessed edge.
+- Add declaration-order, direct/indexed-name, source-alias, dynamic-name,
+  absolute-path, malformed-package, and JSON/Markdown/SARIF redaction
+  coverage, including an independently maintained public external-link
+  workbook fixture.
+
 ## 0.87.0 — 2026-07-26
 
 - Extend the candidate-only `FF079` portfolio graph to the documented direct

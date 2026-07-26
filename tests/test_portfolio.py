@@ -14,8 +14,15 @@ from formulafence.cli import main
 from formulafence.output import as_json, portfolio_to_markdown, portfolio_to_sarif
 from formulafence.policy import parse_policy
 from formulafence.portfolio import PortfolioError, compare_portfolios, discover_workbooks
+from formulafence.workbook import profile_snapshot
 
-from .helpers import make_model, rewrite
+from .helpers import (
+    duplicate_external_link_definition,
+    duplicate_indexed_external_link_part_binding,
+    make_indexed_external_workbook_name_link_model,
+    make_model,
+    rewrite,
+)
 
 
 def _copy_workbook(source: Path, destination: Path) -> None:
@@ -262,7 +269,13 @@ def test_portfolio_resolves_relative_ranges_case_insensitively_without_basename_
         lambda workbook: setattr(workbook["Data"]["B3"], "value", 21),
     )
 
-    report = compare_portfolios(baseline, candidate)
+    report = compare_portfolios(
+        baseline,
+        candidate,
+        policy=parse_policy(
+            {"version": 1, "rules": {"no_cross_workbook_impacts": True}}
+        ),
+    )
     source = next(entry for entry in report.workbooks if entry.path == "inputs/shared.xlsx")
     finding = next(finding for finding in source.findings if finding.rule_id == "FF079")
 
@@ -320,11 +333,17 @@ def test_portfolio_resolves_relative_external_workbook_defined_names_privately(
     finding = next(
         finding for finding in source_entry.findings if finding.rule_id == "FF079"
     )
-    rendered = (
+    consumer_entry = next(
+        entry for entry in report.workbooks if entry.path == "reports/summary.xlsx"
+    )
+    assert consumer_entry.after is not None
+    report_rendered = (
         as_json(report.to_dict()),
         portfolio_to_markdown(report),
         as_json(portfolio_to_sarif(report)),
     )
+    profile_rendered = as_json(profile_snapshot(consumer_entry.after))
+    rendered = (*report_rendered, profile_rendered)
 
     assert finding.details["impacted_workbook_count"] == 1
     assert finding.details["impacted_formula_count"] == 1
@@ -340,6 +359,182 @@ def test_portfolio_resolves_relative_external_workbook_defined_names_privately(
     assert all("PrivateInputRange" not in value for value in rendered)
     assert all("PrivateInputAlias" not in value for value in rendered)
     assert all("DynamicInputRange" not in value for value in rendered)
+
+
+def test_portfolio_resolves_declared_package_indexed_external_names_privately(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    source_path = _write_workbook(
+        baseline / "inputs" / "source.xlsx",
+        "Data",
+        {"B2": 10, "B3": 20, "B4": 30},
+    )
+    source = load_workbook(source_path)
+    source.defined_names.add(
+        DefinedName("PrivatePackageSourceRange", attr_text="Data!$B$2:$B$4")
+    )
+    source.defined_names.add(
+        DefinedName(
+            "PrivatePackageSourceAlias",
+            attr_text="=PrivatePackageSourceRange",
+        )
+    )
+    source.save(source_path)
+    _write_workbook(baseline / "decoy.xlsx", "Data", {"B3": 999})
+    make_indexed_external_workbook_name_link_model(
+        baseline / "reports" / "summary.xlsx",
+        target_paths=("../decoy.xlsx", "../inputs/source.xlsx"),
+        source_name="PrivatePackageSourceAlias",
+        link_index=2,
+    )
+    shutil.copytree(baseline, candidate)
+    rewrite(
+        candidate / "inputs" / "source.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B3"], "value", 21),
+    )
+
+    report = compare_portfolios(
+        baseline,
+        candidate,
+        policy=parse_policy(
+            {"version": 1, "rules": {"no_cross_workbook_impacts": True}}
+        ),
+    )
+    source_entry = next(
+        entry for entry in report.workbooks if entry.path == "inputs/source.xlsx"
+    )
+    finding = next(
+        finding for finding in source_entry.findings if finding.rule_id == "FF079"
+    )
+    consumer_entry = next(
+        entry for entry in report.workbooks if entry.path == "reports/summary.xlsx"
+    )
+    assert consumer_entry.after is not None
+    report_rendered = (
+        as_json(report.to_dict()),
+        portfolio_to_markdown(report),
+        as_json(portfolio_to_sarif(report)),
+    )
+    profile_rendered = as_json(profile_snapshot(consumer_entry.after))
+    rendered = (*report_rendered, profile_rendered)
+
+    assert not report.incomplete
+    assert finding.details["impacted_workbook_count"] == 1
+    assert finding.details["impacted_formula_count"] == 2
+    assert {finding.rule_id for finding in source_entry.findings} >= {"FF079", "FFP079"}
+    assert [impact["location"] for impact in finding.details["sample_impacts"]] == [
+        "Model!D2",
+        "Model!E2",
+    ]
+    assert all("PrivatePackageSourceRange" not in value for value in rendered)
+    assert all("PrivatePackageSourceAlias" not in value for value in rendered)
+    assert all("PackageExternalInput" not in value for value in report_rendered)
+    assert "PackageExternalInput" in profile_rendered
+
+
+def test_portfolio_fails_closed_for_dynamic_or_absolute_package_indexed_names(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    private_path = "PRIVATE-PACKAGE-INDEXED-EXTERNAL-PATH"
+    source_path = _write_workbook(
+        baseline / "inputs" / "source.xlsx",
+        "Data",
+        {"B2": 10, "B3": 20, "B4": 30},
+    )
+    source = load_workbook(source_path)
+    source.defined_names.add(
+        DefinedName(
+            "PrivatePackageDynamicName",
+            attr_text="=OFFSET(Data!$B$2,0,0,3,1)",
+        )
+    )
+    source.defined_names.add(
+        DefinedName("PrivatePackageStaticName", attr_text="Data!$B$2:$B$4")
+    )
+    source.save(source_path)
+    make_indexed_external_workbook_name_link_model(
+        baseline / "reports" / "dynamic.xlsx",
+        target_paths=("../inputs/source.xlsx",),
+        source_name="PrivatePackageDynamicName",
+    )
+    make_indexed_external_workbook_name_link_model(
+        baseline / "reports" / "absolute.xlsx",
+        target_paths=(f"C:\\{private_path}\\source.xlsx",),
+        source_name="PrivatePackageStaticName",
+    )
+    make_indexed_external_workbook_name_link_model(
+        baseline / "reports" / "ambiguous.xlsx",
+        target_paths=("../inputs/source.xlsx",),
+        source_name="PrivatePackageStaticName",
+    )
+    make_indexed_external_workbook_name_link_model(
+        baseline / "reports" / "rebound.xlsx",
+        target_paths=("../inputs/source.xlsx", "../decoy.xlsx"),
+        source_name="PrivatePackageStaticName",
+    )
+    make_indexed_external_workbook_name_link_model(
+        baseline / "reports" / "sheet-local.xlsx",
+        target_paths=("../inputs/source.xlsx",),
+        source_name="PrivatePackageStaticName",
+        consumer_alias_local_sheet_id=1,
+        include_direct_indexed_formula=False,
+    )
+    make_indexed_external_workbook_name_link_model(
+        baseline / "reports" / "formula-alias.xlsx",
+        target_paths=("../inputs/source.xlsx",),
+        source_name="PrivatePackageStaticName",
+        include_direct_indexed_formula=False,
+        consumer_formula_alias=True,
+    )
+    shutil.copytree(baseline, candidate)
+    duplicate_external_link_definition(candidate / "reports" / "ambiguous.xlsx")
+    duplicate_indexed_external_link_part_binding(candidate / "reports" / "rebound.xlsx")
+    rewrite(
+        candidate / "inputs" / "source.xlsx",
+        lambda workbook: setattr(workbook["Data"]["B3"], "value", 21),
+    )
+
+    report = compare_portfolios(baseline, candidate)
+    rendered = (
+        as_json(report.to_dict()),
+        portfolio_to_markdown(report),
+        as_json(portfolio_to_sarif(report)),
+    )
+
+    assert not report.incomplete
+    assert not any(
+        finding.rule_id == "FF079"
+        for entry in report.workbooks
+        for finding in entry.findings
+    )
+    assert all(private_path not in value for value in rendered)
+    assert all("PrivatePackageDynamicName" not in value for value in rendered)
+    assert all("PrivatePackageStaticName" not in value for value in rendered)
+    absolute_entry = next(
+        entry for entry in report.workbooks if entry.path == "reports/absolute.xlsx"
+    )
+    assert absolute_entry.after is not None
+    assert private_path not in as_json(profile_snapshot(absolute_entry.after))
+    ambiguous_entry = next(
+        entry for entry in report.workbooks if entry.path == "reports/ambiguous.xlsx"
+    )
+    assert ambiguous_entry.after is not None
+    assert any(
+        "without exactly one external workbook" in warning
+        for warning in ambiguous_entry.after.parser_warnings
+    )
+    rebound_entry = next(
+        entry for entry in report.workbooks if entry.path == "reports/rebound.xlsx"
+    )
+    assert rebound_entry.after is not None
+    assert any(
+        "indexed external-name declaration or package part" in warning
+        for warning in rebound_entry.after.parser_warnings
+    )
 
 
 def test_portfolio_never_guesses_or_discloses_unresolved_external_link_paths(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -628,6 +629,84 @@ def parse_external_workbook_defined_name_reference(
         source_path=f"{token[:opening]}{workbook_name}",
         name_key=reference_lookup_key(name),
     )
+
+
+def parse_external_link_indexed_defined_name_reference(
+    value: str,
+) -> tuple[int, str] | None:
+    """Parse Excel's package-indexed external-name spelling without resolving it.
+
+    OOXML can store an external name as ``[1]!InputRange``.  The number is
+    not a filename: it is a one-based position in the workbook's
+    ``externalReferences`` declaration.  Resolving that position requires
+    raw package metadata, so this lexical helper deliberately returns only
+    the bounded index and private normalized name identity.  Sheet/A1 forms,
+    index zero (the current workbook), malformed tokens, and quoted/structured
+    spellings stay outside this static path.
+    """
+    token = value.strip()
+    if token.startswith("="):
+        token = token[1:].strip()
+    if not token or token[0] != "[" or "'" in token:
+        return None
+    closing = token.find("]", 1)
+    if closing < 2 or closing + 1 >= len(token) or token[closing + 1] != "!":
+        return None
+    index_text = token[1:closing]
+    # Bound parsing before converting an untrusted arbitrary-length decimal.
+    if (
+        len(index_text) > 10
+        or not index_text.isascii()
+        or not index_text.isdecimal()
+        or index_text.startswith("0")
+    ):
+        return None
+    index = int(index_text)
+    if index > 2_147_483_647:
+        return None
+    name = token[closing + 2 :]
+    if (
+        not name
+        or len(name) > 255
+        or name != name.strip()
+        # Office does not create or load a backslash-prefixed defined name,
+        # despite the broad ECMA grammar admitting a backslash start.
+        or name.startswith("\\")
+        or not _is_external_link_name_identity(name)
+        or any(ord(character) < 32 or ord(character) == 127 for character in name)
+        or parse_reference_token(name) is not None
+    ):
+        return None
+    return index, reference_lookup_key(name)
+
+
+def _is_external_link_name_identity(value: str) -> bool:
+    """Check the bounded name grammar used after Excel's ``[N]!`` prefix.
+
+    The package-specific prefix is not a workbook filename.  Once it is
+    removed, Office's external-name grammar admits a defined-name identity,
+    not arbitrary formula punctuation.  Keep Unicode letters and combining
+    marks usable while rejecting strings such as ``[1]!A+B`` or ``[1]!$Name``
+    that could otherwise be mistaken for a name by a permissive tokenizer.
+    """
+
+    def is_start(character: str) -> bool:
+        category = unicodedata.category(character)
+        return (
+            character in {"_", "\\"}
+            or character.isalpha()
+            or category == "Nl"
+        )
+
+    def is_continue(character: str) -> bool:
+        return (
+            is_start(character)
+            or character.isdigit()
+            or character == "."
+            or unicodedata.category(character) in {"Mn", "Mc"}
+        )
+
+    return is_start(value[0]) and all(is_continue(character) for character in value[1:])
 
 
 def _mask_double_quoted_strings(value: str) -> str:
@@ -2087,6 +2166,10 @@ def inspect_formula(
     named_function_formula_environment_information_functions: (
         Mapping[str, Sequence[str]] | None
     ) = None,
+    named_external_workbook_defined_name_references: (
+        Mapping[str, Sequence[ExternalWorkbookDefinedNameReference]] | None
+    ) = None,
+    indexed_external_workbook_paths: Mapping[int, str] | None = None,
     *,
     inspect_formula_defined_xlm_registrations: bool = False,
     inspect_formula_defined_xlm_evaluations: bool = False,
@@ -2097,12 +2180,14 @@ def inspect_formula(
     """Inspect static reference coverage while resolving known named ranges.
 
     A caller provides case-folded name and named-LAMBDA maps assembled from the
-    workbook. Supported fully qualified table references are resolved from table
-    metadata, context-bound row references require the formula origin, and
-    3-D references require workbook tab order. Other non-A1 tokens are returned
-    explicitly instead of being silently omitted from the graph. A ``None``
-    named-function value records a known LAMBDA whose definition is not safe to
-    expand, so its call remains a visible coverage gap.
+    workbook. It may also provide private, package-derived external-name maps;
+    those maps never cause a filesystem lookup. Supported fully qualified table
+    references are resolved from table metadata, context-bound row references
+    require the formula origin, and 3-D references require workbook tab order.
+    Other non-A1 tokens are returned explicitly instead of being silently
+    omitted from the graph. A ``None`` named-function value records a known
+    LAMBDA whose definition is not safe to expand, so its call remains a visible
+    coverage gap.
     """
     direct_formula_dde_link_markers = _formula_dde_link_markers(formula)
     (
@@ -2121,6 +2206,10 @@ def inspect_formula(
             implicit_intersection_tokens=literal_implicit_intersection_tokens,
         )
     resolved_names = named_references or {}
+    resolved_named_external_workbook_defined_names = (
+        named_external_workbook_defined_name_references or {}
+    )
+    resolved_indexed_external_workbook_paths = indexed_external_workbook_paths or {}
     resolved_named_functions = named_function_references or {}
     resolved_named_custom_functions = named_custom_function_candidates or {}
     resolved_named_function_custom_functions = (
@@ -2236,6 +2325,29 @@ def inspect_formula(
             if selected_reference := implicit_intersection_replacements.get(position):
                 references.append(selected_reference)
                 continue
+            if indexed_external_name := (
+                parse_external_link_indexed_defined_name_reference(token.value)
+            ):
+                index, name_key = indexed_external_name
+                if source_path := resolved_indexed_external_workbook_paths.get(index):
+                    # Keep indexed external-name syntax in the ordinary
+                    # external-reference ledger while retaining the package
+                    # target and source name only in private portfolio data.
+                    references.append(
+                        ParsedReference(
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            token.value,
+                            is_external=True,
+                        )
+                    )
+                    external_workbook_defined_name_references.append(
+                        ExternalWorkbookDefinedNameReference(source_path, name_key)
+                    )
+                    continue
             reference = parse_reference_token(token.value)
             if reference is not None:
                 references.append(reference)
@@ -2273,6 +2385,29 @@ def inspect_formula(
                 three_d_reference_tokens.append(token.value)
                 continue
             named_key = reference_lookup_key(token.value)
+            if named_external_references := (
+                resolved_named_external_workbook_defined_names.get(named_key)
+            ):
+                # A workbook-scoped local name can be the package's indirection
+                # layer for an external defined name.  It is intentionally
+                # resolved only when raw OOXML already established the exact
+                # link index and target; formula inspection itself never tries
+                # to infer a source path from a name.
+                references.append(
+                    ParsedReference(
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        token.value,
+                        is_external=True,
+                    )
+                )
+                external_workbook_defined_name_references.extend(
+                    named_external_references
+                )
+                continue
             if named_key in resolved_names:
                 references.extend(resolved_names[named_key])
                 external_action_functions.extend(

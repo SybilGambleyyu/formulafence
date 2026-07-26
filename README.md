@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.87.0/formulafence-0.87.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.88.0/formulafence-0.88.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.87.0
+  uses: SybilGambleyyu/formulafence@v0.88.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -92,18 +92,26 @@ present on only one side emits high-severity `FF077`; enable
 guesses renames, so a move remains a visible removal plus addition.
 
 When a changed candidate cell is read through a direct static external A1
-reference—or the documented workbook-scoped name form such as
-`=[Inputs.xlsx]InputRange`—by a formula in another candidate workbook,
-FormulaFence emits high-severity `FF079` with relative workbook/cell paths and
-deterministic shortest-path samples. An external name is eligible only if the
-exact relative path identifies an already-inspected candidate workbook and its
-workbook-scoped source name can be fully expanded to static internal A1
-destinations without evaluating a formula. Enable `no_cross_workbook_impacts`
-to make that evidence `FFP079`.
+reference, the documented workbook-scoped name form such as
+`=[Inputs.xlsx]InputRange`, or Excel's package-indexed name form such as
+`=[1]!InputRange` (including one direct workbook-scoped consumer alias), by a
+formula in another candidate workbook, FormulaFence emits high-severity
+`FF079` with relative workbook/cell paths and deterministic shortest-path
+samples. An indexed name is eligible only when its one-based
+`externalReferences` declaration identifies exactly one `externalBook` and
+external `externalLinkPath` relationship whose target resolves to one exact
+relative candidate. Its source name must then be workbook-scoped and fully
+expand to static internal A1 destinations without evaluating a formula. Enable
+`no_cross_workbook_impacts` to make that evidence `FFP079`.
 
 This is deliberately a narrow local graph: it never opens or fetches a link
-target, guesses by filename, or evaluates a formula. Raw external path and
-name spelling stay private. Absolute, URI, escaping, sheet-scoped, missing,
+target, guesses by filename, evaluates a formula, or trusts an external-link
+cache. Raw external source paths, package targets, and indexed source-name
+spellings stay private in portfolio evidence; ordinary source and consumer
+defined-name declarations remain normal defined-name review context. Absolute,
+URI, escaping,
+malformed/ambiguous package declarations, non-workbook package links, package
+external-A1 forms, sheet-scoped or formula-defined consumer aliases, missing,
 direct structured, 3-D, dynamic, or otherwise non-statically-expanded name
 forms remain ordinary external-link coverage rather than being approximated. A
 defined-name declaration change remains its ordinary defined-name review event;

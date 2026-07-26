@@ -5,6 +5,57 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Package-indexed external-name portfolio boundary — 2026-07-26
+
+Microsoft's [name grammar notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a469e5f5-a102-49bd-9642-8a8e8aaf1623)
+state that Office prefixes an external name with the index of its associated
+relationship, while its [external-name formula grammar](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/75328f70-50a7-43af-a4da-3abade67f5f9)
+limits the stored definition to references in the same external book.
+FormulaFence 0.88.0 uses that evidence only as a bounded candidate-portfolio
+bridge: `[N]!SourceName` must select one document-order `externalReference`,
+one declared `externalLink` package part, one `externalBook`, and one external
+`externalLinkPath` relationship. The private target must then match an
+already-inspected relative candidate, and the source's workbook-scoped name
+must fully expand to static internal A1 destinations. No cached external-link
+value or name definition is trusted. Microsoft's [external-workbook base-path
+notes](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/ea3aa674-0411-498d-9eb0-3c1f99a9c0c0)
+describe `externalLinkPath` as relative to the package containing that
+relationship; FormulaFence deliberately rejects Excel's alternate
+startup/library/missing-path relationship forms rather than inferring one.
+
+A controlled two-link source/consumer portfolio deliberately wrote workbook
+relationships in reverse order, while the consumer's `[2]!PrivateName` direct
+formula and workbook-scoped alias referred to the second declaration. Changing
+one static source cell produced `FF079` and `FFP079` for exactly those two
+consumer formulas. A dynamic source name, an absolute package target, and an
+external-link part containing two `externalBook` definitions produced no edge.
+Rebinding two indexed declarations to one external-link part also produced no
+edge. Portfolio JSON, Markdown, and SARIF omitted the controlled indexed
+source spelling and private target sentinel. As intended, source and consumer
+defined-name declarations remained ordinary items in their respective profile
+inventories; no profile exposed the private package relationship target or a
+source-to-consumer mapping.
+
+The independently maintained public
+[openpyexcel external-link fixtures](https://github.com/sciris/openpyexcel/tree/1fde667a1adc2f4988279fd73a2ac2660706b5ce/openpyexcel/workbook/external_link/tests/data)
+were rechecked at commit `1fde667a1adc2f4988279fd73a2ac2660706b5ce` in a
+temporary directory outside this repository. Its consumer uses a
+workbook-local name backed by `[1]!B2range` and `externalLink1.xml`; changing
+`book2.xlsx` `Sheet1!A2` yielded `FF079` and `FFP079` only at
+`book1.xlsx` `Sheet1!C1`. The fixture was not executed, refreshed, or changed
+in place; temporary copies and report output contained only relative workbook
+identities and logical cells.
+
+The final source checkout passed **608 tests in 79.80 seconds**, a clean Ruff
+check, and `git diff --check`. A fresh isolated virtual environment then
+installed the exact built 0.88.0 wheel outside the checkout. Its package-indexed
+source/consumer pair produced `FF079` and `FFP079` for one direct `[1]!Name`
+formula and one direct workbook-scoped consumer alias, with two reachable
+formulas total. The JSON omitted the temporary source path and every controlled
+indexed source-name spelling; ordinary source and consumer names remained
+normal defined-name profile context. Both the wheel and source distribution passed
+`twine check`.
+
 ## Cross-workbook defined-name portfolio boundary — 2026-07-26
 
 Microsoft's [workbook-link guidance](https://support.microsoft.com/en-us/excel/create-workbook-links)
@@ -29,7 +80,7 @@ The independently maintained public
 were rechecked at commit `1fde667a1adc2f4988279fd73a2ac2660706b5ce`. Their
 consumer formulas use workbook-local names backed by external-link-package
 metadata, not a direct external workbook-scoped formula token. FormulaFence
-continued to record no portfolio edge rather than infer a filename, package
+0.87.0 continued to record no portfolio edge rather than infer a filename, package
 target, or name identity from that metadata. Neither public workbook was
 executed, refreshed, altered, copied into this repository, nor emitted in a
 report.

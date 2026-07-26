@@ -165,6 +165,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_external_link_package_changes` | boolean | An external-workbook, DDE, or OLE `externalLink` package definition, source binding, cached material, item behavior, or retained extension fragment changes. |
 | `no_external_relationship_changes` | boolean | Any root or part-level OPC relationship with an external target changes, including an opaque relationship that no feature-specific scanner recognizes. Source parts, types, IDs, targets, unknown metadata, and raw XML are compared privately. |
 | `no_formula_external_action_changes` | boolean | A stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, `RTD`, `STOCKHISTORY`, or documented Cube-family formula call in a cell, formula-defined name, or named `LAMBDA`; its private inventory; relevant name-definition material; or a statically visible input changes. FormulaFence uses private signatures and static dependency paths; it never evaluates a formula, resolves a destination, requests content, queries a cube, or starts a provider. |
+| `no_formula_dde_link_changes` | boolean | A direct lexical `application|topic!item` DDE-style formula link in a worksheet formula, formula-defined name, or named `LAMBDA`; its private invocation/definition material; or a statically visible input to an invoking named `LAMBDA` changes. Services, topics, items, formulas, locations, and identities are compared privately. FormulaFence never evaluates a formula, resolves an endpoint, looks up/launches a DDE server, or sends a DDE command. Raw `externalLink` DDE/OLE packages remain under `no_external_link_package_changes`. |
 | `no_python_in_excel_changes` | boolean | Stored Python-in-Excel package code/environment/XML, a `PY` formula binding, function inventory, or a statically visible input changes. Python source, environment IDs, script indexes, formula arguments, locations, and raw XML are compared privately; FormulaFence never parses or runs Python, evaluates `PY`, or contacts the Microsoft Cloud runtime. |
 | `no_office_custom_function_changes` | boolean | A namespaced Office custom-function call candidate, its private formula/call inventory, or a statically visible input changes. A candidate is not proof that an add-in is installed: FormulaFence does not load the add-in manifest or code, execute a formula, or contact a custom-function runtime. Names, namespaces, cells, formulas, and arguments are compared privately. |
 | `no_worksheet_code_resource_registration_changes` | boolean | A stored worksheet or formula-defined `REGISTER.ID` call, relevant formula-defined-name chain, private call inventory, or statically visible input changes. Module paths, procedure names, type strings, formulas, arguments, locations, and name identities are compared privately. FormulaFence never evaluates a formula, resolves a path, loads a DLL/XLL, or determines whether registration succeeds. |
@@ -371,6 +372,35 @@ does not calculate, resolve, fetch, open, follow, click, authenticate to,
 query, or execute any function/provider. Its ordinary semantic diff
 intentionally remains a review artifact with changed formulas, so it is not a
 substitute for the ledger's minimised action details.
+
+## Direct DDE-style formula links
+
+FormulaFence separately inventories direct formula syntax that has an
+application, a pipe outside quoted text, a topic, and an `!item` boundary, such as the
+Excel DDE example `='Quote'|'NYSE'!ZAXX` documented in the Windows [Dynamic
+Data Exchange overview](https://learn.microsoft.com/en-us/windows/win32/dataxchg/about-dynamic-data-exchange).
+The scanner deliberately ignores pipes inside double-quoted string literals and
+single-quoted ordinary sheet names, so `='cmd|/C calc'!A0` is not treated as a
+DDE link. It inventories worksheet formulas plus formula-defined names and
+named `LAMBDA` bodies, following nested, recursive, and sheet-local
+definitions to invoking formula cells. It does not use the syntax to resolve a
+service, topic, or item.
+
+The public `formula_dde_links` profile object and `FF074` contain only
+formula-cell, link, and defined-name counts. Private signatures make a
+same-count endpoint, formula, invocation, or definition-chain change visible
+without exposing it. A normal edit that statically reaches an invoking named
+`LAMBDA` produces `FF074` too. Direct DDE syntax can make the generic formula
+tokenizer fail; FormulaFence inventories it before that parser boundary and
+retains the ordinary tokenization warning as separate coverage evidence.
+
+`no_formula_dde_link_changes` turns `FF074` into `FFP074`. FormulaFence never
+calculates a formula, resolves an endpoint, looks up or starts a DDE server,
+sends a command, or infers whether a server is present, trusted, or permitted
+by Excel. Excel's [DDE security settings](https://learn.microsoft.com/en-us/troubleshoot/microsoft-365-apps/excel/security-settings)
+distinguish server lookup from the not-recommended server-launch option; this
+policy does not attempt to reproduce either setting. Raw OOXML external-link
+DDE/OLE parts are separately guarded by `no_external_link_package_changes`.
 
 Python in Excel is a distinct executable-code boundary. Microsoft documents
 that its Python runtime runs in the Microsoft Cloud, and the OOXML standard

@@ -5,6 +5,50 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct DDE-style formula-link boundary — 2026-07-26
+
+FormulaFence 0.80.0 was checked against the Windows [Dynamic Data Exchange
+overview](https://learn.microsoft.com/en-us/windows/win32/dataxchg/about-dynamic-data-exchange),
+which documents Excel's `='Quote'|'NYSE'!ZAXX` application/topic/item formula
+shape, and Excel's [DDE security settings](https://learn.microsoft.com/en-us/troubleshoot/microsoft-365-apps/excel/security-settings),
+which distinguishes server lookup from the not-recommended server-launch
+option. The scope is lexical and static: FormulaFence recognizes only a pipe
+outside quoted text followed by a topic and an `!item` boundary; it skips ordinary quoted
+sheet names and double-quoted strings. It never evaluates a formula, resolves
+an endpoint, looks up or starts a DDE server, sends a command, or attempts to
+reproduce Trust Center behavior.
+
+Four fresh controlled `.xlsx` files were generated in a standalone validation
+directory without opening Excel. The baseline uses one direct worksheet link,
+one direct formula-defined name, a nested name, and a named `LAMBDA`
+invocation. Its dedicated public ledger reports four invoking formula cells,
+four links, and three relevant formula-defined names. Changing only a private
+named-definition topic kept every public count fixed while emitting `FF074`;
+the narrow policy exited 1 with `FFP074`. Changing only the visible argument to
+the invoking named `LAMBDA` also kept the ledger equal and emitted `FF074` with
+a static-input count of one.
+
+The state-only candidate adds an unrelated worksheet while retaining every
+direct-DDE formula and name. It emitted no `FF074` or `FFP074` and passed the
+narrow policy with exit 0. The suite additionally covers quoted-sheet and
+string-literal non-matches, quoted/unquoted/embedded/missing-item syntax,
+same-count definition changes, static inputs, uninvoked definitions, named
+`LAMBDA` tokenizer fallback, and sheet-local name precedence. The full suite
+passed with 552 tests.
+
+The dedicated `formula_dde_links` profile object and the `FF074` / `FFP074`
+SARIF results excluded controlled services, topics, items, formulas, inputs,
+and name identities. Ordinary semantic and defined-name differences remain
+normal reviewer context, so this privacy claim is deliberately limited to the
+dedicated ledger and policy-facing results. The staged
+`formulafence-0.80.0-py3-none-any.whl` (SHA-256
+`be9f57844e0e7f519b7809e771cc5f716473e65de339cd0e63766b569626aeb5`)
+and its source distribution passed `twine check`. The source-distribution
+digest is intentionally omitted here because this validation note is itself
+included in the source archive. The wheel installed with declared dependencies
+into a fresh environment, returned `FormulaFence 0.80.0`, and reproduced the
+direct DDE validation results above.
+
 ## Formula-defined XLM action and event-dispatch boundary — 2026-07-26
 
 FormulaFence 0.79.0 was checked against Microsoft's [Excel C API

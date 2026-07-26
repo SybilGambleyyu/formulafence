@@ -687,6 +687,66 @@ def change_formula_defined_xlm_evaluation_input(path: Path) -> Path:
     return path
 
 
+def make_formula_dde_link_model(path: Path) -> Path:
+    """Create inert direct DDE syntax in cells and stored name definitions.
+
+    The fixture is never opened in Excel.  Its opaque service/topic/item text
+    lets FormulaFence prove that it inventories and compares formula material
+    without launching, resolving, or contacting a DDE server.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Direct DDE formula controls"
+    inputs["A9"] = "PRIVATE-DDE-INPUT-BASELINE"
+    inputs["B2"] = "=DDE.TEST|'PRIVATE-DDE-DIRECT-TOPIC-BASELINE'!PRIVATE_ITEM"
+    inputs["B3"] = "=FENCE.DDE.DIRECT"
+    inputs["B4"] = "=FENCE.DDE.CHAIN"
+    inputs["B5"] = "=FENCE.DDE.LAMBDA(A9)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.DDE.DIRECT",
+            attr_text="=DDE.TEST|'PRIVATE-DDE-NAMED-TOPIC-BASELINE'!PRIVATE_ITEM",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.DDE.CHAIN",
+            attr_text="=FENCE.DDE.DIRECT",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.DDE.LAMBDA",
+            attr_text=(
+                "=LAMBDA(payload,DDE.TEST|'PRIVATE-DDE-LAMBDA-TOPIC-BASELINE'!payload)"
+            ),
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_formula_dde_link_definition(path: Path) -> Path:
+    """Change a stored DDE topic without changing public aggregate counts."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.DDE.DIRECT"]
+    baseline = "=DDE.TEST|'PRIVATE-DDE-NAMED-TOPIC-BASELINE'!PRIVATE_ITEM"
+    if definition.attr_text != baseline:
+        raise ValueError("Fixture does not contain the expected DDE definition")
+    definition.attr_text = "=DDE.TEST|'PRIVATE-DDE-NAMED-TOPIC-CANDIDATE'!PRIVATE_ITEM"
+    workbook.save(path)
+    return path
+
+
+def change_formula_dde_link_input(path: Path) -> Path:
+    """Change a visible argument to an invoking DDE named LAMBDA."""
+    workbook = load_workbook(path)
+    workbook["Inputs"]["A9"] = "PRIVATE-DDE-INPUT-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
 def make_formula_defined_xlm_action_model(path: Path) -> Path:
     """Create inert XLM action calls stored only in defined formulas.
 

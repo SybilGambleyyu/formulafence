@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.79.0/formulafence-0.79.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.80.0/formulafence-0.80.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -149,6 +149,7 @@ allowed_changes:
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function candidates, worksheet and formula-defined code-resource registration calls, formula-defined XLM `REGISTER`/`EVALUATE` calls, XLM macro-sheet, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | Formula external-action and data-provider surfaces | Material stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, `RTD`, `STOCKHISTORY`, or documented `CUBE*` call changes in cells, formula-defined names, or named `LAMBDA`s, including same-count destination, market-provider, connection, or query swaps, without evaluating formulas or exposing their arguments in the private ledger |
+| Direct DDE formula links | Material lexical `application|topic!item` DDE-link changes in worksheet formulas, formula-defined names, or named `LAMBDA`s, including same-count endpoint swaps and static inputs to an invoking named `LAMBDA`, without evaluating a formula, looking up/launching a DDE server, or exposing endpoint material |
 | Native workbook/environment-information boundary | Stored native `CELL`, `INFO`, `SHEET`, and `SHEETS` calls and statically visible inputs, including a private all-tab catalog comparison when `SHEET` or `SHEETS()` can observe tab position/count, without evaluating formulas or exposing arguments |
 | Python in Excel boundary | Stored Python code/environment, `PY` formula bindings, and statically visible inputs, without loading Python code, executing it, or contacting its cloud runtime |
 | Namespaced Office custom-function boundary | Material namespaced formula-call candidates and statically visible inputs, without loading an add-in, executing a formula, or exposing names and arguments in the private ledger |
@@ -382,6 +383,33 @@ follow, authenticate to, query, or execute any formula action/provider, and it
 does not decide whether a dynamic `HYPERLINK` destination is local or remote.
 Enable
 `no_formula_external_action_changes` to block this boundary in CI.
+
+FormulaFence also keeps a separate private **direct DDE formula-link ledger**.
+Windows documents Excel's DDE formula form as
+`='Quote'|'NYSE'!ZAXX`: application and topic are separated by a pipe outside
+quoted text, followed by an item boundary after `!`. FormulaFence recognizes only that
+conservative lexical shape (including quoted components and command-style
+missing-item forms), so an ordinary quoted sheet name such as
+`='cmd|/C calc'!A0` is not misclassified. It follows the signal through
+formula-defined names and named `LAMBDA`s without evaluating either one.
+
+The public profile and `FF074`/`FFP074` details expose only formula-cell,
+DDE-link, and relevant formula-defined-name counts. Private signatures retain
+the stored formula and relevant name chain, so a service/topic/item or
+same-count definition change remains visible without emitting it. An ordinary
+cell change that reaches an invoking named `LAMBDA` through the static graph is
+also reviewable. Direct-DDE raw formula syntax can be outside the underlying
+tokenizer grammar; FormulaFence records its dedicated ledger before that parser
+boundary and preserves the normal tokenization-coverage signal separately.
+It never evaluates a formula, resolves a service/topic/item, looks up or starts
+a DDE server, sends a DDE command, or determines what local Trust Center
+settings allow. Microsoft's [DDE overview](https://learn.microsoft.com/en-us/windows/win32/dataxchg/about-dynamic-data-exchange)
+documents the formula and the application/topic/item conversation model; Excel's
+[DDE security settings](https://learn.microsoft.com/en-us/troubleshoot/microsoft-365-apps/excel/security-settings)
+describe separate server lookup and server-launch controls. Raw OOXML
+`externalLink` DDE/OLE package definitions remain the separate `FF025` boundary
+because package metadata can exist without a direct formula. Enable
+`no_formula_dde_link_changes` to block this surface in CI.
 
 FormulaFence separately inventories **Python in Excel** workbooks. Microsoft
 documents that Python in Excel runs through a Microsoft Cloud runtime, while

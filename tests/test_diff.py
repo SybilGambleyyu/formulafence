@@ -58,6 +58,8 @@ from .helpers import (
     change_font_definition,
     change_formula_cached_result,
     change_formula_cached_result_with_visible_precedent,
+    change_formula_dde_link_definition,
+    change_formula_dde_link_input,
     change_formula_defined_xlm_action_definition,
     change_formula_defined_xlm_action_input,
     change_formula_defined_xlm_environment_information_definition,
@@ -253,6 +255,7 @@ from .helpers import (
     make_filter_visibility_model,
     make_font_model,
     make_formula_cached_result_model,
+    make_formula_dde_link_model,
     make_formula_defined_xlm_action_model,
     make_formula_defined_xlm_environment_information_model,
     make_formula_defined_xlm_evaluation_model,
@@ -2078,6 +2081,150 @@ def test_formula_external_actions_are_profiled_diffed_and_redacted(tmp_path) -> 
         "PRIVATE-REFERENCED-LINK-BASELINE",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_direct_formula_dde_links_are_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_formula_dde_link_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_dde_link_model(tmp_path / "candidate.xlsx")
+    change_formula_dde_link_definition(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    expected_links = {
+        "present": True,
+        "dde_formula_cell_count": 4,
+        "dde_link_count": 4,
+        "dde_defined_name_count": 3,
+    }
+
+    assert baseline_snapshot.formula_dde_links.to_dict() == expected_links
+    assert baseline_snapshot.formula_dde_links.dde_cells == frozenset(
+        {("Inputs", f"B{row}") for row in range(2, 6)}
+    )
+    assert baseline_snapshot.summary()["formula_dde_link_formula_cell_count"] == 4
+    assert baseline_snapshot.summary()["formula_dde_link_count"] == 4
+    assert baseline_snapshot.summary()["formula_dde_link_defined_name_count"] == 3
+    assert baseline_snapshot.summary()["has_formula_dde_links"] is True
+    assert profile["formula_dde_links"] == expected_links
+    assert profile["features"]["has_formula_dde_links"] is True
+    assert "## Direct DDE-style formula links" in markdown
+    assert "**Formula cells / DDE links / formula-defined names:** 4 / 4 / 3" in markdown
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    dde_change = next(
+        change for change in report.changes if change.kind == "formula_dde_links_changed"
+    )
+    dde_finding = next(
+        finding for finding in report.findings if finding.rule_id == "FF074"
+    )
+    assert dde_change.details["before"] == expected_links
+    assert dde_change.details["after"] == expected_links
+    assert dde_change.details["formula_dde_link_definition_material_changed"] is True
+    assert dde_finding.details == dde_change.details
+
+    ff074_sarif_result = next(
+        result
+        for result in report_to_sarif(report)["runs"][0]["results"]
+        if result["ruleId"] == "FF074"
+    )
+    rendered_ledger_artifacts = (
+        json.dumps(profile["formula_dde_links"]),
+        markdown,
+        json.dumps(dde_change.details),
+        json.dumps(dde_finding.to_dict()),
+        json.dumps(ff074_sarif_result),
+    )
+    for sensitive_value in (
+        "FENCE.DDE",
+        "PRIVATE-DDE-DIRECT-TOPIC-BASELINE",
+        "PRIVATE-DDE-NAMED-TOPIC-BASELINE",
+        "PRIVATE-DDE-NAMED-TOPIC-CANDIDATE",
+        "PRIVATE-DDE-LAMBDA-TOPIC-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_direct_formula_dde_link_static_inputs_are_guarded(tmp_path) -> None:
+    baseline = make_formula_dde_link_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_dde_link_model(tmp_path / "candidate.xlsx")
+    change_formula_dde_link_input(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.formula_dde_links == candidate_snapshot.formula_dde_links
+    assert ("Inputs", "B5") in baseline_snapshot.reverse_dependencies[("Inputs", "A9")]
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    dde_change = next(
+        change for change in report.changes if change.kind == "formula_dde_links_changed"
+    )
+    assert dde_change.details["formula_dde_link_static_input_changed"] is True
+    assert dde_change.details["formula_dde_link_static_input_change_count"] == 1
+    assert "formula_dde_link_invocation_material_changed" not in dde_change.details
+    assert "formula_dde_link_definition_material_changed" not in dde_change.details
+    assert "FF074" in {finding.rule_id for finding in report.findings}
+
+
+def test_uninvoked_direct_formula_dde_name_is_profiled_without_an_endpoint(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "stored-dde-name.xlsx")
+
+    def add_stored_dde_link(workbook) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.DDE.STORED",
+                attr_text="=DDE.TEST|'PRIVATE-UNINVOKED-DDE-TOPIC'!PRIVATE_ITEM",
+            )
+        )
+
+    rewrite(workbook_path, add_stored_dde_link)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_dde_links.to_dict() == {
+        "present": True,
+        "dde_formula_cell_count": 0,
+        "dde_link_count": 0,
+        "dde_defined_name_count": 1,
+    }
+    assert snapshot.formula_dde_links.dde_cells == frozenset()
+
+
+def test_direct_formula_dde_names_follow_sheet_local_precedence(tmp_path) -> None:
+    workbook_path = make_model(tmp_path / "scoped-dde-name.xlsx")
+
+    def add_scoped_dde_names(workbook) -> None:
+        model = workbook["Model"]
+        report = workbook["Dashboard"]
+        model["D2"] = "=FENCE.DDE.SCOPED"
+        report["D2"] = "=FENCE.DDE.SCOPED"
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.DDE.SCOPED",
+                attr_text="=DDE.TEST|'PRIVATE-GLOBAL-DDE-TOPIC'!PRIVATE_ITEM",
+            )
+        )
+        model.defined_names.add(
+            DefinedName(
+                "FENCE.DDE.SCOPED",
+                attr_text="=DDE.TEST|'PRIVATE-LOCAL-DDE-TOPIC'!PRIVATE_ITEM",
+                localSheetId=1,
+            )
+        )
+
+    rewrite(workbook_path, add_scoped_dde_names)
+    snapshot = load_snapshot(workbook_path)
+
+    assert snapshot.formula_dde_links.to_dict() == {
+        "present": True,
+        "dde_formula_cell_count": 2,
+        "dde_link_count": 2,
+        "dde_defined_name_count": 2,
+    }
+    assert snapshot.formula_dde_links.dde_cells == frozenset(
+        {("Model", "D2"), ("Dashboard", "D2")}
+    )
+    assert snapshot.unresolved_reference_tokens == {}
 
 
 def test_formula_external_action_static_inputs_are_guarded(tmp_path) -> None:

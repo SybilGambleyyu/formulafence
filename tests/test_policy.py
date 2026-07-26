@@ -24,6 +24,7 @@ from .helpers import (
     change_filter_visibility_hidden_column,
     change_font_definition,
     change_formula_cached_result,
+    change_formula_dde_link_definition,
     change_formula_defined_xlm_action_definition,
     change_formula_defined_xlm_environment_information_definition,
     change_formula_defined_xlm_evaluation_definition,
@@ -91,6 +92,7 @@ from .helpers import (
     make_filter_visibility_model,
     make_font_model,
     make_formula_cached_result_model,
+    make_formula_dde_link_model,
     make_formula_defined_xlm_action_model,
     make_formula_defined_xlm_environment_information_model,
     make_formula_defined_xlm_evaluation_model,
@@ -427,6 +429,24 @@ def test_policy_can_block_formula_external_action_static_input_changes(tmp_path)
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP064"}
+
+
+def test_policy_can_block_direct_formula_dde_link_changes(tmp_path) -> None:
+    baseline = make_formula_dde_link_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_dde_link_model(tmp_path / "candidate.xlsx")
+    change_formula_dde_link_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_formula_dde_link_changes": True},
+        }
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP074"
+    }
 
 
 def test_policy_can_block_named_formula_external_action_changes(tmp_path) -> None:

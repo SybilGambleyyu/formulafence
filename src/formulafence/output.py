@@ -572,6 +572,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     external_link_packages = profile["external_link_packages"]
     external_relationships = profile["external_relationships"]
     formula_external_actions = profile["formula_external_actions"]
+    formula_dde_links = profile["formula_dde_links"]
     python_in_excel = profile["python_in_excel"]
     office_custom_functions = profile["office_custom_functions"]
     worksheet_code_resource_registrations = profile[
@@ -969,6 +970,34 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                     "and named LAMBDAs. Formula cells, name identities, arguments, destinations, "
                     "connections, queries, provider names, and results are compared privately and "
                     "intentionally omitted; no formula is evaluated or provider contacted."
+                ),
+            ]
+        )
+    if formula_dde_links["present"]:
+        lines.extend(
+            [
+                "",
+                "## Direct DDE-style formula links",
+                "",
+                (
+                    "- **Formula cells / DDE links / formula-defined names:** "
+                    f"{formula_dde_links['dde_formula_cell_count']} / "
+                    f"{formula_dde_links['dde_link_count']} / "
+                    f"{formula_dde_links['dde_defined_name_count']}"
+                ),
+                (
+                    "FormulaFence inventories only the explicit lexical "
+                    "application|topic!item form (including a terminal command form) "
+                    "in worksheet formulas, "
+                    "formula-defined names, and named LAMBDAs. Services, topics, "
+                    "items, cells, formulas, and name identities are compared privately "
+                    "and intentionally omitted."
+                ),
+                (
+                    "No formula is evaluated and no DDE server is looked up, started, "
+                    "contacted, or sent a command. Package-level externalLink DDE/OLE "
+                    "metadata remains a separate inventory because it can exist without "
+                    "a direct formula link."
                 ),
             ]
         )

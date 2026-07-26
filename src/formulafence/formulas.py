@@ -126,6 +126,18 @@ _FORMULA_ENVIRONMENT_INFORMATION_IMPLICIT_CELL_REFERENCE_MARKER = (
 _FORMULA_ENVIRONMENT_INFORMATION_IMPLICIT_SHEETS_REFERENCE_MARKER = (
     "FORMULAFENCE_SHEETS_IMPLICIT_REFERENCE_MARKER"
 )
+# A direct DDE worksheet formula is not a function call.  Excel's documented
+# form is ``application|topic!item`` (for example,
+# ``='Quote'|'NYSE'!ZAXX``), and some hostile samples use the same syntax to
+# name a command processor.  Keep the lexical result opaque: it is only used
+# to count and propagate a statically visible DDE-link surface, never to
+# resolve a service, topic, item, server, command, or process.
+_FORMULA_DDE_LINK_MARKER = "FORMULAFENCE_FORMULA_DDE_LINK"
+_DDE_UNQUOTED_COMPONENT_DELIMITERS = frozenset(
+    " \t\r\n'\"|!(),;{}+-*/^&=<>%"
+)
+_DDE_EXPRESSION_BOUNDARIES = frozenset("=+-*/^&,(;{@")
+_DDE_ITEM_TERMINATORS = frozenset(" \t\r\n(),;{}+-*/^&=<>%")
 # Excel's native function catalog includes a small but important set of dotted
 # names.  A namespace separator is also how Office Add-in custom functions are
 # displayed (for example, ``CONTOSO.ADD``), so keep these known native names out
@@ -282,6 +294,7 @@ class FormulaInspection:
     unresolved_range_tokens: tuple[str, ...]
     dynamic_reference_functions: tuple[str, ...]
     external_action_functions: tuple[str, ...] = ()
+    formula_dde_link_markers: tuple[str, ...] = ()
     python_functions: tuple[str, ...] = ()
     office_custom_function_candidates: tuple[str, ...] = ()
     worksheet_code_resource_registration_functions: tuple[str, ...] = ()
@@ -302,6 +315,11 @@ class FormulaInspection:
     def formula_environment_information_function_count(self) -> int:
         """Return native information calls without exposing their arguments."""
         return len(self.formula_environment_information_functions)
+
+    @property
+    def formula_dde_link_count(self) -> int:
+        """Return statically visible direct DDE links without their endpoints."""
+        return len(self.formula_dde_link_markers)
 
     @property
     def formula_environment_information_signal_values(self) -> tuple[str, ...]:
@@ -1362,7 +1380,7 @@ def lambda_parameter_count(formula: str) -> int | None:
     """
     tokens, _, _ = _tokenize_formula(formula)
     if tokens is None:
-        return None
+        return _raw_top_level_lambda_parameter_count(formula)
     meaningful = [
         position
         for position, token in enumerate(tokens)
@@ -1398,6 +1416,82 @@ def lambda_parameter_count(formula: str) -> int | None:
         if declaration is None or declaration[1] in parameters:
             return None
         parameters.add(declaration[1])
+    return len(parameters)
+
+
+def _raw_top_level_lambda_parameter_count(formula: str) -> int | None:
+    """Recognize a complete named LAMBDA when tokenization is unavailable.
+
+    Direct DDE formula syntax is outside openpyxl's grammar, but it can appear
+    in the body of a stored named LAMBDA.  This fallback deliberately recognizes
+    only a full top-level ``LAMBDA(...)`` expression and validates each
+    parameter conservatively; it does not attempt to parse or evaluate its
+    calculation body.  Normal tokenization remains authoritative whenever it
+    succeeds.
+    """
+    match = re.match(r"^\s*=\s*(?:_xlfn\.)?LAMBDA\s*\(", formula, re.IGNORECASE)
+    if match is None:
+        return None
+    opening = match.end() - 1
+    depth = 1
+    argument_starts = [opening + 1]
+    argument_ends: list[int] = []
+    index = opening + 1
+    while index < len(formula):
+        character = formula[index]
+        if character == '"':
+            index = _skip_excel_double_quoted_literal(formula, index)
+            continue
+        if character == "'":
+            quoted_end = _single_quoted_component_end(formula, index)
+            if quoted_end is None:
+                return None
+            index = quoted_end
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                argument_ends.append(index)
+                if formula[index + 1 :].strip():
+                    return None
+                break
+        elif character in {",", ";"} and depth == 1:
+            argument_ends.append(index)
+            argument_starts.append(index + 1)
+        index += 1
+    else:
+        return None
+
+    if not argument_ends or len(argument_starts) != len(argument_ends):
+        return None
+    body = formula[argument_starts[-1] : argument_ends[-1]].strip()
+    if not body:
+        return None
+    parameters: set[str] = set()
+    for start, end in zip(argument_starts[:-1], argument_ends[:-1], strict=True):
+        parameter = formula[start:end].strip()
+        serialised_prefix = next(
+            (
+                prefix
+                for prefix in _SERIALIZED_LOCAL_PREFIXES
+                if parameter.casefold().startswith(prefix)
+            ),
+            None,
+        )
+        if serialised_prefix is not None:
+            parameter = parameter[len(serialised_prefix) :]
+        if (
+            not _LOCAL_IDENTIFIER.fullmatch(parameter)
+            or _A1_LOCAL_IDENTIFIER_CONFLICT.fullmatch(parameter)
+            or _R1C1_LOCAL_IDENTIFIER_CONFLICT.fullmatch(parameter)
+        ):
+            return None
+        key = parameter.casefold()
+        if key in parameters:
+            return None
+        parameters.add(key)
     return len(parameters)
 
 
@@ -1598,6 +1692,157 @@ def _implicit_intersection_reference_replacements(
     return replacements
 
 
+def _skip_excel_double_quoted_literal(formula: str, start: int) -> int:
+    """Return the first index after a double-quoted Excel string literal.
+
+    Excel escapes a literal double quote by doubling it.  An unterminated
+    literal deliberately consumes the remaining text: an unclosed string is
+    not a sound place from which to infer a DDE expression.
+    """
+    index = start + 1
+    while index < len(formula):
+        if formula[index] != '"':
+            index += 1
+            continue
+        if index + 1 < len(formula) and formula[index + 1] == '"':
+            index += 2
+            continue
+        return index + 1
+    return len(formula)
+
+
+def _single_quoted_component_end(formula: str, start: int) -> int | None:
+    """Return the end of an Excel single-quoted identifier, if complete."""
+    index = start + 1
+    while index < len(formula):
+        if formula[index] != "'":
+            index += 1
+            continue
+        if index + 1 < len(formula) and formula[index + 1] == "'":
+            index += 2
+            continue
+        return index + 1
+    return None
+
+
+def _quoted_component_start(formula: str, end: int) -> int | None:
+    """Return a complete quoted component ending at ``end``, if present."""
+    index = 0
+    while index < end:
+        if formula[index] == '"':
+            index = _skip_excel_double_quoted_literal(formula, index)
+            continue
+        if formula[index] != "'":
+            index += 1
+            continue
+        quoted_end = _single_quoted_component_end(formula, index)
+        if quoted_end is None:
+            return None
+        if quoted_end == end:
+            return index if quoted_end > index + 2 else None
+        index = quoted_end
+    return None
+
+
+def _dde_component_start(formula: str, end: int) -> int | None:
+    """Return the start of a quoted or unquoted DDE component before ``end``."""
+    if end <= 0:
+        return None
+    if formula[end - 1] == "'":
+        return _quoted_component_start(formula, end)
+    index = end
+    while (
+        index > 0
+        and formula[index - 1] not in _DDE_UNQUOTED_COMPONENT_DELIMITERS
+    ):
+        index -= 1
+    return index if index < end else None
+
+
+def _dde_component_end(formula: str, start: int) -> int | None:
+    """Return the end of one nonempty quoted or unquoted DDE component."""
+    if start >= len(formula):
+        return None
+    if formula[start] == "'":
+        quoted_end = _single_quoted_component_end(formula, start)
+        if quoted_end is None or quoted_end == start + 2:
+            return None
+        return quoted_end
+    index = start
+    while (
+        index < len(formula)
+        and formula[index] not in _DDE_UNQUOTED_COMPONENT_DELIMITERS
+    ):
+        index += 1
+    return index if index > start else None
+
+
+def _has_dde_expression_boundary(formula: str, component_start: int) -> bool:
+    """Return whether a DDE service starts at a conservative expression edge."""
+    index = component_start - 1
+    while index >= 0 and formula[index].isspace():
+        index -= 1
+    return index < 0 or formula[index] in _DDE_EXPRESSION_BOUNDARIES
+
+
+def _formula_dde_link_markers(formula: str) -> tuple[str, ...]:
+    """Return opaque markers for explicit direct DDE formula syntax.
+
+    The scanner recognizes only an application, a pipe *outside* quoted text,
+    a topic, and an exclamation mark: ``application|topic!item``.  It accepts
+    Excel's single-quoted application/topic spelling and a missing item, since
+    the latter is used by DDE command-style formulas.  Pipes in double-quoted
+    literals and ordinary single-quoted sheet names are skipped, so a formula
+    such as ``='cmd|/C calc'!A0`` is not misclassified.  This is lexical
+    inventory only; no formula is evaluated and no DDE endpoint is contacted.
+    """
+    markers: list[str] = []
+    index = 0
+    while index < len(formula):
+        character = formula[index]
+        if character == '"':
+            index = _skip_excel_double_quoted_literal(formula, index)
+            continue
+        if character == "'":
+            quoted_end = _single_quoted_component_end(formula, index)
+            index = quoted_end if quoted_end is not None else len(formula)
+            continue
+        if character != "|":
+            index += 1
+            continue
+
+        service_start = _dde_component_start(formula, index)
+        topic_start = index + 1
+        topic_end = _dde_component_end(formula, topic_start)
+        if (
+            service_start is None
+            or not _has_dde_expression_boundary(formula, service_start)
+            or topic_end is None
+            or topic_end >= len(formula)
+            or formula[topic_end] != "!"
+        ):
+            index += 1
+            continue
+
+        item_start = topic_end + 1
+        if item_start >= len(formula) or formula[item_start] in _DDE_ITEM_TERMINATORS:
+            item_end = item_start
+        else:
+            item_end = _dde_component_end(formula, item_start)
+            if (
+                item_end is None
+                or (
+                    item_end < len(formula)
+                    and formula[item_end] not in _DDE_ITEM_TERMINATORS
+                )
+            ):
+                index += 1
+                continue
+        markers.append(_FORMULA_DDE_LINK_MARKER)
+        index = max(item_end, index + 1)
+    return tuple(markers)
+
+
 def inspect_formula(
     formula: str,
     named_references: Mapping[str, Sequence[ParsedReference]] | None = None,
@@ -1615,6 +1860,10 @@ def inspect_formula(
         Mapping[str, Sequence[str]] | None
     ) = None,
     named_function_formula_external_action_functions: (
+        Mapping[str, Sequence[str]] | None
+    ) = None,
+    named_formula_dde_link_markers: Mapping[str, Sequence[str]] | None = None,
+    named_function_formula_dde_link_markers: (
         Mapping[str, Sequence[str]] | None
     ) = None,
     named_worksheet_code_resource_registration_functions: (
@@ -1676,6 +1925,7 @@ def inspect_formula(
     named-function value records a known LAMBDA whose definition is not safe to
     expand, so its call remains a visible coverage gap.
     """
+    direct_formula_dde_link_markers = _formula_dde_link_markers(formula)
     (
         tokens,
         literal_spill_tokens,
@@ -1686,6 +1936,7 @@ def inspect_formula(
             (),
             (),
             (),
+            formula_dde_link_markers=direct_formula_dde_link_markers,
             tokenization_failed=True,
             spill_reference_tokens=literal_spill_tokens,
             implicit_intersection_tokens=literal_implicit_intersection_tokens,
@@ -1701,6 +1952,10 @@ def inspect_formula(
     )
     resolved_named_function_formula_external_actions = (
         named_function_formula_external_action_functions or {}
+    )
+    resolved_named_formula_dde_links = named_formula_dde_link_markers or {}
+    resolved_named_function_formula_dde_links = (
+        named_function_formula_dde_link_markers or {}
     )
     resolved_named_worksheet_code_resource_registrations = (
         named_worksheet_code_resource_registration_functions or {}
@@ -1749,6 +2004,7 @@ def inspect_formula(
     unresolved_range_tokens: list[str] = []
     dynamic_reference_functions: list[str] = []
     external_action_functions: list[str] = []
+    formula_dde_link_markers: list[str] = list(direct_formula_dde_link_markers)
     python_functions: list[str] = []
     office_custom_function_candidates: list[str] = []
     worksheet_code_resource_registration_functions: list[str] = []
@@ -1805,6 +2061,9 @@ def inspect_formula(
                 external_action_functions.extend(
                     resolved_named_formula_external_actions.get(named_key, ())
                 )
+                formula_dde_link_markers.extend(
+                    resolved_named_formula_dde_links.get(named_key, ())
+                )
                 office_custom_function_candidates.extend(
                     resolved_named_custom_functions.get(named_key, ())
                 )
@@ -1836,10 +2095,15 @@ def inspect_formula(
                     )
                 )
                 continue
+            named_formula_dde_links = resolved_named_formula_dde_links.get(
+                named_key, ()
+            )
             if named_external_actions := resolved_named_formula_external_actions.get(
                 named_key
             ):
                 external_action_functions.extend(named_external_actions)
+            if named_formula_dde_links:
+                formula_dde_link_markers.extend(named_formula_dde_links)
             if named_custom_functions := resolved_named_custom_functions.get(named_key):
                 office_custom_function_candidates.extend(named_custom_functions)
             if (
@@ -1888,6 +2152,12 @@ def inspect_formula(
                 extend_formula_environment_information_signals(
                     named_formula_environment_information_calls
                 )
+            # A direct DDE name can be classified even though its raw syntax is
+            # intentionally outside the ordinary static-reference graph.  The
+            # dedicated private ledger retains that coverage boundary, so do
+            # not also expose its defined-name identity as an unknown token.
+            if named_formula_dde_links:
+                continue
             table_reference = resolve_structured_reference(
                 token.value, resolved_tables, origin
             )
@@ -1901,8 +2171,16 @@ def inspect_formula(
                 function_key = _function_lookup_key(token)
                 if function_key in resolved_named_functions:
                     function_references = resolved_named_functions[function_key]
+                    named_function_dde_links = (
+                        resolved_named_function_formula_dde_links.get(
+                            function_key, ()
+                        )
+                    )
                     if function_references is None:
-                        unresolved_range_tokens.append(token.value.rstrip("(").strip())
+                        if not named_function_dde_links:
+                            unresolved_range_tokens.append(
+                                token.value.rstrip("(").strip()
+                            )
                     else:
                         references.extend(function_references)
                     external_action_functions.extend(
@@ -1910,6 +2188,7 @@ def inspect_formula(
                             function_key, ()
                         )
                     )
+                    formula_dde_link_markers.extend(named_function_dde_links)
                     office_custom_function_candidates.extend(
                         resolved_named_function_custom_functions.get(function_key, ())
                     )
@@ -2092,6 +2371,7 @@ def inspect_formula(
         unresolved_range_tokens=tuple(dict.fromkeys(unresolved_range_tokens)),
         dynamic_reference_functions=tuple(dict.fromkeys(dynamic_reference_functions)),
         external_action_functions=tuple(external_action_functions),
+        formula_dde_link_markers=tuple(formula_dde_link_markers),
         python_functions=tuple(python_functions),
         office_custom_function_candidates=tuple(office_custom_function_candidates),
         worksheet_code_resource_registration_functions=tuple(

@@ -65,6 +65,7 @@ from formulafence.models import (
     FontSnapshot,
     FormulaCachedResultEntry,
     FormulaCachedResultSnapshot,
+    FormulaDdeLinkSnapshot,
     FormulaDefinedXlmActionSnapshot,
     FormulaDefinedXlmEnvironmentInformationSnapshot,
     FormulaDefinedXlmEvaluationSnapshot,
@@ -41519,6 +41520,12 @@ def _named_reference_maps(
     dict[str, tuple[str, ...]],
     dict[str, dict[str, tuple[str, ...]]],
     tuple[tuple[str, str], ...],
+    # Direct DDE-style formula links.
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
+    dict[str, tuple[str, ...]],
+    dict[str, dict[str, tuple[str, ...]]],
+    tuple[tuple[str, str], ...],
     # Office custom-function candidates.
     dict[str, tuple[str, ...]],
     dict[str, dict[str, tuple[str, ...]]],
@@ -41573,11 +41580,11 @@ def _named_reference_maps(
     visible and internal. Relative references, dynamic functions, unresolved
     tokens, recursive LAMBDAs, external links, and 3-D spans remain unresolved
     at a use site instead of producing a guessed graph edge. Formula external
-    actions, namespaced custom-function candidates, worksheet ``REGISTER.ID``
-    calls, XLM ``REGISTER`` / ``EVALUATE`` / selected action / ``GET.CELL``
-    calls, and native ``CELL`` / ``INFO`` calls stored in definitions are
-    propagated separately through those definitions so a named LAMBDA cannot
-    hide a stored boundary from the formula-cell ledgers.
+    actions, direct DDE links, namespaced custom-function candidates, worksheet
+    ``REGISTER.ID`` calls, XLM ``REGISTER`` / ``EVALUATE`` / selected action /
+    ``GET.CELL`` calls, and native ``CELL`` / ``INFO`` calls stored in
+    definitions are propagated separately through those definitions so a named
+    LAMBDA cannot hide a stored boundary from the formula-cell ledgers.
     """
     workbook_names = getattr(workbook, "defined_names", {})
     global_references: dict[str, tuple[ParsedReference, ...]] = {}
@@ -41811,6 +41818,10 @@ def _named_reference_maps(
         identity: f"FORMULAFENCE_EXTERNAL_ACTION_MARKER_{index}"
         for index, identity in enumerate(definition_identities)
     }
+    formula_dde_link_markers = {
+        identity: f"FORMULAFENCE_FORMULA_DDE_LINK_MARKER_{index}"
+        for index, identity in enumerate(definition_identities)
+    }
     custom_function_markers = {
         identity: f"FORMULAFENCE_OFFICE_CUSTOM_MARKER_{index}"
         for index, identity in enumerate(definition_identities)
@@ -41850,6 +41861,7 @@ def _named_reference_maps(
         marker: identity
         for markers in (
             external_action_markers,
+            formula_dde_link_markers,
             custom_function_markers,
             code_resource_registration_markers,
             formula_defined_xlm_registration_markers,
@@ -41901,6 +41913,7 @@ def _named_reference_maps(
     direct_external_action_functions: dict[
         tuple[str | None, str], tuple[str, ...]
     ] = {}
+    direct_formula_dde_links: dict[tuple[str | None, str], tuple[str, ...]] = {}
     direct_custom_function_candidates: dict[tuple[str | None, str], tuple[str, ...]] = {}
     direct_code_resource_registration_functions: dict[
         tuple[str | None, str], tuple[str, ...]
@@ -41939,6 +41952,14 @@ def _named_reference_maps(
             named_function_formula_external_action_functions=(
                 visible_named_function_markers(
                     definition.scope, external_action_markers
+                )
+            ),
+            named_formula_dde_link_markers=visible_named_markers(
+                definition.scope, formula_dde_link_markers
+            ),
+            named_function_formula_dde_link_markers=(
+                visible_named_function_markers(
+                    definition.scope, formula_dde_link_markers
                 )
             ),
             named_custom_function_candidates=visible_named_markers(
@@ -42021,6 +42042,11 @@ def _named_reference_maps(
             for function in inspection.external_action_functions
             if function not in identities_by_marker
         )
+        direct_formula_dde_links[identity] = tuple(
+            marker
+            for marker in inspection.formula_dde_link_markers
+            if marker not in identities_by_marker
+        )
         direct_custom_function_candidates[identity] = tuple(
             candidate
             for candidate in inspection.office_custom_function_candidates
@@ -42066,6 +42092,7 @@ def _named_reference_maps(
                 identities_by_marker[marker]
                 for marker in (
                     inspection.external_action_functions
+                    + inspection.formula_dde_link_markers
                     + inspection.office_custom_function_candidates
                     + inspection.worksheet_code_resource_registration_functions
                     + inspection.formula_defined_xlm_registration_functions
@@ -42129,6 +42156,7 @@ def _named_reference_maps(
 
     component_dependencies: dict[int, tuple[int, ...]] = {}
     component_direct_external_action_functions: dict[int, tuple[str, ...]] = {}
+    component_direct_formula_dde_links: dict[int, tuple[str, ...]] = {}
     component_direct_candidates: dict[int, tuple[str, ...]] = {}
     component_direct_code_resource_registration_functions: dict[
         int, tuple[str, ...]
@@ -42156,6 +42184,11 @@ def _named_reference_maps(
             function
             for identity in members
             for function in direct_external_action_functions[identity]
+        )
+        component_direct_formula_dde_links[component] = tuple(
+            marker
+            for identity in members
+            for marker in direct_formula_dde_links[identity]
         )
         component_direct_candidates[component] = tuple(
             candidate
@@ -42224,6 +42257,7 @@ def _named_reference_maps(
         if not dependencies
     )
     component_external_action_functions: dict[int, tuple[str, ...]] = {}
+    component_formula_dde_links: dict[int, tuple[str, ...]] = {}
     component_custom_function_candidates: dict[int, tuple[str, ...]] = {}
     component_code_resource_registration_functions: dict[int, tuple[str, ...]] = {}
     component_formula_defined_xlm_registration_functions: dict[
@@ -42248,6 +42282,14 @@ def _named_reference_maps(
                 function
                 for dependency in component_dependencies[component]
                 for function in component_external_action_functions[dependency]
+            )
+        )
+        component_formula_dde_links[component] = (
+            component_direct_formula_dde_links[component]
+            + tuple(
+                marker
+                for dependency in component_dependencies[component]
+                for marker in component_formula_dde_links[dependency]
             )
         )
         component_custom_function_candidates[component] = (
@@ -42342,6 +42384,10 @@ def _named_reference_maps(
     }
     external_action_functions_by_definition = {
         identity: component_external_action_functions[component]
+        for identity, component in component_by_definition.items()
+    }
+    formula_dde_links_by_definition = {
+        identity: component_formula_dde_links[component]
         for identity, component in component_by_definition.items()
     }
     code_resource_registration_functions_by_definition = {
@@ -42475,6 +42521,62 @@ def _named_reference_maps(
             )
             for definition in all_definitions
             if external_action_functions_by_definition[identity_for(definition)]
+        )
+    )
+
+    global_formula_dde_link_result: dict[str, tuple[str, ...]] = {
+        key: formula_dde_links_by_definition[identity_for(definition)]
+        for key, definition in global_formulas.items()
+    }
+    for scope, definitions in local_formulas.items():
+        for key, definition in definitions.items():
+            global_formula_dde_link_result[_qualified_name_key(sheet_titles[scope], key)] = (
+                formula_dde_links_by_definition[identity_for(definition)]
+            )
+
+    local_formula_dde_link_result: dict[str, dict[str, tuple[str, ...]]] = {}
+    for scope, definitions in local_formulas.items():
+        links = {
+            key: formula_dde_links_by_definition[identity_for(definition)]
+            for key, definition in definitions.items()
+        }
+        if links:
+            local_formula_dde_link_result[scope] = links
+
+    global_function_formula_dde_link_result: dict[str, tuple[str, ...]] = {
+        key: formula_dde_links_by_definition[identity_for(definition)]
+        for key, definition in global_lambdas.items()
+    }
+    for scope, definitions in local_lambdas.items():
+        for key, definition in definitions.items():
+            global_function_formula_dde_link_result[
+                _qualified_name_key(sheet_titles[scope], key)
+            ] = formula_dde_links_by_definition[identity_for(definition)]
+
+    local_function_formula_dde_link_result: dict[
+        str, dict[str, tuple[str, ...]]
+    ] = {}
+    for scope, definitions in local_lambdas.items():
+        links = {
+            key: formula_dde_links_by_definition[identity_for(definition)]
+            for key, definition in definitions.items()
+        }
+        if links:
+            local_function_formula_dde_link_result[scope] = links
+
+    formula_dde_link_definition_entries = tuple(
+        sorted(
+            (
+                repr((definition.scope, definition.key)),
+                repr(
+                    (
+                        formula_dde_links_by_definition[identity_for(definition)],
+                        definition.formula,
+                    )
+                ),
+            )
+            for definition in all_definitions
+            if formula_dde_links_by_definition[identity_for(definition)]
         )
     )
 
@@ -43058,6 +43160,11 @@ def _named_reference_maps(
         global_function_external_action_result,
         local_function_external_action_result,
         external_action_definition_entries,
+        global_formula_dde_link_result,
+        local_formula_dde_link_result,
+        global_function_formula_dde_link_result,
+        local_function_formula_dde_link_result,
+        formula_dde_link_definition_entries,
         global_custom_result,
         local_custom_result,
         global_function_custom_result,
@@ -43422,6 +43529,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     formula_external_action_cells: set[CellKey] = set()
     formula_external_action_counts: Counter[str] = Counter()
     formula_external_action_entries: list[tuple[str, str]] = []
+    formula_dde_link_cells: set[CellKey] = set()
+    formula_dde_link_count = 0
+    formula_dde_link_invocation_entries: list[tuple[str, str]] = []
     python_in_excel_cells: set[CellKey] = set()
     python_in_excel_function_counts: Counter[str] = Counter()
     python_in_excel_formula_entries: list[tuple[str, str]] = []
@@ -43477,6 +43587,11 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         global_named_function_formula_external_action_functions,
         local_named_function_formula_external_action_functions,
         formula_external_action_definition_entries,
+        global_named_formula_dde_link_markers,
+        local_named_formula_dde_link_markers,
+        global_named_function_formula_dde_link_markers,
+        local_named_function_formula_dde_link_markers,
+        formula_dde_link_definition_entries,
         global_named_custom_function_candidates,
         local_named_custom_function_candidates,
         global_named_function_custom_function_candidates,
@@ -43536,6 +43651,18 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         named_function_formula_external_action_functions = {
             **global_named_function_formula_external_action_functions,
             **local_named_function_formula_external_action_functions.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
+        named_formula_dde_link_markers = {
+            **global_named_formula_dde_link_markers,
+            **local_named_formula_dde_link_markers.get(
+                worksheet.title.casefold(), {}
+            ),
+        }
+        named_function_formula_dde_link_markers = {
+            **global_named_function_formula_dde_link_markers,
+            **local_named_function_formula_dde_link_markers.get(
                 worksheet.title.casefold(), {}
             ),
         }
@@ -43677,6 +43804,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 named_function_formula_external_action_functions=(
                     named_function_formula_external_action_functions
                 ),
+                named_formula_dde_link_markers=named_formula_dde_link_markers,
+                named_function_formula_dde_link_markers=(
+                    named_function_formula_dde_link_markers
+                ),
                 named_custom_function_candidates=named_custom_function_candidates,
                 named_function_custom_function_candidates=(
                     named_function_custom_function_candidates
@@ -43739,6 +43870,15 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                     (
                         f"{snapshot.location[0]}!{snapshot.location[1]}",
                         repr((inspection.external_action_functions, snapshot.formula)),
+                    )
+                )
+            if inspection.formula_dde_link_markers:
+                formula_dde_link_cells.add(snapshot.location)
+                formula_dde_link_count += inspection.formula_dde_link_count
+                formula_dde_link_invocation_entries.append(
+                    (
+                        f"{snapshot.location[0]}!{snapshot.location[1]}",
+                        repr((inspection.formula_dde_link_markers, snapshot.formula)),
                     )
                 )
             if inspection.python_functions:
@@ -44203,6 +44343,18 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             ),
             action_cells=frozenset(formula_external_action_cells),
         ),
+        formula_dde_links=FormulaDdeLinkSnapshot(
+            dde_formula_cell_count=len(formula_dde_link_cells),
+            dde_link_count=formula_dde_link_count,
+            dde_defined_name_count=len(formula_dde_link_definition_entries),
+            invocation_signature=_private_external_data_signature(
+                tuple(sorted(formula_dde_link_invocation_entries))
+            ),
+            definition_signature=_private_external_data_signature(
+                formula_dde_link_definition_entries
+            ),
+            dde_cells=frozenset(formula_dde_link_cells),
+        ),
         python_in_excel=python_in_excel,
         office_custom_functions=office_custom_functions,
         worksheet_code_resource_registrations=worksheet_code_resource_registrations,
@@ -44316,6 +44468,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
         "external_link_packages": snapshot.external_link_packages.profile_dict(),
         "external_relationships": snapshot.external_relationships.profile_dict(),
         "formula_external_actions": snapshot.formula_external_actions.profile_dict(),
+        "formula_dde_links": snapshot.formula_dde_links.profile_dict(),
         "python_in_excel": snapshot.python_in_excel.profile_dict(),
         "office_custom_functions": snapshot.office_custom_functions.profile_dict(),
         "worksheet_code_resource_registrations": (
@@ -44400,6 +44553,7 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             "has_xlm_macro_sheets": snapshot.xlm_macro_sheets.present,
             "has_external_relationships": snapshot.external_relationships.present,
             "has_formula_external_actions": snapshot.formula_external_actions.present,
+            "has_formula_dde_links": snapshot.formula_dde_links.present,
             "has_python_in_excel": snapshot.python_in_excel.present,
             "has_namespaced_custom_function_calls": (
                 snapshot.office_custom_functions.present

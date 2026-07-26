@@ -70,6 +70,7 @@ _RULE_FIELDS = {
     "no_external_link_package_changes",
     "no_external_relationship_changes",
     "no_formula_external_action_changes",
+    "no_formula_dde_link_changes",
     "no_python_in_excel_changes",
     "no_office_custom_function_changes",
     "no_worksheet_code_resource_registration_changes",
@@ -167,6 +168,7 @@ class Policy:
     no_external_link_package_changes: bool = False
     no_external_relationship_changes: bool = False
     no_formula_external_action_changes: bool = False
+    no_formula_dde_link_changes: bool = False
     no_python_in_excel_changes: bool = False
     no_office_custom_function_changes: bool = False
     no_worksheet_code_resource_registration_changes: bool = False
@@ -246,6 +248,7 @@ rules:
   no_external_link_package_changes: true
   no_external_relationship_changes: true
   no_formula_external_action_changes: true
+  no_formula_dde_link_changes: true
   no_python_in_excel_changes: true
   no_office_custom_function_changes: true
   no_worksheet_code_resource_registration_changes: true
@@ -459,6 +462,7 @@ def parse_policy(data: object) -> Policy:
         no_formula_external_action_changes=_boolean_rule(
             rules, "no_formula_external_action_changes"
         ),
+        no_formula_dde_link_changes=_boolean_rule(rules, "no_formula_dde_link_changes"),
         no_python_in_excel_changes=_boolean_rule(
             rules, "no_python_in_excel_changes"
         ),
@@ -759,6 +763,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP064",
                     "high",
                     "Policy forbids formula external-action or data-provider changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_formula_dde_link_changes:
+        for finding in _rule_triggered(report, "FF074"):
+            violations.append(
+                Finding(
+                    "FFP074",
+                    "high",
+                    "Policy forbids direct formula DDE-link changes.",
                     details=finding.details,
                 )
             )

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.80.0 — 2026-07-26
+
+- Add `FF074`, a private ledger for direct DDE-style formula syntax using the
+  documented `application|topic!item` form in worksheet formulas,
+  formula-defined names, and named `LAMBDA` bodies. The lexical detector
+  deliberately skips pipes inside ordinary quoted sheet names and string
+  literals, and it never evaluates a formula, resolves an endpoint, looks up
+  or launches a DDE server, or sends a command.
+- Propagate stored DDE definitions through nested, recursive, and sheet-local
+  names to their invoking formulas, including a conservative raw `LAMBDA`
+  wrapper fallback when direct DDE syntax defeats the underlying tokenizer.
+  Public profiles expose only formula-cell, DDE-link, and defined-name counts;
+  services, topics, items, formulas, locations, and identities stay inside
+  private comparison signatures. Raw `externalLink` DDE/OLE packages remain a
+  distinct `FF025` package boundary.
+- Add the fail-closed `no_formula_dde_link_changes` policy rule (`FFP074`) and
+  static-input coverage for invoking named LAMBDAs.
+
 ## 0.79.0 — 2026-07-26
 
 - Add `FF073`, a private ledger for selected legacy XLM action and

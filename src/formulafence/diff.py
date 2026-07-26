@@ -32,6 +32,7 @@ from formulafence.models import (
     Finding,
     FontSnapshot,
     FormulaCachedResultSnapshot,
+    FormulaDdeLinkSnapshot,
     FormulaDefinedXlmActionSnapshot,
     FormulaDefinedXlmEnvironmentInformationSnapshot,
     FormulaDefinedXlmEvaluationSnapshot,
@@ -2291,6 +2292,55 @@ def _formula_external_action_changes(
     return [change], [finding]
 
 
+def _formula_dde_link_changes(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+    static_input_change_locations: set[CellKey],
+) -> tuple[list[Change], list[Finding]]:
+    """Flag direct DDE formula material and statically visible input changes.
+
+    FormulaFence compares only its private lexical DDE inventory and existing
+    static dependency graph.  It never evaluates a formula, starts or contacts
+    a DDE server, resolves an application/topic/item, or exposes an endpoint.
+    Raw external-link packages remain a distinct package-level boundary.
+    """
+    old_links: FormulaDdeLinkSnapshot = before.formula_dde_links
+    new_links: FormulaDdeLinkSnapshot = after.formula_dde_links
+    if old_links == new_links and not static_input_change_locations:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_links.to_dict(),
+        "after": new_links.to_dict(),
+    }
+    if old_links.invocation_signature != new_links.invocation_signature:
+        details["formula_dde_link_invocation_material_changed"] = True
+    if old_links.definition_signature != new_links.definition_signature:
+        details["formula_dde_link_definition_material_changed"] = True
+    if static_input_change_locations:
+        details["formula_dde_link_static_input_changed"] = True
+        details["formula_dde_link_static_input_change_count"] = len(
+            static_input_change_locations
+        )
+    change = Change(
+        "formula_dde_links_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF074",
+        "high",
+        (
+            "A direct DDE-style formula link, a relevant formula-defined name, or "
+            "a statically visible input changed; depending on local Excel security "
+            "settings, the workbook may communicate with or launch a DDE server."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _python_in_excel_changes(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
@@ -3454,6 +3504,7 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     formula_changed_locations: set[CellKey] = set()
     semantic_cell_changes: list[Change] = []
     formula_external_action_static_input_changes: set[CellKey] = set()
+    formula_dde_link_static_input_changes: set[CellKey] = set()
     python_in_excel_static_input_changes: set[CellKey] = set()
     office_custom_function_static_input_changes: set[CellKey] = set()
     worksheet_code_resource_registration_static_input_changes: set[CellKey] = set()
@@ -3468,6 +3519,9 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     formula_external_action_cells = (
         before.formula_external_actions.action_cells
         | after.formula_external_actions.action_cells
+    )
+    formula_dde_link_cells = (
+        before.formula_dde_links.dde_cells | after.formula_dde_links.dde_cells
     )
     python_in_excel_cells = (
         before.python_in_excel.python_cells | after.python_in_excel.python_cells
@@ -3537,6 +3591,8 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         semantic_cell_changes.append(change)
         if formula_external_action_cells & impact:
             formula_external_action_static_input_changes.add(location)
+        if formula_dde_link_cells & impact:
+            formula_dde_link_static_input_changes.add(location)
         if python_in_excel_cells & impact:
             python_in_excel_static_input_changes.add(location)
         if office_custom_function_cells & impact:
@@ -3603,6 +3659,14 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(formula_external_action_changes)
     findings.extend(formula_external_action_findings)
+
+    formula_dde_link_changes, formula_dde_link_findings = _formula_dde_link_changes(
+        before,
+        after,
+        formula_dde_link_static_input_changes,
+    )
+    changes.extend(formula_dde_link_changes)
+    findings.extend(formula_dde_link_findings)
 
     python_in_excel_changes, python_in_excel_findings = _python_in_excel_changes(
         before,

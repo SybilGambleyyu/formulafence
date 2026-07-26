@@ -234,6 +234,50 @@ def test_formula_inspection_propagates_worksheet_code_resource_registrations() -
     assert named_formula.unresolved_range_tokens == ()
 
 
+def test_formula_inspection_inventories_direct_dde_syntax_conservatively() -> None:
+    command_style = inspect_formula("=cmd|' /C harmless'!A0")
+    documented_style = inspect_formula("='Quote'|'NYSE'!ZAXX")
+    unquoted_style = inspect_formula("=kepdde|_ddedata!Channel1.M340.Int_1")
+    omitted_item = inspect_formula("=cmd|'/C harmless'!")
+    embedded = inspect_formula("=@SUM(A1:A2)*cmd|'/C harmless'!A0")
+    two_links = inspect_formula("=cmd|'topic'!A0+cmd|'topic'!A1")
+    quoted_sheet = inspect_formula("='cmd|/C harmless'!A0")
+    quoted_string = inspect_formula('=HYPERLINK("cmd|\'/C harmless\'!A0","Open")')
+    ordinary_sheet = inspect_formula("=SUM('Sheet|One'!A1)")
+
+    assert command_style.formula_dde_link_count == 1
+    assert documented_style.formula_dde_link_count == 1
+    assert unquoted_style.formula_dde_link_count == 1
+    assert omitted_item.formula_dde_link_count == 1
+    assert embedded.formula_dde_link_count == 1
+    assert two_links.formula_dde_link_count == 2
+    assert quoted_sheet.formula_dde_link_count == 0
+    assert quoted_string.formula_dde_link_count == 0
+    assert ordinary_sheet.formula_dde_link_count == 0
+    assert command_style.tokenization_failed is True
+    assert unquoted_style.tokenization_failed is False
+
+
+def test_formula_inspection_propagates_direct_dde_markers_from_named_definitions() -> None:
+    named_lambda = inspect_formula(
+        "=FENCE.DDE(A1)",
+        named_function_references={"fence.dde": None},
+        named_function_formula_dde_link_markers={"fence.dde": ("DDE",)},
+    )
+    named_formula = inspect_formula(
+        "=FENCE.DDE.DIRECT",
+        named_references={"fence.dde.direct": ()},
+        named_formula_dde_link_markers={"fence.dde.direct": ("DDE",)},
+    )
+
+    assert named_lambda.formula_dde_link_count == 1
+    assert named_lambda.references == (
+        ParsedReference(None, 1, 1, 1, 1, raw="A1"),
+    )
+    assert named_formula.formula_dde_link_count == 1
+    assert named_formula.unresolved_range_tokens == ()
+
+
 def test_formula_inspection_inventories_formula_defined_xlm_registrations() -> None:
     ordinary = inspect_formula('=REGISTER(A1,A2,"J!")+@REGISTER(A3,A4,"J!")')
     definition = inspect_formula(
@@ -699,6 +743,7 @@ def test_formula_inspection_respects_inline_lambda_parameters() -> None:
 def test_named_lambda_definition_detection_requires_one_valid_top_level_lambda() -> None:
     assert lambda_parameter_count("=LAMBDA(value,value+1)") == 1
     assert lambda_parameter_count("=_xlfn.LAMBDA(42)") == 0
+    assert lambda_parameter_count("=LAMBDA(value,cmd|'topic'!value)") == 1
     assert (
         lambda_parameter_count(
             "=_xlfn.LAMBDA(_xlpm.temp,_xlpm.temp+Inputs!B2)"

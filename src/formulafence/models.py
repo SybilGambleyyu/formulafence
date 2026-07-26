@@ -970,6 +970,46 @@ class FormulaExternalActionSnapshot:
 
 
 @dataclass(frozen=True)
+class FormulaDdeLinkSnapshot:
+    """Private ledger for direct DDE-style worksheet and named formulas.
+
+    Direct DDE formulas use an application/topic/item expression rather than a
+    normal worksheet function.  FormulaFence recognizes only a conservative,
+    lexical ``application|topic!item`` boundary (including terminal command
+    forms with no item) and retains aggregate counts.
+    The application, topic, item, source formula, cells, and defined-name
+    identities remain in private signatures so same-count material changes are
+    comparable without exposing or resolving an endpoint.  FormulaFence never
+    evaluates a formula, launches or contacts a DDE server, or executes a
+    command.  Raw OOXML external-link packages are covered separately because
+    they can exist independently of direct formula syntax.
+    """
+
+    dde_formula_cell_count: int = 0
+    dde_link_count: int = 0
+    dde_defined_name_count: int = 0
+    invocation_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
+    dde_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(self.dde_formula_cell_count or self.dde_defined_name_count)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate counts without DDE endpoint or formula material."""
+        return {
+            "present": self.present,
+            "dde_formula_cell_count": self.dde_formula_cell_count,
+            "dde_link_count": self.dde_link_count,
+            "dde_defined_name_count": self.dde_defined_name_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class PythonInExcelSnapshot:
     """Safe aggregate of Python-in-Excel code and its workbook bindings.
 
@@ -4051,6 +4091,9 @@ class WorkbookSnapshot:
     formula_external_actions: FormulaExternalActionSnapshot = field(
         default_factory=FormulaExternalActionSnapshot
     )
+    formula_dde_links: FormulaDdeLinkSnapshot = field(
+        default_factory=FormulaDdeLinkSnapshot
+    )
     python_in_excel: PythonInExcelSnapshot = field(
         default_factory=PythonInExcelSnapshot
     )
@@ -4553,6 +4596,14 @@ class WorkbookSnapshot:
                 self.formula_external_actions.cube_function_count
             ),
             "has_formula_external_actions": self.formula_external_actions.present,
+            "formula_dde_link_formula_cell_count": (
+                self.formula_dde_links.dde_formula_cell_count
+            ),
+            "formula_dde_link_count": self.formula_dde_links.dde_link_count,
+            "formula_dde_link_defined_name_count": (
+                self.formula_dde_links.dde_defined_name_count
+            ),
+            "has_formula_dde_links": self.formula_dde_links.present,
             "python_in_excel_part_count": self.python_in_excel.python_part_count,
             "python_in_excel_formula_cell_count": (
                 self.python_in_excel.python_formula_cell_count

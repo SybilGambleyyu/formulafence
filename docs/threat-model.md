@@ -573,6 +573,20 @@ review prompt, not proof of an error.
   [`RTD` reference](https://support.microsoft.com/en-us/excel/functions/rtd-function),
   [`STOCKHISTORY` reference](https://support.microsoft.com/en-us/office/stockhistory-function-1ac8b5b3-5f62-4d94-8ab8-7504ec7239a8),
   and [`CUBESET` reference](https://support.microsoft.com/en-us/excel/functions/cubeset-function).
+- Direct DDE-style formulas can carry a cross-process link without a normal
+  worksheet function or a raw `externalLink` package. FormulaFence separately
+  recognizes only the lexical `application|topic!item` shape described by the
+  Windows [DDE overview](https://learn.microsoft.com/en-us/windows/win32/dataxchg/about-dynamic-data-exchange),
+  skipping pipes inside string literals and ordinary quoted sheet names. It
+  privately fingerprints direct worksheet formulas plus formula-defined names
+  and named `LAMBDA` chains; public `FF074` output has only formula-cell, link,
+  and defined-name counts. A material change or statically visible input to an
+  invoking named `LAMBDA` emits `FF074`; enable
+  `no_formula_dde_link_changes` for `FFP074`. FormulaFence does **not**
+  evaluate a formula, resolve an endpoint, look up, launch, or contact a DDE
+  server, send a DDE command, or determine whether Excel's local DDE security
+  settings permit any action. Raw external-link DDE/OLE metadata remains under
+  `FF025`.
 - Python in Excel keeps executable source separately from its `PY` formula
   placeholder. FormulaFence recognizes stored `PY` spellings, privately
   fingerprints the documented workbook Python part, relationship, content type,

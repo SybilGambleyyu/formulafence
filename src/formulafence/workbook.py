@@ -187,6 +187,15 @@ _OOXML_READER_MAX_ROW_DIMENSION_COUNT = 16_384
 # container fragmentation separately.
 _OOXML_READER_MAX_COLUMN_DIMENSION_CONTAINER_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_COLUMN_DIMENSION_COUNT = MAX_EXCEL_COLUMN
+# ``openpyxl`` turns every direct ``brk`` child of a transitional ``rowBreaks``
+# or ``colBreaks`` container into a page-break record, while FormulaFence's raw
+# print-layout scanner retains every direct child as either a break or coverage
+# evidence. Excel permits 1,026 horizontal and 1,026 vertical page breaks.
+# Preserve one worksheet's complete published allowance, but bound the
+# aggregate reader/raw-scanner catalog and separately prevent a compact stream
+# of empty direct containers from becoming an unbounded XML tree.
+_OOXML_READER_MAX_PAGE_BREAK_CONTAINER_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_PAGE_BREAK_DECLARATION_COUNT = 2 * 1_026
 # The manifest and workbook relationship catalog are materialized before any
 # worksheet is considered. Their declarations are not ZIP members, so a
 # bounded archive inventory alone cannot stop a small package from making the
@@ -3419,11 +3428,14 @@ def _validate_ooxml_semantic_reader_resources(
     row_dimension_count = 0
     column_dimension_container_count = 0
     column_dimension_count = 0
+    page_break_container_count = 0
+    page_break_declaration_count = 0
     shared_string_count = 0
     cell_tags = _spreadsheetml_tags("c")
     row_tags = _spreadsheetml_tags("row")
     column_tags = _spreadsheetml_tags("col")
     column_container_tags = _spreadsheetml_tags("cols")
+    page_break_container_tags = _spreadsheetml_tags("rowBreaks", "colBreaks")
     worksheet_tags = _spreadsheetml_tags("worksheet")
     formula_tags = _spreadsheetml_tags("f")
     inline_string_tags = _spreadsheetml_tags("is")
@@ -3855,10 +3867,42 @@ def _validate_ooxml_semantic_reader_resources(
         nonlocal row_dimension_count
         nonlocal column_dimension_container_count
         nonlocal column_dimension_count
+        nonlocal page_break_container_count
+        nonlocal page_break_declaration_count
         sheet_catalog_end(element, tags)
         merged_cell_end(element, tags)
         worksheet_reader_catalog_end(element, tags)
         if (
+            element.tag in page_break_container_tags
+            and len(tags) == 2
+            and tags[0] in worksheet_tags
+        ):
+            page_break_container_count += 1
+            if (
+                page_break_container_count
+                > _OOXML_READER_MAX_PAGE_BREAK_CONTAINER_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "page-break containers exceed the semantic-reader safety limit."
+                )
+        elif (
+            len(tags) == 3
+            and tags[0] in worksheet_tags
+            and tags[-2] in page_break_container_tags
+        ):
+            # ``RowBreak.from_tree`` dispatches direct ``brk`` children by
+            # local name, and FormulaFence records unexpected direct children
+            # as print coverage evidence. Count every child of an ordinary or
+            # Strict break container so neither path can evade the bound.
+            page_break_declaration_count += 1
+            if (
+                page_break_declaration_count
+                > _OOXML_READER_MAX_PAGE_BREAK_DECLARATION_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "page-break declarations exceed the semantic-reader safety limit."
+                )
+        elif (
             element.tag in column_container_tags
             and len(tags) == 2
             and tags[0] in worksheet_tags

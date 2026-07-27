@@ -5,6 +5,40 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Worksheet page-break catalog bounds — 2026-07-26
+
+Version 0.123.0 closes two compact allocation paths in worksheet print
+metadata. Excel's
+[published limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits)
+allow 1,026 horizontal and 1,026 vertical page breaks. `openpyxl` turns each
+direct transitional SpreadsheetML `<brk>` record into a page-break object, while
+FormulaFence's raw print-layout scanner retains every direct child of
+`<rowBreaks>` or `<colBreaks>` as either a modeled break or coverage evidence.
+Repeated empty containers are also retained by the raw scanner. Neither path
+needs a populated cell, so the ordinary worksheet-cell budget cannot constrain
+them.
+
+The semantic-reader preflight now permits 2,052 direct break-container children
+in aggregate across selected ordinary worksheet parts: one worksheet's complete
+published row-plus-column allowance. It separately permits 4,096 direct
+`rowBreaks`/`colBreaks` containers, blocking container fragmentation before raw
+XML scanners can build a large direct-child list. The record counter follows
+both allocation paths: every direct child of an ordinary or Strict SpreadsheetML
+container consumes it, including unexpected or alternate-namespace children
+that FormulaFence must retain as raw coverage evidence. Foreign-namespace
+containers remain outside the supported reader/scanner paths.
+
+Independent raw-ZIP fixtures established both costs using the exact 0.122.0
+wheel in Python 3.12, then the 0.123.0 source candidate in that same
+environment. A 17,127-byte workbook with 100,000 valid row-break records
+(4,200,530 bytes of worksheet XML) loaded in 9.762 seconds at 70,900 KiB
+resident and now rejects in 0.012 seconds at 33,676 KiB. A 7,166-byte workbook
+with 100,000 empty direct row-break containers (1,200,466 bytes of worksheet
+XML) loaded in 4.077 seconds at 39,036 KiB and now rejects in 0.015 seconds at
+33,796 KiB. Focused archive-safety and version coverage passed **157 tests in
+5.50 seconds**; the completed source tree passed **859 tests in 122.86
+seconds**, with Ruff, bytecode compilation, and `git diff --check` clean.
+
 ## Column-dimension declaration and container bounds — 2026-07-26
 
 Version 0.122.0 closes two compact allocation paths around worksheet columns.

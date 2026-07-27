@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.123.0 — 2026-07-26
+
+- Bound direct worksheet page-break catalogs before FormulaFence's raw
+  print-layout scanner or `openpyxl` can materialize them. The semantic-reader
+  preflight permits 4,096 direct `rowBreaks`/`colBreaks` containers and 2,052
+  direct child records in aggregate across selected ordinary worksheet parts.
+- Preserve one worksheet's published allowance of 1,026 horizontal plus 1,026
+  vertical page breaks. Every direct child of a supported break container now
+  consumes the record budget, including unexpected or alternate-namespace
+  children that FormulaFence must retain as raw coverage evidence.
+- Add fail-before-reader coverage for configured/default limits, cross-sheet
+  and cross-axis aggregation, exact published capacity, Strict SpreadsheetML,
+  arbitrary direct children, and ignored foreign-namespace containers.
+
 ## 0.122.0 — 2026-07-26
 
 - Bound reader-visible worksheet column declarations and direct containers

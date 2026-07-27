@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.125.0 — 2026-07-26
+
+- Bound every descendant below a direct `customSheetView` in a supported legacy
+  `customSheetViews` container before FormulaFence's raw Custom View scanner can
+  recursively canonicalize opaque XML or materialize specialized controls. The
+  new 4,096-element aggregate budget is separate from the existing 4,096-view
+  declaration bound.
+- Apply the bound to standard, Strict, and alternate-namespace view paths the
+  raw scanner enters, while leaving foreign `customSheetViews` containers outside
+  that scanner path. The published 2,052 Custom View row-plus-column page-break
+  allowance remains accepted inside the new subtree capacity.
+- Add fail-before-reader coverage for configured/default and exact limits,
+  cross-sheet aggregation, nested opaque trees, Strict and opaque views, and
+  ignored foreign containers.
+
 ## 0.124.0 — 2026-07-26
 
 - Extend the existing page-break preflight budget into legacy Excel Custom

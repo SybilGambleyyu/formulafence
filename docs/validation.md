@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Legacy Custom View descendant bounds — 2026-07-26
+
+Version 0.125.0 closes the remaining compact subtree path in the legacy Custom
+View scanner. Version 0.124.0 bounded Custom View page-break records and
+containers, but a supported `<customSheetViews>/<customSheetView>` hierarchy can
+also carry an unknown direct child or a single opaque nested subtree. FormulaFence
+preserves that unsupported XML privately through a recursive canonical signature;
+one view declaration could therefore still make a small package allocate a long
+tuple tree even though its page-break catalog was within bounds.
+
+The semantic-reader preflight now counts every descendant below each direct
+`customSheetView` that the raw scanner will enter from a transitional or Strict
+`customSheetViews` container. It permits 4,096 descendants in aggregate, in
+addition to the existing 4,096 direct-view declaration boundary. This covers
+standard views, Strict views, and alternate-namespace views that reach the
+opaque signature path, while foreign `customSheetViews` containers remain
+outside that raw scanner path. The bound is large enough for the published
+2,052 row-plus-column page-break allowance plus its two containers; an exact
+4,096-descendant opaque fixture remains accepted.
+
+Independent raw-ZIP fixtures measured the exact 0.124.0 wheel and the 0.125.0
+source candidate in the same Python 3.12 environment. An 8,978-byte workbook
+with 100,000 direct opaque Custom View children (1,401,837 bytes of sheet XML)
+loaded through 0.124.0 in 4.197 seconds at 111,704 KiB resident; the candidate
+rejects it in 0.018 seconds at 33,700 KiB. An 8,798-byte workbook with one
+opaque Custom View child containing 100,000 nested entries (1,301,862 bytes of
+sheet XML) loaded in 3.773 seconds at 100,188 KiB and now rejects in 0.019
+seconds at 33,660 KiB. Focused archive-safety and version coverage passed
+**177 tests in 6.26 seconds**; the completed source suite passed **879 tests in
+123.22 seconds**, with Ruff, bytecode compilation, and `git diff --check`
+clean.
+
 ## Legacy Custom View page-break catalog bounds — 2026-07-26
 
 Version 0.124.0 closes the equivalent allocation paths inside legacy Excel

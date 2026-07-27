@@ -209,15 +209,19 @@ def _append_custom_sheet_view_declarations(
     count: int,
     *,
     alternate_namespace: str | None = None,
+    container_namespace: str | None = None,
+    member_name: str = "xl/worksheets/sheet1.xml",
 ) -> None:
     """Repeat direct sheet Custom View entries for the preflight boundary."""
-    member_name = "xl/worksheets/sheet1.xml"
     with ZipFile(path) as archive:
         worksheet = archive.read(member_name)
     root = ElementTree.fromstring(worksheet)
     namespace = root.tag.partition("}")[0].removeprefix("{")
+    container_namespace = container_namespace or namespace
     qualified_container_name = (
-        f"{{{namespace}}}customSheetViews" if namespace else "customSheetViews"
+        f"{{{container_namespace}}}customSheetViews"
+        if container_namespace
+        else "customSheetViews"
     )
     qualified_child_name = (
         f"{{{namespace}}}customSheetView" if namespace else "customSheetView"
@@ -596,6 +600,42 @@ def _append_custom_sheet_view_page_break_containers(
         member_name,
         ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
     )
+
+
+def _append_custom_sheet_view_opaque_descendants(
+    path: Path,
+    count: int,
+    *,
+    member_name: str = "xl/worksheets/sheet1.xml",
+    custom_sheet_view_namespace: str | None = None,
+    nested: bool = False,
+) -> None:
+    """Append raw Custom View descendants without invoking a workbook reader."""
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    root = ElementTree.fromstring(worksheet)
+    _namespace, view = _custom_sheet_view_page_break_target(
+        root,
+        custom_sheet_view_namespace=custom_sheet_view_namespace,
+    )
+    opaque_namespace = "urn:formulafence:custom-view-subtree"
+    parent = view
+    if nested:
+        parent = ElementTree.SubElement(view, f"{{{opaque_namespace}}}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, f"{{{opaque_namespace}}}entry")
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _make_custom_sheet_view_subtree_model(path: Path) -> Path:
+    """Create one otherwise-empty standard Custom View for subtree tests."""
+    workbook = make_model(path)
+    _append_custom_sheet_view_declarations(workbook, 1)
+    return workbook
 
 
 def _insert_worksheet_child_after_sheet_data(
@@ -2205,6 +2245,201 @@ def test_semantic_reader_preflight_rejects_default_custom_sheet_view_limit_befor
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "custom sheet-view declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_custom_sheet_view_descendants_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = _make_custom_sheet_view_subtree_model(
+        tmp_path / "too-many-custom-sheet-view-descendants.xlsx"
+    )
+    _append_custom_sheet_view_opaque_descendants(workbook, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_CUSTOM_SHEET_VIEW_DESCENDANT_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "custom sheet-view descendants" in message
+
+
+def test_semantic_reader_preflight_rejects_default_custom_view_descendant_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = _make_custom_sheet_view_subtree_model(
+        tmp_path / "default-custom-sheet-view-descendant-limit.xlsx"
+    )
+    _append_custom_sheet_view_opaque_descendants(
+        workbook,
+        workbook_module._OOXML_READER_MAX_CUSTOM_SHEET_VIEW_DESCENDANT_COUNT + 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "custom sheet-view descendants" in message
+
+
+def test_semantic_reader_preflight_accepts_default_custom_view_descendant_capacity(
+    tmp_path: Path,
+) -> None:
+    workbook = _make_custom_sheet_view_subtree_model(
+        tmp_path / "custom-sheet-view-descendants-at-default-limit.xlsx"
+    )
+    _append_custom_sheet_view_opaque_descendants(
+        workbook,
+        workbook_module._OOXML_READER_MAX_CUSTOM_SHEET_VIEW_DESCENDANT_COUNT,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_aggregates_custom_sheet_view_descendants_across_sheets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = _make_custom_sheet_view_subtree_model(
+        tmp_path / "aggregate-custom-sheet-view-descendants.xlsx"
+    )
+    _append_custom_sheet_view_declarations(
+        workbook,
+        1,
+        member_name="xl/worksheets/sheet2.xml",
+    )
+    _append_custom_sheet_view_opaque_descendants(workbook, 1)
+    _append_custom_sheet_view_opaque_descendants(
+        workbook,
+        1,
+        member_name="xl/worksheets/sheet2.xml",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_CUSTOM_SHEET_VIEW_DESCENDANT_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "custom sheet-view descendants" in message
+
+
+def test_semantic_reader_preflight_accepts_custom_sheet_view_descendants_at_the_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = _make_custom_sheet_view_subtree_model(
+        tmp_path / "custom-sheet-view-descendants-at-limit.xlsx"
+    )
+    _append_custom_sheet_view_opaque_descendants(workbook, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_CUSTOM_SHEET_VIEW_DESCENDANT_COUNT",
+        2,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_accepts_published_custom_view_page_break_allowance(
+    tmp_path: Path,
+) -> None:
+    workbook = _make_custom_sheet_view_subtree_model(
+        tmp_path / "custom-view-page-breaks-at-published-limit.xlsx"
+    )
+    _append_custom_sheet_view_page_break_declarations(workbook, 1_026)
+    _append_custom_sheet_view_page_break_declarations(workbook, 1_026, axis="column")
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_counts_nested_custom_sheet_view_descendants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = _make_custom_sheet_view_subtree_model(
+        tmp_path / "nested-custom-sheet-view-descendants.xlsx"
+    )
+    _append_custom_sheet_view_opaque_descendants(workbook, 1, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_CUSTOM_SHEET_VIEW_DESCENDANT_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "custom sheet-view descendants" in message
+
+
+def test_semantic_reader_preflight_counts_opaque_custom_sheet_view_descendants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = _make_custom_sheet_view_subtree_model(
+        tmp_path / "opaque-custom-sheet-view-descendants.xlsx"
+    )
+    _append_custom_sheet_view_opaque_descendants(
+        workbook,
+        1,
+        custom_sheet_view_namespace="urn:formulafence:opaque-custom-sheet-view",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_CUSTOM_SHEET_VIEW_DESCENDANT_COUNT",
+        0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "custom sheet-view descendants" in message
+
+
+def test_semantic_reader_preflight_ignores_foreign_custom_sheet_view_containers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "foreign-custom-sheet-view-container.xlsx")
+    _append_custom_sheet_view_declarations(
+        workbook,
+        1,
+        container_namespace="urn:formulafence:foreign-custom-sheet-views",
+    )
+    _append_custom_sheet_view_opaque_descendants(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_CUSTOM_SHEET_VIEW_DESCENDANT_COUNT",
+        0,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_counts_strict_custom_sheet_view_descendants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_strict_custom_workbook_view_model(
+        tmp_path / "strict-custom-sheet-view-descendants.xlsx"
+    )
+    _append_custom_sheet_view_opaque_descendants(
+        workbook,
+        workbook_module._OOXML_READER_MAX_CUSTOM_SHEET_VIEW_DESCENDANT_COUNT + 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "custom sheet-view descendants" in message
 
 
 def test_semantic_reader_preflight_rejects_excessive_merged_cell_declarations_before_scanners(

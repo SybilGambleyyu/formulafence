@@ -234,6 +234,13 @@ _OOXML_READER_MAX_WORKBOOK_FUNCTION_GROUP_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_SMART_TAG_TYPE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_WEB_PUBLISH_OBJECT_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_CUSTOM_SHEET_VIEW_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+# FormulaFence's raw Custom View scanner either walks a standard view's direct
+# controls or recursively canonicalizes an opaque descendant subtree. A bound
+# on view declarations alone therefore cannot stop one supported container
+# from hiding a compact, expensive descendant catalog. Keep a separate
+# aggregate element budget for descendants below the direct view declarations
+# the raw scanner will inspect, matching the established package-catalog scale.
+_OOXML_READER_MAX_CUSTOM_SHEET_VIEW_DESCENDANT_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 # ``openpyxl`` expands every coordinate in a merged range into a ``MergedCell``
 # object while binding a worksheet. A compact merge declaration can therefore
 # allocate an entire worksheet even when the XML contains almost no cells.
@@ -3415,6 +3422,7 @@ def _validate_ooxml_semantic_reader_resources(
     workbook_pivot_cache_count = 0
     workbook_auxiliary_catalog_counts: dict[str, int] = {}
     custom_sheet_view_count = 0
+    custom_sheet_view_descendant_count = 0
     merged_cell_range_count = 0
     merged_cell_count = 0
     data_validation_count = 0
@@ -3610,11 +3618,40 @@ def _validate_ooxml_semantic_reader_resources(
         if element.tag in inline_string_tags:
             inline_string_text_lengths.append(0)
 
+    def custom_sheet_view_descendant_end(
+        _element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        """Bound raw-scanned descendants beneath supported Custom View entries."""
+        nonlocal custom_sheet_view_descendant_count
+
+        # The Custom View scanner only enters a sheet-level container in a
+        # supported SpreadsheetML namespace. It then handles every direct
+        # ``customSheetView`` child, including an alternate-namespace child it
+        # must hash as opaque evidence. Count each descendant—not the view
+        # declaration itself, which has its own catalog budget—before either
+        # the specialized or recursive generic scanner can build Python tuples.
+        if (
+            len(tags) < 4
+            or tags[1] not in custom_sheet_view_container_tags
+            or _xml_local_name(tags[2]) != "customSheetView"
+        ):
+            return
+        custom_sheet_view_descendant_count += 1
+        if (
+            custom_sheet_view_descendant_count
+            > _OOXML_READER_MAX_CUSTOM_SHEET_VIEW_DESCENDANT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "custom sheet-view descendants exceed the semantic-reader safety limit."
+            )
+
     def sheet_catalog_end(
         element: ElementTree.Element,
         tags: list[str],
     ) -> None:
         nonlocal custom_sheet_view_count
+        custom_sheet_view_descendant_end(element, tags)
         custom_sheet_view_page_break_end(element, tags)
         # FormulaFence's legacy Custom View scanner examines every direct child
         # of a sheet-level ``customSheetViews`` container, including an unknown

@@ -1596,10 +1596,13 @@ Writer-generated comment shape IDs, VML shape IDs, package relationship IDs,
 and consistently rekeyed placeholder GUIDs normalize away. Missing, duplicate,
 unsafe, unbound, malformed, unreadable, oversized, or over-budget metadata
 becomes a coverage warning; XML reads are bounded to 16 MiB per part, 64 MiB
-per workbook, and 512 parts. The ordinary workbook reader uses a
-Note-quarantined copy only after the raw scanner has recorded the original
-package, so parser tolerance or a bad target cannot turn a review finding into
-a reader crash.
+per workbook, and 512 parts. Before materializing a comments or Note-VML tree,
+FormulaFence streams complete structure: 32,768 elements per part and 65,536
+across the legacy-Note scan. This is a CI allocation and coverage boundary, not
+a workbook-validity limit; a well-formed structural overage becomes visible
+`FF010`/`FF046` evidence. The ordinary workbook reader uses a Note-quarantined
+copy only after the raw scanner has recorded the original package, so parser
+tolerance or a bad target cannot turn a review finding into a reader crash.
 
 This rule compares stored package state only. It does not render Note text/VML,
 resolve authors, fetch a relationship target, execute linked content, determine
@@ -1749,12 +1752,15 @@ FormulaFence does not initialize an ActiveX control, deserialize/open an OLE
 object or package, render a VML drawing, read comment-note content into the
 control inventory, follow an external relationship, or infer event dispatch.
 Relevant XML reads are bounded to 16 MiB per part,
-64 MiB per workbook, and 512 parts; direct payload hashes are bounded to 32 MiB
-per part, 64 MiB per workbook, and 512 parts. Missing, malformed, orphaned,
-unbound, oversized, or over-budget material remains a visible coverage warning.
-VML/drawing layout, embedded payload formats, event behavior, and behavior not
-reachable through this relationship-backed chain are outside this control's
-scope.
+64 MiB per workbook, and 512 parts. Before private XML canonicalization,
+FormulaFence streams complete structure: 32,768 elements per part and 65,536
+across the embedded-control scan. A well-formed structural overage becomes
+visible `FF010`/`FF029` coverage evidence. Direct payload hashes are bounded to
+32 MiB per part, 64 MiB per workbook, and 512 parts. Missing, malformed,
+orphaned, unbound, oversized, or over-budget material remains a visible
+coverage warning. VML/drawing layout, embedded payload formats, event behavior,
+and behavior not reachable through this relationship-backed chain are outside
+this control's scope.
 
 Power Query stores query definitions in a `DataMashup` Custom XML part. FormulaFence
 parses the documented length-prefixed container and privately compares its

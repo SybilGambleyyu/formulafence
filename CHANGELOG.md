@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.136.0 — 2026-07-26
+
+- Bound raw traditional Excel Note comments/VML layout XML before FormulaFence
+  recursively canonicalizes private note metadata. Each part allows 32,768 XML
+  elements and the complete legacy-Note scan allows 65,536, alongside the
+  existing 16 MiB per-part, 64 MiB aggregate, and 512-part byte/count limits.
+- Bound the shared raw worksheet embedded-control XML gateway used by worksheet
+  control markup, ActiveX persistence, form-control properties, and legacy VML
+  drawings with the same 32,768-per-part / 65,536-per-scan structural limits.
+  A VML note drawing is independently protected at both the Note and control
+  inventory paths, so either scanner declines it before tree allocation.
+- Convert successfully parsed structural overages into explicit `FF010`/`FF046`
+  Note or `FF010`/`FF029` embedded-control coverage evidence while malformed or
+  unreadable input retains its established diagnostic.
+- Add fail-before-materialization regressions for Comment, ActiveX,
+  form-control-property, and shared VML paths, including nested opaque XML,
+  aggregate budgets, exact capacity, default overage, and report coverage.
+
 ## 0.135.0 — 2026-07-26
 
 - Bound relationship-selected Worksheet DrawingML XML in the shared

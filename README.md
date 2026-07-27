@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.135.0/formulafence-0.135.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.136.0/formulafence-0.136.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.135.0
+  uses: SybilGambleyyu/formulafence@v0.136.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2312,7 +2312,11 @@ Writer-chosen VML shape IDs, comment shape IDs, placeholder GUIDs (when
 consistently rekeyed), and package relationship IDs are normalized. Missing,
 duplicate, malformed, unsafe, unbound, unreadable, oversized, or over-budget
 metadata becomes a visible coverage warning; XML reads are bounded to 16 MiB
-per part, 64 MiB per workbook, and 512 parts.
+per part, 64 MiB per workbook, and 512 parts. Before materializing a comments
+or Note-VML tree, FormulaFence streams its complete structure: 32,768 elements
+per part and 65,536 across the legacy-Note scan. This is a CI allocation and
+coverage boundary, not a workbook-validity limit; a well-formed structural
+overage becomes visible `FF010`/`FF046` evidence.
 
 The scope is deliberately static: FormulaFence does not render Note text or
 VML, resolve an author, fetch a relationship target, execute linked content,
@@ -2477,10 +2481,13 @@ OLE identities, relationship targets, XML, and payload bytes never enter
 profiles or reports. FormulaFence never initializes a control, deserializes or
 opens an OLE object/package, renders a VML drawing, follows an external target,
 or infers control event dispatch. Relevant XML reads are bounded to 16 MiB per
-part, 64 MiB per workbook, and 512 parts; direct raw payload hashes are bounded
-to 32 MiB per part, 64 MiB per workbook, and 512 parts. Malformed, orphaned,
-unbound, oversized, or over-budget material remains an explicit coverage
-warning. This scope follows Microsoft's guidance on [sheet ActiveX
+part, 64 MiB per workbook, and 512 parts. Before private XML canonicalization,
+FormulaFence streams complete XML structure: 32,768 elements per part and
+65,536 across the embedded-control scan. A well-formed structural overage is
+visible `FF010`/`FF029` coverage evidence. Direct raw payload hashes are
+bounded to 32 MiB per part, 64 MiB per workbook, and 512 parts. Malformed,
+orphaned, unbound, oversized, or over-budget material remains an explicit
+coverage warning. This scope follows Microsoft's guidance on [sheet ActiveX
 controls](https://learn.microsoft.com/en-us/office/vba/excel/concepts/controls-dialogboxes-forms/using-activex-controls-on-sheets),
 the [`ocx` ActiveX persistence
 schema](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/b30a660a-95eb-4716-b201-a46aae788610),

@@ -9717,6 +9717,191 @@ def test_worksheet_embedded_control_xml_part_budget_remains_covered(
     )
 
 
+def test_worksheet_embedded_control_xml_element_budget_stops_activex_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    member = "xl/activeX/activeX1.xml"
+    _append_worksheet_control_xml_elements(workbook, member, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKSHEET_EMBEDDED_CONTROL_MAX_XML_ELEMENT_COUNT",
+        _worksheet_control_xml_element_count(workbook, member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        payload = archive.read(member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(candidate_payload):
+        if candidate_payload == payload:
+            raise AssertionError(
+                "the ActiveX XML tree was materialized after its budget failed"
+            )
+        return original_tree_parse(candidate_payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_embedded_controls.unrecognized_part_count >= 1
+    assert any(
+        "worksheet embedded-control XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_worksheet_embedded_control_xml_element_budget_stops_property_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    member = "xl/ctrlProps/ctrlProp1.xml"
+    _append_worksheet_control_xml_elements(workbook, member, 8, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKSHEET_EMBEDDED_CONTROL_MAX_XML_ELEMENT_COUNT",
+        _worksheet_control_xml_element_count(workbook, member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        payload = archive.read(member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(candidate_payload):
+        if candidate_payload == payload:
+            raise AssertionError(
+                "the control-properties XML tree was materialized after its budget failed"
+            )
+        return original_tree_parse(candidate_payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_embedded_controls.unrecognized_part_count >= 1
+    assert any(
+        "worksheet embedded-control XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_vml_xml_element_budget_stops_every_legacy_note_and_control_tree(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    member = next(
+        member
+        for member in _legacy_note_xml_members(workbook)
+        if member.endswith(".vml")
+    )
+    _append_worksheet_control_xml_elements(workbook, member, 8)
+    maximum_element_count = _worksheet_control_xml_element_count(workbook, member) - 1
+    monkeypatch.setattr(
+        workbook_module,
+        "_LEGACY_COMMENT_MAX_XML_ELEMENT_COUNT",
+        maximum_element_count,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKSHEET_EMBEDDED_CONTROL_MAX_XML_ELEMENT_COUNT",
+        maximum_element_count,
+    )
+    with ZipFile(workbook) as archive:
+        payload = archive.read(member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(candidate_payload):
+        if candidate_payload == payload:
+            raise AssertionError(
+                "the shared VML tree was materialized after both budgets failed"
+            )
+        return original_tree_parse(candidate_payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.legacy_comments.unrecognized_legacy_comment_count >= 1
+    assert snapshot.worksheet_embedded_controls.unrecognized_part_count >= 1
+    assert any(
+        "legacy-note XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+    assert any(
+        "worksheet embedded-control XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_worksheet_embedded_control_xml_element_budget_aggregates_across_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    xml_members = _worksheet_control_xml_members(workbook)
+    remaining_xml_elements = (
+        sum(_worksheet_control_xml_element_count(workbook, member) for member in xml_members)
+        - 1
+    )
+    budget_type = workbook_module._WorksheetEmbeddedControlXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_WorksheetEmbeddedControlXmlBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_embedded_controls.unrecognized_part_count >= 1
+    assert any(
+        "worksheet embedded-control XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_worksheet_embedded_control_xml_element_budget_accepts_the_default_capacity(
+    tmp_path,
+) -> None:
+    workbook = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    member = "xl/activeX/activeX1.xml"
+    _append_worksheet_control_xml_elements(
+        workbook,
+        member,
+        workbook_module._WORKSHEET_EMBEDDED_CONTROL_MAX_XML_ELEMENT_COUNT
+        - _worksheet_control_xml_element_count(workbook, member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert not any(
+        "worksheet embedded-control XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_worksheet_embedded_control_xml_element_budget_rejects_the_default_overage(
+    tmp_path,
+) -> None:
+    workbook = make_worksheet_embedded_control_model(tmp_path / "candidate.xlsx")
+    member = "xl/activeX/activeX1.xml"
+    _append_worksheet_control_xml_elements(
+        workbook,
+        member,
+        workbook_module._WORKSHEET_EMBEDDED_CONTROL_MAX_XML_ELEMENT_COUNT
+        - _worksheet_control_xml_element_count(workbook, member)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_embedded_controls.unrecognized_part_count >= 1
+    assert any(
+        "worksheet embedded-control XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
 def test_oversized_worksheet_embedded_control_payloads_remain_uninspected(
     tmp_path,
     monkeypatch,
@@ -10110,6 +10295,97 @@ def _append_threaded_comment_xml_elements(
 
 def _threaded_comment_xml_element_count(path, member: str) -> int:
     """Count one complete threaded-comment fixture XML tree for exact budgets."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member))
+    return sum(1 for _ in root.iter())
+
+
+def _legacy_note_xml_members(path) -> tuple[str, ...]:
+    """Return legacy Note and VML XML payloads materialized by raw scanners."""
+    expected_members = (
+        "xl/comments/comment1.xml",
+        "xl/drawings/commentsDrawing1.vml",
+    )
+    with ZipFile(path) as archive:
+        members = {entry.filename for entry in archive.infolist()}
+    return tuple(member for member in expected_members if member in members)
+
+
+def _append_legacy_note_xml_elements(
+    path,
+    member: str,
+    count: int,
+    *,
+    nested: bool = False,
+) -> None:
+    """Add opaque conventional-Note XML entries without FormulaFence's reader."""
+    staging = path.with_suffix(".legacy-note-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, "{urn:formulafence:audit}entry")
+    contents[member] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _legacy_note_xml_element_count(path, member: str) -> int:
+    """Count one complete legacy Note scanner XML tree for exact budgets."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member))
+    return sum(1 for _ in root.iter())
+
+
+def _worksheet_control_xml_members(path) -> tuple[str, ...]:
+    """Return each XML payload materialized by the control scanner fixture."""
+    expected_members = (
+        "xl/worksheets/sheet1.xml",
+        "xl/activeX/activeX1.xml",
+        "xl/ctrlProps/ctrlProp1.xml",
+    )
+    with ZipFile(path) as archive:
+        members = {entry.filename for entry in archive.infolist()}
+    return tuple(member for member in expected_members if member in members)
+
+
+def _append_worksheet_control_xml_elements(
+    path,
+    member: str,
+    count: int,
+    *,
+    nested: bool = False,
+) -> None:
+    """Add opaque embedded-control XML entries without FormulaFence's reader."""
+    staging = path.with_suffix(".worksheet-control-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, "{urn:formulafence:audit}entry")
+    contents[member] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _worksheet_control_xml_element_count(path, member: str) -> int:
+    """Count one complete embedded-control XML tree for exact budget tests."""
     with ZipFile(path) as archive:
         root = ElementTree.fromstring(archive.read(member))
     return sum(1 for _ in root.iter())
@@ -15779,6 +16055,153 @@ def test_legacy_excel_notes_are_profiled_diffed_and_redacted(tmp_path) -> None:
         "_x0000_s",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_legacy_comment_xml_element_budget_stops_comment_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    member = next(
+        member
+        for member in _legacy_note_xml_members(workbook)
+        if member.startswith("xl/comments/")
+    )
+    _append_legacy_note_xml_elements(workbook, member, 8, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_LEGACY_COMMENT_MAX_XML_ELEMENT_COUNT",
+        _legacy_note_xml_element_count(workbook, member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        payload = archive.read(member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(candidate_payload):
+        if candidate_payload == payload:
+            raise AssertionError(
+                "the legacy-comment XML tree was materialized after its budget failed"
+            )
+        return original_tree_parse(candidate_payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.legacy_comments.unrecognized_legacy_comment_count >= 1
+    assert any(
+        "legacy-note XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_legacy_comment_xml_element_budget_remains_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_legacy_comment_model(tmp_path / "baseline.xlsx")
+    workbook = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    member = next(
+        member
+        for member in _legacy_note_xml_members(workbook)
+        if member.startswith("xl/comments/")
+    )
+    _append_legacy_note_xml_elements(workbook, member, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_LEGACY_COMMENT_MAX_XML_ELEMENT_COUNT",
+        _legacy_note_xml_element_count(workbook, member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+    report = compare_snapshots(baseline_snapshot, snapshot)
+
+    assert snapshot.legacy_comments.unrecognized_legacy_comment_count >= 1
+    assert any(
+        "legacy-note XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+    assert {"FF010", "FF046"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_legacy_comment_xml_element_budget_aggregates_across_package_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    xml_members = _legacy_note_xml_members(workbook)
+    remaining_xml_elements = (
+        sum(_legacy_note_xml_element_count(workbook, member) for member in xml_members)
+        - 1
+    )
+    budget_type = workbook_module._LegacyCommentBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_LegacyCommentBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.legacy_comments.unrecognized_legacy_comment_count >= 1
+    assert any(
+        "legacy-note XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_legacy_comment_xml_element_budget_accepts_the_default_capacity(
+    tmp_path,
+) -> None:
+    workbook = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    member = next(
+        member
+        for member in _legacy_note_xml_members(workbook)
+        if member.startswith("xl/comments/")
+    )
+    additional_element_count = (
+        workbook_module._LEGACY_COMMENT_MAX_XML_ELEMENT_COUNT
+        - _legacy_note_xml_element_count(workbook, member)
+    )
+    _append_legacy_note_xml_elements(workbook, member, additional_element_count)
+
+    snapshot = load_snapshot(workbook)
+
+    assert (
+        snapshot.legacy_comments.unrecognized_legacy_comment_count
+        == additional_element_count
+    )
+    assert not any(
+        "legacy-note XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_legacy_comment_xml_element_budget_rejects_the_default_overage(
+    tmp_path,
+) -> None:
+    workbook = make_legacy_comment_model(tmp_path / "candidate.xlsx")
+    member = next(
+        member
+        for member in _legacy_note_xml_members(workbook)
+        if member.startswith("xl/comments/")
+    )
+    _append_legacy_note_xml_elements(
+        workbook,
+        member,
+        workbook_module._LEGACY_COMMENT_MAX_XML_ELEMENT_COUNT
+        - _legacy_note_xml_element_count(workbook, member)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.legacy_comments.unrecognized_legacy_comment_count >= 1
+    assert any(
+        "legacy-note XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_unsafe_legacy_comment_relationship_fails_closed_and_is_redacted(

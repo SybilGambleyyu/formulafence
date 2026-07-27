@@ -5,6 +5,54 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Legacy Note and embedded-control XML structural bounds — 2026-07-26
+
+Version 0.136.0 closes compact-allocation paths in two raw OOXML inventories.
+Traditional Excel Notes require a SpreadsheetML comments part and can carry
+visibility/layout in a VML `legacyDrawing`; FormulaFence recursively
+canonicalizes both privately before ordinary cell inspection. The
+embedded-control inventory independently reads worksheet control markup, ActiveX
+`ocx` persistence XML, form-control properties, and all relationship-selected
+legacy VML drawings so it can exclude `Note` `ClientData` while retaining form
+controls. Microsoft's [Comment](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.comment?view=openxml-3.0.1),
+[LegacyDrawing](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.legacydrawing?view=openxml-3.0.1),
+and [`ocx` persistence](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/b30a660a-95eb-4716-b201-a46aae788610)
+definitions establish those persisted surfaces; they do not make FormulaFence's
+allocation ceilings Excel-file-validity rules.
+
+Both raw gateways now stream complete XML structure before calling their private
+tree parsers. Each part permits 32,768 elements and each complete scan permits
+65,536; the pre-existing 16 MiB per-part, 64 MiB aggregate, and 512-part
+byte/count limits remain in force. A successfully parsed structural overage is
+not silently skipped: the Note path emits visible `FF010`/`FF046` coverage
+evidence and the embedded-control path emits `FF010`/`FF029`. The VML path has
+both independent gates because the two inventories each previously materialized
+the same tree; malformed or unreadable input keeps its established diagnostic.
+
+Raw-ZIP fixtures generated without FormulaFence's readers added 1,000,000
+opaque direct children to otherwise ordinary Note package parts. The Comments
+fixture was a 15,086-byte workbook whose `xl/comments/comment1.xml` expanded to
+5,000,277 bytes (7,509 compressed); the VML fixture was 15,131 bytes with
+`xl/drawings/commentsDrawing1.vml` at 5,001,035 expanded bytes (7,877
+compressed). In the same Python 3.12 environment, the exact 0.135.0 wheel
+completed normal diffs in 8.585594 seconds at 739,200 KiB for Comments and
+3.738134 seconds at 209,108 KiB for VML. The candidate source completed the
+corresponding fail-closed coverage diffs in 0.588982 seconds at 41,604 KiB and
+0.634418 seconds at 45,216 KiB, respectively, without materializing either
+opaque tree. The exact 0.136.0 wheel completed them in 0.706144 seconds at
+40,576 KiB and 0.737067 seconds at 41,696 KiB, respectively. It passed a
+normal baseline-to-baseline CLI diff; the hostile Comment report contained
+`FF010`/`FF046`, while the shared VML report contained `FF010`/`FF029`/`FF046`
+and both structural coverage warnings. Focused regressions prove
+fail-before-tree-materialization for Comments, ActiveX, form-control properties,
+and shared VML; they also cover nested opaque descendants, aggregate budgets,
+exact capacity, default overage, and report findings. The complete 966-test
+suite passed in 134.27 seconds with Ruff and bytecode compilation clean. A
+fresh Python 3.12 environment installed the exact wheel (SHA-256
+`3598ee5dfd436a0baea40a7b45c3bd59224ed88cbe0ecf31c2b94bc6146b7781`), passed
+`pip check`, imported FormulaFence 0.136.0 from `site-packages`, and confirmed
+`openpyxl.DEFUSEDXML`.
+
 ## Shared Worksheet DrawingML semantic-preflight bounds — 2026-07-26
 
 Version 0.135.0 closes a shared compact-allocation path across Worksheet

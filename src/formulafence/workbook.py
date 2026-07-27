@@ -709,6 +709,13 @@ _WORKSHEET_WEB_EXTENSION_EXTENSION_URI = "{F7C9EE02-42E1-4005-9D12-6889AFFD525C}
 _WORKSHEET_EMBEDDED_CONTROL_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_COUNT = 512
+# Worksheet, ActiveX, control-property, and VML parts all reach recursive
+# private canonicalizers. Keep a generous real-world ceiling while preventing
+# a compact XML part from allocating an unbounded tree before inspection.
+_WORKSHEET_EMBEDDED_CONTROL_MAX_XML_ELEMENT_COUNT = 32_768
+_WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _WORKSHEET_EMBEDDED_CONTROL_MAX_XML_ELEMENT_COUNT
+)
 _WORKSHEET_EMBEDDED_CONTROL_RELATED_PART_MAX_BYTES = 32 * 1024 * 1024
 _WORKSHEET_EMBEDDED_CONTROL_RELATED_PART_TOTAL_MAX_BYTES = 64 * 1024 * 1024
 _WORKSHEET_EMBEDDED_CONTROL_RELATED_PART_TOTAL_MAX_COUNT = 512
@@ -771,6 +778,12 @@ _THREADED_COMMENT_PERSON_PART_PATTERN = re.compile(
 _LEGACY_COMMENT_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _LEGACY_COMMENT_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _LEGACY_COMMENT_TOTAL_XML_MAX_COUNT = 512
+# Conventional Note comments and their VML layout parts are recursively
+# canonicalized from raw OOXML before the normal workbook reader runs.
+_LEGACY_COMMENT_MAX_XML_ELEMENT_COUNT = 32_768
+_LEGACY_COMMENT_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _LEGACY_COMMENT_MAX_XML_ELEMENT_COUNT
+)
 _LEGACY_COMMENT_PART_PATTERN = re.compile(r"^xl/comments/[^/]+\.xml$", re.IGNORECASE)
 _LEGACY_COMMENT_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"
@@ -1896,10 +1909,11 @@ class _ThreadedCommentBudget:
 
 @dataclass
 class _LegacyCommentBudget:
-    """Bound legacy-comment and note-VML XML bytes in one package scan."""
+    """Bound legacy-comment and note-VML XML resources in one package scan."""
 
     remaining_bytes: int = _LEGACY_COMMENT_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _LEGACY_COMMENT_TOTAL_XML_MAX_COUNT
+    remaining_xml_elements: int = _LEGACY_COMMENT_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 @dataclass
@@ -1946,10 +1960,13 @@ class _PowerPivotDataBudget:
 
 @dataclass
 class _WorksheetEmbeddedControlXmlBudget:
-    """Bound worksheet-control XML bytes read across one package scan."""
+    """Bound worksheet-control XML resources across one package scan."""
 
     remaining_bytes: int = _WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_COUNT
+    remaining_xml_elements: int = (
+        _WORKSHEET_EMBEDDED_CONTROL_TOTAL_XML_MAX_ELEMENT_COUNT
+    )
 
 
 @dataclass
@@ -17422,6 +17439,46 @@ def _worksheet_control_ole_auto_update(
     return False
 
 
+def _worksheet_control_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _WorksheetEmbeddedControlXmlBudget,
+) -> str | None:
+    """Stream control XML before recursively canonicalizing its private tree."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _WORKSHEET_EMBEDDED_CONTROL_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    warnings.add(
+        "FormulaFence did not fully read a worksheet embedded-control XML part whose "
+        "XML structure exceeds the safety budget; the affected controls have a "
+        "coverage gap."
+    )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
+
+
 def _worksheet_control_xml_payload(
     archive: ZipFile,
     member: str,
@@ -17461,6 +17518,17 @@ def _worksheet_control_xml_payload(
         return None, _private_external_data_signature(
             (("read-budget-exhausted", metadata),)
         )
+    structure_fallback_signature = (
+        _worksheet_control_xml_structure_budget_fallback_signature(
+            archive,
+            member,
+            info,
+            warnings,
+            budget,
+        )
+    )
+    if structure_fallback_signature is not None:
+        return None, structure_fallback_signature
     budget.remaining_bytes -= info.file_size
     try:
         return archive.read(member), None
@@ -38999,6 +39067,45 @@ def _legacy_comment_content_type_status(
     return "mismatched" if declared else "unlisted"
 
 
+def _legacy_comment_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _LegacyCommentBudget,
+) -> str | None:
+    """Stream legacy Note XML before recursively canonicalizing its private tree."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _LEGACY_COMMENT_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    warnings.add(
+        "FormulaFence did not fully read a legacy-note XML part whose XML structure "
+        "exceeds the safety budget; affected notes have a coverage gap."
+    )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
+
+
 def _legacy_comment_xml_payload(
     archive: ZipFile,
     member: str,
@@ -39040,6 +39147,17 @@ def _legacy_comment_xml_payload(
         return None, _private_external_data_signature(
             (("read-budget-exhausted", metadata),)
         )
+    structure_fallback_signature = (
+        _legacy_comment_xml_structure_budget_fallback_signature(
+            archive,
+            member,
+            info,
+            warnings,
+            budget,
+        )
+    )
+    if structure_fallback_signature is not None:
+        return None, structure_fallback_signature
     budget.remaining_bytes -= info.file_size
     try:
         return archive.read(member), None

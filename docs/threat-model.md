@@ -1202,7 +1202,11 @@ formula will produce.
   placeholder GUIDs normalize away. Missing, duplicate, malformed, unbound,
   unsafe, unreadable, oversized, or over-budget metadata becomes a visible
   coverage warning; XML reads are bounded to 16 MiB per part, 64 MiB per
-  workbook, and 512 parts. The ordinary reader uses a Note-quarantined
+  workbook, and 512 parts. Before a comments or Note-VML tree is materialized,
+  FormulaFence streams complete structure: 32,768 elements per part and 65,536
+  across the legacy-Note scan. This CI allocation boundary turns a well-formed
+  structural overage into visible `FF010`/`FF046` coverage evidence rather
+  than a workbook-validity verdict. The ordinary reader uses a Note-quarantined
   temporary copy only after raw inspection, so unsafe targets and
   parser-tolerance differences cannot erase evidence. FormulaFence does
   **not** render Notes/VML, resolve authors, fetch
@@ -1617,11 +1621,14 @@ formula will produce.
   OLE object or package, render a VML drawing, include ordinary comment notes in
   its control inventory, follow an external relationship, or infer event
   dispatch. Relevant XML reads are bounded to 16 MiB per part, 64 MiB per
-  workbook, and 512 parts; direct payload hashing is bounded to 32 MiB per
-  part, 64 MiB per workbook, and 512 parts. Missing, malformed, orphaned,
-  unbound, oversized, or over-budget material remains a visible parser-coverage
-  warning. VML/drawing layout, embedded payload formats, and behavior outside
-  this relationship-backed chain are not modeled.
+  workbook, and 512 parts. Before private XML canonicalization, FormulaFence
+  streams complete structure: 32,768 elements per part and 65,536 across the
+  embedded-control scan. A well-formed structural overage becomes visible
+  `FF010`/`FF029` coverage evidence. Direct payload hashing is bounded to 32
+  MiB per part, 64 MiB per workbook, and 512 parts. Missing, malformed,
+  orphaned, unbound, oversized, or over-budget material remains a visible
+  parser-coverage warning. VML/drawing layout, embedded payload formats, and
+  behavior outside this relationship-backed chain are not modeled.
 - Power Query Data Mashup custom XML is inspected without serializing its M
   formulas or data/source material. FormulaFence privately compares the
   `Section1.m` formula document, logical package content, stable query metadata,

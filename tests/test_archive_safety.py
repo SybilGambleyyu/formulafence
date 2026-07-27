@@ -323,6 +323,78 @@ def _append_row_dimension_declarations(
     )
 
 
+def _append_column_dimension_declarations(
+    path: Path,
+    count: int,
+    *,
+    member_name: str = "xl/worksheets/sheet1.xml",
+    attributes: dict[str, str] | None = None,
+    alternate_namespace: str | None = None,
+) -> None:
+    """Append reader-visible column declarations without an object-model writer."""
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    root = ElementTree.fromstring(worksheet)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    qualified_container_name = f"{{{namespace}}}cols" if namespace else "cols"
+    qualified_column_name = f"{{{namespace}}}col" if namespace else "col"
+    if alternate_namespace is not None:
+        qualified_column_name = f"{{{alternate_namespace}}}col"
+    columns = next(
+        (child for child in root if child.tag == qualified_container_name),
+        None,
+    )
+    if columns is None:
+        columns = ElementTree.Element(qualified_container_name)
+        sheet_data_index = next(
+            index
+            for index, child in enumerate(root)
+            if child.tag.rsplit("}", maxsplit=1)[-1] == "sheetData"
+        )
+        root.insert(sheet_data_index, columns)
+    column_attributes = {"min": "1", "max": "1"}
+    if attributes is None:
+        column_attributes.update({"width": "10", "customWidth": "1"})
+    else:
+        column_attributes.update(attributes)
+    for _ in range(count):
+        ElementTree.SubElement(columns, qualified_column_name, column_attributes)
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _append_column_dimension_containers(
+    path: Path,
+    count: int,
+    *,
+    member_name: str = "xl/worksheets/sheet1.xml",
+    alternate_namespace: str | None = None,
+) -> None:
+    """Append direct column containers that raw dimension scanners must retain."""
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    root = ElementTree.fromstring(worksheet)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    qualified_container_name = f"{{{namespace}}}cols" if namespace else "cols"
+    if alternate_namespace is not None:
+        qualified_container_name = f"{{{alternate_namespace}}}cols"
+    sheet_data_index = next(
+        index
+        for index, child in enumerate(root)
+        if child.tag.rsplit("}", maxsplit=1)[-1] == "sheetData"
+    )
+    for _ in range(count):
+        root.insert(sheet_data_index, ElementTree.Element(qualified_container_name))
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
 def _insert_worksheet_child_after_sheet_data(
     root: ElementTree.Element,
     child: ElementTree.Element,
@@ -953,6 +1025,191 @@ def test_semantic_reader_preflight_ignores_foreign_namespace_rows(
         alternate_namespace="urn:formulafence:archive-safety",
     )
     monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_ROW_DIMENSION_COUNT", 0)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_rejects_excessive_column_dimensions_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-column-dimensions.xlsx")
+    _append_column_dimension_declarations(workbook, 2)
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_COLUMN_DIMENSION_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "column-dimension declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_default_column_dimension_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "default-column-dimension-limit.xlsx")
+    _append_column_dimension_declarations(
+        workbook,
+        workbook_module._OOXML_READER_MAX_COLUMN_DIMENSION_COUNT + 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "column-dimension declarations" in message
+
+
+def test_semantic_reader_preflight_counts_column_dimensions_across_worksheets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "aggregate-column-dimensions.xlsx")
+    _append_column_dimension_declarations(workbook, 1)
+    _append_column_dimension_declarations(
+        workbook,
+        1,
+        member_name="xl/worksheets/sheet2.xml",
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_COLUMN_DIMENSION_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "column-dimension declarations" in message
+
+
+def test_semantic_reader_preflight_accepts_column_dimensions_at_the_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "column-dimensions-at-limit.xlsx")
+    _append_column_dimension_declarations(workbook, 2)
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_COLUMN_DIMENSION_COUNT", 2)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_counts_unknown_unqualified_column_attributes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "unknown-column-dimension-attribute.xlsx")
+    _append_column_dimension_declarations(
+        workbook,
+        1,
+        attributes={"formulafenceAudit": "1"},
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_COLUMN_DIMENSION_COUNT", 0)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "column-dimension declarations" in message
+
+
+def test_semantic_reader_preflight_ignores_foreign_namespace_columns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "foreign-column-dimensions.xlsx")
+    _append_column_dimension_declarations(
+        workbook,
+        1,
+        alternate_namespace="urn:formulafence:archive-safety",
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_COLUMN_DIMENSION_COUNT", 0)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_rejects_excessive_column_dimension_containers_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-column-dimension-containers.xlsx")
+    _append_column_dimension_containers(workbook, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_COLUMN_DIMENSION_CONTAINER_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "column-dimension containers" in message
+
+
+def test_semantic_reader_preflight_rejects_default_column_dimension_container_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "default-column-dimension-container-limit.xlsx")
+    _append_column_dimension_containers(
+        workbook,
+        workbook_module._OOXML_READER_MAX_COLUMN_DIMENSION_CONTAINER_COUNT + 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "column-dimension containers" in message
+
+
+def test_semantic_reader_preflight_counts_column_dimension_containers_across_worksheets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "aggregate-column-dimension-containers.xlsx")
+    _append_column_dimension_containers(workbook, 1)
+    _append_column_dimension_containers(
+        workbook,
+        1,
+        member_name="xl/worksheets/sheet2.xml",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_COLUMN_DIMENSION_CONTAINER_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "column-dimension containers" in message
+
+
+def test_semantic_reader_preflight_accepts_column_dimension_containers_at_the_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "column-dimension-containers-at-limit.xlsx")
+    _append_column_dimension_containers(workbook, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_COLUMN_DIMENSION_CONTAINER_COUNT",
+        2,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_ignores_foreign_namespace_column_containers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "foreign-column-dimension-containers.xlsx")
+    _append_column_dimension_containers(
+        workbook,
+        1,
+        alternate_namespace="urn:formulafence:archive-safety",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_COLUMN_DIMENSION_CONTAINER_COUNT",
+        0,
+    )
 
     snapshot = load_snapshot(workbook)
 

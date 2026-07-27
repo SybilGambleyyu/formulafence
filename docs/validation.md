@@ -5,6 +5,40 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Column-dimension declaration and container bounds — 2026-07-26
+
+Version 0.122.0 closes two compact allocation paths around worksheet columns.
+Excel allows up to
+[16,384 columns](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits),
+yet a valid package can repeat the same column declaration without expanding
+the grid. `openpyxl` dispatches every transitional SpreadsheetML `<col>` into
+its column-dimension parser before FormulaFence can decide whether the width,
+style, or visibility is relevant; repeated entries can therefore create costly
+parser work even when they overwrite the same final column key. FormulaFence's
+raw dimension scanners also retain direct `<cols>` container lists.
+
+The semantic-reader preflight now limits reader-visible `col` declarations to
+16,384 and direct `cols` containers to 4,096, each in aggregate across selected
+ordinary worksheet parts. The declaration count follows the reader's actual tag
+dispatch, so unknown unqualified attributes do not evade it. The container count
+follows the raw scanner's direct worksheet-child behavior; foreign namespace
+declarations stay outside both supported reader paths. These are separate
+CI-oriented cardinality limits, not a claim that a valid Excel grid at its
+documented column maximum is unsafe.
+
+Independent raw-ZIP fixtures established both costs. A 20,680-byte workbook
+with 100,000 repeated valid `col` declarations (5,400,663 bytes of worksheet
+XML) loaded before the gate in 9.028 seconds at 82,776 KiB despite retaining one
+final column key; it now rejects in 0.074 seconds at 35,828 KiB. A 7,246-byte
+workbook with 100,000 empty direct `cols` containers (1,200,642 bytes of
+worksheet XML) loaded in 4.226 seconds at 72,280 KiB and now rejects in 0.014
+seconds at 34,744 KiB. A 10,000-declaration fixture remains accepted in 0.848
+seconds at 39,680 KiB; exact 16,384-declaration and 4,096-container fixtures
+completed in 1.382 seconds and 0.203 seconds, respectively. The completed
+source tree passed **847 tests in 120.57 seconds**; focused archive-safety and
+version coverage passed **145 tests in 4.59 seconds**, with Ruff, bytecode
+compilation, and `git diff --check` clean.
+
 ## Empty formatted-row dimension bound — 2026-07-26
 
 Version 0.121.0 closes a compact allocation path in ordinary worksheet loading.

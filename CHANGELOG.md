@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.122.0 — 2026-07-26
+
+- Bound reader-visible worksheet column declarations and direct containers
+  before downstream raw OOXML scanners or the complete workbook reader run. The
+  semantic-reader preflight now permits 16,384 `col` declarations and 4,096
+  direct `cols` containers in aggregate across selected ordinary worksheet
+  parts.
+- Count every reader-visible SpreadsheetML `col`, including declarations that
+  repeat one final column key or have unknown attributes, because `openpyxl`
+  dispatches each one before FormulaFence can determine whether it is material.
+- Add fail-before-reader coverage for configured/default limits, cross-sheet
+  aggregation, exact limits, unknown attributes, and ignored foreign-namespace
+  declaration and container cases.
+
 ## 0.121.0 — 2026-07-26
 
 - Bound the reader-materialized formatted-row catalog before raw OOXML scanners

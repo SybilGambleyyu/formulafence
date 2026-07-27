@@ -132,11 +132,15 @@ financial correctness or replace model review.
   capped at 4,000,000 elements and 256 nesting levels. The gate limits
   populated SpreadsheetML cell records and shared-string entries to 500,000
   each, row-dimension declarations to 16,384 across selected ordinary
-  worksheet parts, effective `cellXfs` styles to 65,490, cell text to 32,767
-  characters, and stored formula/defined-name text to 8,192 characters. A row
+  worksheet parts, column-dimension declarations to 16,384, and direct
+  column-dimension containers to 4,096 across those parts, effective `cellXfs`
+  styles to 65,490, cell text to 32,767 characters, and stored
+  formula/defined-name text to 8,192 characters. A row
   counts only when it has an unqualified attribute other than `r` or `spans`,
   the condition that makes `openpyxl` retain a `RowDimension`; namespaced
-  extension attributes do not count. It separately caps
+  extension attributes do not count. Every reader-visible `col` counts because
+  `openpyxl` dispatches it before resolving its attributes, while raw dimension
+  scanners retain direct `cols` containers. It separately caps
   repeated known stylesheet containers and every reader-materialized number-
   format, font, fill, fill-child, gradient-stop, border, base-XF, named-style,
   differential-style, palette, table-style, table-style-element, and extension
@@ -265,11 +269,14 @@ formula will produce.
   elements and 256 nesting levels for every reader-visible part it streams,
   500,000 populated SpreadsheetML cell records, 16,384 reader-materialized
   row-dimension declarations across reader-selected ordinary worksheet parts,
-  500,000 shared-string entries, and 65,490 effective `cellXfs` styles. A row
-  declaration counts only when it has an unqualified attribute other than `r`
-  or `spans`, which is the `openpyxl` `RowDimension` allocation trigger; a
-  namespace-qualified extension attribute does not count. It also caps repeated
-  known stylesheet
+  16,384 column-dimension declarations and 4,096 direct column-dimension
+  containers across those parts, 500,000 shared-string entries, and 65,490
+  effective `cellXfs` styles. A row declaration counts only when it has an
+  unqualified attribute other than `r` or `spans`, which is the `openpyxl`
+  `RowDimension` allocation trigger; a namespace-qualified extension attribute
+  does not count. Every reader-visible `col` counts because `openpyxl`
+  dispatches it before examining attributes, and raw dimension scanners retain
+  direct `cols` containers. It also caps repeated known stylesheet
   containers plus number-format, font, fill, fill-child, gradient-stop, border,
   base-XF, named-style, differential-style, palette, table-style,
   table-style-element, and extension records at 4,096 each. It follows

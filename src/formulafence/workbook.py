@@ -177,6 +177,16 @@ _OOXML_READER_MAX_WORKSHEET_CELL_COUNT = 500_000
 # generous for report layout while making this otherwise cell-free allocation
 # path finite.
 _OOXML_READER_MAX_ROW_DIMENSION_COUNT = 16_384
+# ``openpyxl`` dispatches every transitional ``col`` declaration into its
+# column-dimension parser before FormulaFence can decide whether its width,
+# style, or visibility matters. Repeated declarations can therefore consume
+# parser work even when they repeatedly overwrite one final column key.
+# FormulaFence's raw dimension scanners also retain the direct ``cols``
+# containers themselves. Excel's grid has 16,384 columns, so preserve one
+# declaration per possible column while bounding the otherwise unbounded
+# container fragmentation separately.
+_OOXML_READER_MAX_COLUMN_DIMENSION_CONTAINER_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_COLUMN_DIMENSION_COUNT = MAX_EXCEL_COLUMN
 # The manifest and workbook relationship catalog are materialized before any
 # worksheet is considered. Their declarations are not ZIP members, so a
 # bounded archive inventory alone cannot stop a small package from making the
@@ -3407,9 +3417,14 @@ def _validate_ooxml_semantic_reader_resources(
     scenario_target_range_count = 0
     populated_cell_count = 0
     row_dimension_count = 0
+    column_dimension_container_count = 0
+    column_dimension_count = 0
     shared_string_count = 0
     cell_tags = _spreadsheetml_tags("c")
     row_tags = _spreadsheetml_tags("row")
+    column_tags = _spreadsheetml_tags("col")
+    column_container_tags = _spreadsheetml_tags("cols")
+    worksheet_tags = _spreadsheetml_tags("worksheet")
     formula_tags = _spreadsheetml_tags("f")
     inline_string_tags = _spreadsheetml_tags("is")
     shared_string_tags = _spreadsheetml_tags("si")
@@ -3838,10 +3853,31 @@ def _validate_ooxml_semantic_reader_resources(
     ) -> None:
         nonlocal populated_cell_count
         nonlocal row_dimension_count
+        nonlocal column_dimension_container_count
+        nonlocal column_dimension_count
         sheet_catalog_end(element, tags)
         merged_cell_end(element, tags)
         worksheet_reader_catalog_end(element, tags)
-        if element.tag in row_tags and any(
+        if (
+            element.tag in column_container_tags
+            and len(tags) == 2
+            and tags[0] in worksheet_tags
+        ):
+            column_dimension_container_count += 1
+            if (
+                column_dimension_container_count
+                > _OOXML_READER_MAX_COLUMN_DIMENSION_CONTAINER_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "column-dimension containers exceed the semantic-reader safety limit."
+                )
+        elif element.tag in column_tags:
+            column_dimension_count += 1
+            if column_dimension_count > _OOXML_READER_MAX_COLUMN_DIMENSION_COUNT:
+                raise _reader_preflight_error(
+                    "column-dimension declarations exceed the semantic-reader safety limit."
+                )
+        elif element.tag in row_tags and any(
             not attribute.startswith("{") and attribute not in {"r", "spans"}
             for attribute in element.attrib
         ):

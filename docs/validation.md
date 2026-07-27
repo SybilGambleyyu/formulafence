@@ -35,7 +35,10 @@ sheet XML) loaded in 3.773 seconds at 100,188 KiB and now rejects in 0.019
 seconds at 33,660 KiB. Focused archive-safety and version coverage passed
 **177 tests in 6.26 seconds**; the completed source suite passed **879 tests in
 123.22 seconds**, with Ruff, bytecode compilation, and `git diff --check`
-clean.
+clean. A fresh Python 3.12 environment installed the exact candidate wheel,
+confirmed `FormulaFence 0.125.0` and `openpyxl.DEFUSEDXML`, completed a normal
+CLI comparison, and returned the normal input-error exit status (2) for both
+independently generated 100,000-entry Custom View subtree fixtures.
 
 ## Legacy Custom View page-break catalog bounds — 2026-07-26
 

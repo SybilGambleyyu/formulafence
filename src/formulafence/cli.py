@@ -18,6 +18,8 @@ from formulafence.output import (
     redact_external_workbook_link_material,
     redact_formula_defined_xlm_action_portfolio_payload,
     redact_formula_defined_xlm_action_report_payload,
+    redact_formula_defined_xlm_environment_information_portfolio_payload,
+    redact_formula_defined_xlm_environment_information_report_payload,
     redact_formula_defined_xlm_evaluation_portfolio_payload,
     redact_formula_defined_xlm_evaluation_report_payload,
     redact_formula_defined_xlm_get_cell_portfolio_payload,
@@ -180,6 +182,20 @@ def _add_formula_defined_xlm_get_cell_redaction_argument(
     )
 
 
+def _add_formula_defined_xlm_environment_information_redaction_argument(
+    parser: argparse.ArgumentParser,
+) -> None:
+    parser.add_argument(
+        "--redact-formula-defined-xlm-environment-information-calls",
+        action="store_true",
+        help=(
+            "Replace visible formula-defined XLM environment-information material "
+            "and known static inputs in this shared report without changing comparison "
+            "or policy results"
+        ),
+    )
+
+
 def _positive_integer(value: str) -> int:
     try:
         parsed = int(value)
@@ -218,6 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_formula_defined_xlm_evaluation_redaction_argument(diff)
     _add_formula_defined_xlm_action_redaction_argument(diff)
     _add_formula_defined_xlm_get_cell_redaction_argument(diff)
+    _add_formula_defined_xlm_environment_information_redaction_argument(diff)
     diff.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -240,6 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_formula_defined_xlm_evaluation_redaction_argument(check)
     _add_formula_defined_xlm_action_redaction_argument(check)
     _add_formula_defined_xlm_get_cell_redaction_argument(check)
+    _add_formula_defined_xlm_environment_information_redaction_argument(check)
     check.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -283,6 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_formula_defined_xlm_evaluation_redaction_argument(portfolio)
     _add_formula_defined_xlm_action_redaction_argument(portfolio)
     _add_formula_defined_xlm_get_cell_redaction_argument(portfolio)
+    _add_formula_defined_xlm_environment_information_redaction_argument(portfolio)
     portfolio.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -380,6 +399,10 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
             payload = redact_formula_defined_xlm_action_report_payload(report, payload)
         if arguments.redact_formula_defined_xlm_get_cell_calls:
             payload = redact_formula_defined_xlm_get_cell_report_payload(report, payload)
+        if arguments.redact_formula_defined_xlm_environment_information_calls:
+            payload = redact_formula_defined_xlm_environment_information_report_payload(
+                report, payload
+            )
         content = as_json(payload)
     elif arguments.format == "sarif":
         content = as_json(
@@ -408,6 +431,9 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
                 redact_formula_defined_xlm_get_cell_calls=(
                     arguments.redact_formula_defined_xlm_get_cell_calls
                 ),
+                redact_formula_defined_xlm_environment_information_calls=(
+                    arguments.redact_formula_defined_xlm_environment_information_calls
+                ),
             )
         )
     else:
@@ -435,6 +461,9 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
             ),
             redact_formula_defined_xlm_get_cell_calls=(
                 arguments.redact_formula_defined_xlm_get_cell_calls
+            ),
+            redact_formula_defined_xlm_environment_information_calls=(
+                arguments.redact_formula_defined_xlm_environment_information_calls
             ),
         )
     _emit(content, arguments.output)
@@ -497,6 +526,10 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
             payload = redact_formula_defined_xlm_get_cell_portfolio_payload(
                 report, payload
             )
+        if arguments.redact_formula_defined_xlm_environment_information_calls:
+            payload = redact_formula_defined_xlm_environment_information_portfolio_payload(
+                report, payload
+            )
         content = as_json(payload)
     elif arguments.format == "sarif":
         content = as_json(
@@ -524,6 +557,9 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
                 redact_formula_defined_xlm_get_cell_calls=(
                     arguments.redact_formula_defined_xlm_get_cell_calls
                 ),
+                redact_formula_defined_xlm_environment_information_calls=(
+                    arguments.redact_formula_defined_xlm_environment_information_calls
+                ),
             )
         )
     else:
@@ -550,6 +586,9 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
             ),
             redact_formula_defined_xlm_get_cell_calls=(
                 arguments.redact_formula_defined_xlm_get_cell_calls
+            ),
+            redact_formula_defined_xlm_environment_information_calls=(
+                arguments.redact_formula_defined_xlm_environment_information_calls
             ),
         )
     _emit(content, arguments.output)

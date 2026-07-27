@@ -5,6 +5,58 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared formula-defined XLM environment-information report redaction — 2026-07-26
+
+FormulaFence 0.108.0 adds the separate, opt-in
+`--redact-formula-defined-xlm-environment-information-calls` rendering boundary
+for generic reports. It is deliberately separate from the count-only `FF071`
+ledger and from the external-workbook-link, formula-action, Python-in-Excel,
+Office custom-function, unqualified-runtime-function, worksheet-code-resource
+registration, formula-defined XLM registration, formula-defined XLM evaluation,
+formula-defined XLM action, and formula-defined XLM GET.CELL redaction modes.
+Default local-review output remains unchanged. When enabled, JSON, Markdown,
+and SARIF hide direct stored selected environment-information material, changed
+invoking-formula evidence, and exact changed static input evidence the private
+dependency analysis recorded as reaching an inventoried call. A
+formula-defined-name body can pass a private information code or reference
+through a dotted workbook-defined wrapper to GET.WORKBOOK, GET.WORKSPACE, or
+GET.DOCUMENT deeper in the chain, so FormulaFence privately compares the
+resolved definition chain and conservatively hides changed defined-name
+before/after evidence when that signature changes.
+
+Microsoft's [Excel C API
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel)
+identifies workspace information functions such as GET.CELL and GET.WORKBOOK;
+Microsoft's [xlfFree example](https://learn.microsoft.com/en-us/office/client-developer/excel/xlfree)
+demonstrates GET.WORKSPACE returning platform information, and its [expression
+evaluation reference](https://learn.microsoft.com/en-us/office/client-developer/excel/excel-worksheet-and-expression-evaluation)
+identifies GET.DOCUMENT as an XLM information function. Those documented stored
+arguments explain why generic report evidence can disclose private material
+without proving that a call will calculate or what information Excel would
+return. FormulaFence does not calculate a formula or information call,
+determine an information type, resolve a dynamic reference, simulate
+workbook/workspace/document state, or reconstruct a runtime value.
+
+Focused fixtures cover a direct stored selected call plus a changed static
+input, an input whose environment-information consumer falls beyond the
+report's bounded impact sample, and a dotted named wrapper whose private
+reference can only be associated with a selected call through the private
+fixed-point definition analysis. The redacted JSON, Markdown, SARIF, policy,
+portfolio, and composite-Action contracts retain `FF071` / `FFP071` and their
+exit behavior while omitting controlled information-code, reference, input,
+and nested-name markers. The final source tree passed **695 tests in 100.98
+seconds** (deterministic command-limited chunks), plus a clean Ruff check,
+`git diff --check`, and shell syntax check for the composite Action. The exact
+release wheel was installed in a fresh environment; its CLI reported
+`FormulaFence 0.108.0`, retained controlled environment/input markers in
+default JSON, removed them from redacted JSON/Markdown/SARIF/policy/portfolio
+output, and still returned `1` with `FF071` and `FFP071` for the redacted policy
+check. The wheel `formulafence-0.108.0-py3-none-any.whl` passed `twine check`
+with SHA-256
+`62c2163c2f3f2eecc1978daf05790573173fe88621fe6610b25bc3cc16034524`.
+The source distribution also passed `twine check`; its digest is intentionally
+omitted because this validation note is included in that archive.
+
 ## Shared formula-defined XLM GET.CELL report redaction — 2026-07-26
 
 FormulaFence 0.107.0 adds the separate, opt-in

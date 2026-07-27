@@ -1254,6 +1254,20 @@ def change_formula_defined_xlm_environment_information_input(path: Path) -> Path
     return path
 
 
+def change_formula_defined_xlm_environment_information_call(path: Path) -> Path:
+    """Change a direct stored XLM environment call without querying its state."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.XLM.GET.WORKSPACE"]
+    expected = "=GET.WORKSPACE(2)"
+    if definition.attr_text != expected:
+        raise ValueError(
+            "Fixture does not contain the expected XLM environment-information call"
+        )
+    definition.attr_text = "=GET.WORKSPACE(3)"
+    workbook.save(path)
+    return path
+
+
 def make_formula_environment_information_model(path: Path) -> Path:
     """Create native CELL/INFO calls without opening the workbook in Excel.
 

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.108.0 — 2026-07-26
+
+- Add opt-in `--redact-formula-defined-xlm-environment-information-calls`
+  rendering for `diff`, `check`, and `portfolio` JSON, Markdown, and SARIF
+  artifacts. Default local review output remains unchanged; the output-only
+  boundary replaces direct stored `FF071` GET.WORKBOOK, GET.WORKSPACE, and
+  GET.DOCUMENT material with `[formula-defined XLM environment-information
+  material redacted]`.
+- Extend the boundary to before/after evidence for changed invoking formulas
+  and exact changed static input cells recorded by the private full dependency
+  impact set, rather than the bounded impact sample shown in reports.
+- Retain the private formula-defined-name chain signature for FF071 and, when
+  it changes, conservatively redact changed defined-name before/after evidence
+  so a dotted workbook-defined wrapper cannot disclose a private information
+  code or reference that reaches a selected environment-information call deeper
+  in the chain.
+- Keep comparison facts, findings, policy evaluation, and exit status unchanged.
+  The composite GitHub Action exposes the switch as
+  `redact-formula-defined-xlm-environment-information-calls: 'true'`; the mode
+  does not calculate a formula, determine an information type, resolve a
+  dynamic reference, simulate workbook/workspace/document state, or reconstruct
+  a runtime value, and it is not a general secret scrubber.
+- Add direct-call, exact unsampled-static-input, resolved named-chain,
+  default-evidence, policy, portfolio, JSON/Markdown/SARIF, and composite-Action
+  regression coverage.
+
 ## 0.107.0 — 2026-07-26
 
 - Add opt-in `--redact-formula-defined-xlm-get-cell-calls` rendering for

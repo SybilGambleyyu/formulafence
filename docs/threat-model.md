@@ -897,7 +897,12 @@ formula will produce.
   not assert that a state-only workbook change alters a stored call. Direct
   worksheet calls and raw XLM macro-sheet parts remain intentionally outside
   this narrow boundary; dynamic/unresolved inputs remain static-coverage
-  limits.
+  limits. The separate
+  `--redact-formula-defined-xlm-environment-information-calls`
+  shared-artifact mode hides direct selected-call material, exact changed static
+  inputs, and changed private name-chain evidence after comparison and policy
+  evaluation without evaluating a call, simulating Excel state, or changing any
+  comparison fact.
 - Native CELL and INFO calls can observe file/location/content or operating
   environment information outside ordinary visible precedents. Native SHEET and
   SHEETS calls can observe workbook tab position or, with an omitted SHEETS

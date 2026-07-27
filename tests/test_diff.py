@@ -17,6 +17,7 @@ from formulafence.diff import compare_snapshots
 from formulafence.output import (
     EXTERNAL_WORKBOOK_LINK_REDACTION,
     FORMULA_DEFINED_XLM_ACTION_REDACTION,
+    FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_REDACTION,
     FORMULA_DEFINED_XLM_EVALUATION_REDACTION,
     FORMULA_DEFINED_XLM_GET_CELL_REDACTION,
     FORMULA_DEFINED_XLM_REGISTRATION_REDACTION,
@@ -29,6 +30,8 @@ from formulafence.output import (
     redact_external_workbook_link_material,
     redact_formula_defined_xlm_action_material,
     redact_formula_defined_xlm_action_report_payload,
+    redact_formula_defined_xlm_environment_information_material,
+    redact_formula_defined_xlm_environment_information_report_payload,
     redact_formula_defined_xlm_evaluation_material,
     redact_formula_defined_xlm_evaluation_report_payload,
     redact_formula_defined_xlm_get_cell_material,
@@ -98,6 +101,7 @@ from .helpers import (
     change_formula_defined_xlm_action_call,
     change_formula_defined_xlm_action_definition,
     change_formula_defined_xlm_action_input,
+    change_formula_defined_xlm_environment_information_call,
     change_formula_defined_xlm_environment_information_definition,
     change_formula_defined_xlm_environment_information_input,
     change_formula_defined_xlm_evaluation_call,
@@ -6361,6 +6365,187 @@ def test_formula_defined_xlm_environment_information_static_inputs_are_guarded(
         == 1
     )
     assert "FF071" in {finding.rule_id for finding in report.findings}
+    assert report.formula_defined_xlm_environment_information_static_input_cells == (
+        frozenset({("Inputs", "A9")})
+    )
+
+
+def test_formula_defined_xlm_environment_information_report_redaction_hides_calls_and_inputs(
+    tmp_path,
+) -> None:
+    baseline = make_formula_defined_xlm_environment_information_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_defined_xlm_environment_information_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_formula_defined_xlm_environment_information_input(candidate)
+    change_formula_defined_xlm_environment_information_call(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    sensitive_values = (
+        "PRIVATE-XLM-ENVIRONMENT-INPUT-BASELINE",
+        "PRIVATE-XLM-ENVIRONMENT-INPUT-CANDIDATE",
+        "GET.WORKSPACE(2)",
+        "GET.WORKSPACE(3)",
+    )
+    raw_rendered = json.dumps(raw_payload)
+    assert all(value in raw_rendered for value in sensitive_values)
+
+    redacted_payload = redact_formula_defined_xlm_environment_information_report_payload(
+        report, raw_payload
+    )
+    redacted_rendered = json.dumps(redacted_payload)
+    assert all(value not in redacted_rendered for value in sensitive_values)
+    assert FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_REDACTION in redacted_rendered
+    assert redacted_payload["summary"] == raw_payload["summary"]
+
+    redacted_markdown = report_to_markdown(
+        report, redact_formula_defined_xlm_environment_information_calls=True
+    )
+    redacted_sarif = report_to_sarif(
+        report, redact_formula_defined_xlm_environment_information_calls=True
+    )
+    assert (
+        "Formula-defined XLM environment-information material:** redacted for sharing"
+        in redacted_markdown
+    )
+    assert "FF071" in json.dumps(redacted_sarif)
+    for artifact in (redacted_markdown, json.dumps(redacted_sarif)):
+        assert all(value not in artifact for value in sensitive_values)
+
+    native_formula = "=SUM(A1:A2)"
+    assert (
+        redact_formula_defined_xlm_environment_information_material(native_formula)
+        == native_formula
+    )
+
+
+def test_formula_defined_xlm_environment_information_report_redaction_hides_unsampled_inputs(
+    tmp_path,
+) -> None:
+    """Environment-call input redaction must use full private impact evidence."""
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    baseline_marker = "PRIVATE-UNSAMPLED-XLM-ENVIRONMENT-BASELINE"
+    candidate_marker = "PRIVATE-UNSAMPLED-XLM-ENVIRONMENT-CANDIDATE"
+
+    def add_environment_fanout(workbook, marker: str) -> None:
+        inputs = workbook["Inputs"]
+        inputs["A9"] = marker
+        for column in range(2, 22):
+            inputs.cell(row=1, column=column).value = "=A9"
+        inputs["Z1"] = "=FENCE.XLM.UNSAMPLED.ENVIRONMENT(A9)"
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.UNSAMPLED.ENVIRONMENT",
+                attr_text="=LAMBDA(workbook_name,GET.WORKBOOK(4,workbook_name))",
+            )
+        )
+
+    rewrite(baseline, lambda workbook: add_environment_fanout(workbook, baseline_marker))
+    rewrite(candidate, lambda workbook: add_environment_fanout(workbook, candidate_marker))
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    input_change = next(
+        change for change in raw_payload["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert "Inputs!Z1" not in input_change["impacted_cells"]
+    assert report.formula_defined_xlm_environment_information_static_input_cells == (
+        frozenset({("Inputs", "A9")})
+    )
+
+    redacted = redact_formula_defined_xlm_environment_information_report_payload(
+        report, raw_payload
+    )
+    redacted_change = next(
+        change for change in redacted["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert (
+        redacted_change["before"]["value"]
+        == FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_REDACTION
+    )
+    assert (
+        redacted_change["after"]["value"]
+        == FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_REDACTION
+    )
+    rendered = json.dumps(redacted)
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+
+
+def test_formula_defined_xlm_environment_information_report_redaction_hides_indirect_names(
+    tmp_path,
+) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+
+    def add_environment_chain(workbook, marker: str) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.ENVIRONMENTWRAPPER",
+                attr_text="=LAMBDA(workbook_name,GET.WORKBOOK(4,workbook_name))",
+            )
+        )
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.ENVIRONMENTCHAIN",
+                attr_text=(
+                    f'=LAMBDA(workbook_name,FENCE.XLM.ENVIRONMENTWRAPPER("{marker}"))'
+                ),
+            )
+        )
+
+    baseline_marker = "PRIVATE-INDIRECT-XLM-ENVIRONMENT-BASELINE"
+    candidate_marker = "PRIVATE-INDIRECT-XLM-ENVIRONMENT-CANDIDATE"
+    rewrite(baseline, lambda workbook: add_environment_chain(workbook, baseline_marker))
+    rewrite(candidate, lambda workbook: add_environment_chain(workbook, candidate_marker))
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    environment_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_defined_xlm_environment_information_calls_changed"
+    )
+    assert (
+        environment_change.details[
+            "formula_defined_xlm_environment_information_definition_material_changed"
+        ]
+        is True
+    )
+    ordinary_looking_definition = (
+        f'=LAMBDA(workbook_name,FENCE.XLM.ENVIRONMENTWRAPPER("{baseline_marker}"))'
+    )
+    assert (
+        redact_formula_defined_xlm_environment_information_material(
+            ordinary_looking_definition
+        )
+        == ordinary_looking_definition
+    )
+
+    raw_payload = report.to_dict()
+    raw_rendered = json.dumps(raw_payload)
+    assert baseline_marker in raw_rendered
+    assert candidate_marker in raw_rendered
+
+    redacted_payload = redact_formula_defined_xlm_environment_information_report_payload(
+        report, raw_payload
+    )
+    redacted_rendered = json.dumps(redacted_payload)
+    assert baseline_marker not in redacted_rendered
+    assert candidate_marker not in redacted_rendered
+    assert FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_REDACTION in redacted_rendered
+
+    redacted_sarif = report_to_sarif(
+        report, redact_formula_defined_xlm_environment_information_calls=True
+    )
+    redacted_sarif_rendered = json.dumps(redacted_sarif)
+    assert baseline_marker not in redacted_sarif_rendered
+    assert candidate_marker not in redacted_sarif_rendered
+    assert "FF008" in redacted_sarif_rendered
+    assert "FF071" in redacted_sarif_rendered
 
 
 def test_xlm_environment_information_state_is_not_simulated(tmp_path) -> None:

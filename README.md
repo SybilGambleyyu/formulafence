@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.107.0/formulafence-0.107.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.108.0/formulafence-0.108.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.107.0
+  uses: SybilGambleyyu/formulafence@v0.108.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1184,6 +1184,18 @@ not asserted to change a stored call. Direct worksheet calls and raw XLM
 macro-sheet parts are deliberately outside this narrow stored-definition
 boundary. Enable no_formula_defined_xlm_environment_information_changes to
 block this boundary in CI.
+
+The ordinary semantic diff deliberately retains full local reviewer evidence.
+For an artifact that leaves that boundary, add
+`--redact-formula-defined-xlm-environment-information-calls` to `diff`,
+`check`, or `portfolio`. The output-only mode replaces direct stored selected
+environment-information material, changed invoking-formula evidence, exact
+changed static inputs, and changed resolved formula-defined-name-chain evidence
+with `[formula-defined XLM environment-information material redacted]`; it
+preserves comparison facts, policy results, and exit status. It does not
+evaluate a call, determine an information type, resolve a dynamic reference,
+simulate workbook/workspace/document state, or reconstruct a runtime value,
+and is not a general secret scrubber.
 
 FormulaFence also keeps a separate **native workbook and environment-information
 ledger** for `CELL`, `INFO`, `SHEET`, and `SHEETS` calls in ordinary worksheet

@@ -723,6 +723,15 @@ state-only workbook change is not asserted to change a stored call. Direct
 worksheet calls and raw XLM macro-sheet parts remain deliberately outside this
 narrow stored-definition boundary; the latter remain under FF026.
 
+The ordinary semantic diff retains local-review formula and defined-name
+evidence. For a shared artifact, the separate output-only
+`--redact-formula-defined-xlm-environment-information-calls` mode hides direct
+stored GET.WORKBOOK, GET.WORKSPACE, and GET.DOCUMENT material, exact changed
+static inputs, and changed private resolved name-chain evidence without
+changing comparison, policy evaluation, or exit status. It does not evaluate a
+call, determine an information type, resolve a dynamic reference, simulate
+workbook/workspace/document state, or reconstruct a runtime value.
+
 ## Native CELL, INFO, SHEET, and SHEETS information
 
 Microsoft's [CELL function

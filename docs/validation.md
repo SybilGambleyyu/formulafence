@@ -31,7 +31,13 @@ marks it unrecognized in 0.137 seconds at 33,352 KiB. A 9,976-byte workbook
 with one opaque RibbonX child containing 100,000 nested entries (1,300,522
 bytes of XML) loaded in 0.578 seconds at 92,872 KiB and now stops in 0.137
 seconds at 34,092 KiB. The completed source suite passed **885 tests in 124.65
-seconds**, with Ruff and `git diff --check` clean.
+seconds**, with Ruff and `git diff --check` clean. A fresh Python 3.12
+environment installed the exact candidate wheel and confirmed its FormulaFence
+0.126.0 version with `openpyxl.DEFUSEDXML` enabled, then completed a normal CLI
+comparison. Both independently generated RibbonX fixtures produced exactly one
+structural warning in the installed reader and the expected `FF010` coverage
+finding; with `--fail-on medium`, each installed CLI comparison returned status
+1.
 
 ## Legacy Custom View descendant bounds — 2026-07-26
 

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.131.0/formulafence-0.131.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.132.0/formulafence-0.132.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.131.0
+  uses: SybilGambleyyu/formulafence@v0.132.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2225,7 +2225,15 @@ document-property `pid` stay quiet. Custom XML `itemID` and Custom Data `id`
 storage identities are compared privately because an add-in can bind state to
 them. Missing, duplicate, malformed, unsafe, unbound, unreadable, oversized,
 or over-budget metadata becomes a visible coverage warning; raw reads are
-bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts.
+bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts. Before any
+custom-state XML tree is materialized, FormulaFence also streams its complete
+structure: 32,768 elements per XML part and 65,536 across the custom-state
+scan. This is a FormulaFence CI allocation and coverage boundary, not an Excel
+file-validity limit: a well-formed overage produces visible `FF052` coverage
+evidence. Opaque binary Custom Data remains byte-bounded rather than being
+treated as XML. The Power Query scanner receives only `DataMashup` members that
+the same bounded pass classified safely, so rejected generic Custom XML is not
+materialized a second time.
 
 This is a stored-state boundary, not add-in execution. FormulaFence does not
 execute an add-in, resolve a property, follow or fetch a relationship target,

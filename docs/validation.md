@@ -5,6 +5,47 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Custom workbook data-store XML structural bounds — 2026-07-26
+
+Version 0.132.0 closes the compact allocation path in FormulaFence's generic
+Custom XML and persisted add-in-state scanner. The scanner reads generic Custom
+XML data/property/schema parts, Custom Data property parts, custom document
+properties, and their package relationships before an ordinary workbook reader
+can omit them. Its existing 16 MiB per-part, 64 MiB aggregate, and 512-part
+byte/count limits did not bound the XML objects created by its private recursive
+canonicalizer. A later Power Query discovery pass also used to revisit arbitrary
+Custom XML items while looking for `DataMashup` definitions.
+
+Microsoft describes Custom XML parts as a place to store [arbitrary XML data in
+Office documents](https://learn.microsoft.com/en-us/visualstudio/vsto/custom-xml-parts-overview?view=visualstudio),
+and its [Office Scripts API](https://learn.microsoft.com/en-us/javascript/api/office-scripts/excelscript/excelscript.customxmlpart?view=office-scripts)
+exposes whole-part `getXml` / `setXml` operations.
+That means an element count is a FormulaFence reader-allocation and coverage
+boundary, not an Excel-file-validity rule. FormulaFence now streams every
+custom-state XML member before tree materialization, allowing 32,768 elements
+per part and 65,536 across the complete custom-state scan. A successfully
+streamed overage becomes visible `FF052` coverage evidence; malformed or
+unreadable input retains its established parser diagnostic. Opaque binary
+Custom Data remains byte-bounded rather than being parsed as XML. The Power
+Query scanner consumes only `DataMashup` items safely classified by this same
+bounded pass, so a rejected generic tree cannot be materialized a second time.
+
+A raw-ZIP fixture generated without FormulaFence's reader contained an
+11,493-byte workbook with 100,000 opaque direct Custom XML children
+(1,400,203 bytes of Custom XML). In the same Python 3.12.3 environment, the
+exact 0.131.0 wheel completed in 0.8529 seconds at 94,776 KiB and reported no
+unrecognized custom-data-store coverage. The exact 0.132.0 wheel completed in
+0.1860 seconds at 36,024 KiB before materializing that tree, recorded explicit
+unrecognized custom-data-store coverage, and emitted one structural warning.
+The normal installed CLI diff exited 0; the baseline-to-fixture diff emitted
+`FF010` and `FF052` and exited 1 with `--fail-on medium`. The complete
+929-test source suite passed in 128.02 seconds, with Ruff, bytecode
+compilation, `git diff --check`, the 35-test action-contract suite, and
+`twine check` clean. A fresh Python 3.12 environment installed the exact wheel
+(SHA-256 `c34d9c5f0caba6d7ad32a3f377c4fac0e8f5ac9bb5812d1e7304c1c8284d162e`),
+confirmed FormulaFence 0.132.0 with `openpyxl.DEFUSEDXML` enabled, and retained
+the expected normal and hostile CLI outcomes.
+
 ## Slicer and Timeline cache XML structural bounds — 2026-07-26
 
 Version 0.131.0 closes the corresponding compact allocation path in

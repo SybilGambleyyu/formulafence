@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.132.0 — 2026-07-26
+
+- Bound generic Custom XML, Custom XML-property, Custom Data-property, custom
+  document-property, and custom-state relationship XML before FormulaFence can
+  materialize and recursively canonicalize private trees. Each XML part allows
+  32,768 elements and the complete custom-state scan allows 65,536, alongside
+  the existing 16 MiB per-part, 64 MiB aggregate, and 512-part byte/count
+  limits.
+- Stream raw custom-state XML before the private parser runs, so a successfully
+  parsed structural overage becomes explicit `FF052` coverage evidence while
+  malformed or unreadable input keeps its established diagnostic. Opaque binary
+  Custom Data payloads remain byte-bounded and are never interpreted as XML.
+- Hand safely classified `DataMashup` members to the Power Query scanner rather
+  than reparsing every arbitrary Custom XML item. This preserves the separate
+  Power Query boundary while ensuring a rejected generic or over-budget custom
+  XML tree cannot be materialized by a second scanner.
+- Add fail-before-all-materializing-readers, binary-payload, configured/default
+  and exact capacity, aggregate, nested-opaque, and Power Query handoff
+  regressions.
+
 ## 0.131.0 — 2026-07-26
 
 - Bound Slicer and Timeline cache-definition XML before FormulaFence's private

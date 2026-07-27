@@ -156,7 +156,15 @@ financial correctness or replace model review.
   type, and web-publish-object catalogs at 4,096 each. Direct legacy custom
   sheet-view declarations are capped at 4,096 in aggregate across the selected
   worksheet, chart-sheet, and dialog-sheet parts before FormulaFence's raw
-  Custom View scanner builds per-view records. The catalog counters follow the
+  Custom View scanner builds per-view records. It also follows direct internal
+  `drawing` relationships from selected transitional or Strict worksheet parts,
+  then streams each unique XML target before shape, native-image, in-content
+  Office Web Add-in, worksheet-chart, or ordinary workbook readers can
+  materialize it. Those shared Worksheet DrawingML targets allow 32,768 XML
+  elements per part and 65,536 in aggregate. A successfully parsed structural
+  overage is rejected by the stable safety preflight; malformed, missing, or
+  non-XML optional targets retain their downstream coverage behavior, and
+  orphan DrawingML parts are not selected. The catalog counters follow the
   reader's local-name behavior so alternate-namespace entries cannot evade a
   safety boundary. FormulaFence requires
   `defusedxml` for its XML parser,

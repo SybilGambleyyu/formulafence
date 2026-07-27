@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.134.0/formulafence-0.134.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.135.0/formulafence-0.135.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.134.0
+  uses: SybilGambleyyu/formulafence@v0.135.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2615,8 +2615,17 @@ reader-materialized number-format, font, fill, fill-child, gradient-stop,
 border, base-XF, named-style, differential-style, palette, table-style,
 table-style-element, and extension catalog at 4,096 records. It follows
 `openpyxl`'s local-name and nested-sequence behavior, so alternate namespaces
-or an unexpected direct child cannot evade a stylesheet bound. Valid workbooks
-above FormulaFence's separate CI-oriented cardinality bounds
+or an unexpected direct child cannot evade a stylesheet bound. Before the raw
+shape, native-image, in-content Office Web Add-in, worksheet-chart, or ordinary
+workbook readers can materialize a shared DrawingML tree, the preflight follows
+direct internal `drawing` relationships from selected transitional or Strict
+worksheet parts. It streams every unique XML target under a 32,768-element
+per-part and 65,536-element aggregate ceiling. A successfully parsed overage
+returns the stable safety-preflight error rather than a partial metadata report;
+missing, malformed, or non-XML optional targets keep their existing coverage
+diagnostics, and orphan DrawingML parts remain outside this relationship-based
+boundary. These are CI allocation limits, not Excel workbook-validity limits.
+Valid workbooks above FormulaFence's separate CI-oriented cardinality bounds
 are deliberately rejected rather than partially inspected. FormulaFence
 requires `defusedxml` for its XML parser, which also enables `openpyxl`'s
 defused XML path in the supported installation. Partition unusually large data

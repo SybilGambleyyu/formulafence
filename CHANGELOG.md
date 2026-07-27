@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.135.0 — 2026-07-26
+
+- Bound relationship-selected Worksheet DrawingML XML in the shared
+  semantic-reader preflight before FormulaFence's shape, native-image,
+  in-content Office Web Add-in, chart, or ordinary workbook readers can
+  materialize the same tree. Each internally targeted transitional or Strict
+  worksheet drawing part allows 32,768 XML elements, and all unique selected
+  targets allow 65,536 in aggregate.
+- Stream only direct internal worksheet `drawing` relationship targets and
+  fail with the stable reader-safety error for a successfully parsed structural
+  overage. Missing, malformed, or non-XML optional targets keep their existing
+  scanner coverage behavior, and unrelated orphan DrawingML parts are not
+  broadened into the reader boundary.
+- Add direct/nested opaque, Strict relationship, aggregate-target, exact
+  capacity, default-capacity, orphan-scope, and fail-before-any-reader
+  regressions for the shared DrawingML path.
+
 ## 0.134.0 — 2026-07-26
 
 - Bound modern Threaded Comments and Persons XML before FormulaFence can

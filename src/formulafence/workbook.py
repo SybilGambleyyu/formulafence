@@ -230,6 +230,16 @@ _OOXML_READER_MAX_WORKBOOK_RELATIONSHIP_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 # materialize an oversized relationship tree or catalog.
 _OOXML_READER_MAX_RELATIONSHIP_PART_XML_ELEMENT_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_RELATIONSHIP_XML_ELEMENT_COUNT = 4 * _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+# A worksheet DrawingML part is independently materialized by the shape,
+# native-image, chart, and in-content Office Web Add-in boundaries.  A generic
+# reader XML ceiling is too high to protect those recursive private fragments,
+# and a late chart-local check cannot protect the earlier readers.  Stream the
+# relationship-selected shared source once before any of them can construct a
+# tree.  This is a CI safety boundary, not an OOXML file-format limit.
+_OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_WORKSHEET_DRAWING_XML_ELEMENT_COUNT = (
+    2 * _OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT
+)
 _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
 _OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT = 100_000
 _OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
@@ -4405,6 +4415,98 @@ def _validate_ooxml_semantic_reader_resources(
             for member_name, _ in _sheet_xml_parts(archive).values():
                 if member_name not in reader_sheet_members:
                     reader_sheet_members.append(member_name)
+
+            # Multiple metadata boundaries inspect a worksheet's DrawingML
+            # target before ``openpyxl`` starts.  Do not rely on the later
+            # chart boundary's local XML budget: shape, image, and in-content
+            # Office Web Add-in readers can each otherwise materialize the
+            # same compact, expansive tree first.  Follow the same direct
+            # relationship semantics as those readers, but stream the target
+            # without retaining its XML tree.  A missing, malformed, or
+            # non-XML optional target remains a scanner coverage condition;
+            # only a successfully streamed XML structure that exceeds this
+            # shared reader budget is an unsafe workbook input.
+            drawing_relationship_types = frozenset(
+                {
+                    _WORKSHEET_DRAWING_RELATIONSHIP.casefold(),
+                    _WORKSHEET_STRICT_DRAWING_RELATIONSHIP.casefold(),
+                }
+            )
+            package_relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+            worksheet_drawing_members: set[str] = set()
+            for worksheet_member in worksheet_members:
+                relationship_member_name = _relationship_part_path(worksheet_member)
+                if relationship_member_name not in member_by_name:
+                    continue
+
+                def worksheet_drawing_relationship_end(
+                    element: ElementTree.Element,
+                    tags: list[str],
+                    *,
+                    source_member: str = worksheet_member,
+                ) -> None:
+                    if (
+                        len(tags) != 2
+                        or element.tag != package_relationship_tag
+                        or element.get("Type", "").casefold()
+                        not in drawing_relationship_types
+                        or element.get("TargetMode", "Internal").casefold()
+                        != "internal"
+                    ):
+                        return
+                    raw_target = element.get("Target")
+                    if raw_target is None:
+                        return
+                    target = _normalise_part_target(source_member, raw_target)
+                    if target is not None and target in member_by_name:
+                        worksheet_drawing_members.add(target)
+
+                try:
+                    _stream_ooxml_reader_xml(
+                        archive,
+                        relationship_member_name,
+                        on_end=worksheet_drawing_relationship_end,
+                    )
+                except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+                    # Raw metadata boundaries retain their established warning
+                    # and opaque-coverage behavior for malformed optional
+                    # relationship parts.  The all-relationship structural
+                    # stream above has already bounded their parser work.
+                    continue
+
+            worksheet_drawing_xml_element_count = 0
+            for drawing_member in sorted(worksheet_drawing_members, key=str.casefold):
+                member = member_by_name[drawing_member]
+                if not _is_ooxml_xml_member(member):
+                    continue
+                try:
+                    element_count = _ooxml_xml_structure_element_count_within_budget(
+                        archive,
+                        drawing_member,
+                        maximum_element_count=(
+                            _OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT
+                        ),
+                    )
+                except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+                    # Preserve the raw boundaries' normal coverage warning for
+                    # malformed optional DrawingML while ensuring a valid,
+                    # expansive target never reaches any materializing reader.
+                    continue
+                if element_count is None:
+                    raise _reader_preflight_error(
+                        "worksheet DrawingML XML structure exceeds the "
+                        "semantic-reader safety limit."
+                    )
+                worksheet_drawing_xml_element_count += element_count
+                if (
+                    worksheet_drawing_xml_element_count
+                    > _OOXML_READER_MAX_WORKSHEET_DRAWING_XML_ELEMENT_COUNT
+                ):
+                    raise _reader_preflight_error(
+                        "aggregate worksheet DrawingML XML elements exceed the "
+                        "semantic-reader safety limit."
+                    )
+
             shared_string_members = _reader_shared_string_xml_paths(
                 archive,
                 manifest_targets=tuple(manifest_shared_string_members),

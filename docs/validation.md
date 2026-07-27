@@ -5,6 +5,48 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared Worksheet DrawingML semantic-preflight bounds — 2026-07-26
+
+Version 0.135.0 closes a shared compact-allocation path across Worksheet
+DrawingML readers. FormulaFence's shape, native-image, in-content Office Web
+Add-in, and worksheet-chart boundaries can all reach an internal DrawingML
+target before the ordinary workbook reader starts. The later chart scanner had
+its own structural guard, but the earlier shape and image paths could already
+materialize the same opaque XML tree. Microsoft's Open XML SDK documents the
+Worksheet Drawing root as `xdr:wsDr` and its shape surface as `xdr:sp` in the
+[Drawing.Spreadsheet namespace](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.spreadsheet?view=openxml-3.0.1);
+that makes a relationship-selected drawing worth inspecting, but does not turn
+FormulaFence's allocation ceiling into an Excel-file-validity rule.
+
+The semantic-reader preflight now follows direct internal transitional or
+Strict worksheet `drawing` relationships, deduplicates their XML targets, and
+streams complete structure before any materializing DrawingML or workbook
+reader can run. It permits 32,768 elements per target and 65,536 across those
+selected targets. A successfully parsed overage gets the stable safety-preflight
+error and CLI status 2 rather than a partial report. Missing, malformed, or
+non-XML optional targets retain their existing scanner coverage diagnostics,
+and orphan DrawingML parts are deliberately outside the relationship-selected
+boundary.
+
+A raw-ZIP fixture generated without FormulaFence's reader contained a
+35,274-byte workbook with 1,000,000 opaque direct children beneath a worksheet
+DrawingML root (`xl/drawings/drawing1.xml`: 14,001,804 expanded bytes and
+27,894 compressed bytes). In the same Python 3.12 environment, the exact
+0.134.0 wheel completed a normal diff in 9.913578 seconds at 143,444 KiB,
+eventually emitting a late chart coverage warning after the shape/image paths
+had already handled the tree. The exact 0.135.0 wheel rejects the same workbook
+in 0.584261 seconds at 39,464 KiB before any metadata reader runs; it emits no
+JSON report because the command exits 2 with the stable Worksheet-DrawingML
+safety error. Focused archive-safety regressions cover direct and nested opaque
+descendants, Strict relationships, aggregate targets, exact/default capacities,
+orphan scope, and fail-before-reader behavior. The complete 955-test source
+suite passed in 132.53 seconds, with Ruff, bytecode compilation, and `git diff
+--check` clean. A fresh Python 3.12 environment installed the exact wheel
+(SHA-256 `621e1e31ecc41d8c2015af0416626fc35247e3435a9ca1ae7f6da1304974de5e`),
+passed `pip check`, imported FormulaFence 0.135.0 from `site-packages`,
+confirmed `openpyxl.DEFUSEDXML`, completed a normal CLI diff, and retained the
+expected hostile status-2/empty-report outcome.
+
 ## Threaded-comment and Persons XML structural bounds — 2026-07-26
 
 Version 0.134.0 closes the compact allocation path in FormulaFence's modern

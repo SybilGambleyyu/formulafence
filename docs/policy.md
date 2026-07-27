@@ -1678,8 +1678,17 @@ malformed, unsafe, unreadable, oversized, over-budget, unsupported, or external
 Diagram Data image material is visible coverage evidence; XML reads are bounded
 to 16 MiB per part, 64 MiB per workbook, and 512 parts, while direct Diagram
 Data image hashing is bounded to 32 MiB per image, 64 MiB per workbook, and
-512 images. FormulaFence does not render or assess visibility, resolve theme
-colours/contrast, calculate a text link, execute a macro assignment, retrieve a
+512 images. Before the shared DrawingML target can reach the shape,
+native-image, in-content Office Web Add-in, chart, or ordinary workbook reader,
+the semantic preflight follows direct internal `drawing` relationships from
+selected transitional or Strict worksheet parts. It streams each unique XML
+target under a 32,768-element per-part and 65,536-element aggregate ceiling.
+A successfully parsed structural overage returns the stable safety-preflight
+error rather than a partial coverage report; malformed, missing, or non-XML
+optional targets retain their existing coverage diagnostics, and orphan
+DrawingML parts are not selected. These are CI allocation limits, not Excel
+workbook-validity limits. FormulaFence does not render or assess visibility,
+resolve theme colours/contrast, calculate a text link, execute a macro assignment, retrieve a
 target, calculate final SmartArt layout, or decode/render media. It hashes only
 bounded direct internal Image targets from a Diagram Data part and does not
 follow hyperlinks, second-hop targets, or component-side relationships from

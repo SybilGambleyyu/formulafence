@@ -23,7 +23,9 @@ from .helpers import (
     make_external_link_package_model,
     make_model,
     make_strict_custom_workbook_view_model,
+    make_strict_worksheet_drawing_connector_model,
     make_strict_worksheet_print_layout_model,
+    make_worksheet_drawing_shape_model,
 )
 
 
@@ -87,6 +89,70 @@ def _relationship_part_element_count(path: Path, member_name: str) -> int:
     with ZipFile(path) as archive:
         root = ElementTree.fromstring(archive.read(member_name))
     return sum(1 for _ in root.iter())
+
+
+def _append_worksheet_drawing_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    nested: bool = False,
+    member_name: str = "xl/drawings/drawing1.xml",
+) -> None:
+    """Add opaque DrawingML descendants without using a workbook reader."""
+    with ZipFile(path) as archive:
+        drawing = archive.read(member_name)
+    root = ElementTree.fromstring(drawing)
+    namespace = "urn:formulafence:archive-safety"
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(parent, f"{{{namespace}}}opaqueContainer")
+    for _ in range(count):
+        ElementTree.SubElement(parent, f"{{{namespace}}}opaque")
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _worksheet_drawing_xml_element_count(path: Path, member_name: str) -> int:
+    """Count the complete tree of one DrawingML part for exact-limit tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member_name))
+    return sum(1 for _ in root.iter())
+
+
+def _add_worksheet_drawing_relationship_target(
+    path: Path,
+    *,
+    source_member: str = "xl/drawings/drawing1.xml",
+    target_member: str = "xl/drawings/drawing2.xml",
+) -> None:
+    """Add a second raw DrawingML target to the selected worksheet relationship part."""
+    relationship_member = "xl/worksheets/_rels/sheet1.xml.rels"
+    with ZipFile(path) as archive:
+        drawing = archive.read(source_member)
+        relationships = archive.read(relationship_member)
+    _append_member(path, target_member, drawing)
+    root = ElementTree.fromstring(relationships)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    ElementTree.SubElement(
+        root,
+        f"{{{namespace}}}Relationship",
+        {
+            "Id": "rIdFormulaFenceSecondDrawing",
+            "Type": (
+                "http://schemas.openxmlformats.org/officeDocument/2006/"
+                "relationships/drawing"
+            ),
+            "Target": "../drawings/drawing2.xml",
+        },
+    )
+    _replace_member(
+        path,
+        relationship_member,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
 
 
 def _append_workbook_sheet_declarations(
@@ -2063,6 +2129,202 @@ def test_semantic_reader_preflight_preserves_malformed_unused_relationship_part_
         "could not parse a package relationship XML part" in warning
         for warning in snapshot.parser_warnings
     )
+
+
+def test_semantic_reader_preflight_rejects_opaque_worksheet_drawing_xml_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_worksheet_drawing_shape_model(
+        tmp_path / "opaque-worksheet-drawing.xml.xlsx"
+    )
+    drawing_member = "xl/drawings/drawing1.xml"
+    _append_worksheet_drawing_xml_elements(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT",
+        _worksheet_drawing_xml_element_count(workbook, drawing_member) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet DrawingML XML structure" in message
+
+
+def test_semantic_reader_preflight_counts_nested_opaque_worksheet_drawing_xml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_worksheet_drawing_shape_model(
+        tmp_path / "nested-opaque-worksheet-drawing.xml.xlsx"
+    )
+    drawing_member = "xl/drawings/drawing1.xml"
+    _append_worksheet_drawing_xml_elements(workbook, 1, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT",
+        _worksheet_drawing_xml_element_count(workbook, drawing_member) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet DrawingML XML structure" in message
+
+
+def test_semantic_reader_preflight_follows_strict_worksheet_drawing_relationships(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_worksheet_drawing_shape_model(
+        tmp_path / "strict-worksheet-drawing-relationship.xlsx"
+    )
+    drawing_member = "xl/drawings/drawing1.xml"
+    relationship_member = "xl/worksheets/_rels/sheet1.xml.rels"
+    with ZipFile(workbook) as archive:
+        relationships = archive.read(relationship_member)
+    _replace_member(
+        workbook,
+        relationship_member,
+        relationships.replace(
+            b"http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
+            b"http://purl.oclc.org/ooxml/officeDocument/relationships/drawing",
+        ),
+    )
+    _append_worksheet_drawing_xml_elements(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT",
+        _worksheet_drawing_xml_element_count(workbook, drawing_member) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet DrawingML XML structure" in message
+
+
+def test_semantic_reader_preflight_follows_strict_worksheet_drawing_parts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_strict_worksheet_drawing_connector_model(
+        tmp_path / "strict-worksheet-drawing-part.xlsx"
+    )
+    drawing_member = "xl/drawings/drawing1.xml"
+    _append_worksheet_drawing_xml_elements(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT",
+        _worksheet_drawing_xml_element_count(workbook, drawing_member) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet DrawingML XML structure" in message
+
+
+def test_semantic_reader_preflight_aggregates_worksheet_drawing_xml_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_worksheet_drawing_shape_model(
+        tmp_path / "aggregate-worksheet-drawing.xml.xlsx"
+    )
+    first_member = "xl/drawings/drawing1.xml"
+    second_member = "xl/drawings/drawing2.xml"
+    _add_worksheet_drawing_relationship_target(workbook)
+    element_counts = (
+        _worksheet_drawing_xml_element_count(workbook, first_member),
+        _worksheet_drawing_xml_element_count(workbook, second_member),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT",
+        max(element_counts),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_DRAWING_XML_ELEMENT_COUNT",
+        sum(element_counts) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "aggregate worksheet DrawingML XML elements" in message
+
+
+def test_semantic_reader_preflight_accepts_worksheet_drawing_xml_at_exact_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_worksheet_drawing_shape_model(
+        tmp_path / "worksheet-drawing.xml-at-limits.xlsx"
+    )
+    element_count = _worksheet_drawing_xml_element_count(
+        workbook,
+        "xl/drawings/drawing1.xml",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT",
+        element_count,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_DRAWING_XML_ELEMENT_COUNT",
+        element_count,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.worksheet_drawing_shapes.present is True
+
+
+def test_semantic_reader_preflight_rejects_default_worksheet_drawing_xml_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_worksheet_drawing_shape_model(
+        tmp_path / "default-worksheet-drawing.xml-limit.xlsx"
+    )
+    drawing_member = "xl/drawings/drawing1.xml"
+    existing_count = _worksheet_drawing_xml_element_count(workbook, drawing_member)
+    _append_worksheet_drawing_xml_elements(
+        workbook,
+        (
+            workbook_module._OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT
+            - existing_count
+            + 1
+        ),
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet DrawingML XML structure" in message
+
+
+def test_semantic_reader_preflight_ignores_orphan_worksheet_drawing_xml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "orphan-worksheet-drawing.xml.xlsx")
+    orphan_member = "xl/drawings/orphan.xml"
+    _append_member(
+        workbook,
+        orphan_member,
+        (
+            b'<wsDr xmlns="http://schemas.openxmlformats.org/drawingml/2006/'
+            b'spreadsheetDrawing"><opaque /><opaque /></wsDr>'
+        ),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT",
+        1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
 
 
 def test_semantic_reader_preflight_rejects_excessive_workbook_sheet_declarations_before_scanners(

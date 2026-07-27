@@ -10,6 +10,7 @@ import os
 import posixpath
 import re
 import shutil
+import stat
 import struct
 import tempfile
 import warnings
@@ -20,7 +21,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TypeVar
 from xml.etree import ElementTree
-from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile, ZipInfo
+from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
 from openpyxl import load_workbook
 from openpyxl.utils.cell import column_index_from_string, get_column_letter, range_boundaries
@@ -142,6 +143,44 @@ from formulafence.models import (
 )
 
 _SUPPORTED_SUFFIXES = {".xlsx", ".xlsm"}
+# Every source workbook passes this bounded ZIP inventory before FormulaFence
+# opens any OOXML part or hands the package to openpyxl.  The values preserve
+# support for the existing 512 MiB Power Pivot data-part allowance while
+# placing a finite ceiling around untrusted CI inputs.
+_OOXML_ARCHIVE_MAX_SOURCE_BYTES = 1 * 1024 * 1024 * 1024
+_OOXML_ARCHIVE_MAX_CENTRAL_DIRECTORY_BYTES = 32 * 1024 * 1024
+_OOXML_ARCHIVE_MAX_ENTRY_COUNT = 4_096
+_OOXML_ARCHIVE_MAX_MEMBER_NAME_BYTES = 1_024
+_OOXML_ARCHIVE_MAX_MEMBER_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+_OOXML_ARCHIVE_MAX_TOTAL_UNCOMPRESSED_BYTES = 768 * 1024 * 1024
+_OOXML_ARCHIVE_MAX_COMPRESSION_RATIO = 1_000
+_OOXML_ARCHIVE_ALLOWED_COMPRESSION_METHODS = frozenset({ZIP_STORED, ZIP_DEFLATED})
+_ZIP_LOCAL_FILE_HEADER_SIGNATURE = b"PK\x03\x04"
+_ZIP_CENTRAL_DIRECTORY_HEADER_SIGNATURE = b"PK\x01\x02"
+_ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE = b"PK\x05\x06"
+_ZIP64_END_OF_CENTRAL_DIRECTORY_SIGNATURE = b"PK\x06\x06"
+_ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE = b"PK\x06\x07"
+_ZIP_END_OF_CENTRAL_DIRECTORY = struct.Struct("<4s4H2LH")
+_ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR = struct.Struct("<4sLQL")
+_ZIP64_END_OF_CENTRAL_DIRECTORY = struct.Struct("<4sQ2H2L4Q")
+_ZIP_CENTRAL_DIRECTORY_HEADER = struct.Struct("<4s4B4HL2L5H2L")
+_ZIP_LOCAL_FILE_HEADER = struct.Struct("<4s2B4HL2L2H")
+_ZIP_MAX_COMMENT_BYTES = 0xFFFF
+_ZIP64_UINT16_SENTINEL = 0xFFFF
+_ZIP64_UINT32_SENTINEL = 0xFFFFFFFF
+
+
+@dataclass(frozen=True)
+class _OoxmlArchiveMember:
+    """One central-directory record retained for local-header validation."""
+
+    name: str
+    compressed_size: int
+    local_header_offset: int
+    flag_bits: int
+    compression_method: int
+
+
 _CALCULATION_FIELDS = (
     "calcMode",
     "fullCalcOnLoad",
@@ -2572,6 +2611,490 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: file_handle.read(1_048_576), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _archive_preflight_error(detail: str) -> WorkbookLoadError:
+    """Build a controlled error without echoing hostile ZIP metadata."""
+    return WorkbookLoadError(
+        "Workbook archive failed FormulaFence safety preflight: " f"{detail}"
+    )
+
+
+def _read_archive_segment(file_handle, offset: int, size: int) -> bytes:
+    """Read one bounded ZIP region, rejecting truncation before any parser sees it."""
+    file_handle.seek(offset)
+    payload = file_handle.read(size)
+    if len(payload) != size:
+        raise _archive_preflight_error("archive metadata is truncated.")
+    return payload
+
+
+def _ooxml_archive_end_of_central_directory(
+    tail: bytes,
+    tail_offset: int,
+) -> tuple[tuple[object, ...], int]:
+    """Find one unambiguous ZIP end record in the bounded archive tail."""
+    candidates: list[tuple[tuple[object, ...], int]] = []
+    search_end = len(tail)
+    while True:
+        offset = tail.rfind(_ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE, 0, search_end)
+        if offset < 0:
+            break
+        if offset + _ZIP_END_OF_CENTRAL_DIRECTORY.size <= len(tail):
+            record = _ZIP_END_OF_CENTRAL_DIRECTORY.unpack_from(tail, offset)
+            comment_size = record[-1]
+            if offset + _ZIP_END_OF_CENTRAL_DIRECTORY.size + comment_size == len(tail):
+                candidates.append((record, tail_offset + offset))
+        search_end = offset
+
+    if not candidates:
+        raise _archive_preflight_error("ZIP end-of-central-directory record is missing.")
+    if len(candidates) > 1:
+        raise _archive_preflight_error("ZIP end-of-central-directory record is ambiguous.")
+    return candidates[0]
+
+
+def _zip64_member_values(
+    extra: bytes,
+    *,
+    uncompressed_size: int,
+    compressed_size: int,
+    local_header_offset: int,
+    disk_start: int,
+) -> tuple[int, int, int, int]:
+    """Resolve ZIP64 central-directory values after validating extra-field framing."""
+    zip64_payload: bytes | None = None
+    cursor = 0
+    while cursor < len(extra):
+        if len(extra) - cursor < 4:
+            raise _archive_preflight_error("ZIP member extra metadata is malformed.")
+        field_id, field_size = struct.unpack_from("<HH", extra, cursor)
+        cursor += 4
+        if field_size > len(extra) - cursor:
+            raise _archive_preflight_error("ZIP member extra metadata is malformed.")
+        if field_id == 0x0001:
+            if zip64_payload is not None:
+                raise _archive_preflight_error("ZIP member ZIP64 metadata is ambiguous.")
+            zip64_payload = extra[cursor : cursor + field_size]
+        elif field_id == 0x7075:
+            # ``zipfile`` can use this Info-ZIP field to replace the decoded
+            # central-directory name after a caller has already indexed it.
+            # OOXML part names must have one canonical spelling, so reject the
+            # alias rather than letting downstream readers see a different key.
+            raise _archive_preflight_error("ZIP Unicode-path aliases are unsupported.")
+        cursor += field_size
+
+    needs_zip64 = (
+        uncompressed_size == _ZIP64_UINT32_SENTINEL
+        or compressed_size == _ZIP64_UINT32_SENTINEL
+        or local_header_offset == _ZIP64_UINT32_SENTINEL
+        or disk_start == _ZIP64_UINT16_SENTINEL
+    )
+    if not needs_zip64:
+        return (
+            uncompressed_size,
+            compressed_size,
+            local_header_offset,
+            disk_start,
+        )
+    if zip64_payload is None:
+        raise _archive_preflight_error("ZIP64 member metadata is incomplete.")
+
+    payload_cursor = 0
+
+    def take_value(size: int) -> int:
+        nonlocal payload_cursor
+        if len(zip64_payload) - payload_cursor < size:
+            raise _archive_preflight_error("ZIP64 member metadata is incomplete.")
+        value = int.from_bytes(
+            zip64_payload[payload_cursor : payload_cursor + size],
+            "little",
+        )
+        payload_cursor += size
+        return value
+
+    if uncompressed_size == _ZIP64_UINT32_SENTINEL:
+        uncompressed_size = take_value(8)
+    if compressed_size == _ZIP64_UINT32_SENTINEL:
+        compressed_size = take_value(8)
+    if local_header_offset == _ZIP64_UINT32_SENTINEL:
+        local_header_offset = take_value(8)
+    if disk_start == _ZIP64_UINT16_SENTINEL:
+        disk_start = take_value(4)
+    return uncompressed_size, compressed_size, local_header_offset, disk_start
+
+
+def _is_safe_ooxml_archive_member_name(member: str) -> bool:
+    """Return whether a decoded ZIP member is one canonical relative OPC path."""
+    if not member or member.startswith("/") or "\\" in member:
+        return False
+    if any(ord(character) < 32 or ord(character) == 127 for character in member):
+        return False
+    try:
+        encoded_member = member.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    if len(encoded_member) > _OOXML_ARCHIVE_MAX_MEMBER_NAME_BYTES:
+        return False
+
+    is_directory = member.endswith("/")
+    normalised = posixpath.normpath(member)
+    expected = f"{normalised}/" if is_directory else normalised
+    if member != expected or normalised in {"", ".", ".."}:
+        return False
+    components = normalised.split("/")
+    return all(component not in {"", ".", ".."} for component in components)
+
+
+def _ooxml_archive_directory_values(
+    file_handle,
+    source_size: int,
+    end_record: tuple[object, ...],
+    end_offset: int,
+) -> tuple[int, int, int]:
+    """Read bounded central-directory coordinates without constructing ``ZipFile``."""
+    (
+        _,
+        disk_number,
+        central_directory_disk,
+        entries_on_disk,
+        entry_count,
+        central_directory_size,
+        central_directory_offset,
+        _,
+    ) = end_record
+    zip64_record_offset: int | None = None
+    locator_offset = end_offset - _ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR.size
+    if locator_offset >= 0:
+        locator = _read_archive_segment(
+            file_handle,
+            locator_offset,
+            _ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR.size,
+        )
+        (
+            locator_signature,
+            zip64_disk,
+            declared_zip64_record_offset,
+            zip64_disk_count,
+        ) = _ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR.unpack(locator)
+        if locator_signature == _ZIP64_END_OF_CENTRAL_DIRECTORY_LOCATOR_SIGNATURE:
+            if zip64_disk != 0 or zip64_disk_count != 1:
+                raise _archive_preflight_error("multi-disk ZIP packages are unsupported.")
+            zip64_record_offset = declared_zip64_record_offset
+            if (
+                zip64_record_offset + _ZIP64_END_OF_CENTRAL_DIRECTORY.size
+                > locator_offset
+            ):
+                raise _archive_preflight_error("ZIP64 end metadata is malformed.")
+            zip64_record = _read_archive_segment(
+                file_handle,
+                zip64_record_offset,
+                _ZIP64_END_OF_CENTRAL_DIRECTORY.size,
+            )
+            (
+                zip64_signature,
+                zip64_record_size,
+                _,
+                _,
+                disk_number,
+                central_directory_disk,
+                entries_on_disk,
+                entry_count,
+                central_directory_size,
+                central_directory_offset,
+            ) = _ZIP64_END_OF_CENTRAL_DIRECTORY.unpack(zip64_record)
+            if zip64_signature != _ZIP64_END_OF_CENTRAL_DIRECTORY_SIGNATURE:
+                raise _archive_preflight_error("ZIP64 end metadata is malformed.")
+            if zip64_record_size < 44 or (
+                zip64_record_offset + 12 + zip64_record_size > locator_offset
+            ):
+                raise _archive_preflight_error("ZIP64 end metadata is malformed.")
+    if zip64_record_offset is None and (
+        entries_on_disk == _ZIP64_UINT16_SENTINEL
+        or entry_count == _ZIP64_UINT16_SENTINEL
+        or central_directory_size == _ZIP64_UINT32_SENTINEL
+        or central_directory_offset == _ZIP64_UINT32_SENTINEL
+    ):
+        raise _archive_preflight_error("ZIP64 end metadata is incomplete.")
+    if disk_number != 0 or central_directory_disk != 0:
+        raise _archive_preflight_error("multi-disk ZIP packages are unsupported.")
+    if entries_on_disk != entry_count:
+        raise _archive_preflight_error("ZIP entry counts are inconsistent.")
+    if entry_count > _OOXML_ARCHIVE_MAX_ENTRY_COUNT:
+        raise _archive_preflight_error(
+            "entry count exceeds the supported safety limit."
+        )
+    if central_directory_size > _OOXML_ARCHIVE_MAX_CENTRAL_DIRECTORY_BYTES:
+        raise _archive_preflight_error(
+            "central-directory size exceeds the supported safety limit."
+        )
+
+    central_directory_end = (
+        zip64_record_offset if zip64_record_offset is not None else end_offset
+    )
+    if (
+        central_directory_offset + central_directory_size > central_directory_end
+        or central_directory_end > source_size
+    ):
+        raise _archive_preflight_error("central-directory coordinates are invalid.")
+    return entry_count, central_directory_size, central_directory_offset
+
+
+def _ooxml_archive_members(
+    central_directory: bytes,
+    declared_entry_count: int,
+) -> tuple[_OoxmlArchiveMember, ...]:
+    """Validate central-directory records before a general ZIP reader allocates them."""
+    cursor = 0
+    entry_count = 0
+    total_uncompressed_size = 0
+    exact_names: set[str] = set()
+    casefolded_names: set[str] = set()
+    local_header_offsets: set[int] = set()
+    members: list[_OoxmlArchiveMember] = []
+    while cursor < len(central_directory):
+        if len(central_directory) - cursor < _ZIP_CENTRAL_DIRECTORY_HEADER.size:
+            raise _archive_preflight_error("central-directory metadata is truncated.")
+        (
+            signature,
+            _,
+            _,
+            _,
+            _,
+            flag_bits,
+            compression_method,
+            _,
+            _,
+            _,
+            compressed_size,
+            uncompressed_size,
+            filename_size,
+            extra_size,
+            comment_size,
+            disk_start,
+            _,
+            external_attributes,
+            local_header_offset,
+        ) = _ZIP_CENTRAL_DIRECTORY_HEADER.unpack_from(central_directory, cursor)
+        if signature != _ZIP_CENTRAL_DIRECTORY_HEADER_SIGNATURE:
+            raise _archive_preflight_error("central-directory metadata is malformed.")
+        record_size = (
+            _ZIP_CENTRAL_DIRECTORY_HEADER.size
+            + filename_size
+            + extra_size
+            + comment_size
+        )
+        if record_size > len(central_directory) - cursor:
+            raise _archive_preflight_error("central-directory metadata is truncated.")
+        entry_count += 1
+        if entry_count > _OOXML_ARCHIVE_MAX_ENTRY_COUNT:
+            raise _archive_preflight_error(
+                "entry count exceeds the supported safety limit."
+            )
+        if filename_size > _OOXML_ARCHIVE_MAX_MEMBER_NAME_BYTES:
+            raise _archive_preflight_error("a member name exceeds the supported safety limit.")
+        filename_start = cursor + _ZIP_CENTRAL_DIRECTORY_HEADER.size
+        filename_payload = central_directory[
+            filename_start : filename_start + filename_size
+        ]
+        extra_start = filename_start + filename_size
+        extra = central_directory[extra_start : extra_start + extra_size]
+        try:
+            member_name = filename_payload.decode(
+                "utf-8" if flag_bits & 0x800 else "cp437"
+            )
+        except UnicodeDecodeError as error:
+            raise _archive_preflight_error("a member name is not valid ZIP text.") from error
+        if not _is_safe_ooxml_archive_member_name(member_name):
+            raise _archive_preflight_error("a member path is unsafe or non-canonical.")
+        if member_name in exact_names or member_name.casefold() in casefolded_names:
+            raise _archive_preflight_error("member paths are ambiguous.")
+        exact_names.add(member_name)
+        casefolded_names.add(member_name.casefold())
+        if flag_bits & 0x1:
+            raise _archive_preflight_error("encrypted members are unsupported.")
+        if compression_method not in _OOXML_ARCHIVE_ALLOWED_COMPRESSION_METHODS:
+            raise _archive_preflight_error("a member uses an unsupported compression method.")
+
+        (
+            uncompressed_size,
+            compressed_size,
+            local_header_offset,
+            disk_start,
+        ) = _zip64_member_values(
+            extra,
+            uncompressed_size=uncompressed_size,
+            compressed_size=compressed_size,
+            local_header_offset=local_header_offset,
+            disk_start=disk_start,
+        )
+        if disk_start != 0:
+            raise _archive_preflight_error("multi-disk ZIP packages are unsupported.")
+        member_mode = stat.S_IFMT(external_attributes >> 16)
+        if stat.S_ISLNK(external_attributes >> 16):
+            raise _archive_preflight_error("symbolic-link members are unsupported.")
+        if member_mode not in {0, stat.S_IFREG, stat.S_IFDIR}:
+            raise _archive_preflight_error("a member has an unsupported special file type.")
+        if member_name.endswith("/") and (compressed_size or uncompressed_size):
+            raise _archive_preflight_error("a directory member contains payload data.")
+        if compression_method == ZIP_STORED and compressed_size != uncompressed_size:
+            raise _archive_preflight_error("stored member sizes are inconsistent.")
+        if uncompressed_size > _OOXML_ARCHIVE_MAX_MEMBER_UNCOMPRESSED_BYTES:
+            raise _archive_preflight_error(
+                "a member exceeds the supported uncompressed-size limit."
+            )
+        total_uncompressed_size += uncompressed_size
+        if total_uncompressed_size > _OOXML_ARCHIVE_MAX_TOTAL_UNCOMPRESSED_BYTES:
+            raise _archive_preflight_error(
+                "aggregate uncompressed size exceeds the supported safety limit."
+            )
+        if uncompressed_size and (
+            not compressed_size
+            or uncompressed_size
+            > compressed_size * _OOXML_ARCHIVE_MAX_COMPRESSION_RATIO
+        ):
+            raise _archive_preflight_error("a member exceeds the compression-ratio limit.")
+        if local_header_offset in local_header_offsets:
+            raise _archive_preflight_error("local member headers are ambiguous.")
+        local_header_offsets.add(local_header_offset)
+        members.append(
+            _OoxmlArchiveMember(
+                name=member_name,
+                compressed_size=compressed_size,
+                local_header_offset=local_header_offset,
+                flag_bits=flag_bits,
+                compression_method=compression_method,
+            )
+        )
+        cursor += record_size
+
+    if entry_count != declared_entry_count:
+        raise _archive_preflight_error("central-directory entry counts are inconsistent.")
+    if not members:
+        raise _archive_preflight_error("the archive contains no workbook parts.")
+    return tuple(members)
+
+
+def _validate_ooxml_archive_local_headers(
+    file_handle,
+    central_directory_offset: int,
+    members: tuple[_OoxmlArchiveMember, ...],
+) -> None:
+    """Ensure each bounded central record points to its own safe local header."""
+    member_ends: list[tuple[int, int]] = []
+    for member in members:
+        if member.local_header_offset >= central_directory_offset:
+            raise _archive_preflight_error("a local member header is outside package data.")
+        local_header = _read_archive_segment(
+            file_handle,
+            member.local_header_offset,
+            _ZIP_LOCAL_FILE_HEADER.size,
+        )
+        (
+            signature,
+            _,
+            _,
+            local_flag_bits,
+            local_compression_method,
+            _,
+            _,
+            _,
+            _,
+            _,
+            filename_size,
+            extra_size,
+        ) = _ZIP_LOCAL_FILE_HEADER.unpack(local_header)
+        if signature != _ZIP_LOCAL_FILE_HEADER_SIGNATURE:
+            raise _archive_preflight_error("a local member header is malformed.")
+        if (
+            local_flag_bits != member.flag_bits
+            or local_compression_method != member.compression_method
+        ):
+            raise _archive_preflight_error("local member metadata is inconsistent.")
+        if filename_size > _OOXML_ARCHIVE_MAX_MEMBER_NAME_BYTES:
+            raise _archive_preflight_error("a local member name exceeds the supported limit.")
+        variable_start = member.local_header_offset + _ZIP_LOCAL_FILE_HEADER.size
+        variable_size = filename_size + extra_size
+        data_start = variable_start + variable_size
+        data_end = data_start + member.compressed_size
+        if data_end > central_directory_offset:
+            raise _archive_preflight_error("a member payload overlaps package metadata.")
+        local_filename_payload = _read_archive_segment(
+            file_handle,
+            variable_start,
+            filename_size,
+        )
+        try:
+            local_name = local_filename_payload.decode(
+                "utf-8" if local_flag_bits & 0x800 else "cp437"
+            )
+        except UnicodeDecodeError as error:
+            raise _archive_preflight_error("a local member name is not valid ZIP text.") from error
+        if local_name != member.name:
+            raise _archive_preflight_error("local and central member paths are inconsistent.")
+        member_ends.append((member.local_header_offset, data_end))
+
+    ordered_member_ends = sorted(member_ends)
+    for (_, data_end), (next_offset, _) in zip(
+        ordered_member_ends,
+        ordered_member_ends[1:],
+        strict=False,
+    ):
+        if data_end > next_offset:
+            raise _archive_preflight_error("member payloads overlap.")
+
+
+def _validate_ooxml_archive(path: Path) -> None:
+    """Fail closed on unsafe ZIP container structure before OOXML inspection."""
+    try:
+        with path.open("rb") as file_handle:
+            source_size = os.fstat(file_handle.fileno()).st_size
+            if source_size > _OOXML_ARCHIVE_MAX_SOURCE_BYTES:
+                raise _archive_preflight_error(
+                    "source size exceeds the supported safety limit."
+                )
+            if source_size < _ZIP_LOCAL_FILE_HEADER.size:
+                raise _archive_preflight_error("archive is too small to be an OOXML package.")
+            if (
+                _read_archive_segment(file_handle, 0, 4)
+                != _ZIP_LOCAL_FILE_HEADER_SIGNATURE
+            ):
+                raise _archive_preflight_error("archive does not begin with a ZIP member.")
+
+            tail_size = min(
+                source_size,
+                _ZIP_MAX_COMMENT_BYTES + _ZIP_END_OF_CENTRAL_DIRECTORY.size,
+            )
+            tail_offset = source_size - tail_size
+            end_record, end_offset = _ooxml_archive_end_of_central_directory(
+                _read_archive_segment(file_handle, tail_offset, tail_size),
+                tail_offset,
+            )
+            (
+                declared_entry_count,
+                central_directory_size,
+                central_directory_offset,
+            ) = _ooxml_archive_directory_values(
+                file_handle,
+                source_size,
+                end_record,
+                end_offset,
+            )
+            central_directory = _read_archive_segment(
+                file_handle,
+                central_directory_offset,
+                central_directory_size,
+            )
+            members = _ooxml_archive_members(central_directory, declared_entry_count)
+            _validate_ooxml_archive_local_headers(
+                file_handle,
+                central_directory_offset,
+                members,
+            )
+    except WorkbookLoadError:
+        raise
+    except (OSError, UnicodeError, struct.error, ValueError) as error:
+        raise _archive_preflight_error("ZIP metadata could not be read safely.") from error
 
 
 def _vba_hash(path: Path) -> str | None:
@@ -45466,6 +45989,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         raise WorkbookLoadError(
             f"Unsupported workbook type {source.suffix!r}; supported types: {supported}"
         )
+
+    _validate_ooxml_archive(source)
 
     workbook_tab_order_metadata = _workbook_tab_order_metadata(source)
     xlm_macro_metadata = _xlm_macro_metadata(source)

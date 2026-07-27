@@ -112,6 +112,16 @@ financial correctness or replace model review.
 - External-data source material is never emitted: connection names/descriptions,
   paths, URLs, connection strings, commands, parameter values, SSO identifiers,
   cached records, and opaque extension XML remain private comparison evidence.
+- Before any raw OOXML member scanner or `openpyxl` reader runs, FormulaFence
+  performs a bounded, fail-closed inventory of the original ZIP container. It
+  reads only ZIP headers and central-directory metadata at this stage; it does
+  not extract members. The inventory requires one canonical single-disk package
+  with stored or deflated members, checks central and local-header consistency,
+  rejects duplicate/case-colliding or unsafe member paths, ZIP Unicode-path
+  aliases, encrypted and special-file members, and overlapping payloads. It
+  bounds source, directory, member, aggregate-expansion, and compression-ratio
+  resources.
+  A rejected package is never handed to a raw OOXML scanner or workbook reader.
 - It uses sparse cell storage rather than walking every coordinate in a workbook's
   declared used rectangle.
 - Parser warnings from unsupported OOXML extensions are captured in the profile
@@ -201,6 +211,17 @@ formula will produce.
   password-to-open workbooks are outside scope. Workbook and worksheet
   protection flags inside an otherwise readable OOXML workbook are inspected as
   operational controls, not treated as encryption.
+- Source package safety limits are fixed at 1 GiB compressed source bytes,
+  32 MiB central-directory metadata, 4,096 members, 1,024 UTF-8 bytes per
+  member name, 512 MiB expanded bytes per member, 768 MiB expanded bytes in
+  aggregate, and a 1,000:1 maximum member compression ratio. FormulaFence
+  accepts only stored or deflated, canonical, single-disk ZIP members. It
+  rejects duplicate and case-colliding names, traversal or non-canonical paths,
+  ZIP Unicode-path aliases, encrypted/symlink/special-file members,
+  inconsistent local headers, and overlapping payloads before it reads workbook
+  content. These are resource and
+  interpretation limits for untrusted CI input, not a claim to detect every
+  hostile document or to make an untrusted runner safe.
 - Portfolio mode intentionally does not support legacy `.xls`, `.xlsb`,
   templates, add-ins, or `.ods` files, infer a rename/content match across
   different paths, recursively follow a symlinked workbook, or combine cell

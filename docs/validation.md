@@ -5,6 +5,29 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Bounded OOXML archive preflight — 2026-07-26
+
+Workbook files are untrusted CI inputs before FormulaFence can inspect their
+formula semantics. The reader now performs a bounded ZIP inventory before it
+opens any OOXML part or calls `openpyxl`: a one-GiB source cap, 32-MiB central
+directory cap, 4,096-entry cap, canonical single-disk member inventory, 512-MiB
+per-member expansion cap, 768-MiB aggregate expansion cap, and a 1,000:1
+compression-ratio cap. It accepts only stored or deflated members and verifies
+their local headers without extracting data. Duplicate or case-colliding paths,
+unsafe paths, encrypted or special-file members, malformed ZIP64 metadata, and
+overlapping payloads fail before downstream scanners run.
+
+Focused regression fixtures prove that ordinary and valid ZIP64 workbooks still
+load, while source-size and central-directory gates run before a general ZIP
+reader; oversized members and aggregate expansion, compression bombs,
+traversal and case-colliding paths, duplicate members, encrypted records, ZIP
+Unicode-path aliases, malformed ZIP64 metadata, local-header disagreement,
+symbolic links, and the CLI error path all fail closed. The completed source
+tree passed **719 tests in 103.64 seconds**. This follows Python's warning about
+ZIP decompression resource pitfalls and Microsoft's archive-validation guidance
+on entry counts and expanded-size limits: [Python `zipfile` documentation](https://docs.python.org/3/library/zipfile.html#decompression-pitfalls)
+and [Microsoft archive best practices](https://learn.microsoft.com/en-us/dotnet/standard/io/zip-tar-best-practices).
+
 ## Self-contained HTML review artifacts — 2026-07-26
 
 FormulaFence 0.110.0 adds `--format html` for `diff`, `check`, and `portfolio`.

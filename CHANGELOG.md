@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.111.0 — 2026-07-26
+
+- Add a fail-closed OOXML ZIP preflight before FormulaFence opens any raw
+  package part or `openpyxl`. It bounds source and central-directory metadata,
+  entry count, member and aggregate expanded sizes, and compression ratio;
+  accepts only canonical single-disk stored/deflated members; and rejects
+  duplicate/case-colliding or unsafe paths, Unicode-path aliases,
+  encrypted/special members, malformed ZIP64 or local-header relationships,
+  and overlapping payloads.
+
 ## 0.110.0 — 2026-07-26
 
 - Add `--format html` for `diff`, `check`, and `portfolio`. It produces one

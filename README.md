@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.110.0/formulafence-0.110.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.111.0/formulafence-0.111.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.110.0
+  uses: SybilGambleyyu/formulafence@v0.111.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2527,6 +2527,19 @@ FormulaFence reads workbook structure only. It does not recalculate formulas,
 run VBA, follow external links, or claim that a workbook's numbers are correct.
 It is a review and control layer; human review remains essential for material
 models.
+
+Every `.xlsx` and `.xlsm` source passes a fail-closed OOXML archive preflight
+before FormulaFence reads an OOXML part or opens the workbook reader. The
+preflight does not extract the archive. It accepts only one canonical,
+single-disk ZIP container with stored or deflated members, then rejects
+duplicate or case-colliding paths, ZIP Unicode-path aliases, unsafe paths,
+encrypted or special-file members, inconsistent local headers, and overlapping
+member payloads. The fixed resource ceilings are 1 GiB for the source package,
+32 MiB for its central
+directory, 4,096 members, 512 MiB per expanded member, 768 MiB in aggregate,
+and a 1,000:1 maximum member compression ratio. These are input-safety limits,
+not a malware classification or a substitute for isolated CI runners. See the
+[threat model](docs/threat-model.md) for the complete boundary.
 
 ## License
 

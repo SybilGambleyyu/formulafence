@@ -951,6 +951,56 @@ class ExternalLinkPackageSnapshot:
 
 
 @dataclass(frozen=True)
+class ExternalWorkbookLinkSurfaceSnapshot:
+    """Private ledger for static external-workbook formula surfaces.
+
+    External-workbook formulas can live outside ordinary worksheet cells: in
+    defined names, data-validation criteria, and DrawingML chart formulas.
+    The private signature keeps source paths, names, formula spellings, and
+    surface identities available for comparison while public output exposes
+    only bounded structural counts.
+    """
+
+    cell_formula_surface_count: int = 0
+    defined_name_surface_count: int = 0
+    data_validation_surface_count: int = 0
+    chart_formula_surface_count: int = 0
+    opaque_chart_part_count: int = 0
+    external_reference_count: int = 0
+    ledger_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def surface_count(self) -> int:
+        """Return the number of statically visible link-bearing surfaces."""
+        return (
+            self.cell_formula_surface_count
+            + self.defined_name_surface_count
+            + self.data_validation_surface_count
+            + self.chart_formula_surface_count
+        )
+
+    @property
+    def present(self) -> bool:
+        return bool(self.surface_count or self.opaque_chart_part_count)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return count-only evidence without locations or external endpoints."""
+        return {
+            "present": self.present,
+            "surface_count": self.surface_count,
+            "cell_formula_surface_count": self.cell_formula_surface_count,
+            "defined_name_surface_count": self.defined_name_surface_count,
+            "data_validation_surface_count": self.data_validation_surface_count,
+            "chart_formula_surface_count": self.chart_formula_surface_count,
+            "opaque_chart_part_count": self.opaque_chart_part_count,
+            "external_reference_count": self.external_reference_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class ExternalRelationshipSnapshot:
     """Safe aggregate of package-wide OPC relationships with external targets.
 
@@ -1806,6 +1856,17 @@ class ChartDefinitionSnapshot:
     fingerprinted_related_part_count: int = 0
     uninspected_related_part_count: int = 0
     unrecognized_part_count: int = 0
+    # These are consumed by the dedicated external-workbook link-surface
+    # ledger. Keep chart part identities and endpoint spellings private even
+    # though their aggregate counts are safe to report there.
+    external_workbook_formula_surface_count: int = field(default=0, repr=False)
+    external_workbook_formula_reference_count: int = field(default=0, repr=False)
+    external_workbook_formula_signature: str | None = field(default=None, repr=False)
+    external_workbook_formula_opaque_part_count: int = field(default=0, repr=False)
+    external_workbook_formula_opaque_signature: str | None = field(
+        default=None,
+        repr=False,
+    )
     declaration_signature: str | None = field(default=None, repr=False)
     definition_signature: str | None = field(default=None, repr=False)
     cached_data_signature: str | None = field(default=None, repr=False)
@@ -4249,6 +4310,9 @@ class WorkbookSnapshot:
     external_link_packages: ExternalLinkPackageSnapshot = field(
         default_factory=ExternalLinkPackageSnapshot
     )
+    external_workbook_link_surfaces: ExternalWorkbookLinkSurfaceSnapshot = field(
+        default_factory=ExternalWorkbookLinkSurfaceSnapshot
+    )
     external_relationships: ExternalRelationshipSnapshot = field(
         default_factory=ExternalRelationshipSnapshot
     )
@@ -4764,6 +4828,15 @@ class WorkbookSnapshot:
             "external_workbook_link_count": self.external_link_packages.external_workbook_count,
             "dde_link_count": self.external_link_packages.dde_link_count,
             "ole_link_count": self.external_link_packages.ole_link_count,
+            "external_workbook_link_surface_count": (
+                self.external_workbook_link_surfaces.surface_count
+            ),
+            "external_workbook_link_surface_reference_count": (
+                self.external_workbook_link_surfaces.external_reference_count
+            ),
+            "has_external_workbook_link_surfaces": (
+                self.external_workbook_link_surfaces.present
+            ),
             "package_external_relationship_count": (
                 self.external_relationships.external_relationship_count
             ),

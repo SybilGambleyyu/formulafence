@@ -431,6 +431,7 @@ from .helpers import (
     rewrite_slicer_timeline_internal_target_spelling,
     rewrite_worksheet_embedded_control_internal_target_spelling,
     rewrite_xlm_macro_sheet_internal_target_spelling,
+    set_chart_formula_external_workbook_target,
     set_external_data_connection_defaults,
     set_power_pivot_data_model_equivalent_guids,
     set_sheet_protection_defaults,
@@ -1233,6 +1234,216 @@ def test_static_external_defined_names_are_retained_privately_for_portfolios(
     rendered = json.dumps(profile_snapshot(snapshot))
     assert private_source not in rendered
     assert private_name not in rendered
+
+
+def test_external_workbook_link_surface_ledger_catches_same_surface_swaps(
+    tmp_path,
+) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    private_baseline = "PRIVATE-LINK-SURFACE-BASELINE"
+    private_candidate = "PRIVATE-LINK-SURFACE-CANDIDATE"
+
+    def add_link_surfaces(workbook, marker: str) -> None:
+        source = f"C:\\{marker}\\[Source.xlsx]Inputs"
+        workbook["Model"]["D2"] = f"='{source}'!$B$2"
+        workbook.defined_names.add(
+            DefinedName(
+                "ExternalNamedLimit",
+                attr_text=f"'{source}'!$C$2",
+            )
+        )
+        validation = DataValidation(
+            type="whole",
+            operator="greaterThan",
+            formula1=f"='{source}'!$D$2",
+        )
+        validation.add("E2")
+        workbook["Model"].add_data_validation(validation)
+
+    rewrite(baseline, lambda workbook: add_link_surfaces(workbook, private_baseline))
+    rewrite(candidate, lambda workbook: add_link_surfaces(workbook, private_candidate))
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    profile = profile_snapshot(candidate_snapshot)
+    surface_change = next(
+        change
+        for change in report.changes
+        if change.kind == "external_workbook_link_surfaces_changed"
+    )
+
+    assert baseline_snapshot.external_references == {("Model", "D2")}
+    assert candidate_snapshot.external_references == {("Model", "D2")}
+    assert not any(finding.rule_id == "FF004" for finding in report.findings)
+    assert any(finding.rule_id == "FF081" for finding in report.findings)
+    assert surface_change.details == {
+        "before": {
+            "present": True,
+            "surface_count": 3,
+            "cell_formula_surface_count": 1,
+            "defined_name_surface_count": 1,
+            "data_validation_surface_count": 1,
+            "chart_formula_surface_count": 0,
+            "opaque_chart_part_count": 0,
+            "external_reference_count": 3,
+        },
+        "after": {
+            "present": True,
+            "surface_count": 3,
+            "cell_formula_surface_count": 1,
+            "defined_name_surface_count": 1,
+            "data_validation_surface_count": 1,
+            "chart_formula_surface_count": 0,
+            "opaque_chart_part_count": 0,
+            "external_reference_count": 3,
+        },
+        "external_workbook_link_surface_material_changed": True,
+    }
+    assert profile["external_workbook_link_surfaces"] == surface_change.details["after"]
+
+    rendered_profile = json.dumps(profile)
+    rendered_markdown = profile_to_markdown(profile)
+    external_surface_sarif = json.dumps(
+        [
+            result
+            for result in report_to_sarif(report)["runs"][0]["results"]
+            if result["ruleId"] == "FF081"
+        ]
+    )
+    for private_value in (private_baseline, private_candidate):
+        assert private_value not in rendered_profile
+        assert private_value not in rendered_markdown
+        assert private_value not in external_surface_sarif
+
+
+def test_external_workbook_link_surface_ledger_covers_direct_external_names(
+    tmp_path,
+) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    private_baseline = "PRIVATE-LINK-NAME-BASELINE"
+    private_candidate = "PRIVATE-LINK-NAME-CANDIDATE"
+
+    def add_external_names(workbook, marker: str) -> None:
+        source = f"C:\\{marker}\\[Source.xlsx]"
+        workbook["Model"]["D2"] = f"='{source}ExternalInput'"
+        workbook.defined_names.add(
+            DefinedName(
+                "ExternalNamedLimit",
+                attr_text=f"='{source}ExternalLimit'",
+            )
+        )
+
+    rewrite(baseline, lambda workbook: add_external_names(workbook, private_baseline))
+    rewrite(candidate, lambda workbook: add_external_names(workbook, private_candidate))
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    details = next(
+        finding.details for finding in report.findings if finding.rule_id == "FF081"
+    )
+
+    assert baseline_snapshot.external_references == {("Model", "D2")}
+    assert candidate_snapshot.external_references == {("Model", "D2")}
+    assert details["after"] == {
+        "present": True,
+        "surface_count": 2,
+        "cell_formula_surface_count": 1,
+        "defined_name_surface_count": 1,
+        "data_validation_surface_count": 0,
+        "chart_formula_surface_count": 0,
+        "opaque_chart_part_count": 0,
+        "external_reference_count": 2,
+    }
+    assert all(
+        private_value not in json.dumps(profile_snapshot(candidate_snapshot))
+        for private_value in (private_baseline, private_candidate)
+    )
+
+
+def test_external_workbook_link_surface_ledger_covers_chart_formula_targets(tmp_path) -> None:
+    baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    private_baseline = "PRIVATE-CHART-LINK-BASELINE"
+    private_candidate = "PRIVATE-CHART-LINK-CANDIDATE"
+    set_chart_formula_external_workbook_target(
+        baseline,
+        f"'C:\\{private_baseline}\\[Source.xlsx]Data'!$B$2:$B$4",
+    )
+    set_chart_formula_external_workbook_target(
+        candidate,
+        f"'C:\\{private_candidate}\\[Source.xlsx]Data'!$B$2:$B$4",
+    )
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    profile = profile_snapshot(candidate_snapshot)
+
+    assert (
+        baseline_snapshot.chart_definitions.external_workbook_formula_surface_count
+    ) == 1
+    assert (
+        candidate_snapshot.chart_definitions.external_workbook_formula_reference_count
+    ) == 1
+    assert profile["external_workbook_link_surfaces"] == {
+        "present": True,
+        "surface_count": 1,
+        "cell_formula_surface_count": 0,
+        "defined_name_surface_count": 0,
+        "data_validation_surface_count": 0,
+        "chart_formula_surface_count": 1,
+        "opaque_chart_part_count": 0,
+        "external_reference_count": 1,
+    }
+    assert any(finding.rule_id == "FF081" for finding in report.findings)
+    assert "## Static external-workbook link surfaces" in profile_to_markdown(profile)
+
+    rendered_profile = json.dumps(profile)
+    rendered_markdown = profile_to_markdown(profile)
+    rendered_sarif = json.dumps(report_to_sarif(report))
+    for private_value in (private_baseline, private_candidate):
+        assert private_value not in rendered_profile
+        assert private_value not in rendered_markdown
+        assert private_value not in rendered_sarif
+
+
+def test_external_workbook_link_surface_ledger_fails_closed_for_unreadable_charts(
+    tmp_path,
+) -> None:
+    baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    corrupt_chart_definition_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    surface_change = next(
+        change
+        for change in report.changes
+        if change.kind == "external_workbook_link_surfaces_changed"
+    )
+
+    assert candidate_snapshot.external_workbook_link_surfaces.opaque_chart_part_count == 1
+    assert surface_change.details["opaque_chart_link_surface_coverage_changed"] is True
+    assert any(finding.rule_id == "FF081" for finding in report.findings)
+
+
+def test_external_workbook_link_surface_ledger_only_marks_unreadable_chart_formulas(
+    tmp_path,
+) -> None:
+    baseline = make_extended_chart_definition_model(tmp_path / "baseline.xlsx")
+    candidate = make_extended_chart_definition_model(tmp_path / "candidate.xlsx")
+    add_unsupported_extended_chart_relationship(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.chart_definitions.unrecognized_part_count >= 1
+    assert candidate_snapshot.external_workbook_link_surfaces.opaque_chart_part_count == 0
+    assert not any(finding.rule_id == "FF081" for finding in report.findings)
 
 
 def test_static_table_references_feed_dependency_paths_and_profiles(tmp_path) -> None:

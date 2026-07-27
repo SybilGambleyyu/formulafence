@@ -73,6 +73,7 @@ from formulafence.models import (
     ExternalLinkPackageSnapshot,
     ExternalRelationshipSnapshot,
     ExternalWorkbookDefinedNameReference,
+    ExternalWorkbookLinkSurfaceSnapshot,
     ExternalWorkbookReference,
     ExternalWorkbookStructuredReference,
     ExternalWorkbookThreeDReference,
@@ -1985,6 +1986,7 @@ class _ChartPartInspection:
     user_shape_members: tuple[str, ...] = ()
     payload_members: tuple[str, ...] = ()
     unresolved_payload_entries: tuple[tuple[str, str], ...] = ()
+    external_workbook_formula_entries: tuple[tuple[str, str], ...] = ()
     unrecognized_count: int = 0
     inspected: bool = False
     definition_signature: str | None = None
@@ -2003,6 +2005,7 @@ class _ChartExPartInspection:
     related_relationship_count: int = 0
     external_relationship_count: int = 0
     payload_members: tuple[str, ...] = ()
+    external_workbook_formula_entries: tuple[tuple[str, str], ...] = ()
     unresolved_payload_entries: tuple[tuple[str, str], ...] = ()
     unrecognized_count: int = 0
     inspected: bool = False
@@ -10716,6 +10719,21 @@ def _chart_drawing_inspection(
     )
 
 
+def _chart_external_workbook_formula_entries(
+    root: ElementTree.Element,
+    namespace: str,
+) -> tuple[tuple[str, str], ...]:
+    """Return private external endpoint tokens from one chart XML formula set."""
+    formula_tag = f"{{{namespace}}}f"
+    entries: list[tuple[str, str]] = []
+    for formula_index, element in enumerate(root.iter(formula_tag)):
+        for endpoint_index, token in enumerate(
+            _external_workbook_formula_surface_tokens(element.text)
+        ):
+            entries.append((f"{formula_index}:{endpoint_index}", token))
+    return tuple(entries)
+
+
 def _chart_part_inspection(
     archive: ZipFile,
     member: str,
@@ -10774,6 +10792,11 @@ def _chart_part_inspection(
             definition_signature=_private_payload_signature(payload),
             relationship_signature=_chart_relationship_signature(relationships),
         )
+
+    external_workbook_formula_entries = _chart_external_workbook_formula_entries(
+        root,
+        _DRAWINGML_CHART_NS,
+    )
 
     relationship_ids = {
         value
@@ -10940,6 +10963,7 @@ def _chart_part_inspection(
         user_shape_members=tuple(sorted(user_shape_members, key=str.casefold)),
         payload_members=tuple(sorted(payload_members, key=str.casefold)),
         unresolved_payload_entries=tuple(unresolved_payload_entries),
+        external_workbook_formula_entries=external_workbook_formula_entries,
         unrecognized_count=unrecognized_count,
         inspected=inspected,
         definition_signature=definition_signature,
@@ -11018,6 +11042,11 @@ def _chart_ex_part_inspection(
             definition_signature=_private_payload_signature(payload),
             relationship_signature=_chart_relationship_signature(relationships),
         )
+
+    external_workbook_formula_entries = _chart_external_workbook_formula_entries(
+        root,
+        _DRAWINGML_CHART_EX_NS,
+    )
 
     relationship_ids = {
         value
@@ -11138,6 +11167,7 @@ def _chart_ex_part_inspection(
             for relationship in relationships
         ),
         payload_members=tuple(sorted(payload_members, key=str.casefold)),
+        external_workbook_formula_entries=external_workbook_formula_entries,
         unresolved_payload_entries=tuple(unresolved_payload_entries),
         unrecognized_count=unrecognized_count,
         inspected=inspected,
@@ -11504,6 +11534,20 @@ def _chart_definition_metadata(path: Path) -> _ChartDefinitionMetadata:
                 *chart_ex_inspections,
                 *user_shape_inspections,
             ]
+            external_workbook_formula_entries = tuple(
+                (inspection.member, formula_position, endpoint)
+                for inspection in [*chart_inspections, *chart_ex_inspections]
+                for formula_position, endpoint in inspection.external_workbook_formula_entries
+            )
+            external_workbook_formula_surfaces = {
+                (member, formula_position)
+                for member, formula_position, _endpoint in external_workbook_formula_entries
+            }
+            opaque_external_workbook_formula_parts = tuple(
+                (inspection.member, inspection.definition_signature)
+                for inspection in [*chart_inspections, *chart_ex_inspections]
+                if not inspection.inspected
+            )
             snapshot = ChartDefinitionSnapshot(
                 chart_host_sheet_count=len(chart_host_sheets),
                 chart_drawing_part_count=sum(
@@ -11581,6 +11625,35 @@ def _chart_definition_metadata(path: Path) -> _ChartDefinitionMetadata:
                     unrecognized_declaration_count
                     + orphan_chart_part_count
                     + sum(inspection.unrecognized_count for inspection in all_inspections)
+                ),
+                external_workbook_formula_surface_count=len(
+                    external_workbook_formula_surfaces
+                ),
+                external_workbook_formula_reference_count=len(
+                    external_workbook_formula_entries
+                ),
+                external_workbook_formula_signature=_private_external_data_signature(
+                    tuple(
+                        (f"formula:{index}", repr(entry))
+                        for index, entry in enumerate(
+                            sorted(external_workbook_formula_entries)
+                        )
+                    )
+                ),
+                external_workbook_formula_opaque_part_count=len(
+                    opaque_external_workbook_formula_parts
+                ),
+                external_workbook_formula_opaque_signature=(
+                    _private_external_data_signature(
+                        tuple(
+                            (f"opaque:{index}", repr(entry))
+                            for index, entry in enumerate(
+                                opaque_external_workbook_formula_parts
+                            )
+                        )
+                    )
+                    if opaque_external_workbook_formula_parts
+                    else None
                 ),
                 declaration_signature=_private_external_data_signature(
                     tuple(declaration_entries)
@@ -45195,6 +45268,160 @@ def _data_validation_snapshots(workbook: object) -> tuple[DataValidationSnapshot
     )
 
 
+def _direct_external_workbook_reference_tokens(inspection: object) -> tuple[str, ...]:
+    """Return only literal external endpoints, excluding expanded name aliases.
+
+    ``inspect_formula`` also expands a workbook-defined name or named LAMBDA
+    when a caller supplies those maps.  That is right for dependency impact,
+    but this ledger must attribute a link to the surface that persists it. A
+    direct A1/table/sheet-local endpoint retains Excel's ``!`` separator in
+    its raw token; a direct workbook-scoped external name is the one exception
+    (``[Source.xlsx]InputRange``).  A parsed direct external-name spelling is
+    therefore included explicitly, while an expanded bare local name remains
+    excluded.
+    """
+    references = getattr(inspection, "references", ())
+    return tuple(
+        sorted(
+            {
+                str(reference.raw).strip().casefold()
+                for reference in references
+                if getattr(reference, "is_external", False)
+                and (
+                    "!" in str(getattr(reference, "raw", ""))
+                    or parse_external_workbook_defined_name_reference(
+                        str(getattr(reference, "raw", ""))
+                    )
+                    is not None
+                )
+            }
+        )
+    )
+
+
+def _external_workbook_formula_surface_tokens(formula: str | None) -> tuple[str, ...]:
+    """Find literal workbook endpoints in any OOXML formula-bearing field.
+
+    Defined-name, data-validation, and chart formula text commonly omit the
+    leading equals sign expected by the worksheet-cell formula tokenizer. Add
+    it solely for lexical inspection; no formula is evaluated or resolved.
+    """
+    if formula is None:
+        return ()
+    candidate = str(formula).strip()
+    if not candidate:
+        return ()
+    if not candidate.startswith("="):
+        candidate = f"={candidate}"
+    return _direct_external_workbook_reference_tokens(inspect_formula(candidate))
+
+
+def _external_workbook_link_surface_snapshot(
+    cell_surfaces: list[tuple[CellKey, tuple[str, ...]]],
+    defined_names: Mapping[str, str],
+    data_validations: tuple[DataValidationSnapshot, ...],
+    chart_definitions: ChartDefinitionSnapshot,
+) -> ExternalWorkbookLinkSurfaceSnapshot:
+    """Build a private, static ledger across persisted workbook-link surfaces.
+
+    The ledger purposefully records endpoint material only inside a salted
+    private signature.  It distinguishes a same-cell target swap from an
+    ordinary formula edit, but exposes only surface and endpoint counts in
+    JSON, Markdown, and SARIF.
+    """
+    entries: list[tuple[str, str]] = []
+    cell_formula_surface_count = 0
+    defined_name_surface_count = 0
+    data_validation_surface_count = 0
+    external_reference_count = 0
+
+    for location, tokens in cell_surfaces:
+        if not tokens:
+            continue
+        cell_formula_surface_count += 1
+        external_reference_count += len(tokens)
+        entries.append(
+            (
+                "cell-formula",
+                repr(((location[0].casefold(), location[1].casefold()), tokens)),
+            )
+        )
+
+    for name, definition in sorted(defined_names.items(), key=lambda item: item[0].casefold()):
+        tokens = _external_workbook_formula_surface_tokens(definition)
+        if not tokens:
+            continue
+        defined_name_surface_count += 1
+        external_reference_count += len(tokens)
+        entries.append(("defined-name", repr((name.casefold(), tokens))))
+
+    for validation in data_validations:
+        identity = (
+            validation.sheet.casefold(),
+            tuple(target.casefold() for target in validation.ranges),
+            validation.validation_type.casefold(),
+            validation.operator.casefold(),
+        )
+        for position, formula in enumerate((validation.formula1, validation.formula2), start=1):
+            tokens = _external_workbook_formula_surface_tokens(formula)
+            if not tokens:
+                continue
+            data_validation_surface_count += 1
+            external_reference_count += len(tokens)
+            entries.append(
+                ("data-validation", repr((identity, position, tokens)))
+            )
+
+    chart_formula_surface_count = chart_definitions.external_workbook_formula_surface_count
+    external_reference_count += (
+        chart_definitions.external_workbook_formula_reference_count
+    )
+    if chart_formula_surface_count:
+        entries.append(
+            (
+                "chart-formula",
+                repr(
+                    (
+                        chart_formula_surface_count,
+                        chart_definitions.external_workbook_formula_reference_count,
+                        chart_definitions.external_workbook_formula_signature,
+                    )
+                ),
+            )
+        )
+
+    opaque_chart_part_count = (
+        chart_definitions.external_workbook_formula_opaque_part_count
+    )
+    if opaque_chart_part_count:
+        # When a chart part cannot be safely inspected, a chart formula link
+        # cannot be ruled out. Keep the affected chart definition private and
+        # make the dedicated policy fail closed on a material change.
+        entries.append(
+            (
+                "opaque-chart-part",
+                repr(
+                    (
+                        opaque_chart_part_count,
+                        chart_definitions.external_workbook_formula_opaque_signature,
+                    )
+                ),
+            )
+        )
+
+    return ExternalWorkbookLinkSurfaceSnapshot(
+        cell_formula_surface_count=cell_formula_surface_count,
+        defined_name_surface_count=defined_name_surface_count,
+        data_validation_surface_count=data_validation_surface_count,
+        chart_formula_surface_count=chart_formula_surface_count,
+        opaque_chart_part_count=opaque_chart_part_count,
+        external_reference_count=external_reference_count,
+        ledger_signature=(
+            _private_external_data_signature(tuple(sorted(entries))) if entries else None
+        ),
+    )
+
+
 def _structured_table_map(tables: dict[str, TableSnapshot]) -> dict[str, StructuredTable]:
     """Translate stable table inventory records into formula-resolution metadata."""
     return {
@@ -45364,6 +45591,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     reverse_dependencies: dict[CellKey, set[CellKey]] = defaultdict(set)
     range_dependencies: list[RangeDependency] = []
     external_references: set[CellKey] = set()
+    external_workbook_link_cell_surfaces: list[tuple[CellKey, tuple[str, ...]]] = []
     external_workbook_references: dict[
         CellKey, tuple[ExternalWorkbookReference, ...]
     ] = {}
@@ -46144,6 +46372,12 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 external_workbook_defined_name_references[snapshot.location] = (
                     inspection.external_workbook_defined_name_references
                 )
+            if direct_external_tokens := _direct_external_workbook_reference_tokens(
+                inspection
+            ):
+                external_workbook_link_cell_surfaces.append(
+                    (snapshot.location, direct_external_tokens)
+                )
             for reference in inspection.references:
                 if reference.is_external:
                     external_references.add(snapshot.location)
@@ -46396,6 +46630,14 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             "has a gap."
         )
 
+    defined_names = _defined_names(workbook)
+    external_workbook_link_surfaces = _external_workbook_link_surface_snapshot(
+        external_workbook_link_cell_surfaces,
+        defined_names,
+        data_validations,
+        chart_definition_metadata.charts,
+    )
+
     return WorkbookSnapshot(
         path=source,
         sha256=sha256_file(source),
@@ -46442,6 +46684,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         query_table_refresh_controls=external_data_metadata.query_tables,
         pivot_cache_refresh_controls=external_data_metadata.pivot_caches,
         external_link_packages=external_data_metadata.external_link_packages,
+        external_workbook_link_surfaces=external_workbook_link_surfaces,
         external_relationships=external_relationship_metadata.relationships,
         formula_external_actions=FormulaExternalActionSnapshot(
             formula_external_action_cell_count=len(formula_external_action_cells),
@@ -46533,7 +46776,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             workbook_tab_order_metadata.worksheet_tab_order_complete
         ),
         sheet_order=sheet_order,
-        defined_names=_defined_names(workbook),
+        defined_names=defined_names,
         macro_hash=_vba_hash(source),
         calculation_settings=_calculation_settings(workbook),
         parser_warnings=tuple(sorted(parser_warnings)),
@@ -46592,6 +46835,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
             control.profile_dict() for control in snapshot.pivot_cache_refresh_controls
         ],
         "external_link_packages": snapshot.external_link_packages.profile_dict(),
+        "external_workbook_link_surfaces": (
+            snapshot.external_workbook_link_surfaces.profile_dict()
+        ),
         "external_relationships": snapshot.external_relationships.profile_dict(),
         "formula_external_actions": snapshot.formula_external_actions.profile_dict(),
         "formula_dde_links": snapshot.formula_dde_links.profile_dict(),
@@ -46687,6 +46933,9 @@ def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
                 snapshot.xlm_automatic_macro_bindings.present
             ),
             "has_external_relationships": snapshot.external_relationships.present,
+            "has_external_workbook_link_surfaces": (
+                snapshot.external_workbook_link_surfaces.present
+            ),
             "has_formula_external_actions": snapshot.formula_external_actions.present,
             "has_formula_dde_links": snapshot.formula_dde_links.present,
             "has_python_in_excel": snapshot.python_in_excel.present,

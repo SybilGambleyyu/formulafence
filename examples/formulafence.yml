@@ -2,6 +2,7 @@ version: 1
 rules:
   no_formula_to_value: true
   no_new_external_links: true
+  no_external_workbook_link_surface_changes: true
   no_new_broken_references: true
   no_macro_changes: true
   no_xlm_macro_sheet_changes: true

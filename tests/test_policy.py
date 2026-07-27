@@ -212,6 +212,38 @@ def test_policy_can_block_new_formula_coverage_gaps(tmp_path) -> None:
     assert {"FFP011", "FFP012"} <= rule_ids
 
 
+def test_policy_can_block_same_cell_external_workbook_target_swaps(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    rewrite(
+        baseline,
+        lambda workbook: setattr(
+            workbook["Model"]["D2"],
+            "value",
+            "='C:\\PRIVATE-BASELINE\\[Source.xlsx]Inputs'!$B$2",
+        ),
+    )
+    rewrite(
+        candidate,
+        lambda workbook: setattr(
+            workbook["Model"]["D2"],
+            "value",
+            "='C:\\PRIVATE-CANDIDATE\\[Source.xlsx]Inputs'!$B$2",
+        ),
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_external_workbook_link_surface_changes": True},
+        }
+    )
+
+    assert any(finding.rule_id == "FF081" for finding in report.findings)
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP081"}
+
+
 def test_policy_can_block_spill_and_tokenization_coverage_limits(tmp_path) -> None:
     baseline = make_model(tmp_path / "baseline.xlsx")
     candidate = make_model(tmp_path / "candidate.xlsx")

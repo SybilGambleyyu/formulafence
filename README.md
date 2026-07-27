@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.96.0/formulafence-0.96.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.97.0/formulafence-0.97.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.96.0
+  uses: SybilGambleyyu/formulafence@v0.97.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -183,6 +183,7 @@ version: 1
 rules:
   no_formula_to_value: true
   no_new_external_links: true
+  no_external_workbook_link_surface_changes: true
   no_new_broken_references: true
   no_macro_changes: true
   no_xlm_macro_sheet_changes: true
@@ -277,6 +278,7 @@ allowed_changes:
 | Portfolio control | Recursive, relative-path workbook matching with per-file semantic reports, explicit additions/removals, bounded static cross-workbook impact evidence, unreadable-file evidence, bounded inventory/traversal, and consolidated JSON/Markdown/SARIF for CI |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function candidates, worksheet and formula-defined code-resource registration calls, formula-defined XLM `REGISTER`/`EVALUATE` calls, XLM macro-sheet programs and automatic-macro bindings, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
+| External-workbook link surfaces | Private static ledger across worksheet formulas, defined names, data-validation criteria, and standard/ChartEx chart formulas; catches same-location source or target swaps without evaluating, resolving, or exposing endpoint material |
 | Formula external-action and data-provider surfaces | Material stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, `RTD`, `STOCKHISTORY`, or documented `CUBE*` call changes in cells, formula-defined names, or named `LAMBDA`s, including same-count destination, market-provider, connection, or query swaps, without evaluating formulas or exposing their arguments in the private ledger |
 | Direct DDE formula links | Material lexical `application|topic!item` DDE-link changes in worksheet formulas, formula-defined names, or named `LAMBDA`s, including same-count endpoint swaps and static inputs to an invoking named `LAMBDA`, without evaluating a formula, looking up/launching a DDE server, or exposing endpoint material |
 | Native workbook/environment-information boundary | Stored native `CELL`, `INFO`, `SHEET`, and `SHEETS` calls and statically visible inputs, including a private all-tab catalog comparison when `SHEET` or `SHEETS()` can observe tab position/count, without evaluating formulas or exposing arguments |
@@ -454,6 +456,24 @@ emits `FF025`; enable `no_external_link_package_changes` for `FFP025`.
 FormulaFence never follows or executes these links, establishes source trust,
 or infers returned data. The package shape follows the
 [SpreadsheetML `externalLink` definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.externallink?view=openxml-3.0.1).
+
+FormulaFence also keeps a separate private **static external-workbook
+link-surface ledger**. It recognizes literal external endpoints persisted in
+worksheet formulas, workbook or sheet-local defined names, data-validation
+criteria, and standard DrawingML/ChartEx chart formula elements. This catches a
+source or target swap at the same cell or object—an intentional gap in
+`no_new_external_links`, which only guards a newly external worksheet formula
+location. A material ledger change emits `FF081`; enable
+`no_external_workbook_link_surface_changes` for `FFP081`.
+
+Profiles and the `FF081` finding expose only surface and endpoint counts. Source
+paths, workbook/sheet/name identities, formulas, validation ranges, and chart
+part identities remain inside this ledger's private signature. Chart parts with
+unavailable formula coverage make that guard fail closed. FormulaFence does not
+evaluate a formula, open or resolve a source workbook, trust a cache, or infer
+text-built references. The boundary follows the SpreadsheetML
+[data-validation formula rules](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/20ed0abd-113f-4b8a-8de3-c68e733a300a)
+and DrawingML chart [`c:f` formula element](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.numberreference?view=openxml-3.0.1).
 
 FormulaFence also keeps a bounded **package-wide external-relationship ledger**.
 It inspects the root and every canonical OPC `.rels` part for

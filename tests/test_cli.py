@@ -90,6 +90,7 @@ def test_init_policy_includes_modern_formula_coverage_controls(tmp_path) -> None
     assert "no_protection_changes: true" in content
     assert "no_external_data_connection_changes: true" in content
     assert "no_external_link_package_changes: true" in content
+    assert "no_external_workbook_link_surface_changes: true" in content
     assert "no_external_relationship_changes: true" in content
     assert "no_formula_external_action_changes: true" in content
     assert "no_formula_dde_link_changes: true" in content

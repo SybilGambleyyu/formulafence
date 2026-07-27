@@ -79,6 +79,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         ),
         f"- **External-data connections:** {workbook['external_data_connection_count']}",
         f"- **External-link package parts:** {workbook['external_link_package_count']}",
+        (
+            "- **Static external-workbook link surfaces / endpoints:** "
+            f"{workbook['external_workbook_link_surface_count']} / "
+            f"{workbook['external_workbook_link_surface_reference_count']}"
+        ),
         f"- **DDE links:** {workbook['dde_link_count']}",
         f"- **OLE links:** {workbook['ole_link_count']}",
         (
@@ -581,6 +586,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     query_tables = profile["query_table_refresh_controls"]
     pivot_caches = profile["pivot_cache_refresh_controls"]
     external_link_packages = profile["external_link_packages"]
+    external_workbook_link_surfaces = profile["external_workbook_link_surfaces"]
     external_relationships = profile["external_relationships"]
     formula_external_actions = profile["formula_external_actions"]
     formula_dde_links = profile["formula_dde_links"]
@@ -923,6 +929,35 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         lines.append(
             "External workbook targets, sheet and defined names, DDE services/topics/items, "
             "OLE program and item names, and cached values are intentionally omitted."
+        )
+    if external_workbook_link_surfaces["present"]:
+        lines.extend(
+            [
+                "",
+                "## Static external-workbook link surfaces",
+                "",
+                (
+                    "- **Surfaces / endpoints:** "
+                    f"{external_workbook_link_surfaces['surface_count']} / "
+                    f"{external_workbook_link_surfaces['external_reference_count']}"
+                ),
+                (
+                    "- **Cell formulas / defined names / data validation / chart formulas:** "
+                    f"{external_workbook_link_surfaces['cell_formula_surface_count']} / "
+                    f"{external_workbook_link_surfaces['defined_name_surface_count']} / "
+                    f"{external_workbook_link_surfaces['data_validation_surface_count']} / "
+                    f"{external_workbook_link_surfaces['chart_formula_surface_count']}"
+                ),
+            ]
+        )
+        if external_workbook_link_surfaces["opaque_chart_part_count"]:
+            lines.append(
+                "- **Chart parts with unavailable link-surface coverage:** "
+                f"{external_workbook_link_surfaces['opaque_chart_part_count']}"
+            )
+        lines.append(
+            "External workbook targets, source paths, names, formulas, and surface "
+            "identities are compared privately and intentionally omitted."
         )
     if external_relationships["present"]:
         lines.extend(

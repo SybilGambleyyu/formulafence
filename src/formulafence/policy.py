@@ -16,6 +16,7 @@ from formulafence.models import CellKey, DiffReport, Finding, PolicyError
 _RULE_FIELDS = {
     "no_formula_to_value",
     "no_new_external_links",
+    "no_external_workbook_link_surface_changes",
     "no_new_broken_references",
     "no_macro_changes",
     "no_xlm_macro_sheet_changes",
@@ -118,6 +119,7 @@ class Policy:
     version: int
     no_formula_to_value: bool = False
     no_new_external_links: bool = False
+    no_external_workbook_link_surface_changes: bool = False
     no_new_broken_references: bool = False
     no_macro_changes: bool = False
     no_xlm_macro_sheet_changes: bool = False
@@ -202,6 +204,7 @@ version: 1
 rules:
   no_formula_to_value: true
   no_new_external_links: true
+  no_external_workbook_link_surface_changes: true
   no_new_broken_references: true
   no_macro_changes: true
   no_xlm_macro_sheet_changes: true
@@ -354,6 +357,9 @@ def parse_policy(data: object) -> Policy:
         version=version,
         no_formula_to_value=_boolean_rule(rules, "no_formula_to_value"),
         no_new_external_links=_boolean_rule(rules, "no_new_external_links"),
+        no_external_workbook_link_surface_changes=_boolean_rule(
+            rules, "no_external_workbook_link_surface_changes"
+        ),
         no_new_broken_references=_boolean_rule(rules, "no_new_broken_references"),
         no_macro_changes=_boolean_rule(rules, "no_macro_changes"),
         no_xlm_macro_sheet_changes=_boolean_rule(rules, "no_xlm_macro_sheet_changes"),
@@ -609,6 +615,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "high",
                     "Policy forbids new external-workbook references.",
                     finding.location,
+                )
+            )
+    if policy.no_external_workbook_link_surface_changes:
+        for finding in _rule_triggered(report, "FF081"):
+            violations.append(
+                Finding(
+                    "FFP081",
+                    "high",
+                    "Policy forbids changes to static external-workbook link surfaces.",
+                    details=finding.details,
                 )
             )
     if policy.no_new_broken_references:

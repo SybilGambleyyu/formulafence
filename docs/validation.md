@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Static external-workbook link surfaces — 2026-07-26
+
+Microsoft's [workbook-link guidance](https://support.microsoft.com/en-us/office/create-workbook-links-c98d1803-dd75-4668-ac6a-d7cca2a9b95f)
+documents formulas that reference another workbook. Its
+[Name Manager guidance](https://support.microsoft.com/en-us/excel/use-the-name-manager-in-excel)
+distinguishes formula-bearing names, and the SpreadsheetML
+[data-validation definition](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/20ed0abd-113f-4b8a-8de3-c68e733a300a)
+permits an external cell reference in a validation criterion. FormulaFence
+0.97.0 therefore compares the literal persisted endpoints privately across
+worksheet formulas, defined names, data-validation criteria, and parsed chart
+formula parts; it does not evaluate a formula, open a source, refresh data, or
+trust cached results.
+
+A separate disposable pair was written with XlsxWriter 3.2.9 outside this
+repository. Each workbook contained three static surfaces: `Model!D2` held an
+external A1 formula, `ExternalLimit` held a direct external workbook-name
+formula, and `Model!E2` held an external data-validation criterion. The
+candidate changed only the controlled source marker; the existing external
+formula remained at `Model!D2`, so the old new-location rule had no reason to
+emit `FF004`. This is a controlled integration fixture, not a claim that the
+writer evaluated or resolved the non-existent external source.
+
+An isolated environment installed the exact built
+`formulafence-0.97.0-py3-none-any.whl` and ran `formulafence check` with only
+`no_external_workbook_link_surface_changes: true`. It returned exit `1` with
+`FF081` and `FFP081`, no `FF004`, one unchanged external-reference cell, and
+three surfaces / three endpoints. The candidate profile, plus the `FF081` and
+`FFP081` JSON and SARIF results, omitted both controlled source markers. The
+ordinary defined-name and data-validation findings retain their pre-existing
+local review evidence; this validation asserts the new ledger's distinct
+count-only evidence contract rather than claiming those unrelated reports are
+redacted.
+
+The 0.97.0 source tree passed **632 tests in 84.03 seconds**, a clean Ruff
+check, and `git diff --check`. Fresh source and wheel distributions passed
+`twine check`.
+
 ## Static external endpoints inside named LAMBDAs — 2026-07-26
 
 Microsoft documents that a named [LAMBDA function](https://support.microsoft.com/en-us/excel/functions/lambda-function)

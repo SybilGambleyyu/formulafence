@@ -10778,6 +10778,24 @@ def change_chart_definition_material(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".chart-definition-change.tmp.xlsx")
 
 
+def set_chart_formula_external_workbook_target(path: Path, formula: str) -> Path:
+    """Replace one chart formula with a controlled external-workbook target."""
+    chart_namespace = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        _drawing_member, chart_member, _overlay_member = _chart_fixture_part_names(contents)
+        chart = ElementTree.fromstring(contents[chart_member])
+        chart_formula = next(chart.iter(f"{{{chart_namespace}}}f"))
+        chart_formula.text = formula
+        contents[chart_member] = ElementTree.tostring(
+            chart,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".chart-external-workbook-target.tmp.xlsx")
+
+
 def change_chart_cached_data(path: Path) -> Path:
     """Change one chart cache value while leaving its definition intact."""
     chart_namespace = "http://schemas.openxmlformats.org/drawingml/2006/chart"

@@ -10,6 +10,7 @@ version: 1
 rules:
   no_formula_to_value: true
   no_new_external_links: true
+  no_external_workbook_link_surface_changes: true
   no_new_broken_references: true
   no_macro_changes: true
   no_xlm_macro_sheet_changes: true
@@ -114,6 +115,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | --- | --- | --- |
 | `no_formula_to_value` | boolean | A formula is replaced with a non-formula value. |
 | `no_new_external_links` | boolean | A formula adds a statically visible external-workbook reference. |
+| `no_external_workbook_link_surface_changes` | boolean | A private static external-workbook link ledger changes in a worksheet formula, defined name, data-validation criterion, or standard/ChartEx chart formula. This catches a same-location source or target swap that `no_new_external_links` intentionally does not treat as a new link. Chart parts with unavailable formula coverage fail closed. |
 | `no_new_broken_references` | boolean | A formula adds `#REF!`. |
 | `no_macro_changes` | boolean | The `xl/vbaProject.bin` payload is added, removed, or has a different SHA-256. |
 | `no_xlm_macro_sheet_changes` | boolean | An Excel 4.0 / XLM macro-sheet declaration, program XML, related-part relationship, or direct internal related-part payload changes. |
@@ -327,6 +329,21 @@ cached values never enter a profile or diff. Any material package change emits
 `FF025`; enable `no_external_link_package_changes` to make it `FFP025` in CI.
 FormulaFence does not follow or execute these links, determine source trust, or
 infer returned data.
+
+FormulaFence separately maintains a private **static external-workbook
+link-surface ledger** across worksheet formulas, workbook/sheet-local defined
+names, data-validation criteria, and standard DrawingML/ChartEx chart formula
+elements. It detects a material source or target swap at the same cell or
+object, which is deliberately broader than `no_new_external_links` but does
+not evaluate a formula, resolve/open a source workbook, refresh data, or trust
+a cached value. Profiles and `FF081` / `FFP081` evidence expose only surface
+and endpoint counts; source paths, workbook/sheet/name identities, formulas,
+validation ranges, and chart-part identities remain inside this ledger's
+private signatures. A chart part whose formula coverage is unavailable is
+retained as opaque coverage evidence and makes
+`no_external_workbook_link_surface_changes` fail closed.
+Text-built references and unsupported formula syntax are not inferred; retain
+`no_new_tokenization_failures` for newly unavailable formula coverage.
 
 FormulaFence also inspects every canonical OPC relationship part—not just
 relationships reached through a recognized workbook feature—for

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.97.0 — 2026-07-26
+
+- Add `FF081` and the `no_external_workbook_link_surface_changes` policy guard
+  (`FFP081`). The new private ledger detects material static external-workbook
+  source or target changes even when an existing external formula remains at
+  the same worksheet cell—an intentional boundary not covered by
+  `no_new_external_links` / `FF004`.
+- Inventory literal static endpoints persisted in worksheet formulas,
+  workbook/sheet-local defined names, data-validation criteria, and standard
+  DrawingML or ChartEx chart formula elements. Preserve only a count-only
+  public ledger profile; source paths, workbook/sheet/name identities,
+  formulas, validation ranges, chart part identities, and endpoint spellings
+  stay inside the private ledger signature.
+- Treat unreadable or otherwise unrecognized chart formula material as opaque
+  coverage evidence for the new guard, so a material chart change fails closed
+  rather than claiming link-surface coverage. Do not evaluate formulas, open,
+  resolve, refresh, or trust an external source/cache. Conditional formatting
+  remains outside this ledger because its spreadsheet formula grammar forbids
+  external-cell references.
+- Add same-cell source-swap, named-definition, data-validation, standard chart,
+  opaque-chart, policy, generated-policy, profile/Markdown, and SARIF-redaction
+  coverage.
+
 ## 0.96.0 — 2026-07-26
 
 - Extend the candidate-only `FF079` portfolio graph through safely eligible,

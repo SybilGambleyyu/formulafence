@@ -27,6 +27,7 @@ from formulafence.models import (
     ExternalDataConnectionSnapshot,
     ExternalLinkPackageSnapshot,
     ExternalRelationshipSnapshot,
+    ExternalWorkbookLinkSurfaceSnapshot,
     FillSnapshot,
     FilterVisibilitySnapshot,
     Finding,
@@ -3939,6 +3940,50 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
     )
     changes.extend(worksheet_image_changes)
     findings.extend(worksheet_image_findings)
+
+    if before.external_workbook_link_surfaces != after.external_workbook_link_surfaces:
+        old_link_surfaces: ExternalWorkbookLinkSurfaceSnapshot = (
+            before.external_workbook_link_surfaces
+        )
+        new_link_surfaces: ExternalWorkbookLinkSurfaceSnapshot = (
+            after.external_workbook_link_surfaces
+        )
+        details: dict[str, object] = {
+            "before": old_link_surfaces.to_dict(),
+            "after": new_link_surfaces.to_dict(),
+        }
+        if old_link_surfaces.ledger_signature != new_link_surfaces.ledger_signature:
+            details["external_workbook_link_surface_material_changed"] = True
+        if (
+            old_link_surfaces.opaque_chart_part_count
+            != new_link_surfaces.opaque_chart_part_count
+            or (
+                old_link_surfaces.opaque_chart_part_count
+                or new_link_surfaces.opaque_chart_part_count
+            )
+            and old_link_surfaces.ledger_signature != new_link_surfaces.ledger_signature
+        ):
+            details["opaque_chart_link_surface_coverage_changed"] = True
+        changes.append(
+            Change(
+                "external_workbook_link_surfaces_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF081",
+                "high",
+                (
+                    "Static external-workbook link surfaces changed; worksheet formulas, "
+                    "defined names, data validation, or chart formulas may now bind a "
+                    "different source or target."
+                ),
+                details=details,
+            )
+        )
 
     newly_broken = after.broken_references - before.broken_references
     for location in sorted(newly_broken, key=_location_sort_key):

@@ -1149,6 +1149,16 @@ formula will produce.
   and can be blocked with `no_external_link_package_changes`. FormulaFence does
   **not** follow or execute these links, establish source trust, or infer
   returned data.
+- A separate private static external-workbook link-surface ledger covers literal
+  endpoints stored in worksheet formulas, workbook/sheet-local defined names,
+  data-validation criteria, and standard DrawingML/ChartEx chart formula
+  elements. It catches same-location source/target swaps without evaluating a
+  formula, opening/resolving a source, refreshing data, or trusting a cache.
+  Reports expose only surface/endpoint counts; source paths, workbook/sheet/name
+  identities, formulas, ranges, and chart-part identities stay inside the
+  ledger's private signature. A material change emits `FF081` and can be blocked with
+  `no_external_workbook_link_surface_changes`; chart parts with unavailable
+  formula coverage make that guard fail closed.
 - Every canonical root or part-level OPC relationship part is also inspected
   independently for `TargetMode="External"`, including opaque relationships
   no feature-specific scanner can reach. FormulaFence retains source, type,
@@ -1366,6 +1376,13 @@ formula will produce.
   external 3-D forms remain explicit coverage gaps.
 - Explicit external-workbook references are detected. References assembled from
   text or macro code are not.
+- The link-surface ledger covers only literal static endpoints in worksheet
+  formulas, defined names, data-validation criteria, and standard/ChartEx chart
+  formulas. It does not infer text-built links, evaluate formulas, follow an
+  endpoint, or establish source trust. Conditional-formatting external-cell
+  references are excluded because the SpreadsheetML conditional-formatting
+  formula grammar forbids them; ordinary shapes, text boxes, OLE/DDE, and OPC
+  relationships remain under their dedicated control boundaries.
 - A formula that the underlying tokenizer cannot inspect is recorded by cell
   location in the profile, and a newly introduced one emits `FF016`; its graph
   is deliberately omitted rather than partially guessed.

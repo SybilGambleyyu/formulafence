@@ -5,6 +5,37 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Slicer and Timeline cache XML structural bounds — 2026-07-26
+
+Version 0.131.0 closes the corresponding compact allocation path in
+FormulaFence's Slicer and Timeline cache scanner. The raw scanner compares
+private filter state, source bindings, and cache definitions by recursively
+canonicalizing each cache XML tree. Its existing 16 MiB per-part, 64 MiB
+aggregate, and 512-part byte/count limits did not bound the number of XML
+objects that a compact cache could create.
+
+FormulaFence now streams every Slicer and Timeline cache member before reading
+it into the private tree, allowing 16,384 XML elements per part and 32,768
+across a complete cache scan. [Excel documents 10,000 items displayed in a
+filter drop-down list](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits),
+so the structural capacity deliberately leaves room above that display limit
+without treating an overage as invalid. A successfully streamed overage instead
+becomes explicit `FF032` filter-cache coverage evidence before the recursive
+scanner runs; malformed or unreadable input keeps its established full-parser
+diagnostic.
+
+A raw-ZIP fixture generated without FormulaFence's reader contained a
+13,633-byte workbook with 100,000 opaque direct Slicer-cache children
+(1,400,536 bytes of cache XML). In the same Python 3.12.3 environment, the
+exact 0.130.0 wheel completed the fixture in 0.7380 seconds at 85,536 KiB and
+reported no unrecognized Slicer/Timeline coverage. The 0.131.0 source candidate
+completed in 0.1613 seconds at 35,304 KiB, before the complete cache tree was
+materialized, and recorded one structural coverage warning. A normal candidate
+CLI diff completed successfully; the baseline-to-fixture diff emitted `FF032`
+and returned status 1 with `--fail-on medium`. The complete 920-test source
+suite passed in 126.68 seconds, with Ruff, bytecode compilation, and
+`git diff --check` clean.
+
 ## PivotTable XML structural bounds — 2026-07-26
 
 Version 0.130.0 closes two compact allocation paths in FormulaFence's

@@ -1525,7 +1525,12 @@ formula will produce.
   model worksheet/drawing Slicer or Timeline view geometry/styles. Missing,
   malformed, orphaned, unbound, externally targeted, oversized, or over-budget
   material remains a visible parser-coverage warning. Cache XML reads are
-  bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts.
+  bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts. Before a
+  cache tree is materialized, FormulaFence also streams 16,384 XML elements per
+  part and 32,768 across the complete Slicer/Timeline cache scan. This is a CI
+  allocation boundary above Excel's documented 10,000 displayed filter
+  drop-down items, not a validity limit; a well-formed structural overage stays
+  visible as coverage evidence rather than being recursively canonicalized.
 - Embedded Power Pivot/Data Model packages are followed from the workbook's
   explicit `powerPivotData` relationship and `x15:dataModel` declaration.
   FormulaFence privately fingerprints declaration material, normalized workbook

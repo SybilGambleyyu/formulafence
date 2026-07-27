@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.130.0/formulafence-0.130.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.131.0/formulafence-0.131.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.130.0
+  uses: SybilGambleyyu/formulafence@v0.131.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1452,14 +1452,21 @@ spellings, coordinated Slicer/Timeline PivotCache extension-ID renumbering, know
 defaults, Boolean spellings, and Timeline GUIDs are normalized away. Missing,
 malformed, orphaned, unbound, externally targeted, oversized, or over-budget
 material becomes a visible coverage warning. Cache XML reads are bounded to 16
-MiB per part, 64 MiB per workbook, and 512 parts. FormulaFence does not apply a
+MiB per part, 64 MiB per workbook, and 512 parts. Before FormulaFence
+materializes a cache tree, a streamed structural preflight permits 16,384 XML
+elements per part and 32,768 across the complete cache scan. That capacity is
+deliberately above Excel's documented 10,000 displayed filter drop-down items;
+it is a CI allocation boundary, not a claim that a larger cache is invalid. A
+well-formed structural overage stays visible as filter-cache coverage evidence
+instead of being recursively canonicalized. FormulaFence does not apply a
 filter, calculate or render a PivotTable or table, infer downstream cell
 impact, fetch an external target, or model worksheet/drawing Slicer or Timeline
 view geometry and styles. The boundary follows Microsoft's [Slicer Cache
 part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/7dbb4481-b021-45cc-8bd4-6094b566a5ff),
 [Timeline Cache part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/29a0f58c-d942-4641-8ed0-4f02010326f2),
 [Slicer-to-PivotCache relationship](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/2a393f85-21f9-4a27-a2b7-4867223f4b9a),
-and [Slicer view boundary](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/69c0e0f9-d014-4bd5-9f2d-2f554c715083).
+and [Slicer view boundary](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/69c0e0f9-d014-4bd5-9f2d-2f554c715083),
+alongside Excel's [published limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits).
 
 FormulaFence also inventories **embedded Power Pivot/Data Model packages**. An
 Excel Data Model can hold tables, relationships, calculations, and stored data

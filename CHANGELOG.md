@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.131.0 — 2026-07-26
+
+- Bound Slicer and Timeline cache-definition XML before FormulaFence's private
+  scanner can recursively canonicalize a compact but oversized filter tree.
+  Each cache XML part allows 16,384 elements and the complete Slicer/Timeline
+  package scan allows 32,768, alongside its existing 16 MiB per-part, 64 MiB
+  aggregate, and 512-part byte/count limits.
+- Stream the raw ZIP member before materializing its private XML tree, so a
+  successfully parsed structural overage becomes explicit `FF032` coverage
+  evidence while malformed or unreadable input retains its established parser
+  diagnostic.
+- Preserve observable coverage for configured/default and exact capacities,
+  package-wide aggregation, nested opaque descendants, and the fail-before-
+  materialization behavior that prevents an over-budget cache tree from being
+  built by the private scanner.
+
 ## 0.130.0 — 2026-07-26
 
 - Bound legacy PivotTable view and cache-definition XML before FormulaFence's

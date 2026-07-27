@@ -57,7 +57,12 @@ scenarios with input cells, and a 4,096-target validation `sqref` completed in
 0.061–0.665 seconds at 35,632–48,060 KiB. The completed source tree passed
 **807 tests in 120.15 seconds**. Focused archive-safety and version coverage
 also passed **105 tests in 2.82 seconds**, along with Ruff, bytecode
-compilation, and `git diff --check`.
+compilation, and `git diff --check`. The release wheel and source distribution
+passed `twine check`; a clean Python 3.12 environment installed the exact wheel,
+confirmed `FormulaFence 0.119.0` and `openpyxl.DEFUSEDXML`, compared a normal
+workbook successfully, and returned the normal input-error exit status (2) for
+independently generated 4,097-entry data-validation, 4,097-target
+conditional-formatting, and 4,097-input-cell Scenario Manager inputs.
 
 ## Reader merged-cell geometry bound — 2026-07-26
 

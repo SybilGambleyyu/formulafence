@@ -44,7 +44,12 @@ def _replace_member(path: Path, name: str, payload: bytes) -> None:
     staging.replace(path)
 
 
-def _append_workbook_sheet_declarations(path: Path, count: int) -> None:
+def _append_workbook_sheet_declarations(
+    path: Path,
+    count: int,
+    *,
+    namespace_prefix: str | None = None,
+) -> None:
     """Repeat one declared sheet to exercise pre-reader sheet amplification."""
     member_name = "xl/workbook.xml"
     with ZipFile(path) as archive:
@@ -52,10 +57,58 @@ def _append_workbook_sheet_declarations(path: Path, count: int) -> None:
     start = workbook.index(b"<sheet ")
     end = workbook.index(b"/>", start) + 2
     declaration = workbook[start:end]
+    if namespace_prefix is not None:
+        namespace = b"urn:formulafence:archive-safety"
+        workbook = workbook.replace(
+            b"<workbook ",
+            b"<workbook xmlns:" + namespace_prefix.encode() + b'=\"' + namespace + b'\" ',
+            1,
+        )
+        declaration = declaration.replace(
+            b"<sheet ",
+            b"<" + namespace_prefix.encode() + b":sheet ",
+            1,
+        )
     _replace_member(
         path,
         member_name,
         workbook.replace(b"</sheets>", declaration * count + b"</sheets>"),
+    )
+
+
+def _append_workbook_defined_name_declarations(
+    path: Path,
+    count: int,
+    *,
+    namespace_prefix: str | None = None,
+) -> None:
+    """Append unique declared names without relying on an object-model writer."""
+    member_name = "xl/workbook.xml"
+    with ZipFile(path) as archive:
+        workbook = archive.read(member_name)
+    tag_name = "definedName"
+    if namespace_prefix is not None:
+        namespace = b"urn:formulafence:archive-safety"
+        workbook = workbook.replace(
+            b"<workbook ",
+            b"<workbook xmlns:" + namespace_prefix.encode() + b'=\"' + namespace + b'\" ',
+            1,
+        )
+        tag_name = f"{namespace_prefix}:definedName"
+    declarations = b"".join(
+        (
+            f'<{tag_name} name="FormulaFenceAuditDefinedName{index:06d}">'
+            f"Inputs!$B$2</{tag_name}>"
+        ).encode()
+        for index in range(count)
+    )
+    _replace_member(
+        path,
+        member_name,
+        workbook.replace(
+            b"</definedNames>",
+            declarations + b"</definedNames>",
+        ),
     )
 
 
@@ -269,6 +322,27 @@ def test_semantic_reader_preflight_rejects_excessive_workbook_sheet_declarations
     assert "workbook sheet declarations" in message
 
 
+def test_semantic_reader_preflight_counts_alternate_namespace_workbook_sheet_declarations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "alternate-namespace-workbook-sheets.xlsx")
+    _append_workbook_sheet_declarations(
+        workbook,
+        1,
+        namespace_prefix="audit",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKBOOK_SHEET_COUNT",
+        4,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook sheet declarations" in message
+
+
 def test_semantic_reader_preflight_rejects_default_sheet_declaration_limit_before_scanners(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -282,6 +356,58 @@ def test_semantic_reader_preflight_rejects_default_sheet_declaration_limit_befor
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "workbook sheet declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_workbook_defined_names_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-workbook-defined-names.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT",
+        0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook defined-name declarations" in message
+
+
+def test_semantic_reader_preflight_counts_alternate_namespace_workbook_defined_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "alternate-namespace-workbook-defined-names.xlsx")
+    _append_workbook_defined_name_declarations(
+        workbook,
+        1,
+        namespace_prefix="audit",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook defined-name declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_default_defined_name_declaration_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-workbook-defined-names.xlsx")
+    _append_workbook_defined_name_declarations(
+        workbook,
+        workbook_module._OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook defined-name declarations" in message
 
 
 def test_semantic_reader_preflight_rejects_excessive_xml_nesting_before_scanners(

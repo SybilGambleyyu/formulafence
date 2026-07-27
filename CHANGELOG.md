@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.115.0 — 2026-07-26
+
+- Bound the reader-materialized workbook `<definedNames>` catalog to 100,000
+  direct declarations before FormulaFence starts raw OOXML scanners or
+  `openpyxl`, preventing a compact workbook part from creating an impractical
+  name index and repeated formula-control analysis workload in CI.
+- Make the workbook catalog counters follow the reader's local-name behavior:
+  alternate-namespace `<definedName>` declarations count toward the new limit,
+  and every direct child the reader materializes from `<sheets>` counts toward
+  the existing 512-sheet ceiling.
+- Add fail-before-reader regression coverage for ordinary and alternate-
+  namespace sheet/name catalogs plus a real default-limit defined-name fixture.
+
 ## 0.114.0 — 2026-07-26
 
 - Bound the OOXML reader's bootstrap catalogs before any raw scanner or

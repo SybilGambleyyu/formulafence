@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Reader defined-name catalog bound — 2026-07-26
+
+Version 0.115.0 closes a workbook-level allocation path that remained after
+the sheet catalog limit. The SpreadsheetML schema permits an unbounded sequence
+of `<definedName>` children, and Microsoft's interoperability notes say Excel
+permits up to 2,147,483,647 occurrences of that element. FormulaFence has to
+make a narrower CI-worker choice because `openpyxl` reads the complete workbook
+part into a `WorkbookPackage` before FormulaFence can decide whether any name is
+relevant to a policy or formula-control ledger.
+
+The semantic-reader preflight now streams direct workbook defined-name
+declarations and rejects the 100,001st before any raw OOXML scanner or complete
+reader starts. Its catalog checks deliberately use the same local-name behavior
+as the reader: an alternate-namespace `definedName` still materializes and is
+therefore counted. The existing 512-sheet counter receives the same correction,
+so an alternate-namespace direct sheet entry cannot bypass it.
+
+A generated fixture with 100,000 direct names had 7,300,628 bytes of
+`xl/workbook.xml` but only a 274,754-byte package. It remained accepted; a
+FormulaFence snapshot took 22.616 seconds and peaked at 192,288 KiB in the
+isolated Python process. Adding one declaration made the package fail in 0.312
+seconds with the stable defined-name preflight error, before any downstream
+reader ran. Focused archive-safety and version coverage passed **43 tests in
+2.08 seconds**; the completed source tree passed **745 tests in 116.02
+seconds**, plus Ruff, bytecode compilation, and `git diff --check`. The schema
+and Excel compatibility detail are documented in Microsoft's
+[definedNames interoperability notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/1aea93a7-b208-44b2-a2e5-83dc2b635b41).
+Both final distribution artifacts passed `twine check`; a fresh Python 3.12
+environment installed the wheel, returned `FormulaFence 0.115.0`, confirmed
+`openpyxl.DEFUSEDXML`, profiled an ordinary workbook, and returned the normal
+input-error exit status (2) for the 100,001-name fixture.
+
 ## Reader bootstrap catalog bounds — 2026-07-26
 
 Version 0.114.0 closes a separate allocation path before worksheet data is

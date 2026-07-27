@@ -172,9 +172,15 @@ _OOXML_READER_MAX_WORKSHEET_CELL_COUNT = 500_000
 # the already-supported package inventory. Sheet declarations receive the
 # lower established per-feature package-part budget because FormulaFence
 # intentionally revisits raw sheet metadata across many control boundaries.
+# Defined names are likewise materialized from the complete workbook catalog,
+# then indexed and traversed across FormulaFence's formula-control analyses.
+# Excel permits a vastly larger collection, but 100,000 definitions already
+# represent substantial CI memory and repeated semantic work, so retain a
+# separate, explicit reader-safety boundary.
 _OOXML_READER_MAX_CONTENT_TYPE_DECLARATION_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_RELATIONSHIP_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
+_OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT = 100_000
 # Reader-facing XML can still be hostile within its byte limit: the ordinary
 # workbook model materializes shared-string entries and style objects, while
 # deep XML can impose disproportionate parser work.  Keep the streaming gate
@@ -3232,8 +3238,9 @@ def _validate_ooxml_semantic_reader_resources(
     It therefore covers relationship-selected worksheet locations and
     shared-string paths rather than assuming a writer used one conventional
     member path, without turning an unrelated malformed extension part into a
-    hard input failure. Alongside cell counts, it bounds the reader-visible XML
-    shape, shared-string table, and Excel-compatible cell/formula scalar sizes.
+    hard input failure. Alongside cell counts, it bounds reader-materialized
+    workbook catalogs, XML shape, the shared-string table, and
+    Excel-compatible cell/formula scalar sizes.
     It protects FormulaFence's complete ``openpyxl`` reader and every
     subsequent raw OOXML scanner from a package that is valid ZIP but
     impractical to model safely in a CI worker.
@@ -3295,6 +3302,7 @@ def _validate_ooxml_semantic_reader_resources(
     content_type_declaration_count = 0
     workbook_relationship_count = 0
     workbook_sheet_count = 0
+    workbook_defined_name_count = 0
     populated_cell_count = 0
     shared_string_count = 0
     cell_tags = _spreadsheetml_tags("c")
@@ -3303,9 +3311,6 @@ def _validate_ooxml_semantic_reader_resources(
     shared_string_tags = _spreadsheetml_tags("si")
     text_tags = _spreadsheetml_tags("t")
     value_tags = _spreadsheetml_tags("v")
-    defined_name_tags = _spreadsheetml_tags("definedName")
-    sheets_tags = _spreadsheetml_tags("sheets")
-    sheet_tags = _spreadsheetml_tags("sheet")
     cell_xfs_tags = _spreadsheetml_tags("cellXfs")
     xf_tags = _spreadsheetml_tags("xf")
 
@@ -3337,13 +3342,33 @@ def _validate_ooxml_semantic_reader_resources(
         element: ElementTree.Element,
         tags: list[str],
     ) -> None:
-        nonlocal workbook_sheet_count
-        if element.tag in defined_name_tags:
+        nonlocal workbook_defined_name_count, workbook_sheet_count
+        # ``openpyxl``'s workbook package parser uses local XML names while
+        # constructing these two catalogs.  A direct alternate-namespace
+        # ``definedName`` is therefore still materialized, and its nested
+        # ``sheets`` sequence constructs a child-sheet object for every direct
+        # child. Count the same direct catalog entries rather than allowing a
+        # namespace variation to evade the allocation bound.
+        if (
+            len(tags) == 3
+            and _xml_local_name(tags[0]) == "workbook"
+            and _xml_local_name(tags[-2]) == "definedNames"
+            and _xml_local_name(element.tag) == "definedName"
+        ):
             validate_formula_text_length(len(element.text or ""))
+            workbook_defined_name_count += 1
+            if (
+                workbook_defined_name_count
+                > _OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "workbook defined-name declarations exceed the "
+                    "semantic-reader safety limit."
+                )
         elif (
-            element.tag in sheet_tags
-            and len(tags) > 1
-            and tags[-2] in sheets_tags
+            len(tags) == 3
+            and _xml_local_name(tags[0]) == "workbook"
+            and _xml_local_name(tags[-2]) == "sheets"
         ):
             workbook_sheet_count += 1
             if workbook_sheet_count > _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT:

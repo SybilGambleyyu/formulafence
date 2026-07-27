@@ -653,6 +653,14 @@ parts remain deliberately outside this narrow stored-definition boundary; the
 latter remain under `FF026`. Workbook-defined callables shadow the native
 spelling rather than being classified as legacy XLM actions.
 
+The ordinary semantic diff retains local-review formula and defined-name
+evidence. For a shared artifact, the separate output-only
+`--redact-formula-defined-xlm-actions` mode hides direct stored selected-action
+material, exact changed static inputs, and changed private resolved name-chain
+evidence without changing comparison, policy evaluation, or exit status. It
+does not resolve a target or handler, execute an action, or reconstruct a
+dynamically assembled target.
+
 ## Formula-defined XLM GET.CELL information
 
 Microsoft identifies

@@ -1116,6 +1116,18 @@ def change_formula_defined_xlm_action_input(path: Path) -> Path:
     return path
 
 
+def change_formula_defined_xlm_action_call(path: Path) -> Path:
+    """Change a direct stored XLM action without resolving its handler."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.XLM.ACTION.DIRECT"]
+    expected = '=ON.TIME(NOW(),"PRIVATE-XLM-ACTION-EVENT")'
+    if definition.attr_text != expected:
+        raise ValueError("Fixture does not contain the expected direct XLM action")
+    definition.attr_text = '=ON.TIME(NOW(),"PRIVATE-XLM-ACTION-EVENT-CANDIDATE")'
+    workbook.save(path)
+    return path
+
+
 def make_formula_defined_xlm_get_cell_model(path: Path) -> Path:
     """Create inert XLM `GET.CELL` calls stored only in defined formulas.
 

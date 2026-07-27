@@ -57,6 +57,10 @@ inputs:
     description: Replace visible formula-defined XLM evaluation material and known static evaluation inputs in the shared report without changing comparison or policy results.
     required: false
     default: 'false'
+  redact-formula-defined-xlm-actions:
+    description: Replace visible formula-defined XLM action material and known static action inputs in the shared report without changing comparison or policy results.
+    required: false
+    default: 'false'
   fail-on:
     description: Also fail when a non-policy change or finding reaches this severity.
     required: false
@@ -110,6 +114,7 @@ runs:
         INPUT_REDACT_WORKSHEET_CODE_RESOURCE_REGISTRATIONS: ${{ inputs.redact-worksheet-code-resource-registrations }}
         INPUT_REDACT_FORMULA_DEFINED_XLM_REGISTRATIONS: ${{ inputs.redact-formula-defined-xlm-registrations }}
         INPUT_REDACT_FORMULA_DEFINED_XLM_EVALUATIONS: ${{ inputs.redact-formula-defined-xlm-evaluations }}
+        INPUT_REDACT_FORMULA_DEFINED_XLM_ACTIONS: ${{ inputs.redact-formula-defined-xlm-actions }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_MAX_WORKBOOKS: ${{ inputs.max-workbooks }}
         INPUT_MAX_LINK_IMPACT: ${{ inputs.max-link-impact }}

@@ -16,6 +16,7 @@ import formulafence.workbook as workbook_module
 from formulafence.diff import compare_snapshots
 from formulafence.output import (
     EXTERNAL_WORKBOOK_LINK_REDACTION,
+    FORMULA_DEFINED_XLM_ACTION_REDACTION,
     FORMULA_DEFINED_XLM_EVALUATION_REDACTION,
     FORMULA_DEFINED_XLM_REGISTRATION_REDACTION,
     FORMULA_EXTERNAL_ACTION_REDACTION,
@@ -25,6 +26,8 @@ from formulafence.output import (
     WORKSHEET_CODE_RESOURCE_REGISTRATION_REDACTION,
     profile_to_markdown,
     redact_external_workbook_link_material,
+    redact_formula_defined_xlm_action_material,
+    redact_formula_defined_xlm_action_report_payload,
     redact_formula_defined_xlm_evaluation_material,
     redact_formula_defined_xlm_evaluation_report_payload,
     redact_formula_defined_xlm_registration_material,
@@ -89,6 +92,7 @@ from .helpers import (
     change_formula_cached_result_with_visible_precedent,
     change_formula_dde_link_definition,
     change_formula_dde_link_input,
+    change_formula_defined_xlm_action_call,
     change_formula_defined_xlm_action_definition,
     change_formula_defined_xlm_action_input,
     change_formula_defined_xlm_environment_information_definition,
@@ -5547,6 +5551,160 @@ def test_formula_defined_xlm_action_static_inputs_are_guarded(tmp_path) -> None:
     assert action_change.details["formula_defined_xlm_action_static_input_changed"] is True
     assert action_change.details["formula_defined_xlm_action_static_input_change_count"] == 1
     assert "FF073" in {finding.rule_id for finding in report.findings}
+    assert report.formula_defined_xlm_action_static_input_cells == frozenset(
+        {("Inputs", "A9")}
+    )
+
+
+def test_formula_defined_xlm_action_report_redaction_hides_calls_and_inputs(
+    tmp_path,
+) -> None:
+    baseline = make_formula_defined_xlm_action_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_defined_xlm_action_model(tmp_path / "candidate.xlsx")
+    change_formula_defined_xlm_action_input(candidate)
+    change_formula_defined_xlm_action_call(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    sensitive_values = (
+        "PRIVATE-XLM-ACTION-INPUT-BASELINE",
+        "PRIVATE-XLM-ACTION-INPUT-CANDIDATE",
+        "PRIVATE-XLM-ACTION-EVENT",
+        "PRIVATE-XLM-ACTION-EVENT-CANDIDATE",
+    )
+    raw_rendered = json.dumps(raw_payload)
+    assert all(value in raw_rendered for value in sensitive_values)
+
+    redacted_payload = redact_formula_defined_xlm_action_report_payload(
+        report, raw_payload
+    )
+    redacted_rendered = json.dumps(redacted_payload)
+    assert all(value not in redacted_rendered for value in sensitive_values)
+    assert FORMULA_DEFINED_XLM_ACTION_REDACTION in redacted_rendered
+    assert redacted_payload["summary"] == raw_payload["summary"]
+
+    redacted_markdown = report_to_markdown(
+        report, redact_formula_defined_xlm_actions=True
+    )
+    redacted_sarif = report_to_sarif(
+        report, redact_formula_defined_xlm_actions=True
+    )
+    assert "Formula-defined XLM action material:** redacted for sharing" in redacted_markdown
+    assert "FF073" in json.dumps(redacted_sarif)
+    for artifact in (redacted_markdown, json.dumps(redacted_sarif)):
+        assert all(value not in artifact for value in sensitive_values)
+
+    native_formula = "=SUM(A1:A2)"
+    assert redact_formula_defined_xlm_action_material(native_formula) == native_formula
+
+
+def test_formula_defined_xlm_action_report_redaction_hides_unsampled_inputs(
+    tmp_path,
+) -> None:
+    """XLM action input redaction must use full private impact evidence."""
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    baseline_marker = "PRIVATE-UNSAMPLED-XLM-ACTION-BASELINE"
+    candidate_marker = "PRIVATE-UNSAMPLED-XLM-ACTION-CANDIDATE"
+
+    def add_action_fanout(workbook, marker: str) -> None:
+        inputs = workbook["Inputs"]
+        inputs["A9"] = marker
+        for column in range(2, 22):
+            inputs.cell(row=1, column=column).value = "=A9"
+        inputs["Z1"] = "=FENCE.XLM.UNSAMPLED.ACTION(A9)"
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.UNSAMPLED.ACTION",
+                attr_text="=LAMBDA(payload,EXEC(payload))",
+            )
+        )
+
+    rewrite(baseline, lambda workbook: add_action_fanout(workbook, baseline_marker))
+    rewrite(candidate, lambda workbook: add_action_fanout(workbook, candidate_marker))
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    input_change = next(
+        change for change in raw_payload["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert "Inputs!Z1" not in input_change["impacted_cells"]
+    assert report.formula_defined_xlm_action_static_input_cells == frozenset(
+        {("Inputs", "A9")}
+    )
+
+    redacted = redact_formula_defined_xlm_action_report_payload(report, raw_payload)
+    redacted_change = next(
+        change for change in redacted["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert redacted_change["before"]["value"] == FORMULA_DEFINED_XLM_ACTION_REDACTION
+    assert redacted_change["after"]["value"] == FORMULA_DEFINED_XLM_ACTION_REDACTION
+    rendered = json.dumps(redacted)
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+
+
+def test_formula_defined_xlm_action_report_redaction_hides_indirect_names(
+    tmp_path,
+) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+
+    def add_action_chain(workbook, marker: str) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.ACTIONWRAPPER",
+                attr_text="=LAMBDA(payload,EXEC(payload))",
+            )
+        )
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.ACTIONCHAIN",
+                attr_text=(
+                    f'=LAMBDA(payload,FENCE.XLM.ACTIONWRAPPER("{marker}"))'
+                ),
+            )
+        )
+
+    baseline_marker = "PRIVATE-INDIRECT-XLM-ACTION-BASELINE"
+    candidate_marker = "PRIVATE-INDIRECT-XLM-ACTION-CANDIDATE"
+    rewrite(baseline, lambda workbook: add_action_chain(workbook, baseline_marker))
+    rewrite(candidate, lambda workbook: add_action_chain(workbook, candidate_marker))
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    action_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_defined_xlm_actions_changed"
+    )
+    assert action_change.details["formula_defined_xlm_action_definition_material_changed"] is True
+    ordinary_looking_definition = (
+        f'=LAMBDA(payload,FENCE.XLM.ACTIONWRAPPER("{baseline_marker}"))'
+    )
+    assert (
+        redact_formula_defined_xlm_action_material(ordinary_looking_definition)
+        == ordinary_looking_definition
+    )
+
+    raw_payload = report.to_dict()
+    raw_rendered = json.dumps(raw_payload)
+    assert baseline_marker in raw_rendered
+    assert candidate_marker in raw_rendered
+
+    redacted_payload = redact_formula_defined_xlm_action_report_payload(
+        report, raw_payload
+    )
+    redacted_rendered = json.dumps(redacted_payload)
+    assert baseline_marker not in redacted_rendered
+    assert candidate_marker not in redacted_rendered
+    assert FORMULA_DEFINED_XLM_ACTION_REDACTION in redacted_rendered
+
+    redacted_sarif = report_to_sarif(report, redact_formula_defined_xlm_actions=True)
+    redacted_sarif_rendered = json.dumps(redacted_sarif)
+    assert baseline_marker not in redacted_sarif_rendered
+    assert candidate_marker not in redacted_sarif_rendered
+    assert "FF008" in redacted_sarif_rendered
+    assert "FF073" in redacted_sarif_rendered
 
 
 def test_uninvoked_formula_defined_xlm_action_is_profiled(tmp_path) -> None:

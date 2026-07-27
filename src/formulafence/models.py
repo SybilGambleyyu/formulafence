@@ -5192,6 +5192,9 @@ class DiffReport:
     formula_defined_xlm_evaluation_static_input_cells: frozenset[CellKey] = field(
         default_factory=frozenset, repr=False
     )
+    formula_defined_xlm_action_static_input_cells: frozenset[CellKey] = field(
+        default_factory=frozenset, repr=False
+    )
 
     def severity_counts(self) -> dict[str, int]:
         counts = {severity: 0 for severity in SEVERITY_ORDER}

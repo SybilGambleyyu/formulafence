@@ -16,6 +16,8 @@ from formulafence.output import (
     portfolio_to_sarif,
     profile_to_markdown,
     redact_external_workbook_link_material,
+    redact_formula_defined_xlm_action_portfolio_payload,
+    redact_formula_defined_xlm_action_report_payload,
     redact_formula_defined_xlm_evaluation_portfolio_payload,
     redact_formula_defined_xlm_evaluation_report_payload,
     redact_formula_defined_xlm_registration_portfolio_payload,
@@ -148,6 +150,20 @@ def _add_formula_defined_xlm_evaluation_redaction_argument(
     )
 
 
+def _add_formula_defined_xlm_action_redaction_argument(
+    parser: argparse.ArgumentParser,
+) -> None:
+    parser.add_argument(
+        "--redact-formula-defined-xlm-actions",
+        action="store_true",
+        help=(
+            "Replace visible formula-defined XLM action material and known static "
+            "action inputs in this shared report without changing comparison "
+            "or policy results"
+        ),
+    )
+
+
 def _positive_integer(value: str) -> int:
     try:
         parsed = int(value)
@@ -184,6 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_worksheet_code_resource_registration_redaction_argument(diff)
     _add_formula_defined_xlm_registration_redaction_argument(diff)
     _add_formula_defined_xlm_evaluation_redaction_argument(diff)
+    _add_formula_defined_xlm_action_redaction_argument(diff)
     diff.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -204,6 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_worksheet_code_resource_registration_redaction_argument(check)
     _add_formula_defined_xlm_registration_redaction_argument(check)
     _add_formula_defined_xlm_evaluation_redaction_argument(check)
+    _add_formula_defined_xlm_action_redaction_argument(check)
     check.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -245,6 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_worksheet_code_resource_registration_redaction_argument(portfolio)
     _add_formula_defined_xlm_registration_redaction_argument(portfolio)
     _add_formula_defined_xlm_evaluation_redaction_argument(portfolio)
+    _add_formula_defined_xlm_action_redaction_argument(portfolio)
     portfolio.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -338,6 +357,8 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
             payload = redact_formula_defined_xlm_evaluation_report_payload(
                 report, payload
             )
+        if arguments.redact_formula_defined_xlm_actions:
+            payload = redact_formula_defined_xlm_action_report_payload(report, payload)
         content = as_json(payload)
     elif arguments.format == "sarif":
         content = as_json(
@@ -360,6 +381,9 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
                 redact_formula_defined_xlm_evaluations=(
                     arguments.redact_formula_defined_xlm_evaluations
                 ),
+                redact_formula_defined_xlm_actions=(
+                    arguments.redact_formula_defined_xlm_actions
+                ),
             )
         )
     else:
@@ -381,6 +405,9 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
             ),
             redact_formula_defined_xlm_evaluations=(
                 arguments.redact_formula_defined_xlm_evaluations
+            ),
+            redact_formula_defined_xlm_actions=(
+                arguments.redact_formula_defined_xlm_actions
             ),
         )
     _emit(content, arguments.output)
@@ -435,6 +462,10 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
             payload = redact_formula_defined_xlm_evaluation_portfolio_payload(
                 report, payload
             )
+        if arguments.redact_formula_defined_xlm_actions:
+            payload = redact_formula_defined_xlm_action_portfolio_payload(
+                report, payload
+            )
         content = as_json(payload)
     elif arguments.format == "sarif":
         content = as_json(
@@ -456,6 +487,9 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
                 redact_formula_defined_xlm_evaluations=(
                     arguments.redact_formula_defined_xlm_evaluations
                 ),
+                redact_formula_defined_xlm_actions=(
+                    arguments.redact_formula_defined_xlm_actions
+                ),
             )
         )
     else:
@@ -476,6 +510,9 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
             ),
             redact_formula_defined_xlm_evaluations=(
                 arguments.redact_formula_defined_xlm_evaluations
+            ),
+            redact_formula_defined_xlm_actions=(
+                arguments.redact_formula_defined_xlm_actions
             ),
         )
     _emit(content, arguments.output)

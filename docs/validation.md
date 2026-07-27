@@ -5,6 +5,54 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared formula-defined XLM action report redaction — 2026-07-26
+
+FormulaFence 0.106.0 adds the separate, opt-in
+`--redact-formula-defined-xlm-actions` rendering boundary for generic reports.
+It is deliberately separate from the count-only `FF073` ledger and from the
+external-workbook-link, formula-action, Python-in-Excel, Office custom-function,
+unqualified-runtime-function, worksheet-code-resource registration,
+formula-defined XLM registration, and formula-defined XLM evaluation redaction
+modes. Default local-review output remains unchanged. When enabled, JSON,
+Markdown, and SARIF hide direct stored selected-action material, changed
+invoking-formula evidence, and exact changed static input evidence the private
+dependency analysis recorded as reaching an inventoried action. A
+formula-defined-name body can pass a private target or handler through a dotted
+workbook-defined wrapper to a selected XLM action deeper in the chain, so
+FormulaFence privately compares the resolved definition chain and
+conservatively hides changed defined-name before/after evidence when that
+signature changes.
+
+Microsoft's [Excel C API
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel)
+describes XLM command-equivalent functions and event traps, while its
+[DLL-access guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/how-to-access-dlls-in-excel)
+documents `CALL` as an XLM route to a DLL function or command. Those documented
+stored arguments explain why generic report evidence can disclose sensitive
+action material without proving that an action is available, trusted, or will
+succeed. FormulaFence does not calculate a formula, resolve a target or
+handler, load a DLL, send DDE, execute a macro or program, or reconstruct a
+dynamically assembled action.
+
+Focused fixtures cover a direct stored selected action plus a changed static
+input, an input whose action consumer falls beyond the report's bounded impact
+sample, and a dotted named wrapper whose private target can only be associated
+with the action through the private fixed-point definition analysis. The
+redacted JSON, Markdown, SARIF, policy, portfolio, and composite-Action
+contracts retain `FF073` / `FFP073` and their exit behavior while omitting
+controlled target, handler, input, and nested-name markers. The final source
+tree passed **683 tests in 98.49 seconds** (deterministic command-limited
+chunks), plus a clean Ruff check, `git diff --check`, and shell syntax check for
+the composite Action. The exact release wheel was installed in a fresh
+environment; its CLI reported `FormulaFence 0.106.0`, retained controlled
+action/input markers in default JSON, removed them from redacted
+JSON/Markdown/SARIF/policy/portfolio output, and still returned `1` with
+`FF073` and `FFP073` for the redacted policy check. The wheel
+`formulafence-0.106.0-py3-none-any.whl` passed `twine check` with SHA-256
+`d47f1f28d1baa2e96286ce570408e0bb207aa9e99b84261d2928a8c6dc727bb3`.
+The source distribution also passed `twine check`; its digest is intentionally
+omitted because this validation note is included in that archive.
+
 ## Shared formula-defined XLM evaluation report redaction — 2026-07-26
 
 FormulaFence 0.105.0 adds the separate, opt-in

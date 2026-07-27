@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.106.0 — 2026-07-26
+
+- Add opt-in `--redact-formula-defined-xlm-actions` rendering for `diff`,
+  `check`, and `portfolio` JSON, Markdown, and SARIF artifacts. Default local
+  review output remains unchanged; the output-only boundary replaces direct
+  stored selected `FF073` action material with `[formula-defined XLM action
+  material redacted]`.
+- Extend the boundary to before/after evidence for changed invoking formulas
+  and exact changed static input cells recorded by the private full dependency
+  impact set, rather than the bounded impact sample shown in reports.
+- Retain the private formula-defined-name chain signature for FF073 and, when
+  it changes, conservatively redact changed defined-name before/after evidence
+  so a dotted workbook-defined wrapper cannot disclose an action target or
+  handler that reaches a selected action deeper in the chain.
+- Keep comparison facts, findings, policy evaluation, and exit status unchanged.
+  The composite GitHub Action exposes the switch as
+  `redact-formula-defined-xlm-actions: 'true'`; the mode does not calculate a
+  formula, resolve an action target or event handler, load a DLL, send DDE,
+  execute a macro or program, or reconstruct a dynamically assembled action,
+  and it is not a general secret scrubber.
+- Add direct-call, exact unsampled-static-input, resolved named-chain,
+  default-evidence, policy, portfolio, JSON/Markdown/SARIF, and composite-Action
+  regression coverage.
+
 ## 0.105.0 — 2026-07-26
 
 - Add opt-in `--redact-formula-defined-xlm-evaluations` rendering for `diff`,

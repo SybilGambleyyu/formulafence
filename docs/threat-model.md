@@ -851,6 +851,11 @@ formula will produce.
   action calls and raw XLM macro-sheet parts remain intentionally outside this
   narrow boundary; this finite inventory does not claim to interpret arbitrary
   XLM commands, and dynamic/unresolved inputs remain static-coverage limits.
+  The separate `--redact-formula-defined-xlm-actions` shared-artifact mode
+  hides direct selected-action material, exact changed static inputs, and
+  changed private name-chain evidence after comparison and policy evaluation
+  without resolving a target/handler, executing an action, or changing any
+  comparison fact.
 - Legacy XLM GET.CELL is an XLM information function. FormulaFence separately
   inventories only calls stored in formula-defined names and named LAMBDA
   bodies, then propagates them through nested and sheet-local names to invoking

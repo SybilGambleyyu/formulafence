@@ -810,6 +810,14 @@ _TIMELINE_CACHE_PART_PATTERN = re.compile(
 _SLICER_TIMELINE_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _SLICER_TIMELINE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _SLICER_TIMELINE_TOTAL_XML_MAX_COUNT = 512
+# Slicer and Timeline cache definitions can carry private item catalogs. Keep
+# comfortably more capacity than Excel's documented 10,000 displayed filter
+# items while bounding the complete private tree before a compact package can
+# amplify a CI worker's memory use.
+_SLICER_TIMELINE_MAX_XML_ELEMENT_COUNT = 16_384
+_SLICER_TIMELINE_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _SLICER_TIMELINE_MAX_XML_ELEMENT_COUNT
+)
 _POWER_PIVOT_DATA_PART_PATTERN = re.compile(r"^xl/model/[^/]+\.data$", re.IGNORECASE)
 _POWER_PIVOT_DATA_MAX_BYTES = 512 * 1024 * 1024
 _POWER_PIVOT_DATA_TOTAL_MAX_BYTES = 512 * 1024 * 1024
@@ -1897,10 +1905,11 @@ class _PivotCacheRecordBudget:
 
 @dataclass
 class _SlicerTimelineXmlBudget:
-    """Bound slicer and Timeline cache XML bytes in one package scan."""
+    """Bound slicer and Timeline cache XML resources in one package scan."""
 
     remaining_bytes: int = _SLICER_TIMELINE_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _SLICER_TIMELINE_TOTAL_XML_MAX_COUNT
+    remaining_xml_elements: int = _SLICER_TIMELINE_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 @dataclass
@@ -15050,6 +15059,45 @@ def _slicer_timeline_xml_fragment(
     )
 
 
+def _slicer_timeline_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _SlicerTimelineXmlBudget,
+) -> str | None:
+    """Stream filter-cache XML before recursively canonicalizing its private tree."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _SLICER_TIMELINE_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    warnings.add(
+        "FormulaFence did not fully read a slicer/Timeline XML part whose XML "
+        "structure exceeds the safety budget; affected filters have a coverage gap."
+    )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
+
+
 def _slicer_timeline_xml_payload(
     archive: ZipFile,
     member: str,
@@ -15089,6 +15137,17 @@ def _slicer_timeline_xml_payload(
         return None, _private_external_data_signature(
             (("read-budget-exhausted", metadata),)
         )
+    structure_fallback_signature = (
+        _slicer_timeline_xml_structure_budget_fallback_signature(
+            archive,
+            member,
+            info,
+            warnings,
+            budget,
+        )
+    )
+    if structure_fallback_signature is not None:
+        return None, structure_fallback_signature
     budget.remaining_bytes -= info.file_size
     try:
         return archive.read(member), None

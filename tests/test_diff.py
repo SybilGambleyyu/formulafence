@@ -9905,6 +9905,57 @@ def _pivot_xml_element_count(path, member: str) -> int:
     return sum(1 for _ in root.iter())
 
 
+def _slicer_timeline_xml_members(path) -> tuple[str, ...]:
+    """Return the fixture's Slicer and Timeline cache-definition XML members."""
+    with ZipFile(path) as archive:
+        members = tuple(entry.filename for entry in archive.infolist())
+    return tuple(
+        sorted(
+            member
+            for member in members
+            if member.endswith(".xml")
+            and (
+                member.startswith("xl/slicerCaches/")
+                or member.startswith("xl/timelineCaches/")
+            )
+        )
+    )
+
+
+def _append_slicer_timeline_xml_elements(
+    path,
+    member: str,
+    count: int,
+    *,
+    nested: bool = False,
+) -> None:
+    """Add opaque filter-cache XML entries without invoking FormulaFence's reader."""
+    staging = path.with_suffix(".slicer-timeline-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, "{urn:formulafence:audit}entry")
+    contents[member] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _slicer_timeline_xml_element_count(path, member: str) -> int:
+    """Count one fixture's complete filter-cache XML tree for exact budget tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member))
+    return sum(1 for _ in root.iter())
+
+
 def test_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
     baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
     candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
@@ -10862,6 +10913,174 @@ def test_pivotless_workbook_does_not_consume_pivottable_budget(tmp_path, monkeyp
     assert snapshot.pivot_table_definitions.present is False
     assert snapshot.pivot_table_definitions.pivot_table_part_count == 0
     assert not any("PivotTable XML" in warning for warning in snapshot.parser_warnings)
+
+
+def test_slicer_timeline_xml_element_budget_stops_before_materializing_the_tree(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_slicer_timeline_cache_model(tmp_path / "candidate.xlsx")
+    slicer_member = _slicer_timeline_xml_members(workbook)[0]
+    _append_slicer_timeline_xml_elements(workbook, slicer_member, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_SLICER_TIMELINE_MAX_XML_ELEMENT_COUNT",
+        _slicer_timeline_xml_element_count(workbook, slicer_member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        slicer_payload = archive.read(slicer_member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == slicer_payload:
+            raise AssertionError(
+                "the slicer/Timeline XML tree was materialized after its budget failed"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+    warnings: set[str] = set()
+    with ZipFile(workbook) as archive:
+        inspection = workbook_module._slicer_timeline_cache_inspection(
+            archive,
+            slicer_member,
+            "slicer",
+            warnings,
+            workbook_module._SlicerTimelineXmlBudget(),
+            {},
+        )
+
+    assert inspection.inspected is False
+    assert any(
+        "slicer/Timeline XML part whose XML structure" in warning
+        for warning in warnings
+    )
+
+
+def test_slicer_timeline_xml_element_budget_remains_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_slicer_timeline_cache_model(tmp_path / "baseline.xlsx")
+    workbook = make_slicer_timeline_cache_model(tmp_path / "candidate.xlsx")
+    slicer_member = _slicer_timeline_xml_members(workbook)[0]
+    _append_slicer_timeline_xml_elements(workbook, slicer_member, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_SLICER_TIMELINE_MAX_XML_ELEMENT_COUNT",
+        _slicer_timeline_xml_element_count(workbook, slicer_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+    report = compare_snapshots(load_snapshot(baseline), snapshot)
+
+    assert snapshot.slicer_timeline_caches.unrecognized_part_count >= 1
+    assert any(
+        "slicer/Timeline XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+    assert "FF032" in {finding.rule_id for finding in report.findings}
+
+
+def test_slicer_timeline_xml_element_budget_accepts_the_configured_capacity(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_slicer_timeline_cache_model(tmp_path / "candidate.xlsx")
+    slicer_member = _slicer_timeline_xml_members(workbook)[0]
+    _append_slicer_timeline_xml_elements(workbook, slicer_member, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_SLICER_TIMELINE_MAX_XML_ELEMENT_COUNT",
+        _slicer_timeline_xml_element_count(workbook, slicer_member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.slicer_timeline_caches.unrecognized_part_count == 0
+
+
+def test_slicer_timeline_xml_element_budget_aggregates_across_package_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_slicer_timeline_cache_model(tmp_path / "candidate.xlsx")
+    xml_members = _slicer_timeline_xml_members(workbook)
+    remaining_xml_elements = (
+        sum(_slicer_timeline_xml_element_count(workbook, member) for member in xml_members)
+        - 1
+    )
+    budget_type = workbook_module._SlicerTimelineXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_SlicerTimelineXmlBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.slicer_timeline_caches.unrecognized_part_count >= 1
+    assert any(
+        "slicer/Timeline XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_slicer_timeline_xml_element_budget_accepts_the_default_capacity(tmp_path) -> None:
+    workbook = make_slicer_timeline_cache_model(tmp_path / "candidate.xlsx")
+    slicer_member = _slicer_timeline_xml_members(workbook)[0]
+    _append_slicer_timeline_xml_elements(
+        workbook,
+        slicer_member,
+        workbook_module._SLICER_TIMELINE_MAX_XML_ELEMENT_COUNT
+        - _slicer_timeline_xml_element_count(workbook, slicer_member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.slicer_timeline_caches.unrecognized_part_count == 0
+
+
+def test_slicer_timeline_xml_element_budget_rejects_the_default_overage(tmp_path) -> None:
+    workbook = make_slicer_timeline_cache_model(tmp_path / "candidate.xlsx")
+    slicer_member = _slicer_timeline_xml_members(workbook)[0]
+    _append_slicer_timeline_xml_elements(
+        workbook,
+        slicer_member,
+        workbook_module._SLICER_TIMELINE_MAX_XML_ELEMENT_COUNT
+        - _slicer_timeline_xml_element_count(workbook, slicer_member)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.slicer_timeline_caches.unrecognized_part_count >= 1
+    assert any(
+        "slicer/Timeline XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_slicer_timeline_xml_element_budget_counts_nested_opaque_subtrees(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_slicer_timeline_cache_model(tmp_path / "candidate.xlsx")
+    slicer_member = _slicer_timeline_xml_members(workbook)[0]
+    _append_slicer_timeline_xml_elements(workbook, slicer_member, 1, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_SLICER_TIMELINE_MAX_XML_ELEMENT_COUNT",
+        _slicer_timeline_xml_element_count(workbook, slicer_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.slicer_timeline_caches.unrecognized_part_count >= 1
+    assert any(
+        "slicer/Timeline XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_slicer_timeline_cache_filters_are_profiled_and_diffed_privately(tmp_path) -> None:

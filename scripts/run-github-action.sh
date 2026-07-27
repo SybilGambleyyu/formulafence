@@ -26,6 +26,7 @@ redact_formula_defined_xlm_evaluations=${INPUT_REDACT_FORMULA_DEFINED_XLM_EVALUA
 redact_formula_defined_xlm_actions=${INPUT_REDACT_FORMULA_DEFINED_XLM_ACTIONS:-false}
 redact_formula_defined_xlm_get_cell_calls=${INPUT_REDACT_FORMULA_DEFINED_XLM_GET_CELL_CALLS:-false}
 redact_formula_defined_xlm_environment_information_calls=${INPUT_REDACT_FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_CALLS:-false}
+redact_formula_environment_information=${INPUT_REDACT_FORMULA_ENVIRONMENT_INFORMATION:-false}
 fail_on=${INPUT_FAIL_ON:-none}
 max_workbooks=${INPUT_MAX_WORKBOOKS:-512}
 max_link_impact=${INPUT_MAX_LINK_IMPACT:-100000}
@@ -102,6 +103,11 @@ esac
 case "$redact_formula_defined_xlm_environment_information_calls" in
   true|false) ;;
   *) fail "Unsupported redact-formula-defined-xlm-environment-information-calls value: $redact_formula_defined_xlm_environment_information_calls (expected true or false)." ;;
+esac
+
+case "$redact_formula_environment_information" in
+  true|false) ;;
+  *) fail "Unsupported redact-formula-environment-information value: $redact_formula_environment_information (expected true or false)." ;;
 esac
 
 if ! [[ "$max_workbooks" =~ ^[1-9][0-9]*$ ]]; then
@@ -233,6 +239,9 @@ if [[ "$redact_formula_defined_xlm_get_cell_calls" == true ]]; then
 fi
 if [[ "$redact_formula_defined_xlm_environment_information_calls" == true ]]; then
   command+=(--redact-formula-defined-xlm-environment-information-calls)
+fi
+if [[ "$redact_formula_environment_information" == true ]]; then
+  command+=(--redact-formula-environment-information)
 fi
 
 if "${command[@]}"; then

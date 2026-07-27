@@ -37,6 +37,9 @@ FORMULA_DEFINED_XLM_GET_CELL_REDACTION = (
 FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_REDACTION = (
     "[formula-defined XLM environment-information material redacted]"
 )
+FORMULA_ENVIRONMENT_INFORMATION_REDACTION = (
+    "[formula environment-information material redacted]"
+)
 
 # This fallback deliberately supplements, rather than replaces, FormulaFence's
 # static formula inspection below.  A visible `INDIRECT("'[Book]Sheet'!A1")`
@@ -267,6 +270,7 @@ def _safe_finding_details(
     redact_formula_defined_xlm_actions: bool = False,
     redact_formula_defined_xlm_get_cell_calls: bool = False,
     redact_formula_defined_xlm_environment_information_calls: bool = False,
+    redact_formula_environment_information: bool = False,
 ) -> dict[str, Any]:
     """Copy one SARIF finding's properties through active name-chain bounds."""
     details = dict(finding.details)
@@ -328,6 +332,12 @@ def _safe_finding_details(
         _redact_formula_defined_xlm_environment_information_defined_name_details(
             details, report
         )
+    if (
+        redact_formula_environment_information
+        and report is not None
+        and finding.rule_id == "FF008"
+    ):
+        _redact_formula_environment_information_defined_name_details(details, report)
     return details
 
 
@@ -1692,6 +1702,177 @@ def redact_formula_defined_xlm_environment_information_portfolio_payload(
                 entry, workbook.report
             )
             _redact_formula_defined_xlm_environment_information_defined_name_evidence(
+                entry, workbook.report
+            )
+    return redacted
+
+
+def _contains_formula_environment_information_material(value: str) -> bool:
+    """Return whether a string exposes a native environment-information call.
+
+    FF072 inventories native CELL, INFO, SHEET, and SHEETS calls in formulas
+    and formula-defined names. A generic renderer does not retain name scope,
+    so a standalone matching expression is conservatively redacted rather than
+    treated as proof that Excel will invoke the native function.
+    """
+    folded = value.casefold()
+    if "(" not in value or not any(
+        token in folded for token in ("cell", "info", "sheet", "sheets")
+    ):
+        return False
+    formula = value if value.lstrip().startswith("=") else f"={value}"
+    return bool(inspect_formula(formula).formula_environment_information_functions)
+
+
+def redact_formula_environment_information_material(payload: Any) -> Any:
+    """Return an output-only copy with native environment-call text hidden.
+
+    The report-level helpers below also hide exact changed static inputs and
+    changed formula-defined-name bodies which the private FF072 comparison
+    resolves as environment-information relevant. This neither evaluates a
+    call nor determines an information type, resolves a dynamic reference, or
+    simulates file, client, workspace, selection, or workbook state.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: redact_formula_environment_information_material(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [redact_formula_environment_information_material(value) for value in payload]
+    if isinstance(payload, tuple):
+        return tuple(
+            redact_formula_environment_information_material(value) for value in payload
+        )
+    if isinstance(payload, str) and _contains_formula_environment_information_material(
+        payload
+    ):
+        return FORMULA_ENVIRONMENT_INFORMATION_REDACTION
+    return payload
+
+
+def _formula_environment_information_sensitive_change_locations(
+    report: DiffReport,
+) -> set[str]:
+    """Return changed cells whose evidence can carry a native call input."""
+    before_calls = report.before.formula_environment_information_calls
+    after_calls = report.after.formula_environment_information_calls
+    sensitive_cells = (
+        before_calls.environment_information_cells
+        | after_calls.environment_information_cells
+        | report.formula_environment_information_static_input_cells
+    )
+    if not sensitive_cells:
+        return set()
+
+    locations: set[str] = set()
+    for change in report.changes:
+        if change.location is None or change.location not in sensitive_cells:
+            continue
+        location = display_location(change.location)
+        if location is not None:
+            locations.add(location)
+    return locations
+
+
+def _redact_formula_environment_information_change_cells(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide cells that invoke a native environment call or feed it."""
+    sensitive_locations = _formula_environment_information_sensitive_change_locations(
+        report
+    )
+    if not sensitive_locations:
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("location") not in sensitive_locations:
+            continue
+        for side in ("before", "after"):
+            snapshot = change.get(side)
+            if not isinstance(snapshot, dict):
+                continue
+            for field in ("value", "formula", "formula_fingerprint"):
+                if snapshot.get(field) is not None:
+                    snapshot[field] = FORMULA_ENVIRONMENT_INFORMATION_REDACTION
+    return payload
+
+
+def _formula_environment_information_definition_material_changed(
+    report: DiffReport,
+) -> bool:
+    """Return whether a native environment-information definition changed."""
+    return (
+        report.before.formula_environment_information_calls.definition_signature
+        != report.after.formula_environment_information_calls.definition_signature
+    )
+
+
+def _redact_formula_environment_information_defined_name_details(
+    details: dict[str, Any], report: DiffReport
+) -> None:
+    """Hide FF008 evidence when a resolved native name chain changed.
+
+    A named LAMBDA can pass a private information code or reference through an
+    ordinary-looking dotted wrapper whose eventual body calls CELL, INFO, SHEET,
+    or SHEETS. Its own text cannot be classified without FormulaFence's private
+    fixed-point resolution. When that definition signature changes, replacing
+    every changed defined-name body is the safe sharing boundary.
+    """
+    if not _formula_environment_information_definition_material_changed(report):
+        return
+    for field in ("before", "after"):
+        if isinstance(details.get(field), str):
+            details[field] = FORMULA_ENVIRONMENT_INFORMATION_REDACTION
+
+
+def _redact_formula_environment_information_defined_name_evidence(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide resolved native environment-information name-chain evidence."""
+    if not _formula_environment_information_definition_material_changed(report):
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("kind") == "defined_name_changed":
+            details = change.get("details")
+            if isinstance(details, dict):
+                _redact_formula_environment_information_defined_name_details(
+                    details, report
+                )
+    for finding in payload.get("findings", []):
+        if finding.get("rule_id") != "FF008":
+            continue
+        details = finding.get("details")
+        if isinstance(details, dict):
+            _redact_formula_environment_information_defined_name_details(
+                details, report
+            )
+    return payload
+
+
+def redact_formula_environment_information_report_payload(
+    report: DiffReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Redact native environment calls and private static/name-chain evidence."""
+    redacted = redact_formula_environment_information_material(payload)
+    _redact_formula_environment_information_change_cells(redacted, report)
+    return _redact_formula_environment_information_defined_name_evidence(
+        redacted, report
+    )
+
+
+def redact_formula_environment_information_portfolio_payload(
+    report: PortfolioReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply the native environment sharing boundary to nested reports."""
+    redacted = redact_formula_environment_information_material(payload)
+    for workbook, entry in zip(
+        report.workbooks, redacted.get("workbooks", []), strict=False
+    ):
+        if workbook.report is not None and isinstance(entry, dict):
+            _redact_formula_environment_information_change_cells(
+                entry, workbook.report
+            )
+            _redact_formula_environment_information_defined_name_evidence(
                 entry, workbook.report
             )
     return redacted
@@ -5101,6 +5282,7 @@ def report_to_markdown(
     redact_formula_defined_xlm_actions: bool = False,
     redact_formula_defined_xlm_get_cell_calls: bool = False,
     redact_formula_defined_xlm_environment_information_calls: bool = False,
+    redact_formula_environment_information: bool = False,
 ) -> str:
     policy_findings = list(extra_findings)
     payload = report.to_dict(policy_findings)
@@ -5134,6 +5316,8 @@ def report_to_markdown(
         payload = redact_formula_defined_xlm_environment_information_report_payload(
             report, payload
         )
+    if redact_formula_environment_information:
+        payload = redact_formula_environment_information_report_payload(report, payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence change report",
@@ -5207,6 +5391,11 @@ def report_to_markdown(
             if redact_formula_defined_xlm_environment_information_calls
             else []
         ),
+        *(
+            ["- **Formula environment-information material:** redacted for sharing"]
+            if redact_formula_environment_information
+            else []
+        ),
         f"- **Changes:** {summary['change_count']}",
         f"- **Findings:** {summary['finding_count']}",
         f"- **Highest severity:** `{summary['highest_severity']}`",
@@ -5240,6 +5429,7 @@ def report_to_sarif(
     redact_formula_defined_xlm_actions: bool = False,
     redact_formula_defined_xlm_get_cell_calls: bool = False,
     redact_formula_defined_xlm_environment_information_calls: bool = False,
+    redact_formula_environment_information: bool = False,
 ) -> dict[str, Any]:
     findings = [*report.findings, *extra_findings]
     rule_ids = sorted({finding.rule_id for finding in findings})
@@ -5275,6 +5465,7 @@ def report_to_sarif(
             redact_formula_defined_xlm_environment_information_calls=(
                 redact_formula_defined_xlm_environment_information_calls
             ),
+            redact_formula_environment_information=redact_formula_environment_information,
         )
         result: dict[str, Any] = {
             "ruleId": finding.rule_id,
@@ -5336,6 +5527,8 @@ def report_to_sarif(
         payload = redact_formula_defined_xlm_get_cell_material(payload)
     if redact_formula_defined_xlm_environment_information_calls:
         payload = redact_formula_defined_xlm_environment_information_material(payload)
+    if redact_formula_environment_information:
+        payload = redact_formula_environment_information_material(payload)
     return payload
 
 
@@ -5391,6 +5584,7 @@ def portfolio_to_markdown(
     redact_formula_defined_xlm_actions: bool = False,
     redact_formula_defined_xlm_get_cell_calls: bool = False,
     redact_formula_defined_xlm_environment_information_calls: bool = False,
+    redact_formula_environment_information: bool = False,
 ) -> str:
     """Render a complete multi-workbook review without absolute filesystem paths."""
     payload = report.to_dict()
@@ -5424,6 +5618,10 @@ def portfolio_to_markdown(
         )
     if redact_formula_defined_xlm_environment_information_calls:
         payload = redact_formula_defined_xlm_environment_information_portfolio_payload(
+            report, payload
+        )
+    if redact_formula_environment_information:
+        payload = redact_formula_environment_information_portfolio_payload(
             report, payload
         )
     summary = payload["summary"]
@@ -5519,6 +5717,11 @@ def portfolio_to_markdown(
             if redact_formula_defined_xlm_environment_information_calls
             else []
         ),
+        *(
+            ["- **Formula environment-information material:** redacted for sharing"]
+            if redact_formula_environment_information
+            else []
+        ),
         "",
         (
             "Relative workbook paths are the comparison identity. A move is deliberately "
@@ -5580,6 +5783,7 @@ def portfolio_to_sarif(
     redact_formula_defined_xlm_actions: bool = False,
     redact_formula_defined_xlm_get_cell_calls: bool = False,
     redact_formula_defined_xlm_environment_information_calls: bool = False,
+    redact_formula_environment_information: bool = False,
 ) -> dict[str, Any]:
     """Render every portfolio finding in one SARIF run with relative artifacts."""
     rule_ids = sorted(
@@ -5621,6 +5825,9 @@ def portfolio_to_sarif(
                 ),
                 redact_formula_defined_xlm_environment_information_calls=(
                     redact_formula_defined_xlm_environment_information_calls
+                ),
+                redact_formula_environment_information=(
+                    redact_formula_environment_information
                 ),
             )
             location: dict[str, Any] = {
@@ -5685,4 +5892,6 @@ def portfolio_to_sarif(
         payload = redact_formula_defined_xlm_get_cell_material(payload)
     if redact_formula_defined_xlm_environment_information_calls:
         payload = redact_formula_defined_xlm_environment_information_material(payload)
+    if redact_formula_environment_information:
+        payload = redact_formula_environment_information_material(payload)
     return payload

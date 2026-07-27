@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.108.0/formulafence-0.108.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.109.0/formulafence-0.109.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.108.0
+  uses: SybilGambleyyu/formulafence@v0.109.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1244,6 +1244,18 @@ reference. A malformed or unavailable tab catalog remains a parser coverage
 warning. The no_formula_environment_information_changes rule blocks material
 call, definition, invocation, statically visible input, and applicable tab-
 catalog changes in CI.
+
+The ordinary semantic diff deliberately retains full local reviewer evidence.
+For an artifact that leaves that boundary, add
+`--redact-formula-environment-information` to `diff`, `check`, or `portfolio`.
+The output-only mode replaces direct stored `CELL`, `INFO`, `SHEET`, and
+`SHEETS` material, exact changed static inputs, and changed resolved
+formula-defined-name-chain evidence with
+`[formula environment-information material redacted]`; it preserves comparison
+facts, policy results, and exit status. It does not evaluate a formula or
+information call, determine an information type, resolve a dynamic reference,
+infer a selected cell, simulate workbook/client/workspace state, or reconstruct
+a runtime value, and is not a general secret scrubber.
 
 FormulaFence separately inventories **Excel 4.0 / XLM macro sheets**. Unlike
 VBA, this executable automation is stored in raw macro-sheet XML parts (usually

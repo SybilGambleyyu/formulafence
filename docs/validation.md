@@ -5,6 +5,57 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared native environment-information report redaction — 2026-07-26
+
+FormulaFence 0.109.0 adds the separate, opt-in
+`--redact-formula-environment-information` rendering boundary for generic
+reports. It is deliberately separate from the count-only `FF072` ledger and
+from external-workbook-link, formula-action, Python-in-Excel, Office
+custom-function, unqualified-runtime-function, worksheet-code-resource
+registration, formula-defined XLM registration, evaluation, action, GET.CELL,
+and environment-information redaction modes. Default local-review output
+remains unchanged. When enabled, JSON, Markdown, and SARIF hide direct stored
+native `CELL`, `INFO`, `SHEET`, and `SHEETS` material and exact changed static
+input evidence the private dependency analysis recorded as reaching an
+inventoried call. A formula-defined-name body can pass a private information
+code or reference through a dotted workbook-defined wrapper to a native call
+deeper in the chain, so FormulaFence privately compares the resolved definition
+chain and conservatively hides changed defined-name before/after evidence when
+that signature changes.
+
+Microsoft's [CELL function
+documentation](https://support.microsoft.com/en-us/office/cell-function-51bd39a5-f338-4dbe-a33f-955d67c2b2cf)
+documents file, location, formatting, and content information, while its
+[INFO function documentation](https://support.microsoft.com/en-au/office/info-function-725f259a-0e4b-49b3-8b52-58815c69acae)
+lists operating-environment data. The [SHEET function
+documentation](https://support.microsoft.com/en-us/excel/functions/sheet-function)
+and [SHEETS function
+documentation](https://support.microsoft.com/en-us/excel/functions/sheets-function)
+cover tab-number/count behavior. Those documented stored calls explain why
+generic report evidence can disclose private material without proving that a
+call will calculate or what information Excel would return. FormulaFence does
+not calculate a formula or information call, determine an information type,
+resolve a dynamic reference, infer a selected cell, simulate workbook/client/
+workspace state, or reconstruct a runtime value. Its existing raw-tab-catalog
+comparison semantics for stored `SHEET` and omitted-reference `SHEETS` calls
+remain unchanged.
+
+Focused fixtures cover a direct stored native call plus a changed static input,
+an input whose native-call consumer falls beyond the report's bounded impact
+sample, and a dotted named wrapper whose private reference can only be
+associated with a native call through the private fixed-point definition
+analysis. The redacted JSON, Markdown, SARIF, policy, portfolio, and
+composite-Action contracts retain `FF072` / `FFP072` and their exit behavior
+while omitting controlled information-code, reference, input, and nested-name
+markers. The final source tree passed **701 tests in 101.90 seconds**, plus a
+clean Ruff check, `git diff --check`, and shell syntax check for the composite
+Action. A wheel built from the release candidate passed `twine check`, was
+installed with its declared dependencies into a fresh environment, reported
+`FormulaFence 0.109.0`, retained controlled environment/input markers in
+default JSON, removed them from redacted JSON/Markdown/SARIF/policy/portfolio
+output, and still returned `1` with `FF072` and `FFP072` for the redacted policy
+check. Final artifact digests are published with the GitHub release.
+
 ## Shared formula-defined XLM environment-information report redaction — 2026-07-26
 
 FormulaFence 0.108.0 adds the separate, opt-in

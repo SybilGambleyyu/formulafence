@@ -21,6 +21,7 @@ from formulafence.output import (
     FORMULA_DEFINED_XLM_EVALUATION_REDACTION,
     FORMULA_DEFINED_XLM_GET_CELL_REDACTION,
     FORMULA_DEFINED_XLM_REGISTRATION_REDACTION,
+    FORMULA_ENVIRONMENT_INFORMATION_REDACTION,
     FORMULA_EXTERNAL_ACTION_REDACTION,
     OFFICE_CUSTOM_FUNCTION_REDACTION,
     PYTHON_IN_EXCEL_REDACTION,
@@ -38,6 +39,8 @@ from formulafence.output import (
     redact_formula_defined_xlm_get_cell_report_payload,
     redact_formula_defined_xlm_registration_material,
     redact_formula_defined_xlm_registration_report_payload,
+    redact_formula_environment_information_material,
+    redact_formula_environment_information_report_payload,
     redact_formula_external_action_material,
     redact_formula_external_action_report_payload,
     redact_office_custom_function_material,
@@ -6836,6 +6839,186 @@ def test_native_environment_information_static_inputs_are_guarded(tmp_path) -> N
         == 1
     )
     assert "FF072" in {finding.rule_id for finding in report.findings}
+    assert report.formula_environment_information_static_input_cells == frozenset(
+        {("Inputs", "A9")}
+    )
+
+
+def test_native_environment_information_report_redaction_hides_calls_and_inputs(
+    tmp_path,
+) -> None:
+    baseline = make_formula_environment_information_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_environment_information_model(tmp_path / "candidate.xlsx")
+    change_formula_environment_information_input(candidate)
+    change_formula_environment_information_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    sensitive_values = (
+        "PRIVATE-NATIVE-ENVIRONMENT-INPUT-BASELINE",
+        "PRIVATE-NATIVE-ENVIRONMENT-INPUT-CANDIDATE",
+        "system",
+        "osversion",
+    )
+    raw_rendered = json.dumps(raw_payload)
+    assert all(value in raw_rendered for value in sensitive_values)
+
+    redacted_payload = redact_formula_environment_information_report_payload(
+        report, raw_payload
+    )
+    redacted_rendered = json.dumps(redacted_payload)
+    assert all(value not in redacted_rendered for value in sensitive_values)
+    assert FORMULA_ENVIRONMENT_INFORMATION_REDACTION in redacted_rendered
+    assert redacted_payload["summary"] == raw_payload["summary"]
+
+    redacted_markdown = report_to_markdown(
+        report, redact_formula_environment_information=True
+    )
+    redacted_sarif = report_to_sarif(
+        report, redact_formula_environment_information=True
+    )
+    assert (
+        "Formula environment-information material:** redacted for sharing"
+        in redacted_markdown
+    )
+    assert "FF072" in json.dumps(redacted_sarif)
+    for artifact in (redacted_markdown, json.dumps(redacted_sarif)):
+        assert all(value not in artifact for value in sensitive_values)
+
+    for environment_formula in (
+        '=CELL("filename")',
+        '=INFO("directory")',
+        '=SHEET("Private tab")',
+        "=SHEETS()",
+    ):
+        assert (
+            redact_formula_environment_information_material(environment_formula)
+            == FORMULA_ENVIRONMENT_INFORMATION_REDACTION
+        )
+    ordinary_formula = "=SUM(A1:A2)"
+    assert redact_formula_environment_information_material(ordinary_formula) == ordinary_formula
+
+
+def test_native_environment_information_report_redaction_hides_unsampled_inputs(
+    tmp_path,
+) -> None:
+    """Native-call input redaction must use full private impact evidence."""
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    baseline_marker = "PRIVATE-UNSAMPLED-NATIVE-ENVIRONMENT-BASELINE"
+    candidate_marker = "PRIVATE-UNSAMPLED-NATIVE-ENVIRONMENT-CANDIDATE"
+
+    def add_environment_fanout(workbook, marker: str) -> None:
+        inputs = workbook["Inputs"]
+        inputs["A9"] = marker
+        for column in range(2, 22):
+            inputs.cell(row=1, column=column).value = "=A9"
+        inputs["Z1"] = "=FENCE.NATIVE.UNSAMPLED.ENVIRONMENT(A9)"
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.NATIVE.UNSAMPLED.ENVIRONMENT",
+                attr_text='=LAMBDA(value,CELL("filename",value))',
+            )
+        )
+
+    rewrite(baseline, lambda workbook: add_environment_fanout(workbook, baseline_marker))
+    rewrite(candidate, lambda workbook: add_environment_fanout(workbook, candidate_marker))
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    input_change = next(
+        change for change in raw_payload["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert "Inputs!Z1" not in input_change["impacted_cells"]
+    assert report.formula_environment_information_static_input_cells == frozenset(
+        {("Inputs", "A9")}
+    )
+
+    redacted = redact_formula_environment_information_report_payload(report, raw_payload)
+    redacted_change = next(
+        change for change in redacted["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert (
+        redacted_change["before"]["value"]
+        == FORMULA_ENVIRONMENT_INFORMATION_REDACTION
+    )
+    assert (
+        redacted_change["after"]["value"]
+        == FORMULA_ENVIRONMENT_INFORMATION_REDACTION
+    )
+    rendered = json.dumps(redacted)
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+
+
+def test_native_environment_information_report_redaction_hides_indirect_names(
+    tmp_path,
+) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+
+    def add_environment_chain(workbook, marker: str) -> None:
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.NATIVE.ENVIRONMENTWRAPPER",
+                attr_text='=LAMBDA(value,CELL("filename",value))',
+            )
+        )
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.NATIVE.ENVIRONMENTCHAIN",
+                attr_text=(
+                    f'=LAMBDA(value,FENCE.NATIVE.ENVIRONMENTWRAPPER("{marker}"))'
+                ),
+            )
+        )
+
+    baseline_marker = "PRIVATE-INDIRECT-NATIVE-ENVIRONMENT-BASELINE"
+    candidate_marker = "PRIVATE-INDIRECT-NATIVE-ENVIRONMENT-CANDIDATE"
+    rewrite(baseline, lambda workbook: add_environment_chain(workbook, baseline_marker))
+    rewrite(candidate, lambda workbook: add_environment_chain(workbook, candidate_marker))
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    environment_change = next(
+        change
+        for change in report.changes
+        if change.kind == "formula_environment_information_calls_changed"
+    )
+    assert (
+        environment_change.details[
+            "formula_environment_information_definition_material_changed"
+        ]
+        is True
+    )
+    ordinary_looking_definition = (
+        f'=LAMBDA(value,FENCE.NATIVE.ENVIRONMENTWRAPPER("{baseline_marker}"))'
+    )
+    assert (
+        redact_formula_environment_information_material(ordinary_looking_definition)
+        == ordinary_looking_definition
+    )
+
+    raw_payload = report.to_dict()
+    raw_rendered = json.dumps(raw_payload)
+    assert baseline_marker in raw_rendered
+    assert candidate_marker in raw_rendered
+
+    redacted_payload = redact_formula_environment_information_report_payload(
+        report, raw_payload
+    )
+    redacted_rendered = json.dumps(redacted_payload)
+    assert baseline_marker not in redacted_rendered
+    assert candidate_marker not in redacted_rendered
+    assert FORMULA_ENVIRONMENT_INFORMATION_REDACTION in redacted_rendered
+
+    redacted_sarif = report_to_sarif(
+        report, redact_formula_environment_information=True
+    )
+    redacted_sarif_rendered = json.dumps(redacted_sarif)
+    assert baseline_marker not in redacted_sarif_rendered
+    assert candidate_marker not in redacted_sarif_rendered
+    assert "FF008" in redacted_sarif_rendered
+    assert "FF072" in redacted_sarif_rendered
 
 
 def test_native_environment_information_state_is_not_simulated(tmp_path) -> None:

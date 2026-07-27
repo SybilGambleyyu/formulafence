@@ -934,7 +934,11 @@ formula will produce.
   a dynamic argument, infer a selected cell, calculate a result, or simulate
   file/folder/client/workspace/workbook state. Explicit SHEETS references are
   not guessed as one-sheet versus 3-D; dynamic/unresolved inputs and incomplete
-  tab catalogs remain explicit static-coverage limits.
+  tab catalogs remain explicit static-coverage limits. The separate
+  `--redact-formula-environment-information` shared-artifact mode hides direct
+  stored native-call material, exact changed static inputs, and changed private
+  name-chain evidence after comparison and policy evaluation without evaluating
+  a call, simulating Excel state, or changing any comparison fact.
 - Office 2010 worksheet sparklines live in `x14:sparklineGroups` worksheet
   extensions, outside ordinary cell values. A group can be retargeted, moved,
   or have its type, axes, display, marker, line-weight, or colour controls

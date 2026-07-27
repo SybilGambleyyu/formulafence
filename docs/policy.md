@@ -774,6 +774,16 @@ whether a non-omitted SHEETS reference is one-sheet or 3-D; visibility-only
 changes are not a tab-catalog condition because Excel includes hidden tabs.
 Incomplete raw tab metadata remains a parser coverage warning.
 
+The ordinary semantic diff retains local-review formula and defined-name
+evidence. For a shared artifact, the separate output-only
+`--redact-formula-environment-information` mode hides direct stored `CELL`,
+`INFO`, `SHEET`, and `SHEETS` material, exact changed static inputs, and
+changed private resolved name-chain evidence without changing comparison,
+policy evaluation, or exit status. It does not evaluate a formula or
+information call, determine an information type, resolve a dynamic reference,
+infer a selected cell, simulate workbook/client/workspace state, or reconstruct
+a runtime value.
+
 Excel 4.0 / XLM macro sheets are separate from the VBA binary: their executable
 commands live in Macro Sheet XML package parts, typically under
 `xl/macrosheets/`. FormulaFence reads those parts before the workbook library

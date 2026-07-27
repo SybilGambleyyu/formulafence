@@ -43,6 +43,7 @@ def _run_action_script(
     redact_formula_defined_xlm_actions: str = "false",
     redact_formula_defined_xlm_get_cell_calls: str = "false",
     redact_formula_defined_xlm_environment_information_calls: str = "false",
+    redact_formula_environment_information: str = "false",
     max_workbooks: str = "512",
     max_link_impact: str = "100000",
     upload_artifact: str = "true",
@@ -93,6 +94,9 @@ def _run_action_script(
             "INPUT_REDACT_FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_CALLS": (
                 redact_formula_defined_xlm_environment_information_calls
             ),
+            "INPUT_REDACT_FORMULA_ENVIRONMENT_INFORMATION": (
+                redact_formula_environment_information
+            ),
             "INPUT_FAIL_ON": "none",
             "INPUT_MAX_WORKBOOKS": max_workbooks,
             "INPUT_MAX_LINK_IMPACT": max_link_impact,
@@ -134,6 +138,7 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
         "redact-formula-defined-xlm-actions",
         "redact-formula-defined-xlm-get-cell-calls",
         "redact-formula-defined-xlm-environment-information-calls",
+        "redact-formula-environment-information",
         "max-workbooks",
         "max-link-impact",
     } <= set(action["inputs"])
@@ -834,6 +839,72 @@ def test_action_rejects_an_invalid_formula_defined_xlm_environment_information_s
         "Unsupported redact-formula-defined-xlm-environment-information-calls value"
         in result.stderr
     )
+
+
+def test_action_can_redact_formula_environment_information_material(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    baseline_marker = "PRIVATE-ACTION-NATIVE-ENVIRONMENT-BASELINE"
+    candidate_marker = "PRIVATE-ACTION-NATIVE-ENVIRONMENT-CANDIDATE"
+    baseline_reference = "PRIVATE-ACTION-NATIVE-ENVIRONMENT-REFERENCE-BASELINE"
+    candidate_reference = "PRIVATE-ACTION-NATIVE-ENVIRONMENT-REFERENCE-CANDIDATE"
+
+    def native_environment_workbook(path: Path, payload: str, reference: str) -> None:
+        workbook = Workbook()
+        workbook.active.title = "Inputs"
+        workbook.active["A9"] = payload
+        workbook.active["B2"] = "=FENCE.NATIVE.ENVIRONMENT(A9)"
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.NATIVE.ENVIRONMENT",
+                attr_text=(
+                    f'=LAMBDA(value,CELL("filename",value&"{reference}"))'
+                ),
+            )
+        )
+        workbook.save(path)
+
+    native_environment_workbook(baseline, baseline_marker, baseline_reference)
+    native_environment_workbook(candidate, candidate_marker, candidate_reference)
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        report_format="json",
+        output="reports/formulafence.json",
+        redact_formula_environment_information="true",
+    )
+
+    assert result.returncode == 0
+    rendered = (tmp_path / "reports" / "formulafence.json").read_text(encoding="utf-8")
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+    assert baseline_reference not in rendered
+    assert candidate_reference not in rendered
+    assert "formula environment-information material redacted" in rendered
+    assert "FF072" in rendered
+
+
+def test_action_rejects_an_invalid_formula_environment_information_switch(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    _workbook(baseline, "=1+1")
+    _workbook(candidate, "=1+1")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        redact_formula_environment_information="sometimes",
+    )
+
+    assert result.returncode == 2
+    assert "Unsupported redact-formula-environment-information value" in result.stderr
 
 
 def test_action_runs_a_directory_portfolio_and_preserves_membership_evidence(

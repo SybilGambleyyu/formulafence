@@ -190,10 +190,12 @@ _OOXML_READER_MAX_COLUMN_DIMENSION_COUNT = MAX_EXCEL_COLUMN
 # ``openpyxl`` turns every direct ``brk`` child of a transitional ``rowBreaks``
 # or ``colBreaks`` container into a page-break record, while FormulaFence's raw
 # print-layout scanner retains every direct child as either a break or coverage
-# evidence. Excel permits 1,026 horizontal and 1,026 vertical page breaks.
-# Preserve one worksheet's complete published allowance, but bound the
-# aggregate reader/raw-scanner catalog and separately prevent a compact stream
-# of empty direct containers from becoming an unbounded XML tree.
+# evidence. Its legacy Custom View scanner does the same for equivalent direct
+# children below supported ``customSheetViews`` declarations, and hashes opaque
+# namespace variants there. Excel permits 1,026 horizontal and 1,026 vertical
+# page breaks. Preserve one worksheet's complete published allowance, but bound
+# the aggregate reader/raw-scanner catalog and separately prevent a compact
+# stream of empty direct containers from becoming an unbounded XML tree.
 _OOXML_READER_MAX_PAGE_BREAK_CONTAINER_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_PAGE_BREAK_DECLARATION_COUNT = 2 * 1_026
 # The manifest and workbook relationship catalog are materialized before any
@@ -3436,6 +3438,7 @@ def _validate_ooxml_semantic_reader_resources(
     column_tags = _spreadsheetml_tags("col")
     column_container_tags = _spreadsheetml_tags("cols")
     page_break_container_tags = _spreadsheetml_tags("rowBreaks", "colBreaks")
+    custom_sheet_view_container_tags = _spreadsheetml_tags("customSheetViews")
     worksheet_tags = _spreadsheetml_tags("worksheet")
     formula_tags = _spreadsheetml_tags("f")
     inline_string_tags = _spreadsheetml_tags("is")
@@ -3612,6 +3615,7 @@ def _validate_ooxml_semantic_reader_resources(
         tags: list[str],
     ) -> None:
         nonlocal custom_sheet_view_count
+        custom_sheet_view_page_break_end(element, tags)
         # FormulaFence's legacy Custom View scanner examines every direct child
         # of a sheet-level ``customSheetViews`` container, including an unknown
         # namespace child it will retain as opaque evidence. Count that same
@@ -3624,6 +3628,52 @@ def _validate_ooxml_semantic_reader_resources(
             raise _reader_preflight_error(
                 "custom sheet-view declarations exceed the semantic-reader safety limit."
             )
+
+    def custom_sheet_view_page_break_end(
+        element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        """Bound direct page-break catalogs the raw Custom View scanner retains."""
+        nonlocal page_break_container_count
+        nonlocal page_break_declaration_count
+
+        # The Custom View scanner accepts either SpreadsheetML namespace for a
+        # direct ``customSheetViews`` container, then handles every direct
+        # ``customSheetView`` child. A standard view parses its direct page
+        # break containers structurally; an alternate-namespace view or nested
+        # break container is retained through the generic opaque signature path.
+        # Count both forms by local name so neither can make that raw scanner
+        # allocate an unbounded record or subtree catalog.
+        if (
+            len(tags) == 4
+            and tags[-3] in custom_sheet_view_container_tags
+            and _xml_local_name(tags[-2]) == "customSheetView"
+            and _xml_local_name(element.tag) in {"rowBreaks", "colBreaks"}
+        ):
+            page_break_container_count += 1
+            if (
+                page_break_container_count
+                > _OOXML_READER_MAX_PAGE_BREAK_CONTAINER_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "page-break containers exceed the semantic-reader safety limit."
+                )
+            return
+
+        if (
+            len(tags) == 5
+            and tags[-4] in custom_sheet_view_container_tags
+            and _xml_local_name(tags[-3]) == "customSheetView"
+            and _xml_local_name(tags[-2]) in {"rowBreaks", "colBreaks"}
+        ):
+            page_break_declaration_count += 1
+            if (
+                page_break_declaration_count
+                > _OOXML_READER_MAX_PAGE_BREAK_DECLARATION_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "page-break declarations exceed the semantic-reader safety limit."
+                )
 
     def merged_cell_end(
         element: ElementTree.Element,

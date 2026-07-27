@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.124.0 — 2026-07-26
+
+- Extend the existing page-break preflight budget into legacy Excel Custom
+  Views before FormulaFence's raw Custom View scanner can materialize break
+  signatures or opaque subtree evidence. The 4,096-container and 2,052-direct-
+  child budgets now aggregate ordinary worksheet and supported Custom View
+  paths.
+- Count direct `rowBreaks`/`colBreaks` beneath a supported
+  `customSheetViews` container by local name, including Strict SpreadsheetML,
+  alternate-namespace `customSheetView` or break-container paths, and every
+  direct child that the scanner must preserve.
+- Add fail-before-reader coverage for configured/default limits, aggregation
+  with ordinary worksheet breaks, exact configured limits, Strict Custom Views,
+  opaque namespace paths, and fragmented Custom View break containers.
+
 ## 0.123.0 — 2026-07-26
 
 - Bound direct worksheet page-break catalogs before FormulaFence's raw

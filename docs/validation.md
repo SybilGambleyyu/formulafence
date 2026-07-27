@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Legacy Custom View page-break catalog bounds — 2026-07-26
+
+Version 0.124.0 closes the equivalent allocation paths inside legacy Excel
+Custom Views. Version 0.123.0 bounded direct worksheet
+`<rowBreaks>`/`<colBreaks>` catalogs, but FormulaFence's separate Custom View
+scanner also parses direct break containers beneath a supported
+`<customSheetViews>/<customSheetView>` hierarchy. It constructs break
+signatures for standard and Strict SpreadsheetML views, and hashes the same
+subtrees when an alternate-namespace view or break container must be retained
+as opaque coverage evidence. That left a small valid workbook able to bypass
+the ordinary worksheet break counter without a populated cell.
+
+The semantic-reader preflight now shares its 2,052-direct-child and
+4,096-container aggregate budgets with that supported Custom View path. It
+recognizes transitional and Strict `<customSheetViews>` containers, then counts
+the local `customSheetView`, `rowBreaks`, and `colBreaks` shapes the raw scanner
+will handle. Every direct break-container child consumes the record budget,
+including unexpected names and alternate namespaces. This is deliberately
+scoped to the raw scanner's supported container hierarchy; a foreign
+`customSheetViews` container remains outside that scanner path.
+
+Independent raw-ZIP fixtures measured the exact 0.123.0 wheel and the 0.124.0
+source candidate in the same fresh Python 3.12 environment. A 19,396-byte
+workbook with 100,000 Custom View row-break records (4,501,791 bytes of sheet
+XML) loaded through 0.123.0 in 9.043 seconds at 109,628 KiB resident; the
+candidate rejects it in 0.012 seconds at 33,272 KiB. A 9,138-byte workbook with
+100,000 empty Custom View row-break containers (1,501,764 bytes of sheet XML)
+loaded in 3.981 seconds at 74,332 KiB and now rejects in 0.023 seconds at
+33,852 KiB. Focused standard, Strict, opaque-path, aggregation, and exact-limit
+regressions passed alongside the completed source suite: **869 tests in 121.67
+seconds**.
+
 ## Worksheet page-break catalog bounds — 2026-07-26
 
 Version 0.123.0 closes two compact allocation paths in worksheet print

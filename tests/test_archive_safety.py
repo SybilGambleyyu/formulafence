@@ -18,9 +18,11 @@ from formulafence.models import WorkbookLoadError
 from formulafence.workbook import load_snapshot
 
 from .helpers import (
+    make_custom_workbook_view_model,
     make_external_data_refresh_model,
     make_external_link_package_model,
     make_model,
+    make_strict_custom_workbook_view_model,
     make_strict_worksheet_print_layout_model,
 )
 
@@ -465,6 +467,130 @@ def _append_page_break_containers(
             root,
             ElementTree.Element(qualified_container_name),
         )
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _custom_sheet_view_page_break_target(
+    root: ElementTree.Element,
+    *,
+    custom_sheet_view_namespace: str | None,
+) -> tuple[str, ElementTree.Element]:
+    """Return one fixture Custom View, optionally through an opaque child path."""
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    container = next(
+        (
+            child
+            for child in root
+            if child.tag.rsplit("}", maxsplit=1)[-1] == "customSheetViews"
+        ),
+        None,
+    )
+    if container is None:
+        raise ValueError("Could not locate the Custom View fixture container")
+    if custom_sheet_view_namespace is not None:
+        view = ElementTree.Element(
+            f"{{{custom_sheet_view_namespace}}}customSheetView",
+            {"guid": "{11111111-1111-1111-1111-111111111111}"},
+        )
+        container.append(view)
+        return namespace, view
+    view = next(
+        (
+            child
+            for child in reversed(list(container))
+            if child.tag.rsplit("}", maxsplit=1)[-1] == "customSheetView"
+        ),
+        None,
+    )
+    if view is None:
+        raise ValueError("Could not locate the Custom View fixture declaration")
+    return namespace, view
+
+
+def _append_custom_sheet_view_page_break_declarations(
+    path: Path,
+    count: int,
+    *,
+    axis: str = "row",
+    member_name: str = "xl/worksheets/sheet1.xml",
+    child_name: str = "brk",
+    custom_sheet_view_namespace: str | None = None,
+    break_container_namespace: str | None = None,
+    break_child_namespace: str | None = None,
+) -> None:
+    """Append direct Custom View break records without a workbook reader."""
+    container_name = {"row": "rowBreaks", "column": "colBreaks"}.get(axis)
+    if container_name is None:
+        raise ValueError(f"Unsupported page-break axis {axis!r}")
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    root = ElementTree.fromstring(worksheet)
+    namespace, view = _custom_sheet_view_page_break_target(
+        root,
+        custom_sheet_view_namespace=custom_sheet_view_namespace,
+    )
+    container_namespace = break_container_namespace or namespace
+    child_namespace = break_child_namespace or container_namespace
+    qualified_container_name = (
+        f"{{{container_namespace}}}{container_name}"
+        if container_namespace
+        else container_name
+    )
+    qualified_child_name = (
+        f"{{{child_namespace}}}{child_name}" if child_namespace else child_name
+    )
+    container = next(
+        (child for child in view if child.tag == qualified_container_name),
+        None,
+    )
+    if container is None:
+        container = ElementTree.Element(qualified_container_name)
+        view.append(container)
+    for _ in range(count):
+        ElementTree.SubElement(
+            container,
+            qualified_child_name,
+            {"id": "10", "min": "0", "max": "16383", "man": "1"},
+        )
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _append_custom_sheet_view_page_break_containers(
+    path: Path,
+    count: int,
+    *,
+    axis: str = "row",
+    member_name: str = "xl/worksheets/sheet1.xml",
+    custom_sheet_view_namespace: str | None = None,
+    break_container_namespace: str | None = None,
+) -> None:
+    """Append Custom View break containers without a workbook reader."""
+    container_name = {"row": "rowBreaks", "column": "colBreaks"}.get(axis)
+    if container_name is None:
+        raise ValueError(f"Unsupported page-break axis {axis!r}")
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    root = ElementTree.fromstring(worksheet)
+    namespace, view = _custom_sheet_view_page_break_target(
+        root,
+        custom_sheet_view_namespace=custom_sheet_view_namespace,
+    )
+    container_namespace = break_container_namespace or namespace
+    qualified_container_name = (
+        f"{{{container_namespace}}}{container_name}"
+        if container_namespace
+        else container_name
+    )
+    for _ in range(count):
+        view.append(ElementTree.Element(qualified_container_name))
     _replace_member(
         path,
         member_name,
@@ -1409,6 +1535,153 @@ def test_semantic_reader_preflight_counts_strict_page_break_declarations_before_
     assert "page-break declarations" in message
 
 
+def test_semantic_reader_preflight_rejects_custom_view_page_break_declarations_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_custom_workbook_view_model(
+        tmp_path / "too-many-custom-view-page-break-declarations.xlsx"
+    )
+    _append_custom_sheet_view_page_break_declarations(workbook, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_PAGE_BREAK_DECLARATION_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "page-break declarations" in message
+
+
+def test_semantic_reader_preflight_accepts_custom_view_page_break_declarations_at_the_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_custom_workbook_view_model(
+        tmp_path / "custom-view-page-break-declarations-at-limit.xlsx"
+    )
+    _append_custom_sheet_view_page_break_declarations(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_PAGE_BREAK_DECLARATION_COUNT",
+        1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_rejects_default_custom_view_page_break_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_custom_workbook_view_model(
+        tmp_path / "default-custom-view-page-break-declaration-limit.xlsx"
+    )
+    _append_custom_sheet_view_page_break_declarations(
+        workbook,
+        workbook_module._OOXML_READER_MAX_PAGE_BREAK_DECLARATION_COUNT + 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "page-break declarations" in message
+
+
+def test_semantic_reader_preflight_aggregates_custom_view_and_ordinary_page_break_declarations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_custom_workbook_view_model(
+        tmp_path / "aggregate-custom-view-page-break-declarations.xlsx"
+    )
+    _append_page_break_declarations(workbook, 1)
+    _append_custom_sheet_view_page_break_declarations(workbook, 1, axis="column")
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_PAGE_BREAK_DECLARATION_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "page-break declarations" in message
+
+
+def test_semantic_reader_preflight_counts_strict_custom_view_breaks_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_strict_custom_workbook_view_model(
+        tmp_path / "strict-custom-view-page-break-declarations.xlsx"
+    )
+    _append_custom_sheet_view_page_break_declarations(workbook, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_PAGE_BREAK_DECLARATION_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "page-break declarations" in message
+
+
+@pytest.mark.parametrize(
+    (
+        "custom_sheet_view_namespace",
+        "break_container_namespace",
+        "child_name",
+        "break_child_namespace",
+    ),
+    (
+        (
+            "urn:formulafence:opaque-custom-view",
+            None,
+            "brk",
+            None,
+        ),
+        (
+            None,
+            "urn:formulafence:opaque-page-break-container",
+            "brk",
+            None,
+        ),
+        (None, None, "formulafenceAudit", None),
+    ),
+)
+def test_semantic_reader_preflight_counts_opaque_custom_view_page_break_children(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    custom_sheet_view_namespace: str | None,
+    break_container_namespace: str | None,
+    child_name: str,
+    break_child_namespace: str | None,
+) -> None:
+    workbook = make_custom_workbook_view_model(
+        tmp_path / "opaque-custom-view-page-break-child.xlsx"
+    )
+    _append_custom_sheet_view_page_break_declarations(
+        workbook,
+        1,
+        custom_sheet_view_namespace=custom_sheet_view_namespace,
+        break_container_namespace=break_container_namespace,
+        child_name=child_name,
+        break_child_namespace=break_child_namespace,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_PAGE_BREAK_DECLARATION_COUNT",
+        0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "page-break declarations" in message
+
+
 def test_semantic_reader_preflight_rejects_excessive_page_break_containers_before_scanners(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1495,6 +1768,44 @@ def test_semantic_reader_preflight_ignores_foreign_namespace_page_break_containe
         workbook_module,
         "_OOXML_READER_MAX_PAGE_BREAK_CONTAINER_COUNT",
         0,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_rejects_custom_view_page_break_containers_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_custom_workbook_view_model(
+        tmp_path / "too-many-custom-view-page-break-containers.xlsx"
+    )
+    _append_custom_sheet_view_page_break_containers(workbook, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_PAGE_BREAK_CONTAINER_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "page-break containers" in message
+
+
+def test_semantic_reader_preflight_accepts_custom_view_page_break_containers_at_the_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_custom_workbook_view_model(
+        tmp_path / "custom-view-page-break-containers-at-limit.xlsx"
+    )
+    _append_custom_sheet_view_page_break_containers(workbook, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_PAGE_BREAK_CONTAINER_COUNT",
+        2,
     )
 
     snapshot = load_snapshot(workbook)

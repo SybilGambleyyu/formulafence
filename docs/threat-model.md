@@ -501,8 +501,11 @@ formula will produce.
   trail outside ordinary cells: prior/new values, locations, authors,
   timestamps, comments, formatting records, conflict-resolution material, and
   shared/tracking/retention/protection controls. FormulaFence follows the
-  workbook-to-header and header-to-log relationships, fingerprints complete
-  bounded raw declarations privately, and emits `FF062`; the
+  workbook-to-header and header-to-log relationships, and streams raw revision
+  XML before it privately canonicalizes complete bounded declarations. Each
+  revision XML part allows 32,768 elements and the complete scan allows 65,536,
+  alongside the existing 16 MiB per-part, 64 MiB aggregate, and 512-part
+  byte/count limits. A successfully streamed overage emits `FF010`/`FF062`; the
   `no_shared_workbook_revision_changes` rule can block it as `FFP062`. Profiles
   and `FF062` details expose only structural header/log parts and record counts,
   aggregate control counts, and unrecognized metadata—never historic values,
@@ -510,10 +513,11 @@ formula will produce.
   XML. Equivalent Boolean/integer spelling, coordinated relationship-ID
   rewrites, and transitional/Strict relationship type spelling normalize.
   Missing, duplicate, malformed, unsafe, unsupported, oversized, or
-  over-budget declarations remain visible coverage evidence. FormulaFence does
-  not apply revisions, reconstruct a historical state, resolve conflicts,
-  validate identity/timestamp claims, render Excel, or interpret arbitrary
-  future extensions.
+  over-budget declarations remain visible coverage evidence; a structural
+  overage retains a private streamed content fingerprint so same-size changes
+  remain diff-visible. FormulaFence does not apply revisions, reconstruct a
+  historical state, resolve conflicts, validate identity/timestamp claims,
+  render Excel, or interpret arbitrary future extensions.
 - Excel number formats can hide or materially reinterpret an unchanged stored
   value: `;;;` can display it as blank, while custom sections, scaling commas,
   dates, percentages, literals, and text placeholders can change the review

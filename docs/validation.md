@@ -5,6 +5,44 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Legacy shared-workbook revision XML structural bounds — 2026-07-26
+
+Version 0.139.0 closes a compact-allocation path in raw legacy
+shared-workbook revision history. FormulaFence already limited `revisionHeaders`
+and `revisionLog` parts to 16 MiB each, 64 MiB per scan, and 512 parts, but the
+private revision scanner parsed and recursively canonicalized each permitted
+XML tree. A highly repetitive history therefore could consume substantial CI
+memory despite a very small ZIP member.
+
+FormulaFence now streams every revision header, log, and relationship XML part
+before private parsing. Each part allows 32,768 elements and the complete
+revision scan allows 65,536. A successfully streamed overage becomes explicit
+`FF010` plus `FF062` coverage evidence; malformed input retains its established
+parser diagnostic. The fallback includes a private streamed SHA-256 content
+fingerprint, so same-size hostile revisions remain diff-visible without
+retaining history, identity, cell, or XML content. These are allocation
+boundaries, not shared-workbook validity rules.
+
+Two controlled fixtures inserted 1,000,000 direct valid records into the
+`revisionLog` and `revisionHeaders` roots. The log was 6,000,127 bytes,
+compressed to 8,879 bytes; the header was 9,000,123 bytes, compressed to
+17,605 bytes. In the same source environment, the unguarded 0.138.0 reader
+completed them in 4.211653 seconds / 449,600 KiB and 5.087386 seconds /
+454,444 KiB. The 0.139 source completed them in 0.158966 seconds / 41,268 KiB
+and 0.166300 seconds / 40,688 KiB without materializing either hostile tree.
+Normal baseline-to-baseline diffs had no findings or changes; each hostile
+baseline comparison produced `FF010`/`FF062`, a
+`shared_workbook_revisions_changed` record, and no exposed revision material.
+The source suite passed 1,005 tests in 143.94 seconds with Ruff, bytecode
+compilation, and diff whitespace checks clean.
+The exact final wheel completed the log and header fixtures in 0.204736 seconds
+/ 40,052 KiB and 0.247325 seconds / 40,164 KiB; its SHA-256 is
+`3e94b11538e31b5d3cea0614e9468a7634941602b466fa0aa4b8306357c6bfa4`.
+A fresh Python 3.12 environment installed that wheel, passed `pip check`,
+imported FormulaFence 0.139.0 from `site-packages`, confirmed
+`openpyxl.DEFUSEDXML`, produced no baseline findings, and emitted only the
+expected `FF010`/`FF062` pair for each hostile fixture.
+
 ## Power Query nested XML structural bounds — 2026-07-26
 
 Version 0.138.0 closes an allocation path inside Power Query `DataMashup`

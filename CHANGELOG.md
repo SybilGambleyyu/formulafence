@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.139.0 — 2026-07-26
+
+- Bound raw legacy shared-workbook `revisionHeaders` and `revisionLog` XML
+  before FormulaFence can materialize and recursively canonicalize its private
+  history records. Each revision XML part allows 32,768 elements and the
+  complete revision scan allows 65,536, alongside the existing 16 MiB per-part,
+  64 MiB aggregate, and 512-part byte/count limits.
+- Convert a successfully streamed structural overage into explicit `FF010` plus
+  `FF062` revision-history coverage evidence. The fallback retains a private
+  streamed content fingerprint, so same-size hostile history changes remain
+  diff-visible without exposing historic cells, identities, or XML.
+- Add header/log fail-before-materialization, nested opaque, exact/default,
+  aggregate, visibility, and same-size-fingerprint regressions.
+
 ## 0.138.0 — 2026-07-26
 
 - Bound the decoded metadata and formula-firewall permission XML embedded in

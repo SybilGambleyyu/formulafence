@@ -10195,6 +10195,66 @@ def _custom_data_store_xml_element_count(path, member: str) -> int:
     return sum(1 for _ in root.iter())
 
 
+_SHARED_WORKBOOK_REVISION_XML_MEMBERS = {
+    "header": "xl/revisions/revisionHeaders.xml",
+    "log": "xl/revisions/revisionLog1.xml",
+}
+
+
+def _shared_workbook_revision_xml_payload(path, kind: str) -> bytes:
+    """Return one raw revision XML payload from the synthetic workbook fixture."""
+    try:
+        member = _SHARED_WORKBOOK_REVISION_XML_MEMBERS[kind]
+    except KeyError as error:
+        raise ValueError(f"unknown shared-workbook revision XML kind: {kind}") from error
+    with ZipFile(path) as archive:
+        return archive.read(member)
+
+
+def _append_shared_workbook_revision_xml_elements(
+    path,
+    kind: str,
+    count: int,
+    *,
+    nested: bool = False,
+    entry_name: str | None = None,
+) -> None:
+    """Add raw revision XML entries without invoking FormulaFence's reader."""
+    try:
+        member = _SHARED_WORKBOOK_REVISION_XML_MEMBERS[kind]
+    except KeyError as error:
+        raise ValueError(f"unknown shared-workbook revision XML kind: {kind}") from error
+    staging = path.with_suffix(".shared-workbook-revision-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    namespace = root.tag[1:].partition("}")[0]
+    child_name = entry_name or ("header" if kind == "header" else "rcc")
+    for _ in range(count):
+        ElementTree.SubElement(parent, f"{{{namespace}}}{child_name}")
+    contents[member] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _shared_workbook_revision_xml_element_count(path, kind: str) -> int:
+    """Count one complete raw revision XML tree for exact budget tests."""
+    return sum(
+        1
+        for _ in ElementTree.fromstring(
+            _shared_workbook_revision_xml_payload(path, kind)
+        ).iter()
+    )
+
+
 def _power_query_mashup_fields(payload: bytes) -> tuple[int, list[bytes]]:
     """Unpack the four fixture-only Data Mashup binary fields."""
     version = struct.unpack_from("<I", payload, 0)[0]
@@ -19384,6 +19444,190 @@ def test_malformed_shared_workbook_revision_fails_closed_and_is_redacted(
         "PRIVATE-REVISION-CONTROL",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+@pytest.mark.parametrize("kind", ("header", "log"))
+def test_shared_workbook_revision_xml_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+    kind: str,
+) -> None:
+    workbook = make_shared_workbook_revision_model(tmp_path / "candidate.xlsx")
+    _append_shared_workbook_revision_xml_elements(
+        workbook,
+        kind,
+        8,
+        nested=True,
+    )
+    revision_xml = _shared_workbook_revision_xml_payload(workbook, kind)
+    monkeypatch.setattr(
+        workbook_module,
+        "_SHARED_WORKBOOK_REVISION_MAX_XML_ELEMENT_COUNT",
+        _shared_workbook_revision_xml_element_count(workbook, kind) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == revision_xml:
+            raise AssertionError(
+                "the over-budget shared-workbook revision XML tree was materialized"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.shared_workbook_revisions.unrecognized_shared_workbook_revision_count >= 1
+    assert any(
+        "legacy shared-workbook revision XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+@pytest.mark.parametrize("kind", ("header", "log"))
+def test_shared_workbook_revision_xml_budget_remains_visible(
+    tmp_path,
+    monkeypatch,
+    kind: str,
+) -> None:
+    baseline = make_shared_workbook_revision_model(tmp_path / "baseline.xlsx")
+    candidate = make_shared_workbook_revision_model(tmp_path / "candidate.xlsx")
+    _append_shared_workbook_revision_xml_elements(candidate, kind, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_SHARED_WORKBOOK_REVISION_MAX_XML_ELEMENT_COUNT",
+        _shared_workbook_revision_xml_element_count(candidate, kind) - 1,
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert (
+        candidate_snapshot.shared_workbook_revisions.unrecognized_shared_workbook_revision_count
+        >= 1
+    )
+    assert any(
+        "legacy shared-workbook revision XML part whose XML structure" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF062"} <= {finding.rule_id for finding in report.findings}
+
+
+@pytest.mark.parametrize("kind", ("header", "log"))
+def test_shared_workbook_revision_xml_budget_accepts_the_default_capacity(
+    tmp_path,
+    kind: str,
+) -> None:
+    workbook = make_shared_workbook_revision_model(tmp_path / "candidate.xlsx")
+    _append_shared_workbook_revision_xml_elements(
+        workbook,
+        kind,
+        workbook_module._SHARED_WORKBOOK_REVISION_MAX_XML_ELEMENT_COUNT
+        - _shared_workbook_revision_xml_element_count(workbook, kind),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert not any(
+        "legacy shared-workbook revision XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+@pytest.mark.parametrize("kind", ("header", "log"))
+def test_shared_workbook_revision_xml_budget_rejects_the_default_overage(
+    tmp_path,
+    kind: str,
+) -> None:
+    workbook = make_shared_workbook_revision_model(tmp_path / "candidate.xlsx")
+    _append_shared_workbook_revision_xml_elements(
+        workbook,
+        kind,
+        workbook_module._SHARED_WORKBOOK_REVISION_MAX_XML_ELEMENT_COUNT
+        - _shared_workbook_revision_xml_element_count(workbook, kind)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert any(
+        "legacy shared-workbook revision XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_shared_workbook_revision_xml_budget_aggregates_across_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_shared_workbook_revision_model(tmp_path / "candidate.xlsx")
+    remaining_xml_elements = (
+        _shared_workbook_revision_xml_element_count(workbook, "header")
+        + _shared_workbook_revision_xml_element_count(workbook, "log")
+        - 1
+    )
+    budget_type = workbook_module._SharedWorkbookRevisionBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_SharedWorkbookRevisionBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert any(
+        "legacy shared-workbook revision XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_shared_workbook_revision_xml_budget_fingerprints_same_size_overages(
+    tmp_path,
+) -> None:
+    first = make_shared_workbook_revision_model(tmp_path / "first.xlsx")
+    second = make_shared_workbook_revision_model(tmp_path / "second.xlsx")
+    _append_shared_workbook_revision_xml_elements(
+        first,
+        "log",
+        1,
+        entry_name="rcc",
+    )
+    _append_shared_workbook_revision_xml_elements(
+        second,
+        "log",
+        1,
+        entry_name="rrc",
+    )
+    member = _SHARED_WORKBOOK_REVISION_XML_MEMBERS["log"]
+    with ZipFile(first) as archive:
+        first_info = archive.getinfo(member)
+        first_signature = (
+            workbook_module._shared_workbook_revision_xml_structure_budget_fallback_signature(
+                archive,
+                member,
+                first_info,
+                workbook_module._SharedWorkbookRevisionBudget(
+                    remaining_xml_elements=1
+                ),
+            )
+        )
+    with ZipFile(second) as archive:
+        second_info = archive.getinfo(member)
+        second_signature = (
+            workbook_module._shared_workbook_revision_xml_structure_budget_fallback_signature(
+                archive,
+                member,
+                second_info,
+                workbook_module._SharedWorkbookRevisionBudget(
+                    remaining_xml_elements=1
+                ),
+            )
+        )
+
+    assert first_info.file_size == second_info.file_size
+    assert first_signature is not None
+    assert first_signature != second_signature
 
 
 def test_shared_workbook_revision_free_workbook_has_no_inventory(tmp_path) -> None:

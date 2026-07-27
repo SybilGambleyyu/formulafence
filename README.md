@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.138.0/formulafence-0.138.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.139.0/formulafence-0.139.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.138.0
+        uses: SybilGambleyyu/formulafence@v0.139.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1700,9 +1700,13 @@ worksheet grid. They can preserve prior cell values, author identities,
 timestamps, comments, formatting edits, conflict-resolution records, and
 tracking/retention/protection controls even when cells and formulas are
 unchanged. FormulaFence follows the workbook-to-header and header-to-log
-relationships, fingerprints complete bounded revision declarations privately,
-and emits `FF062` for any material history, relationship, control, or coverage
-change. Enable `no_shared_workbook_revision_changes` for `FFP062` in CI.
+relationships, streams each revision XML part before private parsing, and
+fingerprints complete bounded revision declarations privately. Each revision
+part permits 32,768 XML elements and the complete revision scan permits 65,536,
+alongside its existing 16 MiB per-part, 64 MiB aggregate, and 512-part
+byte/count limits. A successfully streamed overage becomes visible
+`FF010`/`FF062` coverage evidence rather than a materialized private tree.
+Enable `no_shared_workbook_revision_changes` for `FFP062` in CI.
 
 Profiles expose only revision-header/log-part and record counts plus aggregate
 shared/tracked/history-retention/protection state and unrecognized-metadata
@@ -1712,7 +1716,8 @@ SARIF. Equivalent Boolean/integer spelling, coordinated relationship-ID
 rewrites, and transitional versus Strict SpreadsheetML relationship spelling
 normalize. Missing, duplicate, malformed, unsafe, unsupported, oversized, or
 over-budget declarations become explicit coverage evidence rather than a silent
-blind spot.
+blind spot. Structural-overage evidence keeps a private streamed content
+fingerprint, so same-size hostile history changes remain diff-visible.
 
 FormulaFence compares stored audit declarations; it does not apply revisions,
 reconstruct a historical workbook state, resolve conflicts, validate an author

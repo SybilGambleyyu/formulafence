@@ -2823,6 +2823,25 @@ _SHARED_WORKBOOK_REVISION_LOG_MEMBER_PATTERN = re.compile(
 _SHARED_WORKBOOK_REVISION_MAX_PART_BYTES = 16 * 1024 * 1024
 _SHARED_WORKBOOK_REVISION_TOTAL_MAX_BYTES = 64 * 1024 * 1024
 _SHARED_WORKBOOK_REVISION_TOTAL_MAX_COUNT = 512
+# Revision headers and logs can contain a highly compressible history of
+# repeated record declarations. This raw scanner recursively canonicalizes its
+# complete private XML before comparing it, so byte ceilings alone cannot stop
+# a compact package from allocating an impractical tree in a CI worker.
+_SHARED_WORKBOOK_REVISION_MAX_XML_ELEMENT_COUNT = 32_768
+_SHARED_WORKBOOK_REVISION_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _SHARED_WORKBOOK_REVISION_MAX_XML_ELEMENT_COUNT
+)
+
+
+@dataclass
+class _SharedWorkbookRevisionBudget:
+    """Bound raw legacy shared-workbook revision XML in one package scan."""
+
+    remaining_parts: int = _SHARED_WORKBOOK_REVISION_TOTAL_MAX_COUNT
+    remaining_bytes: int = _SHARED_WORKBOOK_REVISION_TOTAL_MAX_BYTES
+    remaining_xml_elements: int = _SHARED_WORKBOOK_REVISION_TOTAL_XML_MAX_ELEMENT_COUNT
+
+
 _SHARED_WORKBOOK_REVISION_HEADER_BOOLEAN_ATTRIBUTES = frozenset(
     {
         "diskRevisions",
@@ -6266,6 +6285,21 @@ def _external_data_opaque_metadata(
 def _private_payload_signature(payload: bytes) -> str:
     """Hash opaque bytes without retaining them in any reviewable model."""
     return hashlib.sha256(payload).hexdigest()
+
+
+def _private_archive_member_payload_signature(
+    archive: ZipFile,
+    info: ZipInfo,
+) -> str | None:
+    """Hash one bounded archive member without materializing its payload."""
+    digest = hashlib.sha256()
+    try:
+        with archive.open(info) as payload:
+            for block in iter(lambda: payload.read(1_048_576), b""):
+                digest.update(block)
+    except (BadZipFile, OSError, RuntimeError, ValueError):
+        return None
+    return digest.hexdigest()
 
 
 def _is_opc_relationship_member(member: str) -> bool:
@@ -24190,6 +24224,43 @@ def _shared_workbook_revision_relationship_semantics(
     return resolved
 
 
+def _shared_workbook_revision_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info: ZipInfo,
+    budget: _SharedWorkbookRevisionBudget,
+) -> str | None:
+    """Stream revision XML before its complete private tree is canonicalized."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _SHARED_WORKBOOK_REVISION_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the existing materializing parser diagnostic for malformed
+        # or unreadable XML. Only a successfully streamed overage can bypass
+        # that parser safely.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    signature_entries = [
+        (
+            "xml-structure-budget-exhausted",
+            repr((member, info.file_size, info.compress_size, info.CRC)),
+        )
+    ]
+    if (payload_signature := _private_archive_member_payload_signature(archive, info)) is not None:
+        signature_entries.append(("payload", payload_signature))
+    return _private_external_data_signature(
+        tuple(signature_entries)
+    )
+
+
 def _shared_workbook_revision_metadata(path: Path) -> _SharedWorkbookRevisionMetadata:
     """Inspect legacy shared-workbook revision history before readers omit it.
 
@@ -24222,7 +24293,7 @@ def _shared_workbook_revision_metadata(path: Path) -> _SharedWorkbookRevisionMet
         member: str,
         *,
         context: str,
-        budget: list[int],
+        budget: _SharedWorkbookRevisionBudget,
     ) -> ElementTree.Element | None:
         if member not in members:
             note_issue(f"{context}:missing-part", member)
@@ -24235,14 +24306,33 @@ def _shared_workbook_revision_metadata(path: Path) -> _SharedWorkbookRevisionMet
         if info.file_size > _SHARED_WORKBOOK_REVISION_MAX_PART_BYTES:
             note_issue(f"{context}:oversized-part", info.file_size)
             return None
-        if budget[0] <= 0:
+        if budget.remaining_parts <= 0:
             note_issue(f"{context}:part-count-limit", member)
             return None
-        if budget[1] < info.file_size:
+        if budget.remaining_bytes < info.file_size:
             note_issue(f"{context}:total-size-limit", info.file_size)
             return None
-        budget[0] -= 1
-        budget[1] -= info.file_size
+        budget.remaining_parts -= 1
+        budget.remaining_bytes -= info.file_size
+        structure_fallback_signature = (
+            _shared_workbook_revision_xml_structure_budget_fallback_signature(
+                archive,
+                member,
+                info,
+                budget,
+            )
+        )
+        if structure_fallback_signature is not None:
+            warnings.add(
+                "FormulaFence did not fully read a legacy shared-workbook revision "
+                "XML part whose XML structure exceeds the safety budget; affected "
+                "revision history has a coverage gap."
+            )
+            note_issue(
+                f"{context}:xml-structure-budget-exhausted",
+                structure_fallback_signature,
+            )
+            return None
         try:
             return _xml_root_from_payload(archive.read(member))
         except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
@@ -24255,7 +24345,7 @@ def _shared_workbook_revision_metadata(path: Path) -> _SharedWorkbookRevisionMet
         source_member: str,
         *,
         context: str,
-        budget: list[int],
+        budget: _SharedWorkbookRevisionBudget,
     ) -> tuple[_PackageRelationship, ...]:
         relationship_member = _relationship_part_path(source_member)
         if relationship_member not in members:
@@ -24334,10 +24424,7 @@ def _shared_workbook_revision_metadata(path: Path) -> _SharedWorkbookRevisionMet
                 for member in members
                 if member.casefold().startswith("xl/revisions/")
             }
-            budget = [
-                _SHARED_WORKBOOK_REVISION_TOTAL_MAX_COUNT,
-                _SHARED_WORKBOOK_REVISION_TOTAL_MAX_BYTES,
-            ]
+            budget = _SharedWorkbookRevisionBudget()
             if len(revision_members) > _SHARED_WORKBOOK_REVISION_TOTAL_MAX_COUNT:
                 note_issue("revisions:part-count-limit", len(revision_members))
             for member in sorted(revision_members):

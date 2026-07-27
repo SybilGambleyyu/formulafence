@@ -1097,9 +1097,13 @@ Legacy shared-workbook revision history can persist outside ordinary worksheet
 cells in relationship-backed `revisionHeaders` and `revisionLog` parts. The
 records can retain prior/new values, locations, authors, timestamps, comments,
 formatting edits, conflict-resolution material, and shared/tracking/retention/
-protection controls. FormulaFence fingerprints complete bounded declarations
-privately, follows workbook-to-header and header-to-log relationships, and
-emits `FF062`; `no_shared_workbook_revision_changes` makes it `FFP062` in CI.
+protection controls. FormulaFence follows workbook-to-header and header-to-log
+relationships, streams each revision XML part before private parsing, and
+fingerprints complete bounded declarations privately. Each part permits 32,768
+XML elements and the complete revision scan permits 65,536, alongside its
+existing 16 MiB per-part, 64 MiB aggregate, and 512-part byte/count limits. A
+successfully streamed overage emits `FF010`/`FF062`;
+`no_shared_workbook_revision_changes` makes it `FFP062` in CI.
 
 Profiles and `FF062` details expose only header/log part and record counts,
 aggregate shared/tracked/history-retention/protection state, and coverage
@@ -1108,9 +1112,11 @@ relationship IDs, and raw XML remain private. Equivalent Boolean/integer
 spelling, coordinated relationship-ID changes, and transitional/Strict
 relationship type spelling normalize. Missing, duplicate, malformed, unsafe,
 unsupported, oversized, or over-budget declarations are explicit coverage
-warnings. FormulaFence does not apply revisions, reconstruct historical
-workbook state, resolve conflicts, validate identity/timestamp claims, render
-Excel, or interpret arbitrary future extensions.
+warnings; structural-overage evidence keeps a private streamed content
+fingerprint so same-size hostile histories remain diff-visible. FormulaFence
+does not apply revisions, reconstruct historical workbook state, resolve
+conflicts, validate identity/timestamp claims, render Excel, or interpret
+arbitrary future extensions.
 
 Excel number formats can hide or materially reinterpret a value without changing
 its stored value or formula: `;;;` can make it appear blank, while custom

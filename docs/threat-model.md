@@ -36,6 +36,15 @@ financial correctness or replace model review.
   material, exact changed static inputs, and changed private name-chain evidence
   when that artifact is shared. A matching formula is not evidence that an
   Office Add-in is installed, trusted, or runnable.
+- The dedicated unqualified runtime-function ledger compares unknown bare-call
+  candidates, arguments, cells, and relevant formula-defined-name chains through
+  private signatures only. Its public inventory retains aggregate formula-cell,
+  call, and relevant-definition counts. Generic semantic reports retain local
+  reviewer evidence by default; the separate
+  `--redact-unqualified-runtime-functions` rendering boundary covers direct
+  bare-call material, exact changed static inputs, and changed private
+  name-chain evidence when that artifact is shared. A candidate is not proof a
+  VBA, COM/Automation, XLL, or other provider is installed, trusted, or runnable.
 - What-If Data Table output ranges, input-cell references, and raw formula
   metadata are compared through a private signature only. Cached scenario-output
   cells remain under the normal cell-diff boundary.
@@ -739,7 +748,11 @@ formula will produce.
   XLL, or registered provider, inspect host trust settings, or execute code.
   Stored candidate definitions remain independently reviewable even when no
   worksheet formula invokes them, while static-input paths require an actual
-  inspected call. Dynamic and unresolved inputs remain static-coverage limits. This boundary
+  inspected call. Dynamic and unresolved inputs remain static-coverage limits.
+  The separate `--redact-unqualified-runtime-functions` shared-artifact mode
+  hides direct bare-call material, exact changed static inputs, and changed
+  private name-chain evidence after comparison and policy evaluation without
+  resolving a provider or changing any comparison fact. This boundary
   follows Microsoft's [native function catalogue](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188),
   [installed UDF guidance](https://support.microsoft.com/en-us/excel/user-defined-functions-that-are-installed-with-add-ins-reference),
   [VBA custom-function guidance](https://support.microsoft.com/en-us/excel/create-custom-functions-in-excel),
@@ -1219,6 +1232,18 @@ formula will produce.
   snapshot/policy fact/exit status, or claim to redact arbitrary workbook
   material. It does not replace the external-link, formula-action, or Python
   sharing boundaries.
+- The separate `--redact-unqualified-runtime-functions` rendering mode is for
+  direct stored bare `FF075` candidate material, exact changed static cells
+  recorded by the private dependency graph as reaching an inventoried call, and
+  changed formula-defined-name evidence when the private resolved runtime-name
+  chain changed. It runs after comparison and policy evaluation, replaces whole
+  direct formula strings and before/after evidence for those changed cells or
+  names, and never exposes the private cell/name set used for that decision.
+  It does not evaluate a formula, resolve or load VBA, COM/Automation, XLL, or
+  another provider, execute code, contact a runtime, reconstruct an argument,
+  mutate a snapshot/policy fact/exit status, or claim to redact arbitrary
+  workbook material. It does not replace the external-link, formula-action,
+  Python, or Office custom-function sharing boundaries.
 - Every canonical root or part-level OPC relationship part is also inspected
   independently for `TargetMode="External"`, including opaque relationships
   no feature-specific scanner can reach. FormulaFence retains source, type,

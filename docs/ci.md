@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.101.0
+        uses: SybilGambleyyu/formulafence@v0.102.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -63,7 +63,7 @@ with the repository's chosen SARIF uploader. FormulaFence uses logical
 locations such as `Dashboard!B12`; consumers that do not understand Excel
 coordinates can still show the workbook path, rule, and message.
 
-## Shared external-workbook-link, formula-action, Python-in-Excel, and Office custom-function artifacts
+## Shared external-workbook-link, formula-action, Python-in-Excel, Office custom-function, and unqualified runtime-function artifacts
 
 The default report preserves full local reviewer evidence. If an artifact or
 Markdown job summary will be shared outside that review boundary, set the
@@ -75,6 +75,7 @@ Action input below (or pass the same CLI flag to `diff`, `check`, or
           redact-formula-external-actions: 'true'
           redact-python-in-excel: 'true'
           redact-office-custom-functions: 'true'
+          redact-unqualified-runtime-functions: 'true'
 ```
 
 This maps directly to `--redact-external-workbook-links`. It replaces a whole
@@ -123,11 +124,24 @@ policy, exit-code, and the in-memory report unchanged; it never evaluates a
 formula, loads an add-in or manifest, executes JavaScript, contacts a service,
 or reconstructs a dynamically assembled argument.
 
+`redact-unqualified-runtime-functions: 'true'` maps directly to
+`--redact-unqualified-runtime-functions`. It replaces direct stored bare
+`FF075` runtime-function candidate material with `[unqualified runtime-function
+material redacted]`. It also hides before/after cell evidence for a changed
+candidate formula and for an exact changed static input the private dependency
+analysis recorded as reaching one. When a relevant formula-defined-name chain
+changed, it conservatively replaces changed defined-name before/after values
+too, because a dotted workbook-defined wrapper can carry a private argument
+without spelling the bare UDF. The mode leaves comparison facts, policy,
+exit-code, and the in-memory report unchanged; it never evaluates a formula,
+resolves or loads VBA, COM/Automation, XLL, or another provider, executes code,
+or reconstructs a dynamically assembled argument.
+
 This is not a general sensitive-data redaction guarantee. No sharing switch
-replaces the other external-workbook-link, formula-action, Python-in-Excel, or
-Office custom-function boundaries, so set the relevant inputs when a shared
-artifact may contain multiple kinds of material. Leave them off for the
-established complete local-review report.
+replaces the other external-workbook-link, formula-action, Python-in-Excel,
+Office custom-function, or unqualified runtime-function boundaries, so set the
+relevant inputs when a shared artifact may contain multiple kinds of material.
+Leave them off for the established complete local-review report.
 
 ## Directory portfolios
 
@@ -138,7 +152,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.101.0
+  uses: SybilGambleyyu/formulafence@v0.102.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -242,7 +256,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.101.0/formulafence-0.101.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.102.0/formulafence-0.102.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

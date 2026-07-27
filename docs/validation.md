@@ -5,6 +5,50 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared unqualified runtime-function report redaction — 2026-07-26
+
+FormulaFence 0.102.0 adds the separate, opt-in
+`--redact-unqualified-runtime-functions` rendering boundary for generic
+reports. It is deliberately separate from the count-only `FF075` ledger and
+from the external-workbook-link, formula-action, Python-in-Excel, and Office
+custom-function redaction modes. Default local-review output remains unchanged.
+When enabled, JSON, Markdown, and SARIF hide direct stored bare runtime-call
+material, changed runtime-call-cell evidence, and exact changed static input
+evidence the private dependency analysis recorded as reaching an inventoried
+call. A formula-defined-name body can send a private argument through a dotted
+workbook-defined wrapper to a bare UDF deeper in the chain, so FormulaFence
+privately compares the resolved definition chain and conservatively hides
+changed defined-name before/after evidence when that signature changes.
+
+Microsoft's [installed UDF guidance](https://support.microsoft.com/en-us/excel/user-defined-functions-that-are-installed-with-add-ins-reference)
+documents add-in and Automation functions, its [VBA custom-function guidance](https://support.microsoft.com/en-us/excel/create-custom-functions-in-excel)
+shows a bare worksheet call such as `=DISCOUNT(D7,E7)`, and the
+[XLL registration/call guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/accessing-xll-code-in-excel)
+documents XLL code exposed to Excel. Those documents establish why a stored
+bare call and its arguments can be sensitive without proving a provider is
+installed or runnable. FormulaFence does not evaluate a formula, resolve/load
+VBA, COM/Automation, XLL, or another provider, execute code, contact a runtime,
+or reconstruct a dynamic argument.
+
+Focused fixtures cover a direct `PRIVATEUDF` formula plus a changed static
+input, an input whose bare-runtime-function consumer falls beyond the report's
+bounded impact sample, and a dotted named wrapper whose private argument can
+only be associated with the bare call through the private fixed-point definition
+analysis. The redacted JSON, Markdown, SARIF, policy, portfolio, and
+composite-Action contracts retain `FF075` / `FFP075` and their exit behavior
+while omitting the controlled UDF, argument, input, and nested-name markers.
+The final source tree passed **659 tests in 92.70 seconds** (deterministic
+command-limited chunks), plus a clean Ruff check, `git diff --check`, and shell
+syntax check for the composite Action. The exact release wheel was installed in
+a fresh environment; its CLI reported `FormulaFence 0.102.0`, retained the
+controlled UDF/input markers in default JSON, removed them from redacted
+JSON/Markdown/SARIF/policy/portfolio output, and still returned `1` with
+`FF075` and `FFP075` for the redacted policy check. The wheel
+`formulafence-0.102.0-py3-none-any.whl` passed `twine check` with SHA-256
+`2e73319cc362eeb2900c66b466458b6028b1601c8db719d3dfbd39c6ae5088bf`.
+The source distribution also passed `twine check`; its digest is intentionally
+omitted because this validation note is included in that archive.
+
 ## Shared Office custom-function report redaction — 2026-07-26
 
 FormulaFence 0.101.0 adds the separate, opt-in

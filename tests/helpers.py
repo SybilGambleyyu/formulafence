@@ -534,6 +534,57 @@ def change_indirect_named_office_custom_function_definition(path: Path) -> Path:
     return path
 
 
+def make_indirect_named_unqualified_runtime_function_model(path: Path) -> Path:
+    """Create a dotted name chain that eventually calls a bare runtime UDF.
+
+    The outer body intentionally contains no bare call. Its private argument
+    can only be associated with ``PRIVATEUDF`` through FormulaFence's private
+    formula-defined-name fixed point, which exercises the shared-artifact
+    redaction bound for an otherwise ordinary-looking definition.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Indirect named unqualified runtime-function controls"
+    inputs["A9"] = "PRIVATE-INDIRECT-NAMED-RUNTIME-FUNCTION-INPUT"
+    inputs["B2"] = "=FENCE.RUNTIMECHAIN(A9)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.RUNTIMEWRAPPER",
+            attr_text="=LAMBDA(value,PRIVATEUDF(value))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.RUNTIMECHAIN",
+            attr_text=(
+                '=LAMBDA(value,FENCE.RUNTIMEWRAPPER("PRIVATE-INDIRECT-NAMED-'
+                'RUNTIME-FUNCTION-BASELINE"))'
+            ),
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_indirect_named_unqualified_runtime_function_definition(path: Path) -> Path:
+    """Rewrite a private argument in an ordinary-looking UDF name-chain body."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.RUNTIMECHAIN"]
+    expected = (
+        '=LAMBDA(value,FENCE.RUNTIMEWRAPPER("PRIVATE-INDIRECT-NAMED-'
+        'RUNTIME-FUNCTION-BASELINE"))'
+    )
+    if definition.attr_text != expected:
+        raise ValueError("Fixture does not contain the expected indirect runtime call")
+    definition.attr_text = (
+        '=LAMBDA(value,FENCE.RUNTIMEWRAPPER("PRIVATE-INDIRECT-NAMED-'
+        'RUNTIME-FUNCTION-CANDIDATE"))'
+    )
+    workbook.save(path)
+    return path
+
+
 def make_unqualified_runtime_function_model(path: Path) -> Path:
     """Create unknown bare calls without installing or invoking a provider.
 

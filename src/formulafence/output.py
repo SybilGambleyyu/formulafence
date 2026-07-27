@@ -16,6 +16,9 @@ EXTERNAL_WORKBOOK_LINK_REDACTION = "[external-workbook link material redacted]"
 FORMULA_EXTERNAL_ACTION_REDACTION = "[formula external-action material redacted]"
 PYTHON_IN_EXCEL_REDACTION = "[Python-in-Excel material redacted]"
 OFFICE_CUSTOM_FUNCTION_REDACTION = "[Office custom-function material redacted]"
+UNQUALIFIED_RUNTIME_FUNCTION_REDACTION = (
+    "[unqualified runtime-function material redacted]"
+)
 
 # This fallback deliberately supplements, rather than replaces, FormulaFence's
 # static formula inspection below.  A visible `INDIRECT("'[Book]Sheet'!A1")`
@@ -239,6 +242,7 @@ def _safe_finding_details(
     *,
     redact_formula_external_actions: bool = False,
     redact_office_custom_functions: bool = False,
+    redact_unqualified_runtime_functions: bool = False,
 ) -> dict[str, Any]:
     """Copy one SARIF finding's properties through active name-chain bounds."""
     details = dict(finding.details)
@@ -254,6 +258,12 @@ def _safe_finding_details(
         and finding.rule_id == "FF008"
     ):
         _redact_office_custom_function_defined_name_details(details, report)
+    if (
+        redact_unqualified_runtime_functions
+        and report is not None
+        and finding.rule_id == "FF008"
+    ):
+        _redact_unqualified_runtime_function_defined_name_details(details, report)
     return details
 
 
@@ -426,6 +436,167 @@ def redact_office_custom_function_portfolio_payload(
         if workbook.report is not None and isinstance(entry, dict):
             _redact_office_custom_function_change_cells(entry, workbook.report)
             _redact_office_custom_function_defined_name_evidence(entry, workbook.report)
+    return redacted
+
+
+def _contains_unqualified_runtime_function_material(value: str) -> bool:
+    """Return whether one rendered string exposes a bare runtime-call candidate.
+
+    An unknown unqualified worksheet call can expose a private UDF name and its
+    arguments even when FormulaFence's FF075 ledger publishes only counts. The
+    workbook-aware classifier excludes defined names and local bindings during
+    snapshot inspection; this generic output scan intentionally hides any
+    standalone formula shaped like an unqualified runtime candidate because
+    report strings do not retain that private workbook context.
+    """
+    if "(" not in value:
+        return False
+    formula = value if value.lstrip().startswith("=") else f"={value}"
+    return bool(inspect_formula(formula).unqualified_runtime_function_candidates)
+
+
+def redact_unqualified_runtime_function_material(payload: Any) -> Any:
+    """Return an output-only copy with direct unknown runtime calls hidden.
+
+    This handles direct stored formula material. The report-level helpers below
+    also hide exact changed static inputs and changed formula-defined-name
+    bodies that the private FF075 comparison identifies as runtime-function
+    relevant.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: redact_unqualified_runtime_function_material(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [
+            redact_unqualified_runtime_function_material(value) for value in payload
+        ]
+    if isinstance(payload, tuple):
+        return tuple(
+            redact_unqualified_runtime_function_material(value) for value in payload
+        )
+    if isinstance(payload, str) and _contains_unqualified_runtime_function_material(
+        payload
+    ):
+        return UNQUALIFIED_RUNTIME_FUNCTION_REDACTION
+    return payload
+
+
+def _unqualified_runtime_function_sensitive_change_locations(
+    report: DiffReport,
+) -> set[str]:
+    """Return changed cells whose evidence can carry a runtime-call input."""
+    sensitive_cells = (
+        report.before.unqualified_runtime_functions.call_cells
+        | report.after.unqualified_runtime_functions.call_cells
+        | report.unqualified_runtime_function_static_input_cells
+    )
+    if not sensitive_cells:
+        return set()
+
+    locations: set[str] = set()
+    for change in report.changes:
+        if change.location is None or change.location not in sensitive_cells:
+            continue
+        location = display_location(change.location)
+        if location is not None:
+            locations.add(location)
+    return locations
+
+
+def _redact_unqualified_runtime_function_change_cells(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide before/after cells that are a runtime call or exact static input."""
+    sensitive_locations = _unqualified_runtime_function_sensitive_change_locations(
+        report
+    )
+    if not sensitive_locations:
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("location") not in sensitive_locations:
+            continue
+        for side in ("before", "after"):
+            snapshot = change.get(side)
+            if not isinstance(snapshot, dict):
+                continue
+            for field in ("value", "formula", "formula_fingerprint"):
+                if snapshot.get(field) is not None:
+                    snapshot[field] = UNQUALIFIED_RUNTIME_FUNCTION_REDACTION
+    return payload
+
+
+def _unqualified_runtime_function_definition_material_changed(
+    report: DiffReport,
+) -> bool:
+    """Return whether a runtime-function-relevant defined-name body changed."""
+    return (
+        report.before.unqualified_runtime_functions.definition_signature
+        != report.after.unqualified_runtime_functions.definition_signature
+    )
+
+
+def _redact_unqualified_runtime_function_defined_name_details(
+    details: dict[str, Any], report: DiffReport
+) -> None:
+    """Hide FF008 evidence when a resolved runtime-function name chain changed.
+
+    A named LAMBDA can call a dotted workbook-defined wrapper whose eventual
+    implementation contains the bare runtime candidate. Its own text can look
+    ordinary to a standalone lexical scanner. When the private FF075 resolved
+    definition signature changes, hiding every changed defined-name body is the
+    safe shared-artifact boundary.
+    """
+    if not _unqualified_runtime_function_definition_material_changed(report):
+        return
+    for field in ("before", "after"):
+        if isinstance(details.get(field), str):
+            details[field] = UNQUALIFIED_RUNTIME_FUNCTION_REDACTION
+
+
+def _redact_unqualified_runtime_function_defined_name_evidence(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide runtime-function-resolved name-chain text in report evidence."""
+    if not _unqualified_runtime_function_definition_material_changed(report):
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("kind") == "defined_name_changed":
+            details = change.get("details")
+            if isinstance(details, dict):
+                _redact_unqualified_runtime_function_defined_name_details(details, report)
+    for finding in payload.get("findings", []):
+        if finding.get("rule_id") != "FF008":
+            continue
+        details = finding.get("details")
+        if isinstance(details, dict):
+            _redact_unqualified_runtime_function_defined_name_details(details, report)
+    return payload
+
+
+def redact_unqualified_runtime_function_report_payload(
+    report: DiffReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Redact direct runtime calls and private static/name-chain evidence."""
+    redacted = redact_unqualified_runtime_function_material(payload)
+    _redact_unqualified_runtime_function_change_cells(redacted, report)
+    return _redact_unqualified_runtime_function_defined_name_evidence(redacted, report)
+
+
+def redact_unqualified_runtime_function_portfolio_payload(
+    report: PortfolioReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply the runtime-function sharing boundary to nested reports."""
+    redacted = redact_unqualified_runtime_function_material(payload)
+    for workbook, entry in zip(
+        report.workbooks, redacted.get("workbooks", []), strict=False
+    ):
+        if workbook.report is not None and isinstance(entry, dict):
+            _redact_unqualified_runtime_function_change_cells(entry, workbook.report)
+            _redact_unqualified_runtime_function_defined_name_evidence(
+                entry, workbook.report
+            )
     return redacted
 
 
@@ -3826,6 +3997,7 @@ def report_to_markdown(
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
     redact_office_custom_functions: bool = False,
+    redact_unqualified_runtime_functions: bool = False,
 ) -> str:
     policy_findings = list(extra_findings)
     payload = report.to_dict(policy_findings)
@@ -3837,6 +4009,8 @@ def report_to_markdown(
         payload = redact_python_in_excel_report_payload(report, payload)
     if redact_office_custom_functions:
         payload = redact_office_custom_function_report_payload(report, payload)
+    if redact_unqualified_runtime_functions:
+        payload = redact_unqualified_runtime_function_report_payload(report, payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence change report",
@@ -3861,6 +4035,11 @@ def report_to_markdown(
         *(
             ["- **Office custom-function material:** redacted for sharing"]
             if redact_office_custom_functions
+            else []
+        ),
+        *(
+            ["- **Unqualified runtime-function material:** redacted for sharing"]
+            if redact_unqualified_runtime_functions
             else []
         ),
         f"- **Changes:** {summary['change_count']}",
@@ -3889,6 +4068,7 @@ def report_to_sarif(
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
     redact_office_custom_functions: bool = False,
+    redact_unqualified_runtime_functions: bool = False,
 ) -> dict[str, Any]:
     findings = [*report.findings, *extra_findings]
     rule_ids = sorted({finding.rule_id for finding in findings})
@@ -3907,6 +4087,7 @@ def report_to_sarif(
             report,
             redact_formula_external_actions=redact_formula_external_actions,
             redact_office_custom_functions=redact_office_custom_functions,
+            redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
         )
         result: dict[str, Any] = {
             "ruleId": finding.rule_id,
@@ -3954,6 +4135,8 @@ def report_to_sarif(
         payload = redact_python_in_excel_material(payload)
     if redact_office_custom_functions:
         payload = redact_office_custom_function_material(payload)
+    if redact_unqualified_runtime_functions:
+        payload = redact_unqualified_runtime_function_material(payload)
     return payload
 
 
@@ -4002,6 +4185,7 @@ def portfolio_to_markdown(
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
     redact_office_custom_functions: bool = False,
+    redact_unqualified_runtime_functions: bool = False,
 ) -> str:
     """Render a complete multi-workbook review without absolute filesystem paths."""
     payload = report.to_dict()
@@ -4013,6 +4197,8 @@ def portfolio_to_markdown(
         payload = redact_python_in_excel_portfolio_payload(report, payload)
     if redact_office_custom_functions:
         payload = redact_office_custom_function_portfolio_payload(report, payload)
+    if redact_unqualified_runtime_functions:
+        payload = redact_unqualified_runtime_function_portfolio_payload(report, payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence portfolio report",
@@ -4057,6 +4243,11 @@ def portfolio_to_markdown(
         *(
             ["- **Office custom-function material:** redacted for sharing"]
             if redact_office_custom_functions
+            else []
+        ),
+        *(
+            ["- **Unqualified runtime-function material:** redacted for sharing"]
+            if redact_unqualified_runtime_functions
             else []
         ),
         "",
@@ -4113,6 +4304,7 @@ def portfolio_to_sarif(
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
     redact_office_custom_functions: bool = False,
+    redact_unqualified_runtime_functions: bool = False,
 ) -> dict[str, Any]:
     """Render every portfolio finding in one SARIF run with relative artifacts."""
     rule_ids = sorted(
@@ -4138,6 +4330,7 @@ def portfolio_to_sarif(
                 workbook.report,
                 redact_formula_external_actions=redact_formula_external_actions,
                 redact_office_custom_functions=redact_office_custom_functions,
+                redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
             )
             location: dict[str, Any] = {
                 "physicalLocation": {"artifactLocation": {"uri": workbook.path}},
@@ -4187,4 +4380,6 @@ def portfolio_to_sarif(
         payload = redact_python_in_excel_material(payload)
     if redact_office_custom_functions:
         payload = redact_office_custom_function_material(payload)
+    if redact_unqualified_runtime_functions:
+        payload = redact_unqualified_runtime_function_material(payload)
     return payload

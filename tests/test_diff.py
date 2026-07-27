@@ -19,6 +19,7 @@ from formulafence.output import (
     FORMULA_EXTERNAL_ACTION_REDACTION,
     OFFICE_CUSTOM_FUNCTION_REDACTION,
     PYTHON_IN_EXCEL_REDACTION,
+    UNQUALIFIED_RUNTIME_FUNCTION_REDACTION,
     profile_to_markdown,
     redact_external_workbook_link_material,
     redact_formula_external_action_material,
@@ -27,6 +28,8 @@ from formulafence.output import (
     redact_office_custom_function_report_payload,
     redact_python_in_excel_material,
     redact_python_in_excel_report_payload,
+    redact_unqualified_runtime_function_material,
+    redact_unqualified_runtime_function_report_payload,
     report_to_markdown,
     report_to_sarif,
 )
@@ -102,6 +105,7 @@ from .helpers import (
     change_in_content_office_web_addin_anchor,
     change_in_content_office_web_addin_preview_payload,
     change_indirect_named_office_custom_function_definition,
+    change_indirect_named_unqualified_runtime_function_definition,
     change_inline_rich_text_run_color,
     change_legacy_comment_text,
     change_legacy_note_visibility,
@@ -294,6 +298,7 @@ from .helpers import (
     make_implicit_intersection_model,
     make_in_content_office_web_addin_model,
     make_indirect_named_office_custom_function_model,
+    make_indirect_named_unqualified_runtime_function_model,
     make_legacy_array_model,
     make_legacy_comment_model,
     make_legacy_threaded_placeholder_model,
@@ -3751,6 +3756,9 @@ def test_unqualified_runtime_function_static_inputs_are_guarded(tmp_path) -> Non
     assert function_change.details["unqualified_runtime_function_static_input_change_count"] == 1
     assert "unqualified_runtime_function_material_changed" not in function_change.details
     assert "FF075" in {finding.rule_id for finding in report.findings}
+    assert report.unqualified_runtime_function_static_input_cells == frozenset(
+        {("Inputs", "A9")}
+    )
 
     rendered_artifacts = (
         json.dumps(function_change.details),
@@ -3762,6 +3770,159 @@ def test_unqualified_runtime_function_static_inputs_are_guarded(tmp_path) -> Non
         "PRIVATE-RUNTIME-FUNCTION-INPUT-CANDIDATE",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_unqualified_runtime_function_report_redaction_hides_calls_and_static_inputs(
+    tmp_path,
+) -> None:
+    baseline = make_unqualified_runtime_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_unqualified_runtime_function_model(tmp_path / "candidate.xlsx")
+    change_unqualified_runtime_function_input(candidate)
+    change_unqualified_runtime_function_call(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    sensitive_values = (
+        "PRIVATEUDF",
+        "UPDATEDUDF",
+        "PRIVATE-RUNTIME-FUNCTION-QUERY-BASELINE",
+        "PRIVATE-RUNTIME-FUNCTION-INPUT-BASELINE",
+        "PRIVATE-RUNTIME-FUNCTION-INPUT-CANDIDATE",
+    )
+    raw_rendered = json.dumps(raw_payload)
+    assert all(value in raw_rendered for value in sensitive_values)
+
+    redacted_payload = redact_unqualified_runtime_function_report_payload(
+        report, raw_payload
+    )
+    redacted_rendered = json.dumps(redacted_payload)
+    assert all(value not in redacted_rendered for value in sensitive_values)
+    assert UNQUALIFIED_RUNTIME_FUNCTION_REDACTION in redacted_rendered
+    assert redacted_payload["summary"] == raw_payload["summary"]
+
+    redacted_markdown = report_to_markdown(
+        report, redact_unqualified_runtime_functions=True
+    )
+    redacted_sarif = report_to_sarif(
+        report, redact_unqualified_runtime_functions=True
+    )
+    assert (
+        "Unqualified runtime-function material:** redacted for sharing"
+        in redacted_markdown
+    )
+    assert "FF075" in json.dumps(redacted_sarif)
+    for artifact in (redacted_markdown, json.dumps(redacted_sarif)):
+        assert all(value not in artifact for value in sensitive_values)
+
+    native_formula = "=SUM(A1:A2)"
+    assert redact_unqualified_runtime_function_material(native_formula) == native_formula
+
+
+def test_unqualified_runtime_function_report_redaction_hides_unsampled_static_inputs(
+    tmp_path,
+) -> None:
+    """Runtime-function input redaction must use full private impact evidence."""
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    baseline_marker = "PRIVATE-UNSAMPLED-RUNTIME-FUNCTION-BASELINE"
+    candidate_marker = "PRIVATE-UNSAMPLED-RUNTIME-FUNCTION-CANDIDATE"
+
+    def add_runtime_function_fanout(workbook, marker: str) -> None:
+        inputs = workbook["Inputs"]
+        inputs["A9"] = marker
+        # Z1 is a bare-runtime-function consumer after the report's B1:U1 sample.
+        for column in range(2, 22):
+            inputs.cell(row=1, column=column).value = "=A9"
+        inputs["Z1"] = "=PRIVATEUDF(A9)"
+
+    rewrite(
+        baseline,
+        lambda workbook: add_runtime_function_fanout(workbook, baseline_marker),
+    )
+    rewrite(
+        candidate,
+        lambda workbook: add_runtime_function_fanout(workbook, candidate_marker),
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    input_change = next(
+        change for change in raw_payload["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert "Inputs!Z1" not in input_change["impacted_cells"]
+    assert report.unqualified_runtime_function_static_input_cells == frozenset(
+        {("Inputs", "A9")}
+    )
+
+    redacted = redact_unqualified_runtime_function_report_payload(report, raw_payload)
+    redacted_change = next(
+        change for change in redacted["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert (
+        redacted_change["before"]["value"]
+        == UNQUALIFIED_RUNTIME_FUNCTION_REDACTION
+    )
+    assert (
+        redacted_change["after"]["value"]
+        == UNQUALIFIED_RUNTIME_FUNCTION_REDACTION
+    )
+    rendered = json.dumps(redacted)
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+
+
+def test_unqualified_runtime_function_report_redaction_hides_indirect_named_chain(
+    tmp_path,
+) -> None:
+    baseline = make_indirect_named_unqualified_runtime_function_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_indirect_named_unqualified_runtime_function_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_indirect_named_unqualified_runtime_function_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    function_change = next(
+        change
+        for change in report.changes
+        if change.kind == "unqualified_runtime_functions_changed"
+    )
+    assert function_change.details["unqualified_runtime_function_definition_changed"] is True
+    assert "unqualified_runtime_function_material_changed" not in function_change.details
+
+    baseline_marker = "PRIVATE-INDIRECT-NAMED-RUNTIME-FUNCTION-BASELINE"
+    candidate_marker = "PRIVATE-INDIRECT-NAMED-RUNTIME-FUNCTION-CANDIDATE"
+    ordinary_looking_definition = (
+        f'=LAMBDA(value,FENCE.RUNTIMEWRAPPER("{baseline_marker}"))'
+    )
+    # Without private name-chain resolution this direct text has only a dotted
+    # workbook-defined call, not a bare runtime candidate.
+    assert redact_unqualified_runtime_function_material(ordinary_looking_definition) == (
+        ordinary_looking_definition
+    )
+
+    raw_payload = report.to_dict()
+    raw_rendered = json.dumps(raw_payload)
+    assert baseline_marker in raw_rendered
+    assert candidate_marker in raw_rendered
+
+    redacted_payload = redact_unqualified_runtime_function_report_payload(
+        report, raw_payload
+    )
+    redacted_rendered = json.dumps(redacted_payload)
+    assert baseline_marker not in redacted_rendered
+    assert candidate_marker not in redacted_rendered
+    assert UNQUALIFIED_RUNTIME_FUNCTION_REDACTION in redacted_rendered
+
+    redacted_sarif = report_to_sarif(
+        report, redact_unqualified_runtime_functions=True
+    )
+    redacted_sarif_rendered = json.dumps(redacted_sarif)
+    assert baseline_marker not in redacted_sarif_rendered
+    assert candidate_marker not in redacted_sarif_rendered
+    assert "FF008" in redacted_sarif_rendered
+    assert "FF075" in redacted_sarif_rendered
 
 
 def test_named_unqualified_runtime_function_candidates_are_propagated_and_private(

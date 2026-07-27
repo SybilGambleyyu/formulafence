@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.101.0/formulafence-0.101.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.102.0/formulafence-0.102.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.101.0
+  uses: SybilGambleyyu/formulafence@v0.102.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -215,6 +215,46 @@ The GitHub Action exposes the same boundary through
 `redact-office-custom-functions: 'true'`. The scope follows Microsoft's
 [custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview)
 and [web-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).
+
+### Sharing reports with unqualified runtime functions
+
+A bare unknown worksheet call can bind to a VBA UDF, COM/Automation add-in,
+XLL, or another registered runtime. Its stored formula can expose a proprietary
+call name, arguments, or an ordinary static input in a generic report. For an
+artifact that crosses the local review boundary, add
+`--redact-unqualified-runtime-functions` to `diff`, `check`, or `portfolio`:
+
+```bash
+formulafence check baseline.xlsx candidate.xlsx \
+  --policy formulafence.yml \
+  --format json \
+  --redact-unqualified-runtime-functions \
+  --output shared-report.json
+```
+
+This output-only mode covers direct stored bare-call material that FormulaFence
+inventories under `FF075`. It replaces a whole serialized value with
+`[unqualified runtime-function material redacted]`, hides before/after evidence
+for a changed candidate formula or exact changed static input that the private
+dependency analysis recorded as reaching one, and conservatively hides changed
+formula-defined-name before/after values when a private resolved runtime-name
+chain changed. That last rule protects an ordinary-looking dotted wrapper whose
+private argument eventually reaches a bare UDF call. Because a shared renderer
+does not retain workbook-local name bindings, it may conservatively replace a
+standalone unknown bare-call-shaped string too; default local-review output is
+unchanged.
+
+The switch does not mutate snapshots, findings, policy evaluation, or an exit
+status; it does not calculate formulas, resolve or load VBA, COM/Automation,
+XLL, or another provider, execute code, contact a runtime, or reconstruct a
+dynamically assembled argument. It is not a general secret scrubber and does
+not replace the external-workbook-link, formula-action, Python-in-Excel, or
+Office custom-function sharing boundaries. Use the relevant switches together
+when a report contains multiple sensitive surfaces. The GitHub Action exposes
+the same boundary through `redact-unqualified-runtime-functions: 'true'`. The
+scope follows Microsoft's [installed UDF guidance](https://support.microsoft.com/en-us/excel/user-defined-functions-that-are-installed-with-add-ins-reference),
+[VBA custom-function guidance](https://support.microsoft.com/en-us/excel/create-custom-functions-in-excel),
+and [XLL registration/call guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/accessing-xll-code-in-excel).
 
 ### Portfolio gates
 

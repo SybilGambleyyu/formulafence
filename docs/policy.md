@@ -521,7 +521,11 @@ synthetic static-input path.
 FormulaFence does not evaluate a formula; resolve or load VBA, COM/Automation,
 an XLL, or another registered runtime; inspect host trust settings; or execute
 code. The ordinary semantic diff still retains changed formulas and definitions
-for reviewer context, so it is not a redacted candidate ledger. This boundary
+for reviewer context, so it is not a redacted candidate ledger. For a shared
+artifact, the separate output-only `--redact-unqualified-runtime-functions`
+mode hides direct bare-call material, exact changed static inputs, and changed
+resolved name-chain evidence without changing the comparison, policy, or exit
+status. This boundary
 follows Microsoft's [native function catalogue](https://support.microsoft.com/en-us/office/excel-functions-alphabetical-b3944572-255d-4efb-bb96-c6d90033e188),
 [installed UDF guidance](https://support.microsoft.com/en-us/excel/user-defined-functions-that-are-installed-with-add-ins-reference),
 [VBA custom-function guidance](https://support.microsoft.com/en-us/excel/create-custom-functions-in-excel),

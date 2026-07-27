@@ -4154,6 +4154,9 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         office_custom_function_static_input_cells=frozenset(
             office_custom_function_static_input_changes
         ),
+        unqualified_runtime_function_static_input_cells=frozenset(
+            unqualified_runtime_function_static_input_changes
+        ),
     )
 
 

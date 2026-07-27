@@ -5,6 +5,46 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## PivotTable XML structural bounds — 2026-07-26
+
+Version 0.130.0 closes two compact allocation paths in FormulaFence's
+PivotTable handling. The raw scanner recursively canonicalizes PivotTable view
+and cache-definition XML to compare layout, cache schema, and private shared
+items without exposing them. The ordinary workbook reader can then follow the
+same cache and view bindings a second time. Existing 16 MiB per-part, 64 MiB
+aggregate, and 512-part byte/count limits did not bound either materialized
+tree.
+
+FormulaFence now streams every PivotTable view and cache-definition part before
+reading it into a tree, with 32,768 elements per part and 65,536 across a
+package scan. [Microsoft documents up to 1,048,576 unique items per PivotTable
+field](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits),
+so a CI reader cannot assume a small catalog is invalid; a successfully
+streamed overage instead becomes explicit PivotTable coverage evidence before
+the private tree is built. Malformed or unreadable input retains the established
+full-parser diagnostic. After raw inspection, the temporary source for
+`openpyxl` removes only PivotTable cache and view bindings, retaining ordinary
+cell analysis without letting that reader reparse the package graph.
+
+Independent raw-ZIP fixtures measured the exact 0.129.0 wheel and the 0.130.0
+source candidate in the same Python 3.12 environment. An 11,968-byte workbook
+with 100,000 opaque PivotTable-view children (1,400,733 bytes of view XML)
+completed in 1.1149 seconds at 88,576 KiB through the prior wheel with no
+unrecognized PivotTable coverage; the candidate records a structural coverage
+gap in 0.5067 seconds at 41,344 KiB. An 11,766-byte workbook containing
+100,000 valid cached shared items (1,300,855 bytes of cache-definition XML)
+took 7.1374 seconds at 207,188 KiB through the prior wheel with no structural
+coverage marker; the candidate completes in 0.5825 seconds at 44,944 KiB with
+the coverage gap visible. The complete 913-test source suite passed in bounded
+runner batches (127.17 seconds aggregate), with Ruff, bytecode compilation,
+and `git diff --check` clean. A fresh Python 3.12 environment installed the
+exact 0.130.0 wheel, confirmed `openpyxl.DEFUSEDXML`, and completed a normal
+CLI diff. The hostile PivotTable view retained one structural coverage warning;
+its installed diff returned `FF031` and the expected status 1 with
+`--fail-on medium`. The installed reader-isolation check rejected every
+underlying PivotTable cache, record, and view parser while raw PivotTable
+evidence remained available.
+
 ## Chart XML structural bounds — 2026-07-26
 
 Version 0.129.0 closes a compact allocation path in FormulaFence's private

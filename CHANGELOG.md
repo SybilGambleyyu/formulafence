@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.130.0 — 2026-07-26
+
+- Bound legacy PivotTable view and cache-definition XML before FormulaFence's
+  private scanner can recursively canonicalize a compact but oversized tree.
+  Each scanned part allows 32,768 elements and the complete PivotTable package
+  scan allows 65,536, alongside its existing 16 MiB per-part, 64 MiB aggregate,
+  and 512-part byte/count limits.
+- Keep PivotTable refresh controls and static cell inspection available while
+  preventing the ordinary workbook reader from reparsing raw pivot packages:
+  FormulaFence now removes only PivotTable cache and view bindings in its
+  temporary reader copy after the bounded raw inspection has retained evidence.
+- Preserve observable coverage for a valid structural overage, malformed XML,
+  exact/default capacity, aggregate budgets, and nested opaque descendants;
+  add a reader-isolation test that rejects any underlying PivotTable cache,
+  record, or view parse.
+
 ## 0.129.0 — 2026-07-26
 
 - Bound legacy chart, ChartEx, chart-host DrawingML, and chart-overlay XML

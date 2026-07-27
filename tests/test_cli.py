@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.datavalidation import DataValidation
+
 from formulafence.cli import main
 
 from .helpers import make_model, rewrite
@@ -53,6 +56,135 @@ def test_profile_does_not_expose_cell_values(tmp_path) -> None:
     profile = output.read_text(encoding="utf-8")
     assert "Calculated revenue" not in profile
     assert '"formula_cells"' in profile
+
+
+def test_cli_can_redact_external_workbook_link_material_from_shared_reports(tmp_path) -> None:
+    baseline_marker = "PRIVATE-SHARED-BASELINE"
+    candidate_marker = "PRIVATE-SHARED-CANDIDATE"
+
+    def add_external_link_surfaces(workbook, marker: str) -> None:
+        source = f"C:\\{marker}\\[Source.xlsx]Inputs"
+        workbook["Model"]["D2"] = f"='{source}'!$B$2"
+        workbook.defined_names.add(
+            DefinedName("ExternalNamedLimit", attr_text=f"'{source}'!$C$2")
+        )
+        validation = DataValidation(
+            type="whole",
+            operator="greaterThan",
+            formula1=f"='{source}'!$D$2",
+        )
+        validation.add("E2")
+        workbook["Model"].add_data_validation(validation)
+
+    def external_model(path, marker: str):
+        workbook = make_model(path)
+        rewrite(workbook, lambda model: add_external_link_surfaces(model, marker))
+        return workbook
+
+    baseline = external_model(tmp_path / "baseline.xlsx", baseline_marker)
+    candidate = external_model(tmp_path / "candidate.xlsx", candidate_marker)
+    default_json = tmp_path / "default.json"
+    assert (
+        main(
+            [
+                "diff",
+                str(baseline),
+                str(candidate),
+                "--format",
+                "json",
+                "--output",
+                str(default_json),
+            ]
+        )
+        == 0
+    )
+    default_rendered = default_json.read_text(encoding="utf-8")
+    assert baseline_marker in default_rendered
+    assert candidate_marker in default_rendered
+
+    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+        output = tmp_path / f"redacted.{suffix}"
+        assert (
+            main(
+                [
+                    "diff",
+                    str(baseline),
+                    str(candidate),
+                    "--format",
+                    report_format,
+                    "--redact-external-workbook-links",
+                    "--output",
+                    str(output),
+                ]
+            )
+            == 0
+        )
+        rendered = output.read_text(encoding="utf-8")
+        assert baseline_marker not in rendered
+        assert candidate_marker not in rendered
+        if report_format == "markdown":
+            assert "External-workbook link material:** redacted for sharing" in rendered
+        else:
+            assert "external-workbook link material redacted" in rendered
+
+    policy = tmp_path / "formulafence.yml"
+    policy.write_text(
+        "version: 1\nrules:\n  no_external_workbook_link_surface_changes: true\n",
+        encoding="utf-8",
+    )
+    policy_output = tmp_path / "redacted-policy.sarif"
+    assert (
+        main(
+            [
+                "check",
+                str(baseline),
+                str(candidate),
+                "--policy",
+                str(policy),
+                "--format",
+                "sarif",
+                "--redact-external-workbook-links",
+                "--output",
+                str(policy_output),
+            ]
+        )
+        == 1
+    )
+    policy_rendered = policy_output.read_text(encoding="utf-8")
+    assert "FFP081" in policy_rendered
+    assert baseline_marker not in policy_rendered
+    assert candidate_marker not in policy_rendered
+
+    baseline_directory = tmp_path / "baseline-portfolio"
+    candidate_directory = tmp_path / "candidate-portfolio"
+    baseline_directory.mkdir()
+    candidate_directory.mkdir()
+    external_model(baseline_directory / "model.xlsx", baseline_marker)
+    external_model(candidate_directory / "model.xlsx", candidate_marker)
+    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+        output = tmp_path / f"redacted-portfolio.{suffix}"
+        assert (
+            main(
+                [
+                    "portfolio",
+                    str(baseline_directory),
+                    str(candidate_directory),
+                    "--format",
+                    report_format,
+                    "--redact-external-workbook-links",
+                    "--output",
+                    str(output),
+                ]
+            )
+            == 0
+        )
+        rendered = output.read_text(encoding="utf-8")
+        assert baseline_marker not in rendered
+        assert candidate_marker not in rendered
+        if report_format == "markdown":
+            assert "External-workbook link material:** redacted for sharing" in rendered
+        else:
+            assert "external-workbook link material redacted" in rendered
 
 
 def test_cli_refuses_to_overwrite_an_input_workbook(tmp_path) -> None:

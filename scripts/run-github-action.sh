@@ -15,6 +15,7 @@ candidate=${INPUT_CANDIDATE:-}
 policy=${INPUT_POLICY:-}
 format=${INPUT_FORMAT:-markdown}
 output=${INPUT_OUTPUT:-formulafence-report.md}
+redact_external_workbook_links=${INPUT_REDACT_EXTERNAL_WORKBOOK_LINKS:-false}
 fail_on=${INPUT_FAIL_ON:-none}
 max_workbooks=${INPUT_MAX_WORKBOOKS:-512}
 max_link_impact=${INPUT_MAX_LINK_IMPACT:-100000}
@@ -36,6 +37,11 @@ esac
 case "$fail_on" in
   none|low|medium|high|critical) ;;
   *) fail "Unsupported fail-on level: $fail_on." ;;
+esac
+
+case "$redact_external_workbook_links" in
+  true|false) ;;
+  *) fail "Unsupported redact-external-workbook-links value: $redact_external_workbook_links (expected true or false)." ;;
 esac
 
 if ! [[ "$max_workbooks" =~ ^[1-9][0-9]*$ ]]; then
@@ -135,6 +141,9 @@ else
   command+=(diff "$baseline" "$candidate")
 fi
 command+=(--format "$format" --output "$report_path" --fail-on "$fail_on")
+if [[ "$redact_external_workbook_links" == true ]]; then
+  command+=(--redact-external-workbook-links)
+fi
 
 if "${command[@]}"; then
   exit_code=0

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.98.0 — 2026-07-26
+
+- Add opt-in `--redact-external-workbook-links` rendering for `diff`, `check`,
+  and `portfolio` JSON, Markdown, and SARIF artifacts. It keeps ordinary local
+  review output unchanged by default, while replacing a whole serialized value
+  that exposes a literal static external-workbook endpoint with a stable
+  redaction marker. The renderer uses the existing static parser for direct
+  A1, 3-D, defined-name, and book-only table spellings, plus a conservative
+  visible-literal fallback; it never evaluates formulas or reconstructs
+  text-built links.
+- Keep redaction strictly output-only: it does not alter snapshots, comparison
+  facts, policy evaluation, or exit status. The composite GitHub Action now
+  exposes the same behavior as `redact-external-workbook-links: 'true'`, so a
+  shared artifact and Markdown job summary can use the boundary directly.
+- Add regression coverage for default local evidence, JSON/Markdown/SARIF
+  direct reports, policy failures, portfolios, direct renderer use, and the
+  composite Action.
+
 ## 0.97.0 — 2026-07-26
 
 - Add `FF081` and the `no_external_workbook_link_surface_changes` policy guard

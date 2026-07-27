@@ -1159,6 +1159,17 @@ formula will produce.
   ledger's private signature. A material change emits `FF081` and can be blocked with
   `no_external_workbook_link_surface_changes`; chart parts with unavailable
   formula coverage make that guard fail closed.
+- Generic semantic output intentionally remains normal local reviewer context,
+  so `diff`, `check`, and `portfolio` offer an explicit
+  `--redact-external-workbook-links` rendering mode for artifacts that cross
+  that boundary. It walks serialized output values only after comparison and
+  policy evaluation, replacing a whole value that contains a parser-recognized
+  literal static external-workbook endpoint. A conservative lexical fallback
+  also hides visibly embedded bracketed/dynamic endpoint literals without
+  evaluating a formula. The mode does not mutate snapshots, policy facts, or
+  exit status; it does not follow a link, recover a value assembled from text
+  fragments, or claim to redact unrelated sensitive workbook material. It is
+  opt-in so ordinary local reports retain their established detailed evidence.
 - Every canonical root or part-level OPC relationship part is also inspected
   independently for `TargetMode="External"`, including opaque relationships
   no feature-specific scanner can reach. FormulaFence retains source, type,

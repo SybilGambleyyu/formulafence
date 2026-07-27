@@ -14,7 +14,13 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 import formulafence.workbook as workbook_module
 from formulafence.diff import compare_snapshots
-from formulafence.output import profile_to_markdown, report_to_markdown, report_to_sarif
+from formulafence.output import (
+    EXTERNAL_WORKBOOK_LINK_REDACTION,
+    profile_to_markdown,
+    redact_external_workbook_link_material,
+    report_to_markdown,
+    report_to_sarif,
+)
 from formulafence.workbook import load_snapshot, profile_snapshot
 
 from .helpers import (
@@ -1316,6 +1322,36 @@ def test_external_workbook_link_surface_ledger_catches_same_surface_swaps(
         assert private_value not in rendered_profile
         assert private_value not in rendered_markdown
         assert private_value not in external_surface_sarif
+
+
+def test_external_workbook_link_report_redaction_hides_static_and_dynamic_literals() -> None:
+    payload = {
+        "cell": "='C:\\PRIVATE-CELL\\[Source.xlsx]Inputs'!$B$2",
+        "defined_name": "='C:\\PRIVATE-NAME\\[Source.xlsx]ExternalLimit'",
+        "validation": "='C:\\PRIVATE-VALIDATION\\[Source.xlsx]Inputs'!$D$2",
+        "structured": "='..\\PRIVATE-TABLE\\source.xlsx'!Sales[#Data]",
+        "dynamic": '=INDIRECT("\'[PRIVATE-DYNAMIC]Inputs\'!A1")',
+        "ordinary": "keep ordinary local review evidence",
+        "local_table": "Table[Amount]",
+        "nested": ["=[PRIVATE-NAMED]InputRange"],
+    }
+
+    redacted = redact_external_workbook_link_material(payload)
+
+    assert payload["ordinary"] == "keep ordinary local review evidence"
+    assert redacted["ordinary"] == payload["ordinary"]
+    assert redacted["local_table"] == payload["local_table"]
+    for private_value in (
+        "PRIVATE-CELL",
+        "PRIVATE-NAME",
+        "PRIVATE-VALIDATION",
+        "PRIVATE-TABLE",
+        "PRIVATE-DYNAMIC",
+        "PRIVATE-NAMED",
+    ):
+        assert private_value not in json.dumps(redacted)
+    assert redacted["cell"] == EXTERNAL_WORKBOOK_LINK_REDACTION
+    assert redacted["nested"] == [EXTERNAL_WORKBOOK_LINK_REDACTION]
 
 
 def test_external_workbook_link_surface_ledger_covers_direct_external_names(

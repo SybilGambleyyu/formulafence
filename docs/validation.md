@@ -5,6 +5,37 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared external-workbook-link report redaction — 2026-07-26
+
+FormulaFence 0.98.0 adds an explicit rendering boundary for generic reports:
+`--redact-external-workbook-links`. It is deliberately separate from the
+count-only `FF081` ledger. Existing local review output remains unchanged when
+the option is absent; when present, JSON, Markdown, and SARIF replace an entire
+serialized value containing a literal static external-workbook endpoint with a
+stable redaction marker. It does not evaluate a formula, change a comparison or
+policy result, or attempt to reconstruct a dynamic reference assembled from
+text fragments.
+
+A fresh disposable baseline/candidate pair was generated with XlsxWriter 3.2.9
+outside this repository. Each workbook contained a direct external A1 formula,
+a direct external formula-defined name, and an external data-validation
+criterion. Only a controlled source marker changed. The unredacted JSON diff
+contained both markers, confirming that the normal local-review contract stayed
+intact. The exact release wheel then produced redacted JSON, Markdown, and
+SARIF artifacts with neither marker present. Its narrow link-surface policy
+returned exit `1` with `FF008`, `FF020`, `FF081`, and `FFP081`, proving the
+rendering switch did not weaken policy evidence. An exact-wheel one-workbook
+portfolio JSON artifact likewise retained its report structure while omitting
+both markers.
+
+The isolated environment reported `FormulaFence 0.98.0`. The built wheel
+`formulafence-0.98.0-py3-none-any.whl` passed `twine check` with SHA-256
+`06d177296bcd5430e15b2b64c3e4237143af86cb5105b645e1fda6a7c9dc9c35`.
+The source distribution passed `twine check`; its digest is intentionally
+omitted because this validation note is included in that source archive. The
+final source tree passed **636 tests in 85.73 seconds**, plus a clean Ruff
+check, `git diff --check`, and shell syntax check for the composite Action.
+
 ## Static external-workbook link surfaces — 2026-07-26
 
 Microsoft's [workbook-link guidance](https://support.microsoft.com/en-us/office/create-workbook-links-c98d1803-dd75-4668-ac6a-d7cca2a9b95f)

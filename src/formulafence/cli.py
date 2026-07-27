@@ -15,6 +15,7 @@ from formulafence.output import (
     portfolio_to_markdown,
     portfolio_to_sarif,
     profile_to_markdown,
+    redact_external_workbook_link_material,
     report_to_markdown,
     report_to_sarif,
 )
@@ -28,6 +29,17 @@ _FAIL_LEVELS = ("none", "low", "medium", "high", "critical")
 def _add_output_arguments(parser: argparse.ArgumentParser, formats: Sequence[str]) -> None:
     parser.add_argument("--format", choices=formats, default="markdown", help="Report format")
     parser.add_argument("--output", type=Path, help="Write report to this file instead of stdout")
+
+
+def _add_external_workbook_link_redaction_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--redact-external-workbook-links",
+        action="store_true",
+        help=(
+            "Replace visible literal external-workbook link material in this shared "
+            "report without changing comparison or policy results"
+        ),
+    )
 
 
 def _positive_integer(value: str) -> int:
@@ -58,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("before", type=Path, help="Approved or baseline workbook")
     diff.add_argument("after", type=Path, help="Candidate workbook")
     _add_output_arguments(diff, ("json", "markdown", "sarif"))
+    _add_external_workbook_link_redaction_argument(diff)
     diff.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -70,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("after", type=Path, help="Candidate workbook")
     check.add_argument("--policy", required=True, type=Path, help="Path to formulafence.yml")
     _add_output_arguments(check, ("json", "markdown", "sarif"))
+    _add_external_workbook_link_redaction_argument(check)
     check.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -103,6 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_output_arguments(portfolio, ("json", "markdown", "sarif"))
+    _add_external_workbook_link_redaction_argument(portfolio)
     portfolio.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -173,11 +188,24 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
         policy_findings = evaluate_policy(report, load_policy(arguments.policy))
 
     if arguments.format == "json":
-        content = as_json(report.to_dict(policy_findings))
+        payload = report.to_dict(policy_findings)
+        if arguments.redact_external_workbook_links:
+            payload = redact_external_workbook_link_material(payload)
+        content = as_json(payload)
     elif arguments.format == "sarif":
-        content = as_json(report_to_sarif(report, policy_findings))
+        content = as_json(
+            report_to_sarif(
+                report,
+                policy_findings,
+                redact_external_workbook_links=arguments.redact_external_workbook_links,
+            )
+        )
     else:
-        content = report_to_markdown(report, policy_findings)
+        content = report_to_markdown(
+            report,
+            policy_findings,
+            redact_external_workbook_links=arguments.redact_external_workbook_links,
+        )
     _emit(content, arguments.output)
 
     if policy_findings or _threshold_failed(
@@ -205,11 +233,22 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
         max_link_impact=arguments.max_link_impact,
     )
     if arguments.format == "json":
-        content = as_json(report.to_dict())
+        payload = report.to_dict()
+        if arguments.redact_external_workbook_links:
+            payload = redact_external_workbook_link_material(payload)
+        content = as_json(payload)
     elif arguments.format == "sarif":
-        content = as_json(portfolio_to_sarif(report))
+        content = as_json(
+            portfolio_to_sarif(
+                report,
+                redact_external_workbook_links=arguments.redact_external_workbook_links,
+            )
+        )
     else:
-        content = portfolio_to_markdown(report)
+        content = portfolio_to_markdown(
+            report,
+            redact_external_workbook_links=arguments.redact_external_workbook_links,
+        )
     _emit(content, arguments.output)
 
     if report.incomplete:

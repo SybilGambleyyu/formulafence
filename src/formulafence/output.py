@@ -3,16 +3,88 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable
 from typing import Any
 
 from formulafence import __version__
+from formulafence.formulas import inspect_formula
 from formulafence.models import DiffReport, Finding, display_location
 from formulafence.portfolio import PortfolioReport
+
+EXTERNAL_WORKBOOK_LINK_REDACTION = "[external-workbook link material redacted]"
+
+# This fallback deliberately supplements, rather than replaces, FormulaFence's
+# static formula inspection below.  A visible `INDIRECT("'[Book]Sheet'!A1")`
+# string is not a static dependency, but it still exposes a workbook endpoint
+# in a shared artifact.  The grammar is intentionally conservative: it only
+# matches a bracketed book followed by a sheet separator, or a common Excel
+# file extension in a direct-name/table-style literal.  It never evaluates or
+# concatenates formula text.
+_VISIBLE_EXTERNAL_WORKBOOK_LITERAL = re.compile(
+    r"\[[^\[\]\r\n]{1,255}\][^!\r\n]{0,255}!"
+    r"|\[[^\[\]\r\n]{1,255}\.(?:xls(?:x|m|b)?|xlt(?:x|m)?|xlam)\]"
+    r"[A-Za-z_\\]"
+    r"|['\"][^'\"\r\n]{1,1024}\.(?:xls(?:x|m|b)?|xlt(?:x|m)?|xlam)['\"]!",
+    re.IGNORECASE,
+)
 
 
 def as_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+def _contains_external_workbook_link_material(value: str) -> bool:
+    """Return whether one rendered string exposes a literal workbook endpoint.
+
+    Most FormulaFence fields are formula strings, but some Excel controls omit
+    the leading ``=``.  Normalising only that presentation detail lets the
+    existing static parser recognise direct A1, 3-D, defined-name, and table
+    links without resolving a source or evaluating any expression.  The small
+    lexical fallback covers plainly visible dynamic literals such as
+    ``INDIRECT("'[Book]Sheet'!A1")``; it intentionally cannot prove or recover
+    a link assembled from separate text fragments.
+    """
+    # All direct grammar forms include a workbook bracket, except book-only
+    # table syntax such as `'../inputs/source.xlsx'!Sales[#Data]`.  Avoid a
+    # tokenizer pass over the many ordinary locations, messages, and labels in
+    # a large report while retaining both forms.
+    if "[" not in value and ".xls" not in value.casefold():
+        return False
+    formula = value if value.lstrip().startswith("=") else f"={value}"
+    inspection = inspect_formula(formula)
+    if (
+        inspection.external_workbook_references
+        or inspection.external_workbook_three_d_references
+        or inspection.external_workbook_structured_references
+        or inspection.external_workbook_defined_name_references
+    ):
+        return True
+    return bool(_VISIBLE_EXTERNAL_WORKBOOK_LITERAL.search(value))
+
+
+def redact_external_workbook_link_material(payload: Any) -> Any:
+    """Return an output-only copy with visible external-workbook links hidden.
+
+    FormulaFence's ordinary diff objects intentionally retain full local
+    evidence.  This helper is for artifacts that leave that trusted review
+    boundary: it walks JSON-compatible output values and replaces an entire
+    string that exposes a literal external-workbook endpoint.  It does not
+    mutate the supplied report, affect policy evaluation, or promise to redact
+    a source assembled dynamically at Excel calculation time.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: redact_external_workbook_link_material(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [redact_external_workbook_link_material(value) for value in payload]
+    if isinstance(payload, tuple):
+        return tuple(redact_external_workbook_link_material(value) for value in payload)
+    if isinstance(payload, str) and _contains_external_workbook_link_material(payload):
+        return EXTERNAL_WORKBOOK_LINK_REDACTION
+    return payload
 
 
 def _markdown_escape(value: object) -> str:
@@ -3304,15 +3376,27 @@ def _append_report_markdown_sections(
                 lines.append(f"- {path}")
 
 
-def report_to_markdown(report: DiffReport, extra_findings: Iterable[Finding] = ()) -> str:
+def report_to_markdown(
+    report: DiffReport,
+    extra_findings: Iterable[Finding] = (),
+    *,
+    redact_external_workbook_links: bool = False,
+) -> str:
     policy_findings = list(extra_findings)
     payload = report.to_dict(policy_findings)
+    if redact_external_workbook_links:
+        payload = redact_external_workbook_link_material(payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence change report",
         "",
         f"- **Baseline:** `{payload['before']['path']}`",
         f"- **Candidate:** `{payload['after']['path']}`",
+        *(
+            ["- **External-workbook link material:** redacted for sharing"]
+            if redact_external_workbook_links
+            else []
+        ),
         f"- **Changes:** {summary['change_count']}",
         f"- **Findings:** {summary['finding_count']}",
         f"- **Highest severity:** `{summary['highest_severity']}`",
@@ -3331,7 +3415,12 @@ _SARIF_LEVELS = {
 }
 
 
-def report_to_sarif(report: DiffReport, extra_findings: Iterable[Finding] = ()) -> dict[str, Any]:
+def report_to_sarif(
+    report: DiffReport,
+    extra_findings: Iterable[Finding] = (),
+    *,
+    redact_external_workbook_links: bool = False,
+) -> dict[str, Any]:
     findings = [*report.findings, *extra_findings]
     rule_ids = sorted({finding.rule_id for finding in findings})
     rules = [
@@ -3365,7 +3454,7 @@ def report_to_sarif(report: DiffReport, extra_findings: Iterable[Finding] = ()) 
                 }
             ]
         results.append(result)
-    return {
+    payload = {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [
@@ -3382,6 +3471,9 @@ def report_to_sarif(report: DiffReport, extra_findings: Iterable[Finding] = ()) 
             }
         ],
     }
+    if redact_external_workbook_links:
+        return redact_external_workbook_link_material(payload)
+    return payload
 
 
 def _markdown_code(value: object) -> str:
@@ -3422,9 +3514,13 @@ def _append_cross_workbook_impact_samples(
     lines.append("")
 
 
-def portfolio_to_markdown(report: PortfolioReport) -> str:
+def portfolio_to_markdown(
+    report: PortfolioReport, *, redact_external_workbook_links: bool = False
+) -> str:
     """Render a complete multi-workbook review without absolute filesystem paths."""
     payload = report.to_dict()
+    if redact_external_workbook_links:
+        payload = redact_external_workbook_link_material(payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence portfolio report",
@@ -3451,6 +3547,11 @@ def portfolio_to_markdown(report: PortfolioReport) -> str:
         ),
         f"- **Findings:** {summary['finding_count']}",
         f"- **Highest severity:** `{summary['highest_severity']}`",
+        *(
+            ["- **External-workbook link material:** redacted for sharing"]
+            if redact_external_workbook_links
+            else []
+        ),
         "",
         (
             "Relative workbook paths are the comparison identity. A move is deliberately "
@@ -3498,7 +3599,9 @@ def portfolio_to_markdown(report: PortfolioReport) -> str:
     return "\n".join(lines) + "\n"
 
 
-def portfolio_to_sarif(report: PortfolioReport) -> dict[str, Any]:
+def portfolio_to_sarif(
+    report: PortfolioReport, *, redact_external_workbook_links: bool = False
+) -> dict[str, Any]:
     """Render every portfolio finding in one SARIF run with relative artifacts."""
     rule_ids = sorted(
         {
@@ -3541,7 +3644,7 @@ def portfolio_to_sarif(report: PortfolioReport) -> dict[str, Any]:
                     "locations": [location],
                 }
             )
-    return {
+    payload = {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [
@@ -3558,3 +3661,6 @@ def portfolio_to_sarif(report: PortfolioReport) -> dict[str, Any]:
             }
         ],
     }
+    if redact_external_workbook_links:
+        return redact_external_workbook_link_material(payload)
+    return payload

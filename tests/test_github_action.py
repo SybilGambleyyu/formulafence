@@ -31,6 +31,7 @@ def _run_action_script(
     policy: Path | None = None,
     output: str = "reports/formulafence.md",
     report_format: str = "markdown",
+    redact_external_workbook_links: str = "false",
     max_workbooks: str = "512",
     max_link_impact: str = "100000",
     upload_artifact: str = "true",
@@ -56,6 +57,7 @@ def _run_action_script(
             "INPUT_POLICY": workspace_input(policy) if policy is not None else "",
             "INPUT_FORMAT": report_format,
             "INPUT_OUTPUT": output,
+            "INPUT_REDACT_EXTERNAL_WORKBOOK_LINKS": redact_external_workbook_links,
             "INPUT_FAIL_ON": "none",
             "INPUT_MAX_WORKBOOKS": max_workbooks,
             "INPUT_MAX_LINK_IMPACT": max_link_impact,
@@ -86,6 +88,7 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
         "policy",
         "format",
         "output",
+        "redact-external-workbook-links",
         "max-workbooks",
         "max-link-impact",
     } <= set(action["inputs"])
@@ -182,6 +185,47 @@ def test_action_rejects_an_ambiguous_artifact_switch(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "Unsupported upload-artifact value" in result.stderr
+
+
+def test_action_can_redact_external_workbook_link_material(tmp_path: Path) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    baseline_marker = "PRIVATE-ACTION-BASELINE"
+    candidate_marker = "PRIVATE-ACTION-CANDIDATE"
+    _workbook(baseline, f"='C:\\{baseline_marker}\\[Source.xlsx]Inputs'!$B$2")
+    _workbook(candidate, f"='C:\\{candidate_marker}\\[Source.xlsx]Inputs'!$B$2")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        report_format="json",
+        output="reports/formulafence.json",
+        redact_external_workbook_links="true",
+    )
+
+    assert result.returncode == 0
+    rendered = (tmp_path / "reports" / "formulafence.json").read_text(encoding="utf-8")
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+    assert "external-workbook link material redacted" in rendered
+
+
+def test_action_rejects_an_invalid_external_workbook_redaction_switch(tmp_path: Path) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    _workbook(baseline, "=1+1")
+    _workbook(candidate, "=1+1")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        redact_external_workbook_links="sometimes",
+    )
+
+    assert result.returncode == 2
+    assert "Unsupported redact-external-workbook-links value" in result.stderr
 
 
 def test_action_runs_a_directory_portfolio_and_preserves_membership_evidence(

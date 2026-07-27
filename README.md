@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.97.0/formulafence-0.97.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.98.0/formulafence-0.98.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.97.0
+  uses: SybilGambleyyu/formulafence@v0.98.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -81,6 +81,33 @@ immutable commit in a production workflow.
 
 See [the CI integration guide](docs/ci.md) for SARIF, artifact, and
 preinstalled-package options.
+
+### Sharing reports with external-workbook links
+
+Ordinary diff reports deliberately retain full local reviewer evidence. When a
+JSON, Markdown, or SARIF artifact must leave that trusted review boundary, add
+`--redact-external-workbook-links` to `diff`, `check`, or `portfolio`:
+
+```bash
+formulafence check baseline.xlsx candidate.xlsx \
+  --policy formulafence.yml \
+  --format sarif \
+  --redact-external-workbook-links \
+  --output results.sarif
+```
+
+The option is output-only: comparison facts, policy evaluation, exit status,
+and the in-memory report remain unchanged. It replaces a whole serialized
+string that contains a FormulaFence-recognized literal static external-workbook
+reference (including direct A1, 3-D, defined-name, data-validation, or
+book-only table forms) with `[external-workbook link material redacted]`. It
+also conservatively hides plainly visible bracketed/dynamic literals such as
+`INDIRECT("'[Book]Sheet'!A1")`; it never evaluates a formula or reconstructs a
+link assembled from text fragments. This is deliberately not a general
+sensitive-data vault or a guarantee to redact every dynamic Excel expression.
+Without the option, existing local-review output is unchanged. Markdown notes
+when the option was used. The GitHub Action exposes the same behavior through
+`redact-external-workbook-links: 'true'`.
 
 ### Portfolio gates
 
@@ -527,8 +554,11 @@ invoking action/provider formula through its static dependency graph, catching
 without evaluating `A1`. Dynamic or unresolvable arguments remain explicit
 parser-coverage limits. The ordinary semantic cell diff intentionally continues
 to show changed formulas to reviewers; its general payload is not a redacted
-formula vault. FormulaFence does not calculate, resolve, fetch, open, click,
-follow, authenticate to, query, or execute any formula action/provider, and it
+formula vault. `--redact-external-workbook-links` is a narrower, output-only
+sharing boundary for literal external-workbook link material; it does not turn
+the general payload into a redacted formula vault. FormulaFence does not
+calculate, resolve, fetch, open, click, follow, authenticate to, query, or
+execute any formula action/provider, and it
 does not decide whether a dynamic `HYPERLINK` destination is local or remote.
 Enable
 `no_formula_external_action_changes` to block this boundary in CI.

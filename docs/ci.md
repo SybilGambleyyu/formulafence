@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.97.0
+        uses: SybilGambleyyu/formulafence@v0.98.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -63,6 +63,27 @@ with the repository's chosen SARIF uploader. FormulaFence uses logical
 locations such as `Dashboard!B12`; consumers that do not understand Excel
 coordinates can still show the workbook path, rule, and message.
 
+## Shared external-workbook-link artifacts
+
+The default report preserves full local reviewer evidence. If an artifact or
+Markdown job summary will be shared outside that review boundary, set the
+Action input below (or pass the same CLI flag to `diff`, `check`, or
+`portfolio`):
+
+```yaml
+          redact-external-workbook-links: 'true'
+```
+
+This maps directly to `--redact-external-workbook-links`. It replaces a whole
+serialized value containing a FormulaFence-recognized literal static
+external-workbook endpoint with `[external-workbook link material redacted]`,
+and also conservatively removes plainly visible bracketed/dynamic endpoint
+literals. It does not change comparison, policy, exit-code, or in-memory
+evidence; it does not evaluate formulas, follow a link, or reconstruct text
+assembled at Excel calculation time. It is not a general sensitive-data
+redaction guarantee, so keep the default local-review artifact when reviewers
+need the complete formula evidence.
+
 ## Directory portfolios
 
 When both Action inputs are directories, the Action automatically runs
@@ -72,7 +93,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.97.0
+  uses: SybilGambleyyu/formulafence@v0.98.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -176,7 +197,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.97.0/formulafence-0.97.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.98.0/formulafence-0.98.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

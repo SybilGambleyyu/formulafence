@@ -37,7 +37,11 @@ seconds at 39,680 KiB; exact 16,384-declaration and 4,096-container fixtures
 completed in 1.382 seconds and 0.203 seconds, respectively. The completed
 source tree passed **847 tests in 120.57 seconds**; focused archive-safety and
 version coverage passed **145 tests in 4.59 seconds**, with Ruff, bytecode
-compilation, and `git diff --check` clean.
+compilation, and `git diff --check` clean. A fresh Python 3.12 environment
+installed the exact release-candidate wheel, confirmed `FormulaFence 0.122.0`
+and `openpyxl.DEFUSEDXML`, completed a normal CLI comparison, and returned the
+normal input-error exit status (2) for independently generated 100,000-entry
+declaration and container fixtures.
 
 ## Empty formatted-row dimension bound — 2026-07-26
 

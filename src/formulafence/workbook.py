@@ -748,6 +748,10 @@ _WORKSHEET_IMAGE_HASH_CHUNK_BYTES = 1024 * 1024
 _THREADED_COMMENT_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _THREADED_COMMENT_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _THREADED_COMMENT_TOTAL_XML_MAX_COUNT = 512
+_THREADED_COMMENT_MAX_XML_ELEMENT_COUNT = 32_768
+_THREADED_COMMENT_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _THREADED_COMMENT_MAX_XML_ELEMENT_COUNT
+)
 _THREADED_COMMENT_PART_PATTERN = re.compile(
     r"^xl/threadedComments/[^/]+\.xml$", re.IGNORECASE
 )
@@ -1873,10 +1877,11 @@ class _ExternalRelationshipBudget:
 
 @dataclass
 class _ThreadedCommentBudget:
-    """Bound threaded-comment and person XML bytes in one package scan."""
+    """Bound threaded-comment/person XML bytes, parts, and structure per scan."""
 
     remaining_bytes: int = _THREADED_COMMENT_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _THREADED_COMMENT_TOTAL_XML_MAX_COUNT
+    remaining_xml_elements: int = _THREADED_COMMENT_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 @dataclass
@@ -16304,6 +16309,71 @@ def _legacy_note_reader_relationship_replacements(
     return replacements, tuple(sorted(reader_warnings))
 
 
+def _threaded_comment_reader_relationship_replacements(
+    path: Path,
+    prior_replacements: Mapping[str, bytes] | None = None,
+) -> tuple[dict[str, bytes], tuple[str, ...]]:
+    """Keep modern-comment package bindings out of the ordinary workbook reader.
+
+    FormulaFence has already inspected the original threaded-comment and person
+    XML through its bounded raw scanner. The ordinary reader only needs cells
+    and workbook structure, so remove these optional package bindings from its
+    temporary copy. This prevents a future reader implementation from
+    materializing a raw comment tree that the bounded scanner rejected.
+    """
+    replacements: dict[str, bytes] = {}
+    reader_warnings: set[str] = set()
+    prior_replacements = prior_replacements or {}
+    try:
+        with ZipFile(path) as archive:
+            sheet_parts = _sheet_xml_parts(archive)
+            relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+            source_relationship_types = {
+                "xl/workbook.xml": _THREADED_COMMENT_PERSON_RELATIONSHIP.casefold(),
+            }
+            source_relationship_types.update(
+                {
+                    member: _THREADED_COMMENT_RELATIONSHIP.casefold()
+                    for _sheet, (member, sheet_kind) in sheet_parts.items()
+                    if sheet_kind == "worksheet"
+                }
+            )
+            for member, relationship_type in source_relationship_types.items():
+                relationship_member = _relationship_part_path(member)
+                try:
+                    payload = prior_replacements.get(relationship_member)
+                    relationships = (
+                        _xml_root_from_payload(payload)
+                        if payload is not None
+                        else _xml_root(archive, relationship_member)
+                    )
+                except KeyError:
+                    continue
+                if (
+                    _xml_namespace(relationships.tag) != _PACKAGE_RELATIONSHIP_NS
+                    or _xml_local_name(relationships.tag) != "Relationships"
+                ):
+                    continue
+                removed = False
+                for relationship in list(relationships.findall(relationship_tag)):
+                    if relationship.get("Type", "").casefold() != relationship_type:
+                        continue
+                    relationships.remove(relationship)
+                    removed = True
+                if removed:
+                    replacements[relationship_member] = ElementTree.tostring(
+                        relationships,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        reader_warnings.add(
+            "FormulaFence could not isolate threaded-comment relationships before the "
+            f"underlying workbook reader ran ({type(error).__name__})."
+        )
+    return replacements, tuple(sorted(reader_warnings))
+
+
 def _cell_hyperlink_reader_replacements(
     path: Path,
     prior_replacements: Mapping[str, bytes] | None = None,
@@ -16964,6 +17034,13 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
         _legacy_note_reader_relationship_replacements(path)
     )
     prior_replacements = {**replacements, **legacy_replacements}
+    threaded_comment_replacements, threaded_comment_reader_warnings = (
+        _threaded_comment_reader_relationship_replacements(path, prior_replacements)
+    )
+    prior_replacements = {
+        **prior_replacements,
+        **threaded_comment_replacements,
+    }
     cell_hyperlink_replacements, cell_hyperlink_reader_warnings = (
         _cell_hyperlink_reader_replacements(path, prior_replacements)
     )
@@ -17003,6 +17080,7 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
         _table_style_control_reader_replacements(path, prior_replacements)
     )
     replacements.update(legacy_replacements)
+    replacements.update(threaded_comment_replacements)
     replacements.update(cell_hyperlink_replacements)
     replacements.update(worksheet_sparkline_replacements)
     replacements.update(worksheet_web_extension_replacements)
@@ -17014,6 +17092,7 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
             {
                 *reader_warnings,
                 *legacy_reader_warnings,
+                *threaded_comment_reader_warnings,
                 *cell_hyperlink_reader_warnings,
                 *worksheet_sparkline_reader_warnings,
                 *worksheet_web_extension_reader_warnings,
@@ -40222,6 +40301,45 @@ def _threaded_comment_content_type_status(
     return "mismatched" if declared else "unlisted"
 
 
+def _threaded_comment_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _ThreadedCommentBudget,
+) -> str | None:
+    """Stream comment XML before recursively canonicalizing its private tree."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _THREADED_COMMENT_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    warnings.add(
+        "FormulaFence did not fully read a threaded-comment XML part whose XML "
+        "structure exceeds the safety budget; affected comments have a coverage gap."
+    )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
+
+
 def _threaded_comment_xml_payload(
     archive: ZipFile,
     member: str,
@@ -40263,6 +40381,17 @@ def _threaded_comment_xml_payload(
         return None, _private_external_data_signature(
             (("read-budget-exhausted", metadata),)
         )
+    structure_fallback_signature = (
+        _threaded_comment_xml_structure_budget_fallback_signature(
+            archive,
+            member,
+            info,
+            warnings,
+            budget,
+        )
+    )
+    if structure_fallback_signature is not None:
+        return None, structure_fallback_signature
     budget.remaining_bytes -= info.file_size
     try:
         return archive.read(member), None

@@ -10070,6 +10070,51 @@ def _workbook_theme_xml_element_count(path, member: str) -> int:
     return sum(1 for _ in root.iter())
 
 
+def _threaded_comment_xml_members(path) -> tuple[str, ...]:
+    """Return the comment/person XML payloads materialized by the fixture scanner."""
+    expected_members = (
+        "xl/persons/person.xml",
+        "xl/threadedComments/threadedComment1.xml",
+    )
+    with ZipFile(path) as archive:
+        members = {entry.filename for entry in archive.infolist()}
+    return tuple(member for member in expected_members if member in members)
+
+
+def _append_threaded_comment_xml_elements(
+    path,
+    member: str,
+    count: int,
+    *,
+    nested: bool = False,
+) -> None:
+    """Add opaque modern-comment XML entries without using FormulaFence's reader."""
+    staging = path.with_suffix(".threaded-comment-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, "{urn:formulafence:audit}entry")
+    contents[member] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _threaded_comment_xml_element_count(path, member: str) -> int:
+    """Count one complete threaded-comment fixture XML tree for exact budgets."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member))
+    return sum(1 for _ in root.iter())
+
+
 def test_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
     baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
     candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
@@ -16117,6 +16162,320 @@ def test_threaded_comment_xml_budget_fails_closed(tmp_path, monkeypatch) -> None
     assert snapshot.threaded_comments.unrecognized_threaded_comment_count >= 1
     assert any(
         "oversized threaded-comment" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_threaded_comment_relationships_are_quarantined_for_ordinary_reader(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    original_load_workbook = workbook_module.load_workbook
+    reader_sources = []
+
+    def isolated_load_workbook(reader_source, *args, **kwargs):
+        reader_sources.append(reader_source)
+        with ZipFile(reader_source) as archive:
+            relationship_types = {
+                relationship.get("Type", "").casefold()
+                for member in (
+                    "xl/_rels/workbook.xml.rels",
+                    "xl/worksheets/_rels/sheet1.xml.rels",
+                )
+                for relationship in ElementTree.fromstring(archive.read(member))
+            }
+        assert workbook_module._THREADED_COMMENT_RELATIONSHIP.casefold() not in (
+            relationship_types
+        )
+        assert workbook_module._THREADED_COMMENT_PERSON_RELATIONSHIP.casefold() not in (
+            relationship_types
+        )
+        return original_load_workbook(reader_source, *args, **kwargs)
+
+    monkeypatch.setattr(workbook_module, "load_workbook", isolated_load_workbook)
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(reader_sources) == 1
+    assert reader_sources[0] != workbook
+    assert snapshot.threaded_comments.comment_count == 2
+    assert snapshot.threaded_comments.unrecognized_threaded_comment_count == 0
+
+
+def test_threaded_comment_reader_quarantine_preserves_legacy_note_isolation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_legacy_threaded_placeholder_model(tmp_path / "candidate.xlsx")
+    original_load_workbook = workbook_module.load_workbook
+
+    def isolated_load_workbook(reader_source, *args, **kwargs):
+        with ZipFile(reader_source) as archive:
+            relationship_types = {
+                relationship.get("Type", "").casefold()
+                for relationship in ElementTree.fromstring(
+                    archive.read("xl/worksheets/_rels/sheet1.xml.rels")
+                )
+            }
+        assert workbook_module._LEGACY_COMMENT_RELATIONSHIP.casefold() not in (
+            relationship_types
+        )
+        assert workbook_module._THREADED_COMMENT_RELATIONSHIP.casefold() not in (
+            relationship_types
+        )
+        return original_load_workbook(reader_source, *args, **kwargs)
+
+    monkeypatch.setattr(workbook_module, "load_workbook", isolated_load_workbook)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.legacy_comments.present is True
+    assert snapshot.threaded_comments.present is True
+
+
+def test_threaded_comment_xml_element_budget_stops_comment_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    comment_member = next(
+        member
+        for member in _threaded_comment_xml_members(workbook)
+        if member.startswith("xl/threadedComments/")
+    )
+    _append_threaded_comment_xml_elements(workbook, comment_member, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_THREADED_COMMENT_MAX_XML_ELEMENT_COUNT",
+        _threaded_comment_xml_element_count(workbook, comment_member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        comment_payload = archive.read(comment_member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == comment_payload:
+            raise AssertionError(
+                "the threaded-comment XML tree was materialized after its budget failed"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.threaded_comments.unrecognized_threaded_comment_count >= 1
+    assert any(
+        "threaded-comment XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_threaded_comment_xml_element_budget_stops_person_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    person_member = next(
+        member
+        for member in _threaded_comment_xml_members(workbook)
+        if member.startswith("xl/persons/")
+    )
+    _append_threaded_comment_xml_elements(workbook, person_member, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_THREADED_COMMENT_MAX_XML_ELEMENT_COUNT",
+        _threaded_comment_xml_element_count(workbook, person_member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        person_payload = archive.read(person_member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == person_payload:
+            raise AssertionError(
+                "the threaded-comment person XML tree was materialized after its budget failed"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.threaded_comments.unrecognized_threaded_comment_count >= 1
+    assert any(
+        "threaded-comment XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_threaded_comment_xml_element_budget_remains_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_threaded_comment_model(tmp_path / "baseline.xlsx")
+    workbook = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    comment_member = next(
+        member
+        for member in _threaded_comment_xml_members(workbook)
+        if member.startswith("xl/threadedComments/")
+    )
+    _append_threaded_comment_xml_elements(workbook, comment_member, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_THREADED_COMMENT_MAX_XML_ELEMENT_COUNT",
+        _threaded_comment_xml_element_count(workbook, comment_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+    report = compare_snapshots(baseline_snapshot, snapshot)
+
+    assert snapshot.threaded_comments.unrecognized_threaded_comment_count >= 1
+    assert any(
+        "threaded-comment XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+    assert {"FF010", "FF045"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_threaded_comment_xml_element_budget_accepts_the_configured_capacity(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    comment_member = next(
+        member
+        for member in _threaded_comment_xml_members(workbook)
+        if member.startswith("xl/threadedComments/")
+    )
+    _append_threaded_comment_xml_elements(workbook, comment_member, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_THREADED_COMMENT_MAX_XML_ELEMENT_COUNT",
+        _threaded_comment_xml_element_count(workbook, comment_member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.threaded_comments.unrecognized_threaded_comment_count == 8
+    assert not any(
+        "threaded-comment XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_threaded_comment_xml_element_budget_aggregates_across_package_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    xml_members = _threaded_comment_xml_members(workbook)
+    remaining_xml_elements = (
+        sum(_threaded_comment_xml_element_count(workbook, member) for member in xml_members)
+        - 1
+    )
+    budget_type = workbook_module._ThreadedCommentBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_ThreadedCommentBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.threaded_comments.unrecognized_threaded_comment_count >= 1
+    assert any(
+        "threaded-comment XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_threaded_comment_xml_element_budget_accepts_the_default_capacity(
+    tmp_path,
+) -> None:
+    workbook = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    comment_member = next(
+        member
+        for member in _threaded_comment_xml_members(workbook)
+        if member.startswith("xl/threadedComments/")
+    )
+    additional_element_count = (
+        workbook_module._THREADED_COMMENT_MAX_XML_ELEMENT_COUNT
+        - _threaded_comment_xml_element_count(workbook, comment_member)
+    )
+    _append_threaded_comment_xml_elements(
+        workbook,
+        comment_member,
+        additional_element_count,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert (
+        snapshot.threaded_comments.unrecognized_threaded_comment_count
+        == additional_element_count
+    )
+    assert not any(
+        "threaded-comment XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_threaded_comment_xml_element_budget_rejects_the_default_overage(
+    tmp_path,
+) -> None:
+    workbook = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    comment_member = next(
+        member
+        for member in _threaded_comment_xml_members(workbook)
+        if member.startswith("xl/threadedComments/")
+    )
+    _append_threaded_comment_xml_elements(
+        workbook,
+        comment_member,
+        workbook_module._THREADED_COMMENT_MAX_XML_ELEMENT_COUNT
+        - _threaded_comment_xml_element_count(workbook, comment_member)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.threaded_comments.unrecognized_threaded_comment_count >= 1
+    assert any(
+        "threaded-comment XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_threaded_comment_xml_element_budget_counts_nested_opaque_subtrees(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_threaded_comment_model(tmp_path / "candidate.xlsx")
+    comment_member = next(
+        member
+        for member in _threaded_comment_xml_members(workbook)
+        if member.startswith("xl/threadedComments/")
+    )
+    _append_threaded_comment_xml_elements(
+        workbook,
+        comment_member,
+        8,
+        nested=True,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_THREADED_COMMENT_MAX_XML_ELEMENT_COUNT",
+        _threaded_comment_xml_element_count(workbook, comment_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.threaded_comments.unrecognized_threaded_comment_count >= 1
+    assert any(
+        "threaded-comment XML part whose XML structure" in warning
         for warning in snapshot.parser_warnings
     )
 

@@ -1628,7 +1628,14 @@ consistent writer-generated GUID/relationship-ID rewrites do not create a
 finding. It normalizes normal OOXML Boolean spellings for `done`; malformed,
 unsafe, unbound, missing, unreadable, oversized, or over-budget parts become
 coverage warnings. XML reads are bounded to 16 MiB per part, 64 MiB per
-workbook, and 512 parts.
+workbook, and 512 parts. Before materializing comment or person trees,
+FormulaFence streams complete XML structure: 32,768 elements per part and
+65,536 across the threaded-comment scan. This is a CI allocation and coverage
+boundary, not a workbook-validity limit; a well-formed structural overage
+becomes visible `FF010`/`FF045` evidence. After raw inspection, the temporary
+ordinary-reader copy removes threaded-comment and person relationship bindings
+so no current or future underlying reader can re-materialize a rejected tree;
+the original package and private raw evidence remain intact.
 
 This rule compares stored package state only. It does not render comments,
 validate mention offsets against comment text, send notifications, resolve

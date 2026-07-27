@@ -1221,7 +1221,14 @@ formula will produce.
   or client visibility. Missing, duplicate, malformed, unbound, unsafe,
   unreadable, oversized, or over-budget metadata becomes a visible coverage
   warning; XML reads are bounded to 16 MiB per part, 64 MiB per workbook, and
-  512 parts. The boundary follows Microsoft's
+  512 parts. Before materializing comment or person trees, FormulaFence streams
+  complete XML structure: 32,768 elements per part and 65,536 across the
+  threaded-comment scan. This is a CI allocation and coverage boundary, not a
+  workbook-validity limit; a well-formed structural overage becomes visible
+  `FF010`/`FF045` evidence. After raw inspection, the temporary ordinary-reader
+  copy removes threaded-comment and person relationship bindings so no current
+  or future underlying reader can re-materialize a rejected tree; the original
+  package and private raw evidence remain intact. The boundary follows Microsoft's
   [threaded-comment overview](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/e0fb917a-1107-409a-852f-13b47aea70dc),
   [Threaded Comments part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/66e1875d-c60a-48eb-bf88-41066d45fea8),
   [Persons part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1a170d26-42a2-46f0-b2b6-0ff1dec1c344),

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.133.0/formulafence-0.133.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.134.0/formulafence-0.134.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.133.0
+  uses: SybilGambleyyu/formulafence@v0.134.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2344,7 +2344,15 @@ writer-generated comment, parent, person, mention, and package relationship-ID
 rewrites stay quiet. It also accepts equivalent Boolean spellings for resolution
 state. Missing, duplicate, unsafe, unbound, malformed, unreadable, oversized,
 or over-budget metadata becomes an explicit coverage warning; XML reads are
-bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts.
+bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts. Before any
+comment or person tree is materialized, FormulaFence streams the complete XML
+structure: 32,768 elements per part and 65,536 across the complete threaded-
+comment scan. These are CI allocation and coverage limits, not workbook-
+validity limits: a well-formed structural overage becomes visible `FF010` and
+`FF045` evidence. After raw inspection, the ordinary workbook reader receives
+a temporary copy with threaded-comment and person relationship bindings
+removed, so it cannot re-materialize a rejected raw tree; the original package
+and private raw evidence remain intact.
 
 The scope is deliberately static and narrow: FormulaFence does not render
 comments, validate that a mention's character offsets match text, send a

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.134.0 — 2026-07-26
+
+- Bound modern Threaded Comments and Persons XML before FormulaFence can
+  materialize and recursively canonicalize private comment, reply, extension,
+  or person trees. Each XML part allows 32,768 elements and the complete
+  threaded-comment scan allows 65,536, alongside the existing 16 MiB per-part,
+  64 MiB aggregate, and 512-part byte/count limits.
+- Stream raw comment/person XML before the private parser runs, so a
+  successfully parsed structural overage becomes explicit `FF010`/`FF045`
+  coverage evidence while malformed or unreadable input keeps its established
+  diagnostic.
+- Remove threaded-comment and person relationships only from FormulaFence's
+  temporary ordinary-reader copy after raw inspection. The original package and
+  raw evidence remain intact, while a current or future workbook reader cannot
+  re-materialize an XML tree the bounded scanner rejected.
+- Add comment/person fail-before-materialization, reader-isolation,
+  configured/default and exact capacity, aggregate, and nested-opaque boundary
+  regressions.
+
 ## 0.133.0 — 2026-07-26
 
 - Bound DrawingML Theme and Theme-relationship XML before FormulaFence can

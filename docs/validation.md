@@ -5,6 +5,46 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Threaded-comment and Persons XML structural bounds — 2026-07-26
+
+Version 0.134.0 closes the compact allocation path in FormulaFence's modern
+comment scanner. It follows worksheet-associated Threaded Comments and the
+workbook-associated Persons part, then recursively canonicalizes private
+comment/reply, extension, and person material before ordinary cell inspection.
+Its existing 16 MiB per-part, 64 MiB aggregate, and 512-part byte/count limits
+did not bound the XML objects created by those private trees.
+
+Microsoft specifies that a [Threaded Comments part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/66e1875d-c60a-48eb-bf88-41066d45fea8)
+is XML associated with one worksheet through a threaded-comment relationship,
+while a [Persons part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1a170d26-42a2-46f0-b2b6-0ff1dec1c344)
+is XML associated with the workbook through a person relationship. That makes
+their stored review and identity material worth comparing, but does not make
+FormulaFence's element count an Excel-file-validity rule. FormulaFence now
+streams each comment/person XML part before tree materialization, allowing
+32,768 elements per part and 65,536 across the complete scan. A successfully
+streamed overage becomes explicit `FF010`/`FF045` coverage evidence; malformed
+or unreadable input keeps its established parser diagnostic. After raw
+inspection, FormulaFence removes only these relationships from its temporary
+ordinary-reader copy, so the workbook reader cannot re-materialize a rejected
+tree while the original package and private raw evidence remain intact.
+
+A raw-ZIP fixture generated without FormulaFence's reader contained a
+10,565-byte workbook with 100,000 opaque direct Threaded Comments children
+(1,400,899 bytes of `xl/threadedComments/threadedComment1.xml`, 3,152 bytes
+compressed). In the same Python 3.12.3 environment, the exact 0.133.0 wheel
+completed in 1.263552 seconds at 115,312 KiB despite already producing an
+unsupported-metadata warning. The exact 0.134.0 wheel completed in 0.671988
+seconds at 39,892 KiB before materializing that tree, recorded one unrecognized
+threaded-comment coverage entry, and emitted the structural coverage warning.
+The normal installed CLI diff exited 0; the baseline-to-fixture diff emitted
+`FF010` and `FF045` and exited 1 with `--fail-on medium`. The complete 947-test
+source suite passed in 131.19 seconds, with Ruff, bytecode compilation,
+`git diff --check`, the 35-test action-contract suite, and `twine check` clean.
+A fresh Python 3.12 environment installed the exact wheel (SHA-256
+`1590eaf9a1becb7b3d1778e527b815a95e8502a1faa9ec4f3f6b43e2b895b0ec`),
+confirmed FormulaFence 0.134.0 with `openpyxl.DEFUSEDXML` enabled, and retained
+the expected normal and hostile CLI outcomes.
+
 ## Workbook Theme XML structural bounds — 2026-07-26
 
 Version 0.133.0 closes the compact allocation path in FormulaFence's

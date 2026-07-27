@@ -122,6 +122,17 @@ financial correctness or replace model review.
   bounds source, directory, member, aggregate-expansion, and compression-ratio
   resources.
   A rejected package is never handed to a raw OOXML scanner or workbook reader.
+- After the structural ZIP inventory, FormulaFence applies a separate
+  semantic-reader resource preflight before it runs downstream raw OOXML
+  scanners or starts `openpyxl`: every XML/relationship part is capped at 64 MiB, aggregate
+  XML material at 256 MiB, and the bounded workbook sheet relationships are
+  followed to stream selected worksheet parts without retaining values,
+  locations, or a tree and cap actual populated SpreadsheetML cell records at
+  500,000. FormulaFence requires `defusedxml` for its XML parser, which also
+  enables `openpyxl`'s defused XML path in the supported installation. This
+  prevents valid-but-impractical documents from allocating an unbounded complete
+  workbook model; it is not a malware classifier or a substitute for an
+  isolated CI runner.
 - It uses sparse cell storage rather than walking every coordinate in a workbook's
   declared used rectangle.
 - Parser warnings from unsupported OOXML extensions are captured in the profile
@@ -222,6 +233,14 @@ formula will produce.
   content. These are resource and
   interpretation limits for untrusted CI input, not a claim to detect every
   hostile document or to make an untrusted runner safe.
+- After that ZIP-only pass, the semantic-reader limit is 64 MiB for each
+  XML/relationship part, 256 MiB for aggregate XML material, and 500,000
+  populated SpreadsheetML cell records across the workbook-declared worksheet
+  parts. FormulaFence follows the bounded sheet relationships and streams that
+  count with `defusedxml` before it creates the complete workbook model. A valid
+  workbook above those limits is intentionally rejected rather than partially
+  inspected; split high-volume data workbooks before sending them through this
+  CI-oriented reader.
 - Portfolio mode intentionally does not support legacy `.xls`, `.xlsb`,
   templates, add-ins, or `.ods` files, infer a rename/content match across
   different paths, recursively follow a symlinked workbook, or combine cell

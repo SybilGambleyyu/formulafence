@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "formulafence"
-version = "0.111.0"
+version = "0.112.0"
 description = "Local-first spreadsheet change assurance for CI and audit workflows."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,6 +26,7 @@ classifiers = [
   "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
+  "defusedxml>=0.7,<1",
   "openpyxl>=3.1.5,<4",
   "PyYAML>=6.0.2,<7",
 ]

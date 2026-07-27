@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import binascii
+import hashlib
 import stat
 import struct
 import zipfile
@@ -26,6 +27,21 @@ def _append_member(
 ) -> None:
     with ZipFile(path, "a", compression=compression) as archive:
         archive.writestr(name, payload)
+
+
+def _replace_member(path: Path, name: str, payload: bytes) -> None:
+    """Replace one test package part without creating a duplicate ZIP entry."""
+    staging = path.with_suffix(".replacement.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            member.filename: archive.read(member)
+            for member in archive.infolist()
+        }
+    contents[name] = payload
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for member_name, member_payload in contents.items():
+            archive.writestr(member_name, member_payload)
+    staging.replace(path)
 
 
 def _last_central_directory_offset(contents: bytes | bytearray) -> int:
@@ -151,6 +167,107 @@ def test_archive_preflight_rejects_a_compression_bomb_before_readers(
     )
 
     _reject_before_workbook_readers(monkeypatch, workbook)
+
+
+def test_semantic_reader_preflight_rejects_an_oversized_xml_part_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "oversized-xml.xlsx")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_XML_PART_BYTES", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "semantic reader" in message
+    assert "XML part" in message
+
+
+def test_semantic_reader_preflight_rejects_aggregate_xml_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "oversized-xml-total.xlsx")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_TOTAL_XML_BYTES", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "aggregate XML" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_cells_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-cells.xlsx")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_WORKSHEET_CELL_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "populated worksheet cells" in message
+
+
+def test_semantic_reader_preflight_counts_relationship_selected_worksheet_parts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "relationship-selected-cells.xlsx")
+    source_member = "xl/worksheets/sheet1.xml"
+    selected_member = "xl/private/sheet-one.xml"
+    relationship_member = "xl/_rels/workbook.xml.rels"
+    with ZipFile(workbook) as archive:
+        worksheet_payload = archive.read(source_member)
+        relationships = archive.read(relationship_member)
+    assert b"worksheets/sheet1.xml" in relationships
+    _append_member(workbook, selected_member, worksheet_payload)
+    _replace_member(
+        workbook,
+        relationship_member,
+        relationships.replace(b"worksheets/sheet1.xml", b"private/sheet-one.xml"),
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_WORKSHEET_CELL_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "populated worksheet cells" in message
+
+
+def test_semantic_reader_preflight_rejects_xml_entity_declarations_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "xml-entity.xlsx")
+    member_name = "xl/worksheets/sheet1.xml"
+    with ZipFile(workbook) as archive:
+        original = archive.read(member_name)
+    _replace_member(
+        workbook,
+        member_name,
+        b"<!DOCTYPE worksheet [<!ENTITY forbidden 'private'>]>\n" + original,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook sheet metadata could not be scanned safely" in message
+
+
+def test_macro_hash_streams_the_payload_without_zipfile_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "macro-stream.xlsx")
+    payload = b"private macro payload" * 4096
+    _append_member(workbook, "xl/vbaProject.bin", payload)
+
+    original_read = ZipFile.read
+
+    def reject_macro_read(self: ZipFile, name, *args, **kwargs):
+        if name == "xl/vbaProject.bin":
+            raise AssertionError("macro hashing loaded the complete payload")
+        return original_read(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(ZipFile, "read", reject_macro_read)
+
+    assert workbook_module._vba_hash(workbook) == hashlib.sha256(payload).hexdigest()
 
 
 @pytest.mark.parametrize(
@@ -289,3 +406,37 @@ def test_cli_surfaces_archive_preflight_as_an_input_error(
     assert main(["profile", str(workbook)]) == 2
 
     assert "safety preflight" in capsys.readouterr().err
+
+
+def test_cli_surfaces_malformed_openpyxl_cell_metadata_as_an_input_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workbook = make_model(tmp_path / "empty-style.xlsx")
+    member_name = "xl/worksheets/sheet1.xml"
+    with ZipFile(workbook) as archive:
+        worksheet = archive.read(member_name)
+    _replace_member(
+        workbook,
+        member_name,
+        worksheet.replace(b"<c ", b'<c s="" ', 1),
+    )
+
+    assert main(["profile", str(workbook)]) == 2
+
+    assert "Could not read workbook" in capsys.readouterr().err
+
+
+def test_load_snapshot_surfaces_openpyxl_index_errors_as_input_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "reader-index-error.xlsx")
+
+    def malformed_reader(*args, **kwargs):
+        raise IndexError("malformed workbook metadata")
+
+    monkeypatch.setattr(workbook_module, "load_workbook", malformed_reader)
+
+    with pytest.raises(WorkbookLoadError, match="Could not read workbook"):
+        load_snapshot(workbook)

@@ -20,9 +20,9 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TypeVar
-from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
+from defusedxml import ElementTree
 from openpyxl import load_workbook
 from openpyxl.utils.cell import column_index_from_string, get_column_letter, range_boundaries
 from openpyxl.utils.exceptions import InvalidFileException
@@ -155,6 +155,14 @@ _OOXML_ARCHIVE_MAX_MEMBER_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 _OOXML_ARCHIVE_MAX_TOTAL_UNCOMPRESSED_BYTES = 768 * 1024 * 1024
 _OOXML_ARCHIVE_MAX_COMPRESSION_RATIO = 1_000
 _OOXML_ARCHIVE_ALLOWED_COMPRESSION_METHODS = frozenset({ZIP_STORED, ZIP_DEFLATED})
+# The structural archive inventory protects decompression, but FormulaFence
+# deliberately uses openpyxl's complete workbook model so it can compare
+# semantic cell and control state. Bound the XML material that can reach that
+# reader separately: an otherwise valid, highly expanded worksheet can still
+# create far more Python objects than its compressed source suggests.
+_OOXML_READER_MAX_XML_PART_BYTES = 64 * 1024 * 1024
+_OOXML_READER_MAX_TOTAL_XML_BYTES = 256 * 1024 * 1024
+_OOXML_READER_MAX_WORKSHEET_CELL_COUNT = 500_000
 _ZIP_LOCAL_FILE_HEADER_SIGNATURE = b"PK\x03\x04"
 _ZIP_CENTRAL_DIRECTORY_HEADER_SIGNATURE = b"PK\x01\x02"
 _ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE = b"PK\x05\x06"
@@ -176,6 +184,7 @@ class _OoxmlArchiveMember:
 
     name: str
     compressed_size: int
+    uncompressed_size: int
     local_header_offset: int
     flag_bits: int
     compression_method: int
@@ -2961,6 +2970,7 @@ def _ooxml_archive_members(
             _OoxmlArchiveMember(
                 name=member_name,
                 compressed_size=compressed_size,
+                uncompressed_size=uncompressed_size,
                 local_header_offset=local_header_offset,
                 flag_bits=flag_bits,
                 compression_method=compression_method,
@@ -3044,7 +3054,7 @@ def _validate_ooxml_archive_local_headers(
             raise _archive_preflight_error("member payloads overlap.")
 
 
-def _validate_ooxml_archive(path: Path) -> None:
+def _validate_ooxml_archive(path: Path) -> tuple[_OoxmlArchiveMember, ...]:
     """Fail closed on unsafe ZIP container structure before OOXML inspection."""
     try:
         with path.open("rb") as file_handle:
@@ -3095,6 +3105,108 @@ def _validate_ooxml_archive(path: Path) -> None:
         raise
     except (OSError, UnicodeError, struct.error, ValueError) as error:
         raise _archive_preflight_error("ZIP metadata could not be read safely.") from error
+    return members
+
+
+def _reader_preflight_error(detail: str) -> WorkbookLoadError:
+    """Return one stable, non-disclosing semantic-reader safety error."""
+    return WorkbookLoadError(
+        "Workbook semantic reader failed FormulaFence safety preflight: " f"{detail}"
+    )
+
+
+def _is_ooxml_xml_member(member: _OoxmlArchiveMember) -> bool:
+    """Identify package parts that a reader can hand to an XML parser."""
+    return member.name.casefold().endswith((".xml", ".rels"))
+
+
+def _validate_ooxml_semantic_reader_resources(
+    path: Path,
+    members: tuple[_OoxmlArchiveMember, ...],
+) -> None:
+    """Bound XML and populated-cell resources before any semantic reader starts.
+
+    The prior central-directory pass has already established that members have
+    unique canonical names and coherent headers. This pass therefore only needs
+    to inspect the workbook's sheet relationships, then stream each selected
+    worksheet once while keeping no values, locations, or XML tree in memory.
+    It therefore covers relationship-selected worksheet locations rather than
+    assuming a writer used one conventional member path, without turning an
+    unrelated malformed extension part into a hard input failure. It protects
+    FormulaFence's complete ``openpyxl`` reader and every subsequent raw OOXML
+    scanner from a package that is valid ZIP but impractical to model safely in
+    a CI worker.
+    """
+    member_by_name = {member.name: member for member in members}
+    xml_members = tuple(member for member in members if _is_ooxml_xml_member(member))
+    total_xml_bytes = 0
+    for member in xml_members:
+        if member.uncompressed_size > _OOXML_READER_MAX_XML_PART_BYTES:
+            raise _reader_preflight_error(
+                "an XML part exceeds the semantic-reader safety limit."
+            )
+        total_xml_bytes += member.uncompressed_size
+        if total_xml_bytes > _OOXML_READER_MAX_TOTAL_XML_BYTES:
+            raise _reader_preflight_error(
+                "aggregate XML material exceeds the semantic-reader safety limit."
+            )
+
+    spreadsheet_cell_tags = {
+        f"{{{_SPREADSHEETML_NS}}}c",
+        f"{{{_STRICT_SPREADSHEETML_NS}}}c",
+    }
+    populated_cell_count = 0
+    try:
+        with ZipFile(path) as archive:
+            worksheet_members = tuple(
+                dict.fromkeys(_worksheet_display_xml_paths(archive))
+            )
+            for worksheet_member in worksheet_members:
+                member = member_by_name.get(worksheet_member)
+                if member is None:
+                    raise _reader_preflight_error(
+                        "a worksheet part could not be located safely."
+                    )
+                if not _is_ooxml_xml_member(member):
+                    if member.uncompressed_size > _OOXML_READER_MAX_XML_PART_BYTES:
+                        raise _reader_preflight_error(
+                            "an XML part exceeds the semantic-reader safety limit."
+                        )
+                    total_xml_bytes += member.uncompressed_size
+                    if total_xml_bytes > _OOXML_READER_MAX_TOTAL_XML_BYTES:
+                        raise _reader_preflight_error(
+                            "aggregate XML material exceeds the semantic-reader safety "
+                            "limit."
+                        )
+                with archive.open(worksheet_member) as xml_stream:
+                    for _, element in ElementTree.iterparse(
+                        xml_stream,
+                        events=("end",),
+                    ):
+                        if element.tag in spreadsheet_cell_tags:
+                            populated_cell_count += 1
+                            if (
+                                populated_cell_count
+                                > _OOXML_READER_MAX_WORKSHEET_CELL_COUNT
+                            ):
+                                raise _reader_preflight_error(
+                                    "populated worksheet cells exceed the semantic-reader "
+                                    "safety limit."
+                                )
+                        element.clear()
+    except WorkbookLoadError:
+        raise
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        raise _reader_preflight_error(
+            "workbook sheet metadata could not be scanned safely."
+        ) from error
 
 
 def _vba_hash(path: Path) -> str | None:
@@ -3102,12 +3214,15 @@ def _vba_hash(path: Path) -> str | None:
     try:
         with ZipFile(path) as archive:
             try:
-                payload = archive.read("xl/vbaProject.bin")
+                digest = hashlib.sha256()
+                with archive.open("xl/vbaProject.bin") as payload:
+                    for block in iter(lambda: payload.read(1_048_576), b""):
+                        digest.update(block)
             except KeyError:
                 return None
     except BadZipFile as error:
         raise WorkbookLoadError(f"{path} is not a valid Office Open XML workbook") from error
-    return hashlib.sha256(payload).hexdigest()
+    return digest.hexdigest()
 
 
 def _xml_root(archive: ZipFile, member: str) -> ElementTree.Element:
@@ -45990,7 +46105,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             f"Unsupported workbook type {source.suffix!r}; supported types: {supported}"
         )
 
-    _validate_ooxml_archive(source)
+    archive_members = _validate_ooxml_archive(source)
+    _validate_ooxml_semantic_reader_resources(source, archive_members)
 
     workbook_tab_order_metadata = _workbook_tab_order_metadata(source)
     xlm_macro_metadata = _xlm_macro_metadata(source)
@@ -46052,7 +46168,15 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
                 keep_links=False,
                 rich_text=False,
             )
-    except (BadZipFile, InvalidFileException, KeyError, OSError, ValueError) as error:
+    except (
+        BadZipFile,
+        InvalidFileException,
+        IndexError,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+    ) as error:
         raise WorkbookLoadError(f"Could not read workbook {source}: {error}") from error
     finally:
         if temporary_reader_source is not None:

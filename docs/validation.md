@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Semantic-reader resource boundary and defused XML — 2026-07-26
+
+The archive-header inventory from 0.111.0 bounds ZIP expansion, but FormulaFence
+uses a complete non-streaming `openpyxl` workbook model to compare semantic cell
+and control state. Version 0.112.0 adds a second, fail-closed reader preflight
+between that structural ZIP check and downstream raw OOXML scanners or
+`openpyxl` calls. It caps each XML/relationship part at 64 MiB and aggregate XML material at
+256 MiB, follows bounded workbook sheet relationships, and streams those
+selected worksheet parts without retaining cells or values to reject more than
+500,000 populated SpreadsheetML cell records. A nonstandard
+relationship-selected worksheet target is counted too; unrelated malformed
+extension parts retain their existing explicit coverage-warning path rather
+than becoming a broad false-positive input rejection.
+
+`defusedxml>=0.7,<1` is now a declared runtime dependency. FormulaFence uses it
+for raw OOXML parsing, and a clean supported installation confirms that it also
+enables `openpyxl.DEFUSEDXML`. Focused fixtures prove normal and ZIP64 workbooks
+still load; per-part, aggregate, and populated-cell bounds fail before any
+downstream scanner; an entity-bearing selected worksheet fails at the reader
+preflight; and `vbaProject.bin` is SHA-256 hashed through a stream rather than
+one whole-payload `ZipFile.read`. Malformed cell/package metadata that causes
+`openpyxl` to raise `TypeError` or `IndexError` now emits FormulaFence's normal
+unreadable-workbook input error (exit 2), rather than a traceback.
+
+The completed source tree passed **727 tests in 126.37 seconds**, plus Ruff,
+bytecode compilation, and `git diff --check`. Both distribution artifacts passed
+`twine check`; their final SHA-256 values are published with the GitHub Release
+assets rather than copied into this self-included validation note. A fresh
+Python 3.12 environment installed the final wheel and declared dependencies,
+returned `FormulaFence 0.112.0`, profiled a normal formula workbook, confirmed
+the defused parser path, and rejected the entity-bearing workbook before a
+reader ran.
+
 ## Bounded OOXML archive preflight — 2026-07-26
 
 Workbook files are untrusted CI inputs before FormulaFence can inspect their

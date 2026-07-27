@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.112.0 — 2026-07-26
+
+- Require `defusedxml` for FormulaFence's OOXML parsing, which also enables
+  `openpyxl`'s defused XML reader in the supported installation.
+- Add a second fail-closed semantic-reader preflight after the ZIP-header
+  inventory and before downstream raw OOXML scanners or `openpyxl` calls. It caps an
+  XML/relationship part at 64 MiB, aggregate XML material at 256 MiB, and
+  follows the bounded workbook sheet relationships to stream worksheet XML and
+  reject more than 500,000 populated SpreadsheetML cell records before a
+  complete in-memory workbook model can be allocated.
+- Stream `vbaProject.bin` into its private SHA-256 digest rather than loading
+  the whole macro payload at once.
+- Convert malformed cell metadata that causes `openpyxl` to raise `TypeError`
+  or `IndexError` into FormulaFence's normal unreadable-workbook input error
+  (exit status 2), rather than leaking a traceback into CI logs.
+
 ## 0.111.0 — 2026-07-26
 
 - Add a fail-closed OOXML ZIP preflight before FormulaFence opens any raw

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.111.0/formulafence-0.111.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.112.0/formulafence-0.112.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.111.0
+  uses: SybilGambleyyu/formulafence@v0.112.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2540,6 +2540,16 @@ directory, 4,096 members, 512 MiB per expanded member, 768 MiB in aggregate,
 and a 1,000:1 maximum member compression ratio. These are input-safety limits,
 not a malware classification or a substitute for isolated CI runners. See the
 [threat model](docs/threat-model.md) for the complete boundary.
+
+After that header-only ZIP check, a semantic-reader preflight caps every
+XML/relationship part at 64 MiB, aggregate XML material at 256 MiB, and streams
+the bounded workbook-declared worksheet parts to reject more than 500,000
+populated SpreadsheetML cell records before FormulaFence starts a complete
+in-memory reader or downstream raw OOXML scanning.
+FormulaFence requires `defusedxml` for its XML parser, which also enables
+`openpyxl`'s defused XML path in the supported installation. These limits are a
+clear CI resource boundary: partition unusually large data workbooks before
+reviewing them, rather than relying on an unbounded worker allocation.
 
 ## License
 

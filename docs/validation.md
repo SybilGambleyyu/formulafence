@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## External-data Connections XML structural bounds — 2026-07-26
+
+Version 0.140.0 closes a compact-allocation path in raw external-data
+Connections XML. FormulaFence already inspected connection refresh controls,
+but its raw `xl/connections*.xml` reader could first expand a highly repetitive
+yet byte-permitted XML tree before recording its opaque metadata. This release
+adds 16 MiB per-part, 64 MiB aggregate, and 512-part read limits as well as the
+structural element boundary.
+
+FormulaFence now streams each raw Connections XML part before private parsing,
+with 32,768 elements allowed per part and 65,536 across a Connections scan. A
+successfully streamed structural overage becomes explicit `FF010` plus
+`FF023`-visible opaque connection evidence; malformed input retains its
+ordinary parser diagnostic. The fallback includes a private streamed SHA-256
+content fingerprint, so same-size hostile parts remain diff-visible without
+retaining connection names, paths, strings, commands, or raw XML. These are
+allocation boundaries for raw Connections XML, not general external-data
+package validity rules.
+
+A controlled fixture added 1,000,000 foreign-namespace direct children to a
+normal Connections root. Its `xl/connections.xml` expanded to 13,001,347 bytes,
+compressed to 25,951 bytes, and contained 1,000,009 XML elements. In the same
+source environment, the unguarded 0.139.0 reader completed it in 1.126806
+seconds / 145,232 KiB; the 0.140 source completed it in 0.181229 seconds /
+40,708 KiB without materializing the hostile tree. A normal baseline comparison
+had no findings or changes. Comparing the normal baseline with the hostile
+candidate produced `FF010` and `FF023`, an
+`external_data_connections_changed` record, and no hostile tag or raw content
+in JSON, Markdown, or SARIF. The source suite passed 1,015 tests in 143.70
+seconds with Ruff, bytecode compilation, and diff whitespace checks clean.
+The exact final wheel completed the normal and hostile fixtures in 0.132709
+seconds / 33,224 KiB and 0.226601 seconds / 39,280 KiB. A fresh Python 3.12
+environment installed it from `site-packages`, passed `pip check`, confirmed
+`openpyxl.DEFUSEDXML`, emitted no normal findings, and emitted only
+`FF010`/`FF023` for the hostile comparison. Its SHA-256 is
+`7225517d66715a7706c96e53fc1944e1442e4f7590b6836e7b6348e3d7147ebd`.
+
 ## Legacy shared-workbook revision XML structural bounds — 2026-07-26
 
 Version 0.139.0 closes a compact-allocation path in raw legacy

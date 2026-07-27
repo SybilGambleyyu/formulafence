@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.139.0/formulafence-0.139.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.140.0/formulafence-0.140.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.139.0
+  uses: SybilGambleyyu/formulafence@v0.140.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -807,6 +807,15 @@ opens a connection or refreshes data, does not assess source trust or actual
 returned values, or calculate a PivotTable report. The scope follows Microsoft's
 [external-data refresh guidance](https://support.microsoft.com/en-us/excel/refresh-an-external-data-connection-in-excel)
 and the [SpreadsheetML Connections part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Connections_topic_ID0EQLGK.html).
+
+Before FormulaFence privately materializes a raw `xl/connections*.xml` part, it
+streams its XML structure with a 32,768-element per-part and 65,536-element
+Connections-scan limit, alongside 16 MiB per-part, 64 MiB total, and 512-part
+read limits. A successfully streamed structural overage is retained as
+private opaque coverage evidence (`FF010`) and remains diff-visible through
+`FF023`; malformed XML keeps its ordinary parser diagnostic. This bound applies
+to raw Connections XML, not to a claim that every external-data package reader
+has the same structural limit.
 
 FormulaFence separately inventories raw **external-link packages**
 (`xl/externalLinks/externalLink*.xml`). It recognizes external-workbook,

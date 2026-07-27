@@ -2433,6 +2433,277 @@ def test_external_data_connection_defaults_are_canonical(tmp_path) -> None:
     assert "FF023" not in {finding.rule_id for finding in report.findings}
 
 
+def test_external_data_connection_xml_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _append_external_data_connection_xml_elements(workbook, 8, nested=True)
+    connection_xml = _external_data_connection_xml_payload(workbook)
+    monkeypatch.setattr(
+        workbook_module,
+        "_EXTERNAL_DATA_CONNECTION_MAX_XML_ELEMENT_COUNT",
+        _external_data_connection_xml_element_count(workbook) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == connection_xml:
+            raise AssertionError(
+                "the over-budget external-data Connections XML tree was materialized"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.external_data_connections) == 1
+    assert snapshot.external_data_connections[0].opaque_metadata.present is True
+    assert any(
+        "external-data Connections XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_external_data_connection_xml_structure_overage_spends_scan_budgets(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _append_external_data_connection_xml_elements(workbook, 8)
+    with ZipFile(workbook) as archive:
+        connection_size = archive.getinfo(_EXTERNAL_DATA_CONNECTION_XML_MEMBER).file_size
+    budget_type = workbook_module._ExternalDataConnectionXmlBudget
+    budgets = []
+
+    def budget_factory():
+        budget = budget_type(
+            remaining_bytes=connection_size,
+            remaining_xml_elements=(
+                _external_data_connection_xml_element_count(workbook) - 1
+            ),
+        )
+        budgets.append(budget)
+        return budget
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_ExternalDataConnectionXmlBudget",
+        budget_factory,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.external_data_connections) == 1
+    assert budgets[0].remaining_bytes == 0
+    assert budgets[0].remaining_xml_elements == 0
+
+
+def test_external_data_connection_xml_byte_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_external_data_refresh_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    connection_xml = _external_data_connection_xml_payload(candidate)
+    monkeypatch.setattr(
+        workbook_module,
+        "_EXTERNAL_DATA_CONNECTION_MAX_XML_PART_BYTES",
+        len(connection_xml) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == connection_xml:
+            raise AssertionError(
+                "the oversized external-data Connections XML tree was materialized"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert len(candidate_snapshot.external_data_connections) == 1
+    assert candidate_snapshot.external_data_connections[0].opaque_metadata.present is True
+    assert any(
+        "oversized external-data Connections XML part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF023"} <= {finding.rule_id for finding in report.findings}
+
+
+@pytest.mark.parametrize(
+    ("budget", "warning", "opaque_connection_count"),
+    (
+        (
+            {"remaining_parts": 1},
+            "bounded external-data Connections XML part count",
+            1,
+        ),
+        (
+            {"remaining_bytes": 1},
+            "bounded external-data Connections XML read budget",
+            2,
+        ),
+    ),
+)
+def test_external_data_connection_xml_scan_budgets_remain_visible(
+    tmp_path,
+    monkeypatch,
+    budget,
+    warning: str,
+    opaque_connection_count: int,
+) -> None:
+    baseline = make_external_data_refresh_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _duplicate_external_data_connections_part(candidate)
+    baseline_snapshot = load_snapshot(baseline)
+    budget_type = workbook_module._ExternalDataConnectionXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_ExternalDataConnectionXmlBudget",
+        lambda: budget_type(**budget),
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert (
+        sum(
+            snapshot.connection_id is None
+            for snapshot in candidate_snapshot.external_data_connections
+        )
+        == opaque_connection_count
+    )
+    assert any(warning in value for value in candidate_snapshot.parser_warnings)
+    assert {"FF010", "FF023"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_external_data_connection_xml_budget_remains_visible_and_private(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_external_data_refresh_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _append_external_data_connection_xml_elements(candidate, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_EXTERNAL_DATA_CONNECTION_MAX_XML_ELEMENT_COUNT",
+        _external_data_connection_xml_element_count(candidate) - 1,
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+
+    assert len(candidate_snapshot.external_data_connections) == 1
+    assert candidate_snapshot.external_data_connections[0].opaque_metadata.present is True
+    assert any(
+        "external-data Connections XML part whose XML structure" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF023"} <= {finding.rule_id for finding in report.findings}
+    assert all("urn:formulafence:audit" not in artifact for artifact in rendered_artifacts)
+
+
+def test_external_data_connection_xml_budget_accepts_the_default_capacity(
+    tmp_path,
+) -> None:
+    workbook = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _append_external_data_connection_xml_elements(
+        workbook,
+        workbook_module._EXTERNAL_DATA_CONNECTION_MAX_XML_ELEMENT_COUNT
+        - _external_data_connection_xml_element_count(workbook),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert not any(
+        "external-data Connections XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_external_data_connection_xml_budget_rejects_the_default_overage(
+    tmp_path,
+) -> None:
+    workbook = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _append_external_data_connection_xml_elements(
+        workbook,
+        workbook_module._EXTERNAL_DATA_CONNECTION_MAX_XML_ELEMENT_COUNT
+        - _external_data_connection_xml_element_count(workbook)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert any(
+        "external-data Connections XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_external_data_connection_xml_budget_aggregates_across_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _duplicate_external_data_connections_part(workbook)
+    connection_xml_elements = _external_data_connection_xml_element_count(workbook)
+    budget_type = workbook_module._ExternalDataConnectionXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_ExternalDataConnectionXmlBudget",
+        lambda: budget_type(remaining_xml_elements=2 * connection_xml_elements - 1),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.external_data_connections) == 3
+    assert any(
+        "external-data Connections XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_external_data_connection_xml_budget_fingerprints_same_size_overages(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    first = make_external_data_refresh_model(tmp_path / "first.xlsx")
+    second = make_external_data_refresh_model(tmp_path / "second.xlsx")
+    _append_external_data_connection_xml_elements(first, 1, entry_name="entrya")
+    _append_external_data_connection_xml_elements(second, 1, entry_name="entryb")
+    with ZipFile(first) as archive:
+        first_info = archive.getinfo(_EXTERNAL_DATA_CONNECTION_XML_MEMBER)
+    with ZipFile(second) as archive:
+        second_info = archive.getinfo(_EXTERNAL_DATA_CONNECTION_XML_MEMBER)
+    monkeypatch.setattr(
+        workbook_module,
+        "_EXTERNAL_DATA_CONNECTION_MAX_XML_ELEMENT_COUNT",
+        1,
+    )
+
+    first_snapshot = load_snapshot(first)
+    second_snapshot = load_snapshot(second)
+    report = compare_snapshots(first_snapshot, second_snapshot)
+
+    assert first_info.file_size == second_info.file_size
+    assert (
+        first_snapshot.external_data_connections[0].opaque_metadata.signature
+        != second_snapshot.external_data_connections[0].opaque_metadata.signature
+    )
+    assert "FF023" in {finding.rule_id for finding in report.findings}
+
+
 def test_package_wide_external_relationships_are_profiled_and_diffed_privately(
     tmp_path,
 ) -> None:
@@ -10253,6 +10524,110 @@ def _shared_workbook_revision_xml_element_count(path, kind: str) -> int:
             _shared_workbook_revision_xml_payload(path, kind)
         ).iter()
     )
+
+
+_EXTERNAL_DATA_CONNECTION_XML_MEMBER = "xl/connections.xml"
+
+
+def _external_data_connection_xml_payload(path) -> bytes:
+    """Return the raw Connections XML payload from the synthetic workbook fixture."""
+    with ZipFile(path) as archive:
+        return archive.read(_EXTERNAL_DATA_CONNECTION_XML_MEMBER)
+
+
+def _append_external_data_connection_xml_elements(
+    path,
+    count: int,
+    *,
+    nested: bool = False,
+    entry_name: str = "entry",
+) -> None:
+    """Add opaque Connections XML entries without FormulaFence's reader."""
+    staging = path.with_suffix(".external-data-connection-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[_EXTERNAL_DATA_CONNECTION_XML_MEMBER])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, f"{{urn:formulafence:audit}}{entry_name}")
+    contents[_EXTERNAL_DATA_CONNECTION_XML_MEMBER] = ElementTree.tostring(
+        root,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _external_data_connection_xml_element_count(path) -> int:
+    """Count the synthetic Connections XML tree for exact budget tests."""
+    return sum(
+        1
+        for _ in ElementTree.fromstring(
+            _external_data_connection_xml_payload(path)
+        ).iter()
+    )
+
+
+def _duplicate_external_data_connections_part(path) -> None:
+    """Bind a second Connections XML part for aggregate-budget coverage."""
+    staging = path.with_suffix(".external-data-connection-duplicate.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    relationships_namespace = "http://schemas.openxmlformats.org/package/2006/relationships"
+    workbook_relationships = ElementTree.fromstring(
+        contents["xl/_rels/workbook.xml.rels"]
+    )
+    ElementTree.SubElement(
+        workbook_relationships,
+        f"{{{relationships_namespace}}}Relationship",
+        {
+            "Id": "rIdFormulaFenceConnections2",
+            "Type": (
+                "http://schemas.openxmlformats.org/officeDocument/2006/"
+                "relationships/connections"
+            ),
+            "Target": "connections2.xml",
+        },
+    )
+    contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+        workbook_relationships,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    contents["xl/connections2.xml"] = contents[_EXTERNAL_DATA_CONNECTION_XML_MEMBER]
+    content_types_namespace = "http://schemas.openxmlformats.org/package/2006/content-types"
+    content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+    ElementTree.SubElement(
+        content_types,
+        f"{{{content_types_namespace}}}Override",
+        {
+            "PartName": "/xl/connections2.xml",
+            "ContentType": (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml."
+                "connections+xml"
+            ),
+        },
+    )
+    contents["[Content_Types].xml"] = ElementTree.tostring(
+        content_types,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
 
 
 def _power_query_mashup_fields(payload: bytes) -> tuple[int, list[bytes]]:

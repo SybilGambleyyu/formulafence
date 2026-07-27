@@ -319,6 +319,14 @@ source or identity changes. Any such control change emits `FF023`; enable
 does not execute a connection, refresh workbook data, determine source trust,
 or calculate a PivotTable report.
 
+Before privately parsing raw `xl/connections*.xml`, FormulaFence streams each
+Connections part through 32,768-element per-part and 65,536-element complete
+Connections-scan limits, in addition to 16 MiB per-part, 64 MiB aggregate, and
+512-part read limits. A valid structural overage produces `FF010` and remains
+privately diff-visible through `FF023`; malformed XML retains the ordinary
+parser warning. This allocation boundary is limited to Connections XML, not
+every external-data package reader.
+
 FormulaFence separately inventories raw `xl/externalLinks/externalLink*.xml`
 packages. It recognizes external-workbook, DDE, and OLE definitions; privately
 binds each workbook declaration to its package part; and compares link targets,

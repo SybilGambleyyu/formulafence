@@ -1374,6 +1374,14 @@ formula will produce.
   private fingerprints; a material change emits `FF023` and can be blocked with
   `no_external_data_connection_changes`. FormulaFence does **not** connect,
   refresh data, establish source trust, or calculate/render a PivotTable report.
+- Before private parsing, raw `xl/connections*.xml` parts are streamed through
+  32,768-element per-part and 65,536-element Connections-scan structural
+  limits, in addition to 16 MiB per-part, 64 MiB aggregate, and 512-part read
+  limits. A valid structural overage is represented only by private
+  opaque coverage evidence, produces `FF010`, and remains materially
+  diff-visible via `FF023`; malformed input retains the ordinary parser warning.
+  This allocation boundary applies specifically to Connections XML rather than
+  every raw external-data package reader.
 - Raw `xl/externalLinks/externalLink*.xml` packages are separately inspected
   for external-workbook, DDE, and OLE definitions. FormulaFence privately binds
   workbook declarations to package parts and fingerprints endpoint

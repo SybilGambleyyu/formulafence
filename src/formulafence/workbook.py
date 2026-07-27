@@ -638,6 +638,16 @@ _EXTERNAL_LINK_PART_PATTERN = re.compile(
     r"^xl/externalLinks/externalLink(?:\d+)?\.xml$", re.IGNORECASE
 )
 _EXTERNAL_LINK_MAX_PART_BYTES = 16 * 1024 * 1024
+_EXTERNAL_DATA_CONNECTION_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_EXTERNAL_DATA_CONNECTION_TOTAL_XML_BYTES = 64 * 1024 * 1024
+_EXTERNAL_DATA_CONNECTION_TOTAL_XML_PARTS = 512
+# Connection definitions can carry unknown provider metadata outside the normal
+# worksheet reader. Bound complete XML structure before the raw external-data
+# scanner builds one private tree for a highly compressible connection part.
+_EXTERNAL_DATA_CONNECTION_MAX_XML_ELEMENT_COUNT = 32_768
+_EXTERNAL_DATA_CONNECTION_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _EXTERNAL_DATA_CONNECTION_MAX_XML_ELEMENT_COUNT
+)
 _EXTERNAL_LINK_RELATIONSHIP_TYPE = (
     f"{_DOCUMENT_RELATIONSHIP_NS}/externalLink"
 )
@@ -1914,6 +1924,17 @@ class _ExternalRelationshipBudget:
 
     remaining_bytes: int = _EXTERNAL_RELATIONSHIP_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _EXTERNAL_RELATIONSHIP_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _ExternalDataConnectionXmlBudget:
+    """Bound raw external-data Connection XML in one package scan."""
+
+    remaining_bytes: int = _EXTERNAL_DATA_CONNECTION_TOTAL_XML_BYTES
+    remaining_parts: int = _EXTERNAL_DATA_CONNECTION_TOTAL_XML_PARTS
+    remaining_xml_elements: int = (
+        _EXTERNAL_DATA_CONNECTION_TOTAL_XML_MAX_ELEMENT_COUNT
+    )
 
 
 @dataclass
@@ -8828,6 +8849,128 @@ def _external_data_part_root(
         return None
 
 
+def _external_data_connection_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info: ZipInfo,
+    budget: _ExternalDataConnectionXmlBudget,
+) -> str | None:
+    """Stream a Connection XML part before the private tree is materialized."""
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if budget.remaining_xml_elements <= 0:
+        return _private_external_data_signature(
+            (("connection-xml-structure-budget-exhausted", metadata),)
+        )
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _EXTERNAL_DATA_CONNECTION_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Keep the existing full-parser coverage diagnostic for malformed or
+        # unreadable XML. Only a successfully streamed overage can skip that
+        # materializing parser safely.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    # An overage can contain an unbounded number of unseen descendants. Stop
+    # spending the aggregate structural budget after its first failed part.
+    budget.remaining_xml_elements = 0
+    signature_entries = [
+        (
+            "xml-structure-budget-exhausted",
+            metadata,
+        )
+    ]
+    if (payload_signature := _private_archive_member_payload_signature(archive, info)) is not None:
+        signature_entries.append(("payload", payload_signature))
+    return _private_external_data_signature(tuple(signature_entries))
+
+
+def _external_data_connection_bounded_root(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _ExternalDataConnectionXmlBudget,
+) -> tuple[ElementTree.Element | None, str | None]:
+    """Read one bounded external-data Connection XML root privately."""
+    if budget.remaining_parts <= 0:
+        try:
+            info = archive.getinfo(member)
+            metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+        except KeyError:
+            metadata = repr((member, "missing"))
+        warnings.add(
+            "FormulaFence reached its bounded external-data Connections XML part "
+            "count; affected connection controls were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("connection-xml-part-count-budget-exhausted", metadata),)
+        )
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        return (
+            _external_data_part_root(
+                archive,
+                member,
+                warnings,
+                context="Connections",
+            ),
+            None,
+        )
+    budget.remaining_parts -= 1
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _EXTERNAL_DATA_CONNECTION_MAX_XML_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized external-data Connections "
+            "XML part; affected connection controls have a coverage gap."
+        )
+        return None, _private_external_data_signature(
+            (("oversized-connection-xml-part", metadata),)
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded external-data Connections XML read "
+            "budget; affected connection controls were not compared."
+        )
+        return None, _private_external_data_signature(
+            (("connection-xml-read-budget-exhausted", metadata),)
+        )
+    # A structural preflight must count against the same aggregate byte budget:
+    # it reads the whole member even if parsing is then deliberately skipped.
+    budget.remaining_bytes -= info.file_size
+    structure_fallback_signature = (
+        _external_data_connection_xml_structure_budget_fallback_signature(
+            archive,
+            member,
+            info,
+            budget,
+        )
+    )
+    if structure_fallback_signature is not None:
+        warnings.add(
+            "FormulaFence did not fully read an external-data Connections XML part "
+            "whose XML structure exceeds the safety budget; affected connection "
+            "controls have a coverage gap."
+        )
+        return None, structure_fallback_signature
+    return (
+        _external_data_part_root(
+            archive,
+            member,
+            warnings,
+            context="Connections",
+        ),
+        None,
+    )
+
+
 def _external_data_part_relationships(
     archive: ZipFile,
     source_member: str,
@@ -8851,6 +8994,7 @@ def _connection_snapshots(
     archive: ZipFile,
     relationships: tuple[_PackageRelationship, ...],
     warnings: set[str],
+    budget: _ExternalDataConnectionXmlBudget,
 ) -> tuple[ExternalDataConnectionSnapshot, ...]:
     """Read every workbook-connected ``connections`` part safely."""
     connection_parts = [
@@ -8872,13 +9016,24 @@ def _connection_snapshots(
                 "the affected controls were not compared."
             )
             continue
-        root = _external_data_part_root(
+        root, fallback_signature = _external_data_connection_bounded_root(
             archive,
             relationship.target,
             warnings,
-            context="Connections",
+            budget,
         )
         if root is None:
+            if fallback_signature is not None:
+                snapshots.append(
+                    ExternalDataConnectionSnapshot(
+                        connection_id=None,
+                        source_type="unrecognized",
+                        opaque_metadata=ExternalDataOpaqueMetadataSnapshot(
+                            count=1,
+                            signature=fallback_signature,
+                        ),
+                    )
+                )
             continue
         if (
             _xml_local_name(root.tag) != "connections"
@@ -9391,6 +9546,7 @@ def _external_data_metadata(
                 archive,
                 workbook_relationships,
                 warnings,
+                _ExternalDataConnectionXmlBudget(),
             )
             try:
                 sheet_parts = _sheet_xml_parts(archive)

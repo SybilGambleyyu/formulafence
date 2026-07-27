@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.140.0 — 2026-07-26
+
+- Bound raw external-data `Connections` XML before FormulaFence can materialize
+  and privately inspect a highly compressible connection tree. Each
+  `xl/connections*.xml` part allows 32,768 elements and the complete Connections
+  scan allows 65,536, alongside new 16 MiB per-part, 64 MiB aggregate, and
+  512-part byte/count limits.
+- Convert a successfully streamed structural overage into explicit `FF010` plus
+  `FF023`-visible opaque connection coverage evidence. The fallback retains a
+  private streamed content fingerprint, so same-size hostile Connections XML
+  changes remain diff-visible without exposing connection or XML material.
+- Add byte/part, fail-before-materialization, nested opaque, exact/default,
+  aggregate, visibility, and same-size-fingerprint regressions for Connections
+  XML.
+
 ## 0.139.0 — 2026-07-26
 
 - Bound raw legacy shared-workbook `revisionHeaders` and `revisionLog` XML

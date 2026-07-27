@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Workbook Theme XML structural bounds — 2026-07-26
+
+Version 0.133.0 closes the compact allocation path in FormulaFence's
+workbook-level DrawingML Theme scanner. The scanner follows the raw workbook
+Theme binding, privately canonicalizes Theme XML, and follows direct
+Theme-image relationships before ordinary cell inspection. Its existing 16 MiB
+per-part, 64 MiB aggregate, and 512-part byte/count limits did not bound the
+XML objects created by the Theme tree or its recursive canonicalizer.
+
+Microsoft's Open XML documentation says that a SpreadsheetML package can have
+zero or one [Theme part](https://learn.microsoft.com/en-us/office/open-xml/presentation/structure-of-a-presentationml-document),
+bound from the Workbook, and that the part contains the colour, font, and
+format schemes that affect spreadsheet cell contents and charts. That makes the
+stored control material worth comparing, but does not make FormulaFence's
+element count an Excel-file-validity rule. FormulaFence now streams Theme and
+Theme-relationship XML before tree materialization, allowing 32,768 elements
+per XML part and 65,536 across the complete Theme scan. A successfully streamed
+overage becomes explicit `FF053` coverage evidence; malformed or unreadable
+input keeps its established parser diagnostic. Direct Theme-image payloads stay
+byte-bounded rather than being interpreted as XML.
+
+A raw-ZIP fixture generated without FormulaFence's reader contained a
+9,591-byte workbook with 100,000 opaque direct Theme XML children
+(1,210,322 bytes of `xl/theme/theme1.xml`). In the same Python 3.12.3
+environment, the exact 0.132.0 wheel completed in 1.090010 seconds at
+112,240 KiB and reported no unrecognized Theme coverage. The exact 0.133.0
+wheel completed in 0.683019 seconds at 41,512 KiB before materializing that
+tree, recorded explicit unrecognized Theme coverage, and emitted the structural
+coverage warning. The normal installed CLI diff exited 0; the
+baseline-to-fixture diff emitted `FF010` and `FF053` and exited 1 with
+`--fail-on medium`. The complete 937-test source suite passed in 129.68
+seconds, with Ruff, bytecode compilation, `git diff --check`, and `twine check`
+clean. A fresh Python 3.12 environment installed the exact wheel (SHA-256
+`206ae032803648b08b8c1df4ea23d7d06f94ac4866d8937e3e2bb8ac70726829`),
+confirmed FormulaFence 0.133.0 with `openpyxl.DEFUSEDXML` enabled, and retained
+the expected normal and hostile CLI outcomes.
+
 ## Custom workbook data-store XML structural bounds — 2026-07-26
 
 Version 0.132.0 closes the compact allocation path in FormulaFence's generic

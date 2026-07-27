@@ -10007,6 +10007,69 @@ def _custom_data_store_xml_element_count(path, member: str) -> int:
     return sum(1 for _ in root.iter())
 
 
+def _workbook_theme_xml_members(path) -> tuple[str, ...]:
+    """Return each XML part materialized by the workbook-theme scanner."""
+    with ZipFile(path) as archive:
+        members = {entry.filename for entry in archive.infolist()}
+    theme_member = next(
+        member
+        for member in members
+        if member.startswith("xl/theme/") and member.endswith(".xml")
+    )
+    relationship_member = theme_member.rsplit("/", 1)
+    theme_relationship_member = (
+        f"{relationship_member[0]}/_rels/{relationship_member[1]}.rels"
+    )
+    expected_members = (
+        "xl/_rels/workbook.xml.rels",
+        theme_member,
+        theme_relationship_member,
+    )
+    return tuple(member for member in expected_members if member in members)
+
+
+def _append_workbook_theme_xml_elements(
+    path,
+    count: int,
+    *,
+    nested: bool = False,
+) -> None:
+    """Add opaque Theme XML entries without invoking FormulaFence's reader."""
+    staging = path.with_suffix(".workbook-theme-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    theme_member = next(
+        member
+        for member in contents
+        if member.startswith("xl/theme/") and member.endswith(".xml")
+    )
+    root = ElementTree.fromstring(contents[theme_member])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, "{urn:formulafence:audit}entry")
+    contents[theme_member] = ElementTree.tostring(
+        root,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _workbook_theme_xml_element_count(path, member: str) -> int:
+    """Count one complete Theme-scanner XML tree for exact budget tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member))
+    return sum(1 for _ in root.iter())
+
+
 def test_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
     baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
     candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
@@ -13665,6 +13728,213 @@ def test_workbook_theme_read_budget_fails_closed(tmp_path, monkeypatch) -> None:
         for warning in candidate_snapshot.parser_warnings
     )
     assert {"FF010", "FF053"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_workbook_theme_xml_element_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_workbook_theme_image_model(tmp_path / "candidate.xlsx")
+    _append_workbook_theme_xml_elements(workbook, 8)
+    theme_member = next(
+        member
+        for member in _workbook_theme_xml_members(workbook)
+        if member.startswith("xl/theme/") and member.endswith(".xml")
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKBOOK_THEME_MAX_XML_ELEMENT_COUNT",
+        _workbook_theme_xml_element_count(workbook, theme_member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        theme_payload = archive.read(theme_member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == theme_payload:
+            raise AssertionError(
+                "the workbook-theme XML tree was materialized after its budget failed"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.workbook_theme.unrecognized_theme_count >= 1
+    assert any(
+        "workbook-theme XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_workbook_theme_binary_image_does_not_consume_xml_budget(tmp_path) -> None:
+    workbook = make_workbook_theme_image_model(tmp_path / "candidate.xlsx")
+    budget = workbook_module._WorkbookThemeBudget(remaining_xml_elements=0)
+    warnings: set[str] = set()
+
+    with ZipFile(workbook) as archive:
+        payload, fallback_signature = workbook_module._workbook_theme_bounded_payload(
+            archive,
+            "xl/theme/media/fence-theme-image.bin",
+            warnings,
+            budget,
+            kind="theme-image",
+        )
+
+    assert payload == b"PRIVATE-THEME-IMAGE-BASELINE"
+    assert fallback_signature is None
+    assert budget.remaining_xml_elements == 0
+    assert not warnings
+
+
+def test_workbook_theme_xml_element_budget_remains_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_workbook_theme_image_model(tmp_path / "baseline.xlsx")
+    workbook = make_workbook_theme_image_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    _append_workbook_theme_xml_elements(workbook, 8)
+    theme_member = next(
+        member
+        for member in _workbook_theme_xml_members(workbook)
+        if member.startswith("xl/theme/") and member.endswith(".xml")
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKBOOK_THEME_MAX_XML_ELEMENT_COUNT",
+        _workbook_theme_xml_element_count(workbook, theme_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+    report = compare_snapshots(baseline_snapshot, snapshot)
+
+    assert snapshot.workbook_theme.unrecognized_theme_count >= 1
+    assert any(
+        "workbook-theme XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+    assert {"FF010", "FF053"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_workbook_theme_xml_element_budget_accepts_the_configured_capacity(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_workbook_theme_image_model(tmp_path / "candidate.xlsx")
+    _append_workbook_theme_xml_elements(workbook, 8)
+    theme_member = next(
+        member
+        for member in _workbook_theme_xml_members(workbook)
+        if member.startswith("xl/theme/") and member.endswith(".xml")
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKBOOK_THEME_MAX_XML_ELEMENT_COUNT",
+        _workbook_theme_xml_element_count(workbook, theme_member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.workbook_theme.unrecognized_theme_count == 0
+
+
+def test_workbook_theme_xml_element_budget_aggregates_across_package_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_workbook_theme_image_model(tmp_path / "candidate.xlsx")
+    xml_members = _workbook_theme_xml_members(workbook)
+    remaining_xml_elements = (
+        sum(_workbook_theme_xml_element_count(workbook, member) for member in xml_members)
+        - 1
+    )
+    budget_type = workbook_module._WorkbookThemeBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_WorkbookThemeBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.workbook_theme.unrecognized_theme_count >= 1
+    assert any(
+        "workbook-theme XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_workbook_theme_xml_element_budget_accepts_the_default_capacity(
+    tmp_path,
+) -> None:
+    workbook = make_workbook_theme_image_model(tmp_path / "candidate.xlsx")
+    theme_member = next(
+        member
+        for member in _workbook_theme_xml_members(workbook)
+        if member.startswith("xl/theme/") and member.endswith(".xml")
+    )
+    _append_workbook_theme_xml_elements(
+        workbook,
+        workbook_module._WORKBOOK_THEME_MAX_XML_ELEMENT_COUNT
+        - _workbook_theme_xml_element_count(workbook, theme_member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.workbook_theme.unrecognized_theme_count == 0
+
+
+def test_workbook_theme_xml_element_budget_rejects_the_default_overage(
+    tmp_path,
+) -> None:
+    workbook = make_workbook_theme_image_model(tmp_path / "candidate.xlsx")
+    theme_member = next(
+        member
+        for member in _workbook_theme_xml_members(workbook)
+        if member.startswith("xl/theme/") and member.endswith(".xml")
+    )
+    _append_workbook_theme_xml_elements(
+        workbook,
+        workbook_module._WORKBOOK_THEME_MAX_XML_ELEMENT_COUNT
+        - _workbook_theme_xml_element_count(workbook, theme_member)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.workbook_theme.unrecognized_theme_count >= 1
+    assert any(
+        "workbook-theme XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_workbook_theme_xml_element_budget_counts_nested_opaque_subtrees(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_workbook_theme_image_model(tmp_path / "candidate.xlsx")
+    _append_workbook_theme_xml_elements(workbook, 8, nested=True)
+    theme_member = next(
+        member
+        for member in _workbook_theme_xml_members(workbook)
+        if member.startswith("xl/theme/") and member.endswith(".xml")
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_WORKBOOK_THEME_MAX_XML_ELEMENT_COUNT",
+        _workbook_theme_xml_element_count(workbook, theme_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.workbook_theme.unrecognized_theme_count >= 1
+    assert any(
+        "workbook-theme XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_formula_cached_results_are_profiled_diffed_and_redacted(tmp_path) -> None:

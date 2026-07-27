@@ -685,9 +685,14 @@ formula will produce.
   away. Missing, duplicate, malformed, unsafe, unbound, unreadable, oversized,
   or over-budget metadata produces a visible coverage warning; reads are
   bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts. FormulaFence
-  does **not** resolve effective styles, render a workbook, calculate contrast,
-  decode an image, fetch a target, calculate formulas, or infer client
-  behavior. This boundary follows the Open XML SDK
+  also streams Theme and Theme-relationship XML before tree materialization:
+  32,768 elements per XML part and 65,536 across the complete Theme scan.
+  These are reader-allocation and coverage limits, not workbook-validity
+  limits; a well-formed structural overage produces visible `FF053` coverage
+  evidence. Direct Theme-image payloads remain byte-bounded rather than being
+  treated as XML. FormulaFence does **not** resolve effective styles, render a
+  workbook, calculate contrast, decode an image, fetch a target, calculate
+  formulas, or infer client behavior. This boundary follows the Open XML SDK
   [WorkbookPart](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.packaging.workbookpart?view=openxml-2.20.0)
   Theme-part surface and Microsoft's
   [conditional-formatting guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-conditional-formatting).

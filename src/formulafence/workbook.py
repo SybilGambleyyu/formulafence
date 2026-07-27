@@ -928,6 +928,10 @@ _WORKBOOK_THEME_PART_PATTERN = re.compile(r"^xl/theme/[^/]+\.xml$", re.IGNORECAS
 _WORKBOOK_THEME_MAX_PART_BYTES = 16 * 1024 * 1024
 _WORKBOOK_THEME_TOTAL_BYTES = 64 * 1024 * 1024
 _WORKBOOK_THEME_TOTAL_PARTS = 512
+_WORKBOOK_THEME_MAX_XML_ELEMENT_COUNT = 32_768
+_WORKBOOK_THEME_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _WORKBOOK_THEME_MAX_XML_ELEMENT_COUNT
+)
 _WORKBOOK_THEME_RELATIONSHIP_ATTRIBUTES = frozenset(
     f"{{{namespace}}}{local_name}"
     for namespace in {
@@ -29697,6 +29701,7 @@ class _WorkbookThemeBudget:
 
     remaining_parts: int = _WORKBOOK_THEME_TOTAL_PARTS
     remaining_bytes: int = _WORKBOOK_THEME_TOTAL_BYTES
+    remaining_xml_elements: int = _WORKBOOK_THEME_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 def _workbook_theme_issue(
@@ -29708,6 +29713,49 @@ def _workbook_theme_issue(
     issues.append((context, repr(detail)))
 
 
+def _workbook_theme_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _WorkbookThemeBudget,
+    *,
+    report_failure: bool,
+) -> str | None:
+    """Stream theme XML before recursively canonicalizing its private tree."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _WORKBOOK_THEME_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    if report_failure:
+        warnings.add(
+            "FormulaFence did not fully read a workbook-theme XML part whose XML "
+            "structure exceeds the safety budget; affected theme controls have a "
+            "coverage gap."
+        )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
+
+
 def _workbook_theme_bounded_payload(
     archive: ZipFile,
     member: str,
@@ -29716,6 +29764,7 @@ def _workbook_theme_bounded_payload(
     *,
     kind: str,
     report_failure: bool = True,
+    structural_xml: bool = False,
 ) -> tuple[bytes | None, str | None]:
     """Read one theme-related package member inside fixed scan budgets."""
     if budget.remaining_parts <= 0:
@@ -29758,6 +29807,19 @@ def _workbook_theme_bounded_payload(
         return None, _private_external_data_signature(
             (("workbook-theme-read-budget-exhausted", repr((kind, metadata))),)
         )
+    if structural_xml:
+        structure_fallback_signature = (
+            _workbook_theme_xml_structure_budget_fallback_signature(
+                archive,
+                member,
+                info,
+                warnings,
+                budget,
+                report_failure=report_failure,
+            )
+        )
+        if structure_fallback_signature is not None:
+            return None, structure_fallback_signature
     budget.remaining_bytes -= info.file_size
     try:
         return archive.read(member), None
@@ -29789,6 +29851,7 @@ def _workbook_theme_bounded_root(
         budget,
         kind=kind,
         report_failure=report_failure,
+        structural_xml=True,
     )
     if payload is None:
         return None, fallback_signature

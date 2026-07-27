@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.133.0 — 2026-07-26
+
+- Bound DrawingML Theme and Theme-relationship XML before FormulaFence can
+  materialize and recursively canonicalize a private theme tree. Each XML part
+  allows 32,768 elements and the complete Theme scan allows 65,536, alongside
+  the existing 16 MiB per-part, 64 MiB aggregate, and 512-part byte/count
+  limits.
+- Stream raw Theme XML before the private parser runs, so a successfully parsed
+  structural overage becomes explicit `FF053` coverage evidence while malformed
+  or unreadable input keeps its established diagnostic. Direct Theme-image
+  payloads remain byte-bounded rather than being interpreted as XML.
+- Add fail-before-tree-materialization, binary-image, configured/default and
+  exact capacity, aggregate, and nested-opaque Theme boundary regressions.
+
 ## 0.132.0 — 2026-07-26
 
 - Bound generic Custom XML, Custom XML-property, Custom Data-property, custom

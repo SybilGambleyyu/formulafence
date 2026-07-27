@@ -1332,7 +1332,13 @@ image payloads, relationship IDs, and targets remain private. Writer-selected
 relationship IDs/order and equivalent internal target spelling normalize away.
 Missing, duplicate, malformed, unsafe, unbound, unreadable, oversized, or
 over-budget metadata becomes a visible coverage warning; reads are bounded to
-16 MiB per part, 64 MiB per workbook, and 512 parts.
+16 MiB per part, 64 MiB per workbook, and 512 parts. FormulaFence also streams
+Theme and Theme-relationship XML before tree materialization: 32,768 elements
+per XML part and 65,536 across the complete Theme scan. These are
+reader-allocation and coverage limits, not workbook-validity limits; a
+well-formed structural overage produces visible `FF053` coverage evidence.
+Direct Theme-image payloads remain byte-bounded rather than being treated as
+XML.
 
 This policy guards stored declarations, not rendered appearance. FormulaFence
 does not resolve an effective cell/chart/drawing style, render a workbook,

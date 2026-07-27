@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.132.0/formulafence-0.132.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.133.0/formulafence-0.133.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.132.0
+  uses: SybilGambleyyu/formulafence@v0.133.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1992,7 +1992,12 @@ JSON, or SARIF. Writer-selected relationship IDs/order and equivalent internal
 target spelling stay quiet. Missing, duplicate, malformed, unsafe, unbound,
 unreadable, oversized, or over-budget metadata becomes a visible coverage
 warning; raw reads are bounded to 16 MiB per part, 64 MiB per workbook, and
-512 parts.
+512 parts. FormulaFence also streams Theme and Theme-relationship XML before
+tree materialization: 32,768 elements per XML part and 65,536 across the
+complete Theme scan. These are reader-allocation and coverage limits, not
+workbook-validity limits; a well-formed structural overage produces visible
+`FF053` coverage evidence. Direct Theme-image payloads stay byte-bounded rather
+than being treated as XML.
 
 This is a stored-declaration boundary, not a rendering engine. FormulaFence
 does not resolve effective cell/chart/drawing styles, render a workbook,

@@ -5,6 +5,60 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Worksheet control catalog and `sqref` bounds — 2026-07-26
+
+Version 0.119.0 closes three related allocation paths in ordinary worksheet
+loading. A [data-validation collection can contain up to 65,534 entries](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/4ec60c5e-de69-4d16-944d-7fab3e45fdff),
+while the [interoperability notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/0114969a-4859-443e-ae3e-0c1fdebfcc64)
+permit up to 32,767 references in one data-validation `sqref`; the standard
+conditional-formatting collection and
+each of its `cfRule` sequences are explicitly [unbounded](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/ecd8b657-48f7-410b-b856-c4ad9c2fe127)
+and [unbounded](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/98f4ba7a-b8f8-4969-92a0-d671d5d8ca8a),
+respectively. Scenario Manager similarly stores an `sqref` sequence plus a
+collection of scenarios and per-scenario input-cell records, as shown by the
+Open XML [Scenarios](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.scenarios?view=openxml-3.0.1)
+and [InputCells](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.inputcells?view=openxml-3.0.1)
+definitions.
+
+`openpyxl` converts each whitespace-separated `sqref` token into a `CellRange`
+inside a `MultiCellRange`; it also builds one object for each data validation,
+conditional-formatting rule, scenario, and scenario input cell. FormulaFence's
+raw conditional-formatting and Scenario Manager scanners retain corresponding
+private semantic records. Neither ZIP-member counts nor populated-cell counts
+bound those allocations.
+
+The semantic-reader preflight now streams direct local-name children in
+reader-selected ordinary worksheet parts before raw scanners or the complete
+reader begin. It permits at most 4,096 data-validation declarations,
+conditional-formatting declarations, conditional-formatting rules, Scenario
+Manager containers, scenarios, and scenario input cells. Each `sqref` is capped
+at 128 KiB and 4,096 whitespace-separated targets; each control catalog is
+capped at 8,192 targets in aggregate. The stored text of a data-validation
+`formula1`/`formula2` or conditional-formatting `formula` now follows the
+existing 8,192-character formula ceiling. The counters follow `openpyxl`'s
+direct local-child behavior, including alternate-namespace children, so a
+namespace rewrite cannot sidestep the preflight.
+
+Independent fixtures establish the allocation path. Before the gate, an
+18,378-byte workbook with 100,000 repeated data validations (4,600,734 bytes
+of worksheet XML) took 9.640 seconds and 172,260 KiB despite collapsing to one
+semantic rule. A single 218,389-byte validation `sqref` with 100,000 targets
+(688,894 characters) took 1.018 seconds and 77,708 KiB. Ten thousand
+conditional-formatting rules in a 34,777-byte package took 2.143 seconds and
+64,552 KiB; a 100,000-target conditional-formatting `sqref` took 1.147 seconds
+and 86,228 KiB. Ten thousand Scenario Manager declarations took 1.612 seconds
+and 69,172 KiB, while 10,000 input-cell records in one scenario took 0.673
+seconds and 51,920 KiB.
+
+With the normal gate enabled, those generated inputs rejected before downstream
+work in 0.008–0.044 seconds at 34,748–36,820 KiB. Exact-limit fixtures remained
+accepted: 4,096 validations, 4,096 conditional-formatting rules, 4,096
+scenarios with input cells, and a 4,096-target validation `sqref` completed in
+0.061–0.665 seconds at 35,632–48,060 KiB. The completed source tree passed
+**807 tests in 120.15 seconds**. Focused archive-safety and version coverage
+also passed **105 tests in 2.82 seconds**, along with Ruff, bytecode
+compilation, and `git diff --check`.
+
 ## Reader merged-cell geometry bound — 2026-07-26
 
 Version 0.118.0 closes a compact allocation path in ordinary worksheet loading.

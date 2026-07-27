@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.119.0 — 2026-07-26
+
+- Bound the reader-materialized worksheet control catalogs: direct data-
+  validation declarations, conditional-formatting declarations and rules, and
+  Scenario Manager containers, scenarios, and input-cell records each allow at
+  most 4,096 entries across reader-selected ordinary worksheet parts.
+- Bound every reader-visible `sqref` list before `openpyxl` constructs a
+  `CellRange` object for each whitespace-separated target: 128 KiB and 4,096
+  targets per reference, with 8,192 targets in aggregate for each control
+  catalog. Data-validation and conditional-formatting formula fields now follow
+  the existing 8,192-character stored-formula limit as well.
+- Count the same direct local-name children that the reader materializes,
+  including alternate-namespace declarations, and add fail-before-reader
+  coverage for individual and aggregate target budgets, nested Scenario input
+  cells, formula text, default limits, and exact-limit inputs.
+
 ## 0.118.0 — 2026-07-26
 
 - Bound merged-cell geometry before `openpyxl` expands a compact SpreadsheetML

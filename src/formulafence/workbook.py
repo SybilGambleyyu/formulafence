@@ -214,6 +214,27 @@ _OOXML_READER_MAX_CUSTOM_SHEET_VIEW_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_MERGED_CELL_RANGE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_MERGED_CELL_COUNT = 100_000
 _OOXML_READER_MAX_MERGED_CELL_REFERENCE_CHARACTERS = 256
+# The worksheet reader turns each whitespace-separated ``sqref`` token into a
+# ``CellRange`` object for data validations, conditional formatting, and
+# Scenario Manager.  FormulaFence's raw control scanners retain the same
+# declarations as private evidence.  Bound direct reader objects and both the
+# individual and aggregate target-range lists before either path can allocate
+# an unbounded catalog from a compact worksheet part.
+_OOXML_READER_MAX_MULTI_RANGE_REFERENCE_CHARACTERS = 128 * 1024
+_OOXML_READER_MAX_MULTI_RANGE_REFERENCE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_DATA_VALIDATION_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_DATA_VALIDATION_TARGET_RANGE_COUNT = (
+    2 * _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+)
+_OOXML_READER_MAX_CONDITIONAL_FORMATTING_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_CONDITIONAL_FORMATTING_RULE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_CONDITIONAL_FORMATTING_TARGET_RANGE_COUNT = (
+    2 * _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+)
+_OOXML_READER_MAX_SCENARIO_CONTAINER_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_SCENARIO_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_SCENARIO_INPUT_CELL_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_SCENARIO_TARGET_RANGE_COUNT = 2 * _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 # Reader-facing XML can still be hostile within its byte limit: the ordinary
 # workbook model materializes shared-string entries and style objects, while
 # deep XML can impose disproportionate parser work.  Keep the streaming gate
@@ -3342,6 +3363,15 @@ def _validate_ooxml_semantic_reader_resources(
     custom_sheet_view_count = 0
     merged_cell_range_count = 0
     merged_cell_count = 0
+    data_validation_count = 0
+    data_validation_target_range_count = 0
+    conditional_formatting_count = 0
+    conditional_formatting_rule_count = 0
+    conditional_formatting_target_range_count = 0
+    scenario_container_count = 0
+    scenario_count = 0
+    scenario_input_cell_count = 0
+    scenario_target_range_count = 0
     populated_cell_count = 0
     shared_string_count = 0
     cell_tags = _spreadsheetml_tags("c")
@@ -3352,6 +3382,9 @@ def _validate_ooxml_semantic_reader_resources(
     value_tags = _spreadsheetml_tags("v")
     cell_xfs_tags = _spreadsheetml_tags("cellXfs")
     xf_tags = _spreadsheetml_tags("xf")
+    data_validation_container_tags = _spreadsheetml_tags("dataValidations")
+    conditional_formatting_tags = _spreadsheetml_tags("conditionalFormatting")
+    scenario_container_tags = _spreadsheetml_tags("scenarios")
 
     def content_types_end(
         element: ElementTree.Element,
@@ -3594,6 +3627,178 @@ def _validate_ooxml_semantic_reader_resources(
                 "merged-cell area exceeds the semantic-reader safety limit."
             )
 
+    def multi_range_reference_count(
+        reference: str | None,
+        *,
+        label: str,
+    ) -> int:
+        """Measure an ``openpyxl`` ``MultiCellRange`` input before expansion."""
+        if reference is None:
+            return 0
+        if len(reference) > _OOXML_READER_MAX_MULTI_RANGE_REFERENCE_CHARACTERS:
+            raise _reader_preflight_error(
+                f"a {label} reference exceeds the semantic-reader safety limit."
+            )
+        count = len(reference.split())
+        if count > _OOXML_READER_MAX_MULTI_RANGE_REFERENCE_COUNT:
+            raise _reader_preflight_error(
+                f"a {label} reference exceeds the semantic-reader safety limit."
+            )
+        return count
+
+    def worksheet_reader_catalog_end(
+        element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        nonlocal conditional_formatting_count
+        nonlocal conditional_formatting_rule_count
+        nonlocal conditional_formatting_target_range_count
+        nonlocal data_validation_count
+        nonlocal data_validation_target_range_count
+        nonlocal scenario_container_count
+        nonlocal scenario_count
+        nonlocal scenario_input_cell_count
+        nonlocal scenario_target_range_count
+        element_name = _xml_local_name(element.tag)
+
+        # ``DataValidationList`` constructs a ``DataValidation`` for every
+        # direct local-named child; each ``sqref`` becomes a ``MultiCellRange``.
+        if (
+            len(tags) == 3
+            and tags[-2] in data_validation_container_tags
+            and element_name == "dataValidation"
+        ):
+            data_validation_count += 1
+            if data_validation_count > _OOXML_READER_MAX_DATA_VALIDATION_COUNT:
+                raise _reader_preflight_error(
+                    "data-validation declarations exceed the semantic-reader safety "
+                    "limit."
+                )
+            data_validation_target_range_count += multi_range_reference_count(
+                element.get("sqref"),
+                label="data-validation target",
+            )
+            if (
+                data_validation_target_range_count
+                > _OOXML_READER_MAX_DATA_VALIDATION_TARGET_RANGE_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "data-validation target ranges exceed the semantic-reader safety "
+                    "limit."
+                )
+            return
+
+        if (
+            len(tags) == 4
+            and tags[-3] in data_validation_container_tags
+            and _xml_local_name(tags[-2]) == "dataValidation"
+            and element_name in {"formula1", "formula2"}
+        ):
+            validate_formula_text_length(len(element.text or ""))
+            return
+
+        # A worksheet's direct conditional-formatting declarations each retain
+        # one ``MultiCellRange`` and an unbounded local-name ``cfRule`` sequence
+        # in the reader, while FormulaFence separately snapshots the rules.
+        if len(tags) == 2 and element.tag in conditional_formatting_tags:
+            conditional_formatting_count += 1
+            if (
+                conditional_formatting_count
+                > _OOXML_READER_MAX_CONDITIONAL_FORMATTING_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "conditional-formatting declarations exceed the semantic-reader "
+                    "safety limit."
+                )
+            conditional_formatting_target_range_count += multi_range_reference_count(
+                element.get("sqref"),
+                label="conditional-formatting target",
+            )
+            if (
+                conditional_formatting_target_range_count
+                > _OOXML_READER_MAX_CONDITIONAL_FORMATTING_TARGET_RANGE_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "conditional-formatting target ranges exceed the semantic-reader "
+                    "safety limit."
+                )
+            return
+
+        if (
+            len(tags) == 3
+            and tags[-2] in conditional_formatting_tags
+            and element_name == "cfRule"
+        ):
+            conditional_formatting_rule_count += 1
+            if (
+                conditional_formatting_rule_count
+                > _OOXML_READER_MAX_CONDITIONAL_FORMATTING_RULE_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "conditional-formatting rules exceed the semantic-reader safety "
+                    "limit."
+                )
+            return
+
+        if (
+            len(tags) == 4
+            and tags[-3] in conditional_formatting_tags
+            and _xml_local_name(tags[-2]) == "cfRule"
+            and element_name == "formula"
+        ):
+            validate_formula_text_length(len(element.text or ""))
+            return
+
+        # ``ScenarioList`` has the same ``MultiCellRange`` conversion and
+        # materializes every direct scenario and input-cell child. FormulaFence's
+        # raw Scenario Manager scanner retains the corresponding private records.
+        if len(tags) == 2 and element.tag in scenario_container_tags:
+            scenario_container_count += 1
+            if scenario_container_count > _OOXML_READER_MAX_SCENARIO_CONTAINER_COUNT:
+                raise _reader_preflight_error(
+                    "Scenario Manager containers exceed the semantic-reader safety "
+                    "limit."
+                )
+            scenario_target_range_count += multi_range_reference_count(
+                element.get("sqref"),
+                label="Scenario Manager target",
+            )
+            if (
+                scenario_target_range_count
+                > _OOXML_READER_MAX_SCENARIO_TARGET_RANGE_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "Scenario Manager target ranges exceed the semantic-reader safety "
+                    "limit."
+                )
+            return
+
+        if (
+            len(tags) == 3
+            and tags[-2] in scenario_container_tags
+            and element_name == "scenario"
+        ):
+            scenario_count += 1
+            if scenario_count > _OOXML_READER_MAX_SCENARIO_COUNT:
+                raise _reader_preflight_error(
+                    "Scenario Manager declarations exceed the semantic-reader safety "
+                    "limit."
+                )
+            return
+
+        if (
+            len(tags) == 4
+            and tags[-3] in scenario_container_tags
+            and _xml_local_name(tags[-2]) == "scenario"
+            and element_name == "inputCells"
+        ):
+            scenario_input_cell_count += 1
+            if scenario_input_cell_count > _OOXML_READER_MAX_SCENARIO_INPUT_CELL_COUNT:
+                raise _reader_preflight_error(
+                    "Scenario Manager input cells exceed the semantic-reader safety "
+                    "limit."
+                )
+
     def worksheet_end(
         element: ElementTree.Element,
         tags: list[str],
@@ -3601,6 +3806,7 @@ def _validate_ooxml_semantic_reader_resources(
         nonlocal populated_cell_count
         sheet_catalog_end(element, tags)
         merged_cell_end(element, tags)
+        worksheet_reader_catalog_end(element, tags)
         if element.tag in cell_tags:
             populated_cell_count += 1
             if populated_cell_count > _OOXML_READER_MAX_WORKSHEET_CELL_COUNT:

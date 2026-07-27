@@ -282,6 +282,163 @@ def _append_merged_cell_declarations(
     )
 
 
+def _insert_worksheet_child_after_sheet_data(
+    root: ElementTree.Element,
+    child: ElementTree.Element,
+) -> None:
+    """Insert a worksheet child in a reader-compatible location for a fixture."""
+    sheet_data_index = next(
+        (
+            index
+            for index, current in enumerate(root)
+            if current.tag.rsplit("}", maxsplit=1)[-1] == "sheetData"
+        ),
+        None,
+    )
+    root.insert(0 if sheet_data_index is None else sheet_data_index + 1, child)
+
+
+def _append_data_validation_declarations(
+    path: Path,
+    references: tuple[str, ...],
+    *,
+    alternate_namespace: str | None = None,
+    formula: str | None = None,
+) -> None:
+    """Add direct validation declarations without invoking a workbook reader."""
+    member_name = "xl/worksheets/sheet1.xml"
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    root = ElementTree.fromstring(worksheet)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    qualified_container_name = (
+        f"{{{namespace}}}dataValidations" if namespace else "dataValidations"
+    )
+    qualified_child_name = (
+        f"{{{namespace}}}dataValidation" if namespace else "dataValidation"
+    )
+    qualified_formula_name = f"{{{namespace}}}formula1" if namespace else "formula1"
+    container = next(
+        (
+            child
+            for child in root
+            if child.tag.rsplit("}", maxsplit=1)[-1] == "dataValidations"
+        ),
+        None,
+    )
+    if container is None:
+        container = ElementTree.Element(qualified_container_name)
+        _insert_worksheet_child_after_sheet_data(root, container)
+    for reference in references:
+        declaration = ElementTree.Element(
+            qualified_child_name,
+            {"type": "whole", "sqref": reference},
+        )
+        if alternate_namespace is not None:
+            declaration.tag = f"{{{alternate_namespace}}}dataValidation"
+        if formula is not None:
+            ElementTree.SubElement(declaration, qualified_formula_name).text = formula
+        container.append(declaration)
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _append_conditional_formatting_declarations(
+    path: Path,
+    references: tuple[str, ...],
+    *,
+    rule_namespaces: tuple[str | None, ...] = (None,),
+    formula: str | None = None,
+) -> None:
+    """Add direct conditional-formatting declarations without a reader."""
+    member_name = "xl/worksheets/sheet1.xml"
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    root = ElementTree.fromstring(worksheet)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    qualified_container_name = (
+        f"{{{namespace}}}conditionalFormatting" if namespace else "conditionalFormatting"
+    )
+    qualified_rule_name = f"{{{namespace}}}cfRule" if namespace else "cfRule"
+    qualified_formula_name = f"{{{namespace}}}formula" if namespace else "formula"
+    priority = 1
+    for reference in references:
+        container = ElementTree.Element(qualified_container_name, {"sqref": reference})
+        for rule_namespace in rule_namespaces:
+            rule_name = (
+                qualified_rule_name
+                if rule_namespace is None
+                else f"{{{rule_namespace}}}cfRule"
+            )
+            rule = ElementTree.SubElement(
+                container,
+                rule_name,
+                {"type": "expression", "priority": str(priority)},
+            )
+            priority += 1
+            if formula is not None:
+                ElementTree.SubElement(rule, qualified_formula_name).text = formula
+        _insert_worksheet_child_after_sheet_data(root, container)
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _append_scenario_manager_containers(
+    path: Path,
+    references: tuple[str, ...],
+    *,
+    scenario_count: int = 1,
+    input_cell_count: int = 1,
+    alternate_namespace: str | None = None,
+) -> None:
+    """Add Scenario Manager declarations without invoking a workbook reader."""
+    member_name = "xl/worksheets/sheet1.xml"
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    root = ElementTree.fromstring(worksheet)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    qualified_container_name = f"{{{namespace}}}scenarios" if namespace else "scenarios"
+    qualified_scenario_name = f"{{{namespace}}}scenario" if namespace else "scenario"
+    qualified_input_name = f"{{{namespace}}}inputCells" if namespace else "inputCells"
+    scenario_name = (
+        qualified_scenario_name
+        if alternate_namespace is None
+        else f"{{{alternate_namespace}}}scenario"
+    )
+    input_name = (
+        qualified_input_name
+        if alternate_namespace is None
+        else f"{{{alternate_namespace}}}inputCells"
+    )
+    for container_index, reference in enumerate(references):
+        container = ElementTree.Element(qualified_container_name, {"sqref": reference})
+        for scenario_index in range(scenario_count):
+            scenario = ElementTree.SubElement(
+                container,
+                scenario_name,
+                {
+                    "name": f"FormulaFence audit {container_index}-{scenario_index}",
+                    "locked": "0",
+                    "hidden": "0",
+                    "count": str(input_cell_count),
+                },
+            )
+            for _ in range(input_cell_count):
+                ElementTree.SubElement(scenario, input_name, {"r": "A1", "val": "1"})
+        _insert_worksheet_child_after_sheet_data(root, container)
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
 def _last_central_directory_offset(contents: bytes | bytearray) -> int:
     offset = contents.rfind(b"PK\x01\x02")
     assert offset >= 0
@@ -1013,6 +1170,470 @@ def test_semantic_reader_preflight_accepts_merged_cell_area_at_the_configured_li
     snapshot = load_snapshot(workbook)
 
     assert snapshot.sheets
+
+
+def test_semantic_reader_preflight_rejects_excessive_data_validation_declarations_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-data-validations.xlsx")
+    _append_data_validation_declarations(workbook, ("A1",))
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_DATA_VALIDATION_COUNT", 0)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "data-validation declarations" in message
+
+
+def test_semantic_reader_preflight_counts_alternate_namespace_data_validation_declarations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "alternate-namespace-data-validations.xlsx")
+    _append_data_validation_declarations(workbook, ("A1",))
+    _append_data_validation_declarations(
+        workbook,
+        ("B1",),
+        alternate_namespace="urn:formulafence:archive-safety",
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_DATA_VALIDATION_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "data-validation declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_default_data_validation_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-data-validations.xlsx")
+    _append_data_validation_declarations(
+        workbook,
+        ("A1",) * (workbook_module._OOXML_READER_MAX_DATA_VALIDATION_COUNT + 1),
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "data-validation declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_default_data_validation_reference_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-data-validation-reference-ranges.xlsx")
+    _append_data_validation_declarations(
+        workbook,
+        (
+            " ".join(
+                ("A1",)
+                * (workbook_module._OOXML_READER_MAX_MULTI_RANGE_REFERENCE_COUNT + 1)
+            ),
+        ),
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "a data-validation target reference" in message
+
+
+def test_preflight_rejects_data_validation_reference_range_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "data-validation-reference-ranges.xlsx")
+    _append_data_validation_declarations(workbook, ("A1 B1",))
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_MULTI_RANGE_REFERENCE_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "a data-validation target reference" in message
+
+
+def test_preflight_rejects_aggregate_data_validation_reference_ranges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "aggregate-data-validation-reference-ranges.xlsx")
+    _append_data_validation_declarations(workbook, ("A1", "B1"))
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_DATA_VALIDATION_TARGET_RANGE_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "data-validation target ranges" in message
+
+
+def test_semantic_reader_preflight_rejects_an_oversized_data_validation_reference_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "oversized-data-validation-reference.xlsx")
+    _append_data_validation_declarations(workbook, ("A1:B1",))
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_MULTI_RANGE_REFERENCE_CHARACTERS",
+        4,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "a data-validation target reference" in message
+
+
+def test_semantic_reader_preflight_rejects_an_oversized_data_validation_formula_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "oversized-data-validation-formula.xlsx")
+    _append_data_validation_declarations(workbook, ("A1",), formula="TRUE")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_FORMULA_CHARACTERS", 3)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "formula text" in message
+
+
+def test_semantic_reader_preflight_accepts_data_validation_reference_ranges_at_configured_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "data-validation-reference-ranges-at-limit.xlsx")
+    _append_data_validation_declarations(workbook, ("A1 B1", "C1 D1"))
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_MULTI_RANGE_REFERENCE_COUNT", 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_DATA_VALIDATION_TARGET_RANGE_COUNT",
+        4,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.summary()["data_validation_target_ranges"] == 4
+
+
+def test_preflight_rejects_conditional_formatting_declaration_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-conditional-formatting-declarations.xlsx")
+    _append_conditional_formatting_declarations(
+        workbook,
+        ("A1",),
+        rule_namespaces=(),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_CONDITIONAL_FORMATTING_COUNT",
+        0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "conditional-formatting declarations" in message
+
+
+def test_preflight_rejects_default_conditional_formatting_declaration_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-conditional-formatting-declarations.xlsx")
+    _append_conditional_formatting_declarations(
+        workbook,
+        ("A1",) * (workbook_module._OOXML_READER_MAX_CONDITIONAL_FORMATTING_COUNT + 1),
+        rule_namespaces=(),
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "conditional-formatting declarations" in message
+
+
+def test_semantic_reader_preflight_counts_alternate_namespace_conditional_formatting_rules(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "alternate-namespace-conditional-formatting-rules.xlsx")
+    _append_conditional_formatting_declarations(
+        workbook,
+        ("A1",),
+        rule_namespaces=(None, "urn:formulafence:archive-safety"),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_CONDITIONAL_FORMATTING_RULE_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "conditional-formatting rules" in message
+
+
+def test_preflight_rejects_default_conditional_formatting_rule_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-conditional-formatting-rules.xlsx")
+    _append_conditional_formatting_declarations(
+        workbook,
+        ("A1",),
+        rule_namespaces=(None,)
+        * (workbook_module._OOXML_READER_MAX_CONDITIONAL_FORMATTING_RULE_COUNT + 1),
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "conditional-formatting rules" in message
+
+
+def test_preflight_rejects_conditional_formatting_reference_range_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "conditional-formatting-reference-ranges.xlsx")
+    _append_conditional_formatting_declarations(workbook, ("A1 B1",))
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_MULTI_RANGE_REFERENCE_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "a conditional-formatting target reference" in message
+
+
+def test_preflight_rejects_aggregate_conditional_formatting_reference_ranges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "aggregate-conditional-formatting-reference-ranges.xlsx")
+    _append_conditional_formatting_declarations(workbook, ("A1", "B1"))
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_CONDITIONAL_FORMATTING_TARGET_RANGE_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "conditional-formatting target ranges" in message
+
+
+def test_preflight_rejects_oversized_conditional_formatting_reference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "oversized-conditional-formatting-reference.xlsx")
+    _append_conditional_formatting_declarations(workbook, ("A1:B1",))
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_MULTI_RANGE_REFERENCE_CHARACTERS",
+        4,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "a conditional-formatting target reference" in message
+
+
+def test_preflight_rejects_oversized_conditional_formatting_formula(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "oversized-conditional-formatting-formula.xlsx")
+    _append_conditional_formatting_declarations(workbook, ("A1",), formula="TRUE")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_FORMULA_CHARACTERS", 3)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "formula text" in message
+
+
+def test_preflight_accepts_conditional_formatting_reference_ranges_at_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "conditional-formatting-reference-ranges-at-limit.xlsx")
+    _append_conditional_formatting_declarations(workbook, ("A1 B1", "C1 D1"))
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_MULTI_RANGE_REFERENCE_COUNT", 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_CONDITIONAL_FORMATTING_TARGET_RANGE_COUNT",
+        4,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.conditional_formatting) == 2
+
+
+def test_semantic_reader_preflight_rejects_excessive_scenario_manager_containers_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-scenario-manager-containers.xlsx")
+    _append_scenario_manager_containers(workbook, ("A1",), scenario_count=0)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_SCENARIO_CONTAINER_COUNT",
+        0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "Scenario Manager containers" in message
+
+
+def test_semantic_reader_preflight_rejects_default_scenario_manager_container_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-scenario-manager-containers.xlsx")
+    _append_scenario_manager_containers(
+        workbook,
+        ("A1",) * (workbook_module._OOXML_READER_MAX_SCENARIO_CONTAINER_COUNT + 1),
+        scenario_count=0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "Scenario Manager containers" in message
+
+
+def test_semantic_reader_preflight_counts_alternate_namespace_scenario_manager_declarations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "alternate-namespace-scenario-manager-declarations.xlsx")
+    _append_scenario_manager_containers(workbook, ("A1",))
+    _append_scenario_manager_containers(
+        workbook,
+        ("B1",),
+        alternate_namespace="urn:formulafence:archive-safety",
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_SCENARIO_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "Scenario Manager declarations" in message
+
+
+def test_semantic_reader_preflight_counts_alternate_namespace_scenario_manager_input_cells(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "alternate-namespace-scenario-manager-input-cells.xlsx")
+    _append_scenario_manager_containers(workbook, ("A1",))
+    _append_scenario_manager_containers(
+        workbook,
+        ("B1",),
+        alternate_namespace="urn:formulafence:archive-safety",
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_SCENARIO_INPUT_CELL_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "Scenario Manager input cells" in message
+
+
+def test_semantic_reader_preflight_rejects_default_scenario_manager_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-scenario-manager-declarations.xlsx")
+    _append_scenario_manager_containers(
+        workbook,
+        ("A1",),
+        scenario_count=workbook_module._OOXML_READER_MAX_SCENARIO_COUNT + 1,
+        input_cell_count=0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "Scenario Manager declarations" in message
+
+
+def test_preflight_rejects_default_scenario_manager_input_cell_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-scenario-manager-input-cells.xlsx")
+    _append_scenario_manager_containers(
+        workbook,
+        ("A1",),
+        input_cell_count=workbook_module._OOXML_READER_MAX_SCENARIO_INPUT_CELL_COUNT + 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "Scenario Manager input cells" in message
+
+
+def test_preflight_rejects_scenario_manager_reference_range_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "scenario-manager-reference-ranges.xlsx")
+    _append_scenario_manager_containers(workbook, ("A1 B1",), scenario_count=0)
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_MULTI_RANGE_REFERENCE_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "a Scenario Manager target reference" in message
+
+
+def test_preflight_rejects_aggregate_scenario_manager_reference_ranges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "aggregate-scenario-manager-reference-ranges.xlsx")
+    _append_scenario_manager_containers(workbook, ("A1", "B1"), scenario_count=0)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_SCENARIO_TARGET_RANGE_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "Scenario Manager target ranges" in message
+
+
+def test_semantic_reader_preflight_rejects_an_oversized_scenario_manager_reference_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "oversized-scenario-manager-reference.xlsx")
+    _append_scenario_manager_containers(workbook, ("A1:B1",), scenario_count=0)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_MULTI_RANGE_REFERENCE_CHARACTERS",
+        4,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "a Scenario Manager target reference" in message
+
+
+def test_semantic_reader_preflight_accepts_scenario_manager_reference_ranges_at_configured_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "scenario-manager-reference-ranges-at-limit.xlsx")
+    _append_scenario_manager_containers(workbook, ("A1 B1",))
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_MULTI_RANGE_REFERENCE_COUNT", 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_SCENARIO_TARGET_RANGE_COUNT",
+        2,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.scenario_manager.summary_reference_count == 2
 
 
 def test_semantic_reader_preflight_rejects_excessive_xml_nesting_before_scanners(

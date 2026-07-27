@@ -269,7 +269,14 @@ formula will produce.
   their aggregate expanded coordinate area are limited to 100,000 cells, and a
   merge reference is limited to 256 characters. This prevents a tiny worksheet
   XML part from allocating a `MergedCell` object for every coordinate of an
-  impractically large range. FormulaFence
+  impractically large range. FormulaFence also caps direct data-validation
+  declarations, conditional-formatting declarations and rules, and Scenario
+  Manager containers, scenarios, and input-cell records at 4,096 each across
+  reader-selected ordinary worksheet parts. Each of their `sqref` references is
+  limited to 128 KiB and 4,096 target ranges, with 8,192 target ranges in
+  aggregate for each catalog, before `openpyxl` materializes a `CellRange` per
+  target. Data-validation and conditional-formatting formula fields also share
+  the 8,192-character stored-formula bound. FormulaFence
   follows the bounded sheet relationships plus the ordinary reader's shared-string
   manifest selection, and streams them with `defusedxml` before it creates the
   complete workbook model. A valid workbook above those limits is intentionally

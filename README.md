@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.118.0/formulafence-0.118.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.119.0/formulafence-0.119.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.118.0
+  uses: SybilGambleyyu/formulafence@v0.119.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2562,7 +2562,14 @@ records. Direct merged-cell declarations across the reader-selected ordinary
 worksheet parts are capped at 4,096; each merge range and their aggregate
 expanded coordinate area are capped at 100,000 cells, and a merge reference at
 256 characters, before `openpyxl` expands every coordinate into a `MergedCell`.
-The catalog counters follow the reader's local-name behavior, so
+Data-validation declarations, conditional-formatting declarations and rules,
+and Scenario Manager containers, scenarios, and input cells are likewise capped
+at 4,096 each across reader-selected ordinary worksheet parts. Their `sqref`
+fields are capped at 128 KiB and 4,096 target ranges per field, with 8,192
+targets in aggregate for each catalog, before `openpyxl` creates a `CellRange`
+object for every target; data-validation and conditional-formatting formulas
+also follow the 8,192-character stored-formula ceiling. The catalog counters
+follow the reader's local-name behavior, so
 alternate-namespace entries cannot bypass a limit. The text,
 formula, and style ceilings match [Excel's published limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits);
 valid workbooks above FormulaFence's separate CI-oriented cardinality bounds

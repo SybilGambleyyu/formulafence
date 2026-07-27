@@ -163,6 +163,18 @@ _OOXML_ARCHIVE_ALLOWED_COMPRESSION_METHODS = frozenset({ZIP_STORED, ZIP_DEFLATED
 _OOXML_READER_MAX_XML_PART_BYTES = 64 * 1024 * 1024
 _OOXML_READER_MAX_TOTAL_XML_BYTES = 256 * 1024 * 1024
 _OOXML_READER_MAX_WORKSHEET_CELL_COUNT = 500_000
+# The manifest and workbook relationship catalog are materialized before any
+# worksheet is considered. Their declarations are not ZIP members, so a
+# bounded archive inventory alone cannot stop a small package from making the
+# reader construct millions of manifest, relationship, or sheet objects. A
+# content-type declaration normally describes one package member and a
+# workbook relationship normally names one dependency; align their ceiling to
+# the already-supported package inventory. Sheet declarations receive the
+# lower established per-feature package-part budget because FormulaFence
+# intentionally revisits raw sheet metadata across many control boundaries.
+_OOXML_READER_MAX_CONTENT_TYPE_DECLARATION_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_WORKBOOK_RELATIONSHIP_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
 # Reader-facing XML can still be hostile within its byte limit: the ordinary
 # workbook model materializes shared-string entries and style objects, while
 # deep XML can impose disproportionate parser work.  Keep the streaming gate
@@ -3280,6 +3292,9 @@ def _validate_ooxml_semantic_reader_resources(
     inline_string_text_lengths: list[int] = []
     shared_string_text_lengths: list[int] = []
     manifest_shared_string_members: list[str] = []
+    content_type_declaration_count = 0
+    workbook_relationship_count = 0
+    workbook_sheet_count = 0
     populated_cell_count = 0
     shared_string_count = 0
     cell_tags = _spreadsheetml_tags("c")
@@ -3289,6 +3304,8 @@ def _validate_ooxml_semantic_reader_resources(
     text_tags = _spreadsheetml_tags("t")
     value_tags = _spreadsheetml_tags("v")
     defined_name_tags = _spreadsheetml_tags("definedName")
+    sheets_tags = _spreadsheetml_tags("sheets")
+    sheet_tags = _spreadsheetml_tags("sheet")
     cell_xfs_tags = _spreadsheetml_tags("cellXfs")
     xf_tags = _spreadsheetml_tags("xf")
 
@@ -3296,8 +3313,19 @@ def _validate_ooxml_semantic_reader_resources(
         element: ElementTree.Element,
         _tags: list[str],
     ) -> None:
+        nonlocal content_type_declaration_count
+        local_name = element.tag.rsplit("}", maxsplit=1)[-1]
+        if local_name in {"Default", "Override"}:
+            content_type_declaration_count += 1
+            if (
+                content_type_declaration_count
+                > _OOXML_READER_MAX_CONTENT_TYPE_DECLARATION_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "content-type declarations exceed the semantic-reader safety limit."
+                )
         if (
-            element.tag.rsplit("}", maxsplit=1)[-1] == "Override"
+            local_name == "Override"
             and element.get("ContentType", "").casefold()
             == _OOXML_SHARED_STRINGS_CONTENT_TYPE.casefold()
             and (part_name := element.get("PartName"))
@@ -3307,10 +3335,34 @@ def _validate_ooxml_semantic_reader_resources(
 
     def workbook_end(
         element: ElementTree.Element,
-        _tags: list[str],
+        tags: list[str],
     ) -> None:
+        nonlocal workbook_sheet_count
         if element.tag in defined_name_tags:
             validate_formula_text_length(len(element.text or ""))
+        elif (
+            element.tag in sheet_tags
+            and len(tags) > 1
+            and tags[-2] in sheets_tags
+        ):
+            workbook_sheet_count += 1
+            if workbook_sheet_count > _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT:
+                raise _reader_preflight_error(
+                    "workbook sheet declarations exceed the semantic-reader safety limit."
+                )
+
+    def workbook_relationships_end(
+        element: ElementTree.Element,
+        _tags: list[str],
+    ) -> None:
+        nonlocal workbook_relationship_count
+        if element.tag.rsplit("}", maxsplit=1)[-1] != "Relationship":
+            return
+        workbook_relationship_count += 1
+        if workbook_relationship_count > _OOXML_READER_MAX_WORKBOOK_RELATIONSHIP_COUNT:
+            raise _reader_preflight_error(
+                "workbook relationships exceed the semantic-reader safety limit."
+            )
 
     def worksheet_start(element: ElementTree.Element) -> None:
         if element.tag in inline_string_tags:
@@ -3399,7 +3451,7 @@ def _validate_ooxml_semantic_reader_resources(
                         if member_name == "[Content_Types].xml"
                         else workbook_end
                         if member_name == "xl/workbook.xml"
-                        else None
+                        else workbook_relationships_end
                     ),
                 )
 

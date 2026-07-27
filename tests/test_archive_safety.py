@@ -44,6 +44,21 @@ def _replace_member(path: Path, name: str, payload: bytes) -> None:
     staging.replace(path)
 
 
+def _append_workbook_sheet_declarations(path: Path, count: int) -> None:
+    """Repeat one declared sheet to exercise pre-reader sheet amplification."""
+    member_name = "xl/workbook.xml"
+    with ZipFile(path) as archive:
+        workbook = archive.read(member_name)
+    start = workbook.index(b"<sheet ")
+    end = workbook.index(b"/>", start) + 2
+    declaration = workbook[start:end]
+    _replace_member(
+        path,
+        member_name,
+        workbook.replace(b"</sheets>", declaration * count + b"</sheets>"),
+    )
+
+
 def _last_central_directory_offset(contents: bytes | bytearray) -> int:
     offset = contents.rfind(b"PK\x01\x02")
     assert offset >= 0
@@ -204,6 +219,69 @@ def test_semantic_reader_preflight_rejects_excessive_cells_before_scanners(
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "populated worksheet cells" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_content_type_declarations_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-content-types.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_CONTENT_TYPE_DECLARATION_COUNT",
+        0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "content-type declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_workbook_relationships_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-workbook-relationships.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKBOOK_RELATIONSHIP_COUNT",
+        0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook relationships" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_workbook_sheet_declarations_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-workbook-sheets.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKBOOK_SHEET_COUNT",
+        0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook sheet declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_default_sheet_declaration_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-workbook-sheets.xlsx")
+    _append_workbook_sheet_declarations(
+        workbook,
+        workbook_module._OOXML_READER_MAX_WORKBOOK_SHEET_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook sheet declarations" in message
 
 
 def test_semantic_reader_preflight_rejects_excessive_xml_nesting_before_scanners(

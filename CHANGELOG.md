@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.114.0 — 2026-07-26
+
+- Bound the OOXML reader's bootstrap catalogs before any raw scanner or
+  `openpyxl` model can allocate them: 4,096 manifest `Default`/`Override`
+  declarations, 4,096 workbook relationship records, and 512 workbook sheet
+  declarations.
+- Count every declaration in the workbook `<sheets>` catalog rather than only
+  unique target parts, so repeated sheets pointing at one relationship cannot
+  turn a compact package into a large in-memory workbook or repeated scanner
+  workload.
+- Add fail-before-reader regression coverage for all three catalog bounds and a
+  real 512-declaration repeated-sheet boundary fixture.
+
 ## 0.113.0 — 2026-07-26
 
 - Extend the fail-closed semantic-reader preflight to stream the OOXML manifest,

@@ -5,6 +5,34 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Reader bootstrap catalog bounds — 2026-07-26
+
+Version 0.114.0 closes a separate allocation path before worksheet data is
+considered. A SpreadsheetML workbook catalogs `<sheet>` declarations that each
+point to a part through a relationship ID, as shown in Microsoft's
+[SpreadsheetML package structure](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/structure-of-a-spreadsheetml-document).
+`openpyxl` materializes the package manifest's `Default` and `Override`
+sequences before it finds the workbook part, so a ZIP-member bound alone does
+not bound the reader's bootstrap object catalogs.
+
+The semantic-reader preflight now streams these catalogs without retaining XML
+trees and rejects more than 4,096 manifest declarations, 4,096 workbook
+relationships, or 512 workbook sheet declarations. The sheet count is by
+declaration rather than unique target, so a compact package cannot repeat one
+safe relationship hundreds of times and make the reader or FormulaFence's raw
+sheet boundaries revisit it as a large workbook.
+
+Focused fixtures prove every new bound fails before the first downstream
+scanner. A direct boundary reproduction appended 512 copies of one valid
+`<sheet>` declaration to a four-sheet workbook: stock `openpyxl` accepted the
+result as 516 sheets, while FormulaFence returned the stable semantic-reader
+preflight error before loading the workbook. The completed source tree passed
+**741 tests in 121.54 seconds**, plus Ruff, bytecode compilation, and `git diff
+--check`. Both final distribution artifacts passed `twine check`; a fresh Python
+3.12 environment installed the wheel, returned `FormulaFence 0.114.0`, confirmed
+`openpyxl.DEFUSEDXML`, profiled a normal workbook, and returned the normal
+input-error exit status (2) for the repeated-sheet boundary fixture.
+
 ## Reader XML cardinality and scalar limits — 2026-07-26
 
 Version 0.113.0 extends the 0.112.0 semantic-reader preflight around the

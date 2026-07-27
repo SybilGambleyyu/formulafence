@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.113.0/formulafence-0.113.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.114.0/formulafence-0.114.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.113.0
+  uses: SybilGambleyyu/formulafence@v0.114.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2548,7 +2548,10 @@ workbook-selected sheets before FormulaFence starts a complete in-memory reader
 or downstream raw OOXML scanning. It allows at most 4,000,000 XML elements per
 streamed part and 256 nesting levels, 500,000 populated SpreadsheetML cells,
 500,000 shared-string entries, 65,490 `cellXfs` styles, 32,767 characters of
-cell text, and 8,192 characters of stored formula/defined-name text. The text,
+cell text, and 8,192 characters of stored formula/defined-name text. It also
+caps the bootstrap catalog at 4,096 content-type declarations, 4,096 workbook
+relationships, and 512 workbook sheet declarations (including repeated
+declarations of one target part). The text,
 formula, and style ceilings match [Excel's published limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits);
 valid workbooks above FormulaFence's separate CI-oriented cardinality bounds
 are deliberately rejected rather than partially inspected. FormulaFence

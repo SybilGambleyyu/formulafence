@@ -132,7 +132,10 @@ financial correctness or replace model review.
   capped at 4,000,000 elements and 256 nesting levels. The gate limits
   populated SpreadsheetML cell records and shared-string entries to 500,000
   each, `cellXfs` styles to 65,490, cell text to 32,767 characters, and stored
-  formula/defined-name text to 8,192 characters. FormulaFence requires
+  formula/defined-name text to 8,192 characters. It separately caps the
+  reader-materialized bootstrap catalogs at 4,096 content-type declarations,
+  4,096 workbook relationships, and 512 workbook sheet declarations, including
+  repeated declarations of one relationship target. FormulaFence requires
   `defusedxml` for its XML parser,
   which also enables `openpyxl`'s defused XML path in the supported
   installation. This prevents valid-but-impractical documents from allocating
@@ -245,7 +248,10 @@ formula will produce.
   and 65,490 `cellXfs` styles. It also rejects a cell text value above 32,767
   characters or stored formula/defined-name text above 8,192 characters, using
   [Excel's published specifications and limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits)
-  for the text, formula, and style compatibility ceilings. FormulaFence follows
+  for the text, formula, and style compatibility ceilings. It caps manifest
+  declarations and workbook relationships at 4,096 each and workbook sheet
+  declarations at 512, counting declarations rather than unique target parts.
+  FormulaFence follows
   the bounded sheet relationships plus the ordinary reader's shared-string
   manifest selection, and streams them with `defusedxml` before it creates the
   complete workbook model. A valid workbook above those limits is intentionally

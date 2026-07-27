@@ -5,6 +5,35 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Package relationship-part structural bounds — 2026-07-26
+
+Version 0.128.0 closes a shared allocation path across FormulaFence's raw OOXML
+metadata scanners. Version 0.127.0 already bounded the workbook relationship
+catalog, but many scanners also parse optional relationship parts beside
+task-pane, drawing, control, and other package members. A compact workbook can
+therefore contain a very large valid relationship tree that has no reader-visible
+cell and is not represented as an unrecognized control.
+
+The semantic-reader preflight now streams every package member ending in
+`.rels` before any raw scanner or the complete `openpyxl` reader runs. It allows
+4,096 XML elements per relationship part and 16,384 across all relationship
+parts, counting every element including the root and opaque nested descendants.
+An over-budget part returns the stable input safety error. A malformed optional
+part still reaches its established coverage warning after the small bounded
+stream fails to parse, so valid-but-unrecognized metadata remains observable.
+
+Independent raw-ZIP fixtures measured the exact 0.127.0 wheel and the 0.128.0
+source candidate in the same Python 3.12 environment. The 13,334-byte Office
+Web Add-in definition fixture and 13,325-byte task-pane fixture each contain
+100,000 empty relationship records (about 2.0 MiB of relationship XML). The
+previous wheel completed in 1.094 seconds at 83,960 KiB and 1.127 seconds at
+82,016 KiB respectively, with no unrecognized relationship coverage. The
+candidate rejects the definition fixture in 0.0089 seconds at 34,788 KiB and
+the task-pane fixture in 0.0092 seconds at 34,784 KiB, before its private
+Office Web Add-in scanner begins. The archive suite passed 182 tests, and all
+898 source tests passed in bounded runner batches (130.08 seconds aggregate),
+with Ruff and `git diff --check` clean.
+
 ## Office Web Add-in task-pane and definition XML bounds — 2026-07-26
 
 Version 0.127.0 closes two compact allocation paths in FormulaFence's private

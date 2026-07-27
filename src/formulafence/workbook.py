@@ -224,6 +224,12 @@ _OOXML_READER_MAX_PAGE_BREAK_DECLARATION_COUNT = 2 * 1_026
 # package budget across all of those passive catalogs before either path runs.
 _OOXML_READER_MAX_CONTENT_TYPE_DECLARATION_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_RELATIONSHIP_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+# Relationship parts are parsed repeatedly by the workbook reader and raw
+# metadata scanners. A package can contain many optional `.rels` parts, so
+# bound both one part and their aggregate element shape before any parser can
+# materialize an oversized relationship tree or catalog.
+_OOXML_READER_MAX_RELATIONSHIP_PART_XML_ELEMENT_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_RELATIONSHIP_XML_ELEMENT_COUNT = 4 * _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
 _OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT = 100_000
 _OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
@@ -3413,7 +3419,9 @@ def _validate_ooxml_semantic_reader_resources(
     It therefore covers relationship-selected worksheet locations and
     shared-string paths rather than assuming a writer used one conventional
     member path, without turning an unrelated malformed extension part into a
-    hard input failure. Alongside cell counts, it bounds reader-materialized
+    hard input failure. It also streams every relationship part under a small
+    structural budget before raw metadata scanners can materialize an
+    oversized catalog. Alongside cell counts, it bounds reader-materialized
     workbook catalogs, XML shape, the shared-string table, and
     Excel-compatible cell/formula scalar sizes.
     It protects FormulaFence's complete ``openpyxl`` reader and every
@@ -3422,6 +3430,11 @@ def _validate_ooxml_semantic_reader_resources(
     """
     member_by_name = {member.name: member for member in members}
     xml_members = tuple(member for member in members if _is_ooxml_xml_member(member))
+    relationship_member_names = tuple(
+        member.name
+        for member in xml_members
+        if member.name.casefold().endswith(".rels")
+    )
     total_xml_bytes = 0
     for member in xml_members:
         if member.uncompressed_size > _OOXML_READER_MAX_XML_PART_BYTES:
@@ -3476,6 +3489,8 @@ def _validate_ooxml_semantic_reader_resources(
     manifest_shared_string_members: list[str] = []
     content_type_declaration_count = 0
     workbook_relationship_count = 0
+    relationship_part_element_count = 0
+    relationship_xml_element_count = 0
     workbook_sheet_count = 0
     workbook_defined_name_count = 0
     workbook_external_reference_count = 0
@@ -3672,6 +3687,27 @@ def _validate_ooxml_semantic_reader_resources(
         if workbook_relationship_count > _OOXML_READER_MAX_WORKBOOK_RELATIONSHIP_COUNT:
             raise _reader_preflight_error(
                 "workbook relationships exceed the semantic-reader safety limit."
+            )
+
+    def relationship_part_start(_element: ElementTree.Element) -> None:
+        nonlocal relationship_part_element_count
+        nonlocal relationship_xml_element_count
+        relationship_part_element_count += 1
+        if (
+            relationship_part_element_count
+            > _OOXML_READER_MAX_RELATIONSHIP_PART_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "relationship-part XML elements exceed the semantic-reader safety limit."
+            )
+        relationship_xml_element_count += 1
+        if (
+            relationship_xml_element_count
+            > _OOXML_READER_MAX_RELATIONSHIP_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "aggregate relationship-part XML elements exceed the "
+                "semantic-reader safety limit."
             )
 
     def worksheet_start(element: ElementTree.Element) -> None:
@@ -4290,6 +4326,20 @@ def _validate_ooxml_semantic_reader_resources(
 
     try:
         with ZipFile(path) as archive:
+            for relationship_member_name in sorted(relationship_member_names):
+                relationship_part_element_count = 0
+                try:
+                    _stream_ooxml_reader_xml(
+                        archive,
+                        relationship_member_name,
+                        on_start=relationship_part_start,
+                    )
+                except ElementTree.ParseError:
+                    # Individual metadata scanners preserve their established
+                    # coverage warning for malformed optional relationship
+                    # parts. The stream above still enforces structural limits
+                    # before a malformed part can become expensive to parse.
+                    continue
             bootstrap_members = (
                 "[Content_Types].xml",
                 "xl/workbook.xml",

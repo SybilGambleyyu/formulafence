@@ -53,6 +53,42 @@ def _replace_member(path: Path, name: str, payload: bytes) -> None:
     staging.replace(path)
 
 
+def _write_relationship_part_elements(
+    path: Path,
+    member_name: str,
+    count: int,
+    *,
+    nested: bool = False,
+) -> None:
+    """Add package-relationship XML entries without using a workbook reader."""
+    relationship_namespace = "http://schemas.openxmlformats.org/package/2006/relationships"
+    with ZipFile(path) as archive:
+        payload = archive.read(member_name) if member_name in archive.namelist() else None
+    root = (
+        ElementTree.fromstring(payload)
+        if payload is not None
+        else ElementTree.Element(f"{{{relationship_namespace}}}Relationships")
+    )
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, f"{{{namespace}}}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, f"{{{namespace}}}Relationship")
+    serialized = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    if payload is None:
+        _append_member(path, member_name, serialized)
+    else:
+        _replace_member(path, member_name, serialized)
+
+
+def _relationship_part_element_count(path: Path, member_name: str) -> int:
+    """Count one relationship part's complete XML tree for exact limit tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member_name))
+    return sum(1 for _ in root.iter())
+
+
 def _append_workbook_sheet_declarations(
     path: Path,
     count: int,
@@ -1883,6 +1919,150 @@ def test_semantic_reader_preflight_rejects_excessive_workbook_relationships_befo
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "workbook relationships" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_relationship_part_xml_elements_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-relationship-part-elements.xlsx")
+    relationship_member = "xl/_rels/workbook.xml.rels"
+    _write_relationship_part_elements(workbook, relationship_member, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_RELATIONSHIP_PART_XML_ELEMENT_COUNT",
+        _relationship_part_element_count(workbook, relationship_member) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "relationship-part XML elements" in message
+
+
+def test_semantic_reader_preflight_counts_opaque_nested_relationship_part_xml_elements(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "opaque-relationship-part-elements.xlsx")
+    relationship_member = "xl/private/_rels/opaque.xml.rels"
+    _write_relationship_part_elements(
+        workbook,
+        relationship_member,
+        1,
+        nested=True,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_RELATIONSHIP_PART_XML_ELEMENT_COUNT",
+        _relationship_part_element_count(workbook, relationship_member) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "relationship-part XML elements" in message
+
+
+def test_semantic_reader_preflight_aggregates_relationship_part_xml_elements(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "aggregate-relationship-part-elements.xlsx")
+    relationship_members = (
+        "xl/private/_rels/one.xml.rels",
+        "xl/private/_rels/two.xml.rels",
+    )
+    for relationship_member in relationship_members:
+        _write_relationship_part_elements(workbook, relationship_member, 1)
+    with ZipFile(workbook) as archive:
+        all_relationship_members = tuple(
+            member.filename
+            for member in archive.infolist()
+            if member.filename.casefold().endswith(".rels")
+        )
+    element_counts = tuple(
+        _relationship_part_element_count(workbook, relationship_member)
+        for relationship_member in all_relationship_members
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_RELATIONSHIP_PART_XML_ELEMENT_COUNT",
+        max(element_counts),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_RELATIONSHIP_XML_ELEMENT_COUNT",
+        sum(element_counts) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "aggregate relationship-part XML elements" in message
+
+
+def test_semantic_reader_preflight_accepts_relationship_part_xml_elements_at_exact_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "relationship-part-elements-at-limits.xlsx")
+    with ZipFile(workbook) as archive:
+        relationship_members = tuple(
+            member.filename
+            for member in archive.infolist()
+            if member.filename.casefold().endswith(".rels")
+        )
+    element_counts = tuple(
+        _relationship_part_element_count(workbook, relationship_member)
+        for relationship_member in relationship_members
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_RELATIONSHIP_PART_XML_ELEMENT_COUNT",
+        max(element_counts),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_RELATIONSHIP_XML_ELEMENT_COUNT",
+        sum(element_counts),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_rejects_default_relationship_part_element_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "default-relationship-part-element-limit.xlsx")
+    _write_relationship_part_elements(
+        workbook,
+        "xl/private/_rels/unused.xml.rels",
+        workbook_module._OOXML_READER_MAX_RELATIONSHIP_PART_XML_ELEMENT_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "relationship-part XML elements" in message
+
+
+def test_semantic_reader_preflight_preserves_malformed_unused_relationship_part_coverage(
+    tmp_path: Path,
+) -> None:
+    workbook = make_model(tmp_path / "malformed-unused-relationship-part.xlsx")
+    _append_member(
+        workbook,
+        "xl/private/_rels/unused.xml.rels",
+        b"<Relationships",
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+    assert any(
+        "could not parse a package relationship XML part" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_semantic_reader_preflight_rejects_excessive_workbook_sheet_declarations_before_scanners(

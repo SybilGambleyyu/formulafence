@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.128.0 — 2026-07-26
+
+- Bound every OOXML package relationship (`.rels`) part in the shared semantic
+  preflight before FormulaFence's raw metadata scanners or `openpyxl` can
+  materialize an oversized relationship tree or catalog. Each part allows
+  4,096 XML elements and all relationship parts together allow 16,384.
+- Count complete relationship XML shape, including roots and opaque nested
+  descendants, rather than assuming a relationship part contains only direct
+  package `Relationship` records. Oversized well-formed input now gets the
+  stable safety-preflight error before any specialist scanner runs.
+- Preserve established coverage diagnostics for a malformed unused relationship
+  part, and add fail-before-reader tests for per-part, aggregate, exact,
+  opaque-nested, default-limit, and malformed compatibility cases.
+
 ## 0.127.0 — 2026-07-26
 
 - Bound Office Web Add-in task-pane and definition XML before FormulaFence's

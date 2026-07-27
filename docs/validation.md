@@ -32,7 +32,10 @@ candidate rejects the definition fixture in 0.0089 seconds at 34,788 KiB and
 the task-pane fixture in 0.0092 seconds at 34,784 KiB, before its private
 Office Web Add-in scanner begins. The archive suite passed 182 tests, and all
 898 source tests passed in bounded runner batches (130.08 seconds aggregate),
-with Ruff and `git diff --check` clean.
+with Ruff and `git diff --check` clean. A fresh Python 3.12 environment
+installed the exact 0.128.0 wheel, confirmed `openpyxl.DEFUSEDXML`, and
+completed a normal CLI diff. Both relationship fixtures returned the expected
+input-error status (2) through the installed `profile` command.
 
 ## Office Web Add-in task-pane and definition XML bounds — 2026-07-26
 

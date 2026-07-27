@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.117.0 — 2026-07-26
+
+- Bound the remaining repeated workbook-package catalogs: direct workbook
+  views, function groups, smart-tag types, and web-publish objects are limited
+  before `openpyxl` can materialize them, while custom workbook views are
+  limited before FormulaFence's raw Custom View scanner records them. Each
+  catalog allows at most 4,096 entries.
+- Bound FormulaFence's raw-scanned legacy Custom View surface as well: direct
+  custom sheet-view declarations across workbook-selected worksheet, chart-
+  sheet, and dialog-sheet parts are limited to 4,096 before per-view records
+  are built.
+- Match the reader/scanner's local-name behavior in alternate namespaces and
+  add fail-before-reader tests for ordinary, alternate-namespace, exact-limit,
+  and over-limit fixtures across all six catalog surfaces.
+
 ## 0.116.0 — 2026-07-26
 
 - Bound the reader-materialized `<externalReferences>` and `<pivotCaches>`

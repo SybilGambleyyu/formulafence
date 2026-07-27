@@ -137,9 +137,14 @@ financial correctness or replace model review.
   4,096 workbook relationships, 512 workbook sheet declarations, and 100,000
   direct workbook defined-name declarations, including repeated declarations of
   one relationship target. It separately caps direct relationship-backed
-  external-reference and pivot-cache declarations at 4,096 each. The catalog
-  counters follow the reader's local-name behavior so alternate-namespace
-  entries cannot evade a safety boundary. FormulaFence requires
+  external-reference and pivot-cache declarations at 4,096 each, and caps
+  direct workbook book-view, custom-workbook-view, function-group, smart-tag-
+  type, and web-publish-object catalogs at 4,096 each. Direct legacy custom
+  sheet-view declarations are capped at 4,096 in aggregate across the selected
+  worksheet, chart-sheet, and dialog-sheet parts before FormulaFence's raw
+  Custom View scanner builds per-view records. The catalog counters follow the
+  reader's local-name behavior so alternate-namespace entries cannot evade a
+  safety boundary. FormulaFence requires
   `defusedxml` for its XML parser,
   which also enables `openpyxl`'s defused XML path in the supported
   installation. This prevents valid-but-impractical documents from allocating

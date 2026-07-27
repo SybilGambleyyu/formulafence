@@ -180,13 +180,25 @@ _OOXML_READER_MAX_WORKSHEET_CELL_COUNT = 500_000
 # caches each select a workbook relationship. Keep their declaration counts at
 # the same 4,096 boundary as that relationship catalog so repetitions of one
 # valid target cannot make the reader or raw control scanners revisit it
-# unboundedly.
+# unboundedly. The remaining workbook-package collections are also unbounded
+# in SpreadsheetML, and ``openpyxl`` constructs an object for each book-view,
+# function-group, smart-tag, or web-publishing entry before FormulaFence can
+# inspect ordinary cells. FormulaFence isolates legacy custom workbook views
+# from that complete-reader copy, but its raw Custom View scanner still builds
+# records for their workbook and sheet declarations. Apply the same explicit
+# package budget across all of those passive catalogs before either path runs.
 _OOXML_READER_MAX_CONTENT_TYPE_DECLARATION_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_RELATIONSHIP_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
 _OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT = 100_000
 _OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_PIVOT_CACHE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_WORKBOOK_BOOK_VIEW_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_WORKBOOK_CUSTOM_VIEW_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_WORKBOOK_FUNCTION_GROUP_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_WORKBOOK_SMART_TAG_TYPE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_WORKBOOK_WEB_PUBLISH_OBJECT_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_CUSTOM_SHEET_VIEW_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 # Reader-facing XML can still be hostile within its byte limit: the ordinary
 # workbook model materializes shared-string entries and style objects, while
 # deep XML can impose disproportionate parser work.  Keep the streaming gate
@@ -3311,6 +3323,8 @@ def _validate_ooxml_semantic_reader_resources(
     workbook_defined_name_count = 0
     workbook_external_reference_count = 0
     workbook_pivot_cache_count = 0
+    workbook_auxiliary_catalog_counts: dict[str, int] = {}
+    custom_sheet_view_count = 0
     populated_cell_count = 0
     shared_string_count = 0
     cell_tags = _spreadsheetml_tags("c")
@@ -3346,6 +3360,17 @@ def _validate_ooxml_semantic_reader_resources(
         ):
             manifest_shared_string_members.append(part_name.lstrip("/"))
 
+    def increment_auxiliary_catalog(
+        catalog: str,
+        *,
+        limit: int,
+        message: str,
+    ) -> None:
+        count = workbook_auxiliary_catalog_counts.get(catalog, 0) + 1
+        workbook_auxiliary_catalog_counts[catalog] = count
+        if count > limit:
+            raise _reader_preflight_error(message)
+
     def workbook_end(
         element: ElementTree.Element,
         tags: list[str],
@@ -3363,11 +3388,13 @@ def _validate_ooxml_semantic_reader_resources(
         is_direct_workbook_catalog_child = (
             len(tags) == 3 and _xml_local_name(tags[0]) == "workbook"
         )
-        if (
-            is_direct_workbook_catalog_child
-            and _xml_local_name(tags[-2]) == "definedNames"
-            and _xml_local_name(element.tag) == "definedName"
-        ):
+        if not is_direct_workbook_catalog_child:
+            return
+
+        parent_name = _xml_local_name(tags[-2])
+        element_name = _xml_local_name(element.tag)
+
+        if parent_name == "definedNames" and element_name == "definedName":
             validate_formula_text_length(len(element.text or ""))
             workbook_defined_name_count += 1
             if (
@@ -3378,19 +3405,13 @@ def _validate_ooxml_semantic_reader_resources(
                     "workbook defined-name declarations exceed the "
                     "semantic-reader safety limit."
                 )
-        elif (
-            is_direct_workbook_catalog_child
-            and _xml_local_name(tags[-2]) == "sheets"
-        ):
+        elif parent_name == "sheets":
             workbook_sheet_count += 1
             if workbook_sheet_count > _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT:
                 raise _reader_preflight_error(
                     "workbook sheet declarations exceed the semantic-reader safety limit."
                 )
-        elif (
-            is_direct_workbook_catalog_child
-            and _xml_local_name(tags[-2]) == "externalReferences"
-        ):
+        elif parent_name == "externalReferences":
             workbook_external_reference_count += 1
             if (
                 workbook_external_reference_count
@@ -3400,10 +3421,7 @@ def _validate_ooxml_semantic_reader_resources(
                     "workbook external-reference declarations exceed the "
                     "semantic-reader safety limit."
                 )
-        elif (
-            is_direct_workbook_catalog_child
-            and _xml_local_name(tags[-2]) == "pivotCaches"
-        ):
+        elif parent_name == "pivotCaches":
             workbook_pivot_cache_count += 1
             if (
                 workbook_pivot_cache_count
@@ -3413,6 +3431,54 @@ def _validate_ooxml_semantic_reader_resources(
                     "workbook pivot-cache declarations exceed the "
                     "semantic-reader safety limit."
                 )
+        elif parent_name == "bookViews":
+            increment_auxiliary_catalog(
+                "book-views",
+                limit=_OOXML_READER_MAX_WORKBOOK_BOOK_VIEW_COUNT,
+                message=(
+                    "workbook book-view declarations exceed the semantic-reader "
+                    "safety limit."
+                ),
+            )
+        elif parent_name == "customWorkbookViews":
+            increment_auxiliary_catalog(
+                "custom-workbook-views",
+                limit=_OOXML_READER_MAX_WORKBOOK_CUSTOM_VIEW_COUNT,
+                message=(
+                    "workbook custom-view declarations exceed the semantic-reader "
+                    "safety limit."
+                ),
+            )
+        elif parent_name == "functionGroups" and element_name == "functionGroup":
+            increment_auxiliary_catalog(
+                "function-groups",
+                limit=_OOXML_READER_MAX_WORKBOOK_FUNCTION_GROUP_COUNT,
+                message=(
+                    "workbook function-group declarations exceed the semantic-reader "
+                    "safety limit."
+                ),
+            )
+        elif parent_name == "smartTagTypes" and element_name == "smartTagType":
+            increment_auxiliary_catalog(
+                "smart-tag-types",
+                limit=_OOXML_READER_MAX_WORKBOOK_SMART_TAG_TYPE_COUNT,
+                message=(
+                    "workbook smart-tag type declarations exceed the semantic-reader "
+                    "safety limit."
+                ),
+            )
+        elif (
+            parent_name == "webPublishObjects"
+            and element_name == "webPublishObject"
+        ):
+            increment_auxiliary_catalog(
+                "web-publish-objects",
+                limit=_OOXML_READER_MAX_WORKBOOK_WEB_PUBLISH_OBJECT_COUNT,
+                message=(
+                    "workbook web-publish-object declarations exceed the "
+                    "semantic-reader safety limit."
+                ),
+            )
 
     def workbook_relationships_end(
         element: ElementTree.Element,
@@ -3431,11 +3497,30 @@ def _validate_ooxml_semantic_reader_resources(
         if element.tag in inline_string_tags:
             inline_string_text_lengths.append(0)
 
+    def sheet_catalog_end(
+        element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        nonlocal custom_sheet_view_count
+        # FormulaFence's legacy Custom View scanner examines every direct child
+        # of a sheet-level ``customSheetViews`` container, including an unknown
+        # namespace child it will retain as opaque evidence. Count that same
+        # direct shape across all selected worksheet, chart-sheet, and dialog-
+        # sheet parts before the raw scanner can build its per-view records.
+        if len(tags) != 3 or _xml_local_name(tags[-2]) != "customSheetViews":
+            return
+        custom_sheet_view_count += 1
+        if custom_sheet_view_count > _OOXML_READER_MAX_CUSTOM_SHEET_VIEW_COUNT:
+            raise _reader_preflight_error(
+                "custom sheet-view declarations exceed the semantic-reader safety limit."
+            )
+
     def worksheet_end(
         element: ElementTree.Element,
         tags: list[str],
     ) -> None:
         nonlocal populated_cell_count
+        sheet_catalog_end(element, tags)
         if element.tag in cell_tags:
             populated_cell_count += 1
             if populated_cell_count > _OOXML_READER_MAX_WORKSHEET_CELL_COUNT:
@@ -3551,7 +3636,11 @@ def _validate_ooxml_semantic_reader_resources(
                     archive,
                     member_name,
                     on_start=(worksheet_start if member_name in worksheet_members else None),
-                    on_end=(worksheet_end if member_name in worksheet_members else None),
+                    on_end=(
+                        worksheet_end
+                        if member_name in worksheet_members
+                        else sheet_catalog_end
+                    ),
                 )
     except WorkbookLoadError:
         raise

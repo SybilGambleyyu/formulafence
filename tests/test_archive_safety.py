@@ -157,6 +157,92 @@ def _append_workbook_relationship_catalog_declarations(
     )
 
 
+def _append_workbook_package_catalog_declarations(
+    path: Path,
+    catalog_name: str,
+    child_name: str,
+    count: int,
+    *,
+    attributes: dict[str, str] | None = None,
+    alternate_namespace: str | None = None,
+) -> None:
+    """Add repeated workbook-package catalog entries without using a reader."""
+    member_name = "xl/workbook.xml"
+    with ZipFile(path) as archive:
+        workbook = archive.read(member_name)
+    root = ElementTree.fromstring(workbook)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    qualified_catalog_name = (
+        f"{{{namespace}}}{catalog_name}" if namespace else catalog_name
+    )
+    qualified_child_name = f"{{{namespace}}}{child_name}" if namespace else child_name
+    container = next(
+        (
+            child
+            for child in root
+            if child.tag.rsplit("}", maxsplit=1)[-1] == catalog_name
+        ),
+        None,
+    )
+    if container is None:
+        container = ElementTree.Element(qualified_catalog_name)
+        root.insert(0, container)
+    declaration = ElementTree.Element(qualified_child_name)
+    for name, value in (attributes or {}).items():
+        declaration.set(name, value)
+    if alternate_namespace is not None:
+        declaration.tag = f"{{{alternate_namespace}}}{child_name}"
+    for _ in range(count):
+        container.append(deepcopy(declaration))
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _append_custom_sheet_view_declarations(
+    path: Path,
+    count: int,
+    *,
+    alternate_namespace: str | None = None,
+) -> None:
+    """Repeat direct sheet Custom View entries for the preflight boundary."""
+    member_name = "xl/worksheets/sheet1.xml"
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    root = ElementTree.fromstring(worksheet)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    qualified_container_name = (
+        f"{{{namespace}}}customSheetViews" if namespace else "customSheetViews"
+    )
+    qualified_child_name = (
+        f"{{{namespace}}}customSheetView" if namespace else "customSheetView"
+    )
+    container = next(
+        (
+            child
+            for child in root
+            if child.tag.rsplit("}", maxsplit=1)[-1] == "customSheetViews"
+        ),
+        None,
+    )
+    if container is None:
+        container = ElementTree.Element(qualified_container_name)
+        root.insert(0, container)
+    declaration = ElementTree.Element(qualified_child_name)
+    declaration.set("guid", "{11111111-1111-1111-1111-111111111111}")
+    if alternate_namespace is not None:
+        declaration.tag = f"{{{alternate_namespace}}}customSheetView"
+    for _ in range(count):
+        container.append(deepcopy(declaration))
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
 def _last_central_directory_offset(contents: bytes | bytearray) -> int:
     offset = contents.rfind(b"PK\x01\x02")
     assert offset >= 0
@@ -171,6 +257,55 @@ def _reject_before_workbook_readers(monkeypatch: pytest.MonkeyPatch, path: Path)
     with pytest.raises(WorkbookLoadError, match="safety preflight") as error:
         load_snapshot(path)
     return str(error.value)
+
+
+_WORKBOOK_AUXILIARY_CATALOG_CASES = (
+    (
+        "bookViews",
+        "workbookView",
+        {},
+        "_OOXML_READER_MAX_WORKBOOK_BOOK_VIEW_COUNT",
+        "workbook book-view declarations",
+    ),
+    (
+        "customWorkbookViews",
+        "customWorkbookView",
+        {
+            "name": "FormulaFence audit",
+            "guid": "{11111111-1111-1111-1111-111111111111}",
+            "windowWidth": "100",
+            "windowHeight": "100",
+            "activeSheetId": "0",
+        },
+        "_OOXML_READER_MAX_WORKBOOK_CUSTOM_VIEW_COUNT",
+        "workbook custom-view declarations",
+    ),
+    (
+        "functionGroups",
+        "functionGroup",
+        {"name": "FormulaFence audit"},
+        "_OOXML_READER_MAX_WORKBOOK_FUNCTION_GROUP_COUNT",
+        "workbook function-group declarations",
+    ),
+    (
+        "smartTagTypes",
+        "smartTagType",
+        {
+            "namespaceUri": "urn:formulafence:archive-safety",
+            "name": "audit",
+            "url": "https://example.invalid/formulafence",
+        },
+        "_OOXML_READER_MAX_WORKBOOK_SMART_TAG_TYPE_COUNT",
+        "workbook smart-tag type declarations",
+    ),
+    (
+        "webPublishObjects",
+        "webPublishObject",
+        {"id": "1", "divId": "audit", "destinationFile": "audit.html"},
+        "_OOXML_READER_MAX_WORKBOOK_WEB_PUBLISH_OBJECT_COUNT",
+        "workbook web-publish-object declarations",
+    ),
+)
 
 
 def test_archive_preflight_accepts_an_ordinary_workbook(tmp_path: Path) -> None:
@@ -573,6 +708,144 @@ def test_semantic_reader_preflight_rejects_default_pivot_cache_declaration_limit
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "workbook pivot-cache declarations" in message
+
+
+@pytest.mark.parametrize(
+    "catalog_name, child_name, attributes, limit_name, expected_message",
+    _WORKBOOK_AUXILIARY_CATALOG_CASES,
+)
+def test_semantic_reader_preflight_rejects_excessive_auxiliary_workbook_catalogs_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    catalog_name: str,
+    child_name: str,
+    attributes: dict[str, str],
+    limit_name: str,
+    expected_message: str,
+) -> None:
+    workbook = make_model(tmp_path / f"too-many-{catalog_name}.xlsx")
+    _append_workbook_package_catalog_declarations(
+        workbook,
+        catalog_name,
+        child_name,
+        1,
+        attributes=attributes,
+    )
+    monkeypatch.setattr(workbook_module, limit_name, 0)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert expected_message in message
+
+
+@pytest.mark.parametrize(
+    "catalog_name, child_name, attributes, limit_name, expected_message",
+    _WORKBOOK_AUXILIARY_CATALOG_CASES,
+)
+def test_semantic_reader_preflight_counts_alternate_namespace_auxiliary_workbook_catalogs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    catalog_name: str,
+    child_name: str,
+    attributes: dict[str, str],
+    limit_name: str,
+    expected_message: str,
+) -> None:
+    workbook = make_model(tmp_path / f"alternate-namespace-{catalog_name}.xlsx")
+    if catalog_name != "bookViews":
+        _append_workbook_package_catalog_declarations(
+            workbook,
+            catalog_name,
+            child_name,
+            1,
+            attributes=attributes,
+        )
+    _append_workbook_package_catalog_declarations(
+        workbook,
+        catalog_name,
+        child_name,
+        1,
+        attributes=attributes,
+        alternate_namespace="urn:formulafence:archive-safety",
+    )
+    monkeypatch.setattr(workbook_module, limit_name, 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert expected_message in message
+
+
+@pytest.mark.parametrize(
+    "catalog_name, child_name, attributes, limit_name, expected_message",
+    _WORKBOOK_AUXILIARY_CATALOG_CASES,
+)
+def test_semantic_reader_preflight_rejects_default_auxiliary_workbook_catalogs_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    catalog_name: str,
+    child_name: str,
+    attributes: dict[str, str],
+    limit_name: str,
+    expected_message: str,
+) -> None:
+    workbook = make_model(tmp_path / f"repeated-{catalog_name}.xlsx")
+    _append_workbook_package_catalog_declarations(
+        workbook,
+        catalog_name,
+        child_name,
+        getattr(workbook_module, limit_name) + 1,
+        attributes=attributes,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert expected_message in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_custom_sheet_views_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-custom-sheet-views.xlsx")
+    _append_custom_sheet_view_declarations(workbook, 1)
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_CUSTOM_SHEET_VIEW_COUNT", 0)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "custom sheet-view declarations" in message
+
+
+def test_semantic_reader_preflight_counts_alternate_namespace_custom_sheet_views(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "alternate-namespace-custom-sheet-views.xlsx")
+    _append_custom_sheet_view_declarations(workbook, 1)
+    _append_custom_sheet_view_declarations(
+        workbook,
+        1,
+        alternate_namespace="urn:formulafence:archive-safety",
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_CUSTOM_SHEET_VIEW_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "custom sheet-view declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_default_custom_sheet_view_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-custom-sheet-views.xlsx")
+    _append_custom_sheet_view_declarations(
+        workbook,
+        workbook_module._OOXML_READER_MAX_CUSTOM_SHEET_VIEW_COUNT + 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "custom sheet-view declarations" in message
 
 
 def test_semantic_reader_preflight_rejects_excessive_xml_nesting_before_scanners(

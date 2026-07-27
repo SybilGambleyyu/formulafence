@@ -5,6 +5,44 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Reader view and auxiliary catalog bounds — 2026-07-26
+
+Version 0.117.0 closes the remaining repeated-child paths in `openpyxl`'s
+workbook package and FormulaFence's legacy Custom View scanner. The SpreadsheetML
+[BookViews format reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.bookviews?view=openxml-3.0.1)
+explicitly permits an unlimited number of workbook views. `openpyxl` builds
+objects for every direct `bookViews` child and each local-named
+`functionGroup`, `smartTagType`, and `webPublishObject` entry. Its package
+parser has the same repeated-child behavior for `customWorkbookViews`, which
+FormulaFence removes from its complete-reader copy; FormulaFence's raw Custom
+View scanner then retains a per-view record for every direct custom workbook or
+custom sheet view it inspects. None of those lists is bounded by a ZIP-part
+count, relationship count, or ordinary worksheet-cell count.
+
+The semantic-reader preflight now limits direct workbook book-view,
+custom-workbook-view, function-group, smart-tag-type, and web-publish-object
+catalog entries to 4,096 each. It also limits direct legacy custom sheet-view
+declarations to 4,096 in aggregate across workbook-selected worksheet,
+chart-sheet, and dialog-sheet parts. The nested-sequence catalogs count every
+direct child that the reader would materialize, while the typed catalogs count
+the reader's matching local name. The raw Custom View boundary similarly counts
+every direct child it would inspect, so an alternate-namespace entry cannot
+bypass the safety limit.
+
+Controlled 10,000-entry fixtures establish the allocation path: 160,591 bytes
+of workbook XML for 10,001 book views took 0.678 seconds and 40,376 KiB;
+10,000 custom workbook views in a 34,797-byte package took 2.369 seconds and
+87,112 KiB; the function-group, smart-tag, and web-publish-object fixtures took
+0.978, 1.446, and 1.498 seconds; and a 7,170-byte package with 10,000 custom
+sheet views took 0.867 seconds and 67,232 KiB. With the normal gate enabled,
+all six fixtures rejected before downstream work in 0.013–0.022 seconds with
+stable catalog-specific input errors. Exact 4,096-entry fixtures remained
+accepted for every catalog; the 4,097th declaration was rejected.
+
+Focused archive-safety and version coverage passed **67 tests in 2.02 seconds**;
+the completed source tree passed **769 tests in 130.23 seconds**, plus Ruff,
+bytecode compilation, and `git diff --check` before final package verification.
+
 ## Reader relationship-backed catalog bounds — 2026-07-26
 
 Version 0.116.0 closes the next workbook-level repetition path. An

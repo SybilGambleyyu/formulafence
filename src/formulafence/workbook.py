@@ -638,6 +638,15 @@ _EXTERNAL_LINK_PART_PATTERN = re.compile(
     r"^xl/externalLinks/externalLink(?:\d+)?\.xml$", re.IGNORECASE
 )
 _EXTERNAL_LINK_MAX_PART_BYTES = 16 * 1024 * 1024
+_EXTERNAL_LINK_TOTAL_XML_BYTES = 64 * 1024 * 1024
+_EXTERNAL_LINK_TOTAL_XML_PARTS = 512
+# External-link packages contain private source, cache, DDE, OLE, and extension
+# material outside ordinary worksheets. Stream their complete XML structure
+# before recursive opaque metadata canonicalization can build a large tree.
+_EXTERNAL_LINK_MAX_XML_ELEMENT_COUNT = 32_768
+_EXTERNAL_LINK_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _EXTERNAL_LINK_MAX_XML_ELEMENT_COUNT
+)
 _EXTERNAL_DATA_CONNECTION_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _EXTERNAL_DATA_CONNECTION_TOTAL_XML_BYTES = 64 * 1024 * 1024
 _EXTERNAL_DATA_CONNECTION_TOTAL_XML_PARTS = 512
@@ -1924,6 +1933,18 @@ class _ExternalRelationshipBudget:
 
     remaining_bytes: int = _EXTERNAL_RELATIONSHIP_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _EXTERNAL_RELATIONSHIP_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _ExternalLinkXmlBudget:
+    """Bound and cache raw external-link XML in one package scan."""
+
+    remaining_bytes: int = _EXTERNAL_LINK_TOTAL_XML_BYTES
+    remaining_parts: int = _EXTERNAL_LINK_TOTAL_XML_PARTS
+    remaining_xml_elements: int = _EXTERNAL_LINK_TOTAL_XML_MAX_ELEMENT_COUNT
+    roots: dict[str, tuple[ElementTree.Element | None, str | None]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass
@@ -7538,28 +7559,141 @@ def _power_query_snapshot(
     )
 
 
+def _external_link_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info: ZipInfo,
+    budget: _ExternalLinkXmlBudget,
+) -> str | None:
+    """Stream external-link XML before its private tree is materialized."""
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if budget.remaining_xml_elements <= 0:
+        return _private_external_data_signature(
+            (("external-link-xml-structure-budget-exhausted", metadata),)
+        )
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _EXTERNAL_LINK_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable XML. Only a successfully streamed overage can skip that
+        # materializing parser safely.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    # An overage can contain an unbounded number of unseen descendants. Stop
+    # spending the aggregate structural budget after its first failed part.
+    budget.remaining_xml_elements = 0
+    signature_entries = [("xml-structure-budget-exhausted", metadata)]
+    if (
+        payload_signature := _private_archive_member_payload_signature(archive, info)
+    ) is not None:
+        signature_entries.append(("payload", payload_signature))
+    return _private_external_data_signature(tuple(signature_entries))
+
+
 def _external_link_part_root(
     archive: ZipFile,
     member: str,
     warnings: set[str],
+    budget: _ExternalLinkXmlBudget,
     *,
     context: str,
-) -> ElementTree.Element | None:
-    """Read one bounded external-link XML part without exposing its content."""
-    try:
-        if archive.getinfo(member).file_size > _EXTERNAL_LINK_MAX_PART_BYTES:
-            warnings.add(
-                "FormulaFence did not fully read an oversized external-link package part; "
-                "the affected external-link controls have a coverage gap."
+) -> tuple[ElementTree.Element | None, str | None]:
+    """Read one bounded, cached external-link XML root privately."""
+    if member in budget.roots:
+        return budget.roots[member]
+
+    def retain(
+        root: ElementTree.Element | None,
+        fallback_signature: str | None,
+    ) -> tuple[ElementTree.Element | None, str | None]:
+        result = (root, fallback_signature)
+        budget.roots[member] = result
+        return result
+
+    if budget.remaining_parts <= 0:
+        try:
+            info = archive.getinfo(member)
+            metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+        except KeyError:
+            metadata = repr((member, "missing"))
+        warnings.add(
+            "FormulaFence reached its bounded external-link XML part count; "
+            "affected external-link controls were not compared."
+        )
+        return retain(
+            None,
+            _private_external_data_signature(
+                (("external-link-xml-part-count-budget-exhausted", metadata),)
             )
-            return None
+        )
+    try:
+        info = archive.getinfo(member)
     except KeyError:
         warnings.add(
             "FormulaFence could not locate an external-link package part; "
             "the affected external-link controls were not compared."
         )
-        return None
-    return _external_data_part_root(archive, member, warnings, context=context)
+        return retain(
+            None,
+            _private_external_data_signature(
+                (("missing-external-link-xml-member", member),)
+            ),
+        )
+    budget.remaining_parts -= 1
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _EXTERNAL_LINK_MAX_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized external-link XML part; "
+            "the affected external-link controls have a coverage gap."
+        )
+        return retain(
+            None,
+            _private_external_data_signature(
+                (("oversized-external-link-xml-part", metadata),)
+            ),
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded external-link XML read budget; "
+            "affected external-link controls were not compared."
+        )
+        return retain(
+            None,
+            _private_external_data_signature(
+                (("external-link-xml-read-budget-exhausted", metadata),)
+            ),
+        )
+    # A structural preflight must count against the same aggregate byte budget:
+    # it reads the whole member even if parsing is then deliberately skipped.
+    budget.remaining_bytes -= info.file_size
+    structure_fallback_signature = (
+        _external_link_xml_structure_budget_fallback_signature(
+            archive,
+            member,
+            info,
+            budget,
+        )
+    )
+    if structure_fallback_signature is not None:
+        warnings.add(
+            "FormulaFence did not fully read an external-link XML part whose XML "
+            "structure exceeds the safety budget; affected external-link controls "
+            "have a coverage gap."
+        )
+        return retain(None, structure_fallback_signature)
+    return retain(
+        _external_data_part_root(archive, member, warnings, context=context),
+        None,
+    )
 
 
 def _external_link_opaque_entries(
@@ -7604,6 +7738,7 @@ def _external_link_relationship_signature(
     relationship_id: str | None,
     warnings: set[str],
     opaque_entries: list[tuple[str, str]],
+    budget: _ExternalLinkXmlBudget,
 ) -> str | None:
     """Fingerprint one link's package target without retaining its location."""
     if not relationship_id:
@@ -7612,13 +7747,18 @@ def _external_link_relationship_signature(
             "relationship id; the affected external-link control has a coverage gap."
         )
         return None
-    relationships = _external_link_part_root(
+    relationships, fallback_signature = _external_link_part_root(
         archive,
         _relationship_part_path(member),
         warnings,
+        budget,
         context="external-link relationship",
     )
     if relationships is None:
+        if fallback_signature is not None:
+            opaque_entries.append(
+                ("bounded-external-link-relationship-xml", fallback_signature)
+            )
         return None
     relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
     matches = [
@@ -7720,6 +7860,7 @@ def _external_link_part_inspection(
     member: str,
     root: ElementTree.Element,
     warnings: set[str],
+    budget: _ExternalLinkXmlBudget,
 ) -> _ExternalLinkPartInspection:
     """Read one external-link definition while keeping all endpoint material private."""
     opaque_entries = _external_link_opaque_entries(
@@ -7761,6 +7902,7 @@ def _external_link_part_inspection(
             element.get(relationship_id_attribute),
             warnings,
             opaque_entries,
+            budget,
         )
         if relationship_signature is not None:
             source_entries.append(("target", relationship_signature))
@@ -7999,6 +8141,7 @@ def _external_link_part_inspection(
         element.get(relationship_id_attribute),
         warnings,
         opaque_entries,
+        budget,
     )
     if relationship_signature is not None:
         source_entries.append(("target", relationship_signature))
@@ -8071,6 +8214,7 @@ def _external_link_packages_snapshot(
     workbook: ElementTree.Element,
     relationships: tuple[_PackageRelationship, ...],
     warnings: set[str],
+    budget: _ExternalLinkXmlBudget,
 ) -> ExternalLinkPackageSnapshot:
     """Inventory externalLink OOXML parts without following their endpoints."""
     external_relationships = [
@@ -8204,13 +8348,23 @@ def _external_link_packages_snapshot(
 
     inspections: list[_ExternalLinkPartInspection] = []
     for member in sorted(members, key=str.casefold):
-        root = _external_link_part_root(
+        root, fallback_signature = _external_link_part_root(
             archive,
             member,
             warnings,
+            budget,
             context="external-link package",
         )
         if root is None:
+            if fallback_signature is not None:
+                inspections.append(
+                    _ExternalLinkPartInspection(
+                        member=member,
+                        opaque_entries=(
+                            ("bounded-external-link-xml", fallback_signature),
+                        ),
+                    )
+                )
             continue
         if (
             _xml_local_name(root.tag) != "externalLink"
@@ -8221,7 +8375,9 @@ def _external_link_packages_snapshot(
                 "the affected external-link controls were not compared."
             )
             continue
-        inspections.append(_external_link_part_inspection(archive, member, root, warnings))
+        inspections.append(
+            _external_link_part_inspection(archive, member, root, warnings, budget)
+        )
     if not members:
         return ExternalLinkPackageSnapshot()
     inspected_members = {inspection.member for inspection in inspections}
@@ -8320,6 +8476,7 @@ def _external_link_external_workbook_target(
     member: str,
     relationship_id: str | None,
     warnings: set[str],
+    budget: _ExternalLinkXmlBudget,
 ) -> str | None:
     """Return one private external-workbook target from a valid link part.
 
@@ -8335,10 +8492,11 @@ def _external_link_external_workbook_target(
             "was not resolved."
         )
         return None
-    relationships = _external_link_part_root(
+    relationships, _fallback_signature = _external_link_part_root(
         archive,
         _relationship_part_path(member),
         warnings,
+        budget,
         context="package-indexed external-reference relationship",
     )
     if relationships is None:
@@ -8392,6 +8550,7 @@ def _indexed_external_workbook_paths(
     workbook: ElementTree.Element,
     relationships: tuple[_PackageRelationship, ...],
     warnings: set[str],
+    budget: _ExternalLinkXmlBudget,
 ) -> tuple[tuple[int, str], ...]:
     """Map declared external-reference positions to private workbook targets.
 
@@ -8466,10 +8625,11 @@ def _indexed_external_workbook_paths(
             )
             continue
         member = matches[0].target
-        root = _external_link_part_root(
+        root, _fallback_signature = _external_link_part_root(
             archive,
             member,
             warnings,
+            budget,
             context="package-indexed external-reference package",
         )
         if root is None:
@@ -8508,6 +8668,7 @@ def _indexed_external_workbook_paths(
             member,
             external_books[0].get(f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"),
             warnings,
+            budget,
         )
         if target is not None:
             resolved.append((index, target))
@@ -9567,17 +9728,20 @@ def _external_data_metadata(
                 workbook_relationships,
                 warnings,
             )
+            external_link_xml_budget = _ExternalLinkXmlBudget()
             external_link_packages = _external_link_packages_snapshot(
                 archive,
                 workbook,
                 workbook_relationships,
                 warnings,
+                external_link_xml_budget,
             )
             indexed_external_workbook_paths = _indexed_external_workbook_paths(
                 archive,
                 workbook,
                 workbook_relationships,
                 warnings,
+                external_link_xml_budget,
             )
             power_query = _power_query_snapshot(
                 archive,

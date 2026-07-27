@@ -8201,6 +8201,289 @@ def test_external_link_packages_are_profiled_and_diffed_privately(tmp_path) -> N
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
 
 
+def test_external_link_xml_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    _append_external_link_xml_elements(workbook, 8, nested=True)
+    external_link_xml = _external_link_xml_payload(workbook)
+    monkeypatch.setattr(
+        workbook_module,
+        "_EXTERNAL_LINK_MAX_XML_ELEMENT_COUNT",
+        _external_link_xml_element_count(workbook) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == external_link_xml:
+            raise AssertionError(
+                "the over-budget external-link XML tree was materialized"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.external_link_packages.unrecognized_link_count == 1
+    assert any(
+        "external-link XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_external_link_xml_structure_overage_spends_scan_budgets(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    scan_members = _EXTERNAL_LINK_XML_SCAN_MEMBERS[:4]
+    scan_bytes = _external_link_xml_total_bytes(workbook, scan_members)
+    scan_elements = _external_link_xml_total_elements(workbook, scan_members) - 1
+    budget_type = workbook_module._ExternalLinkXmlBudget
+    budgets = []
+
+    def budget_factory():
+        budget = budget_type(
+            remaining_bytes=scan_bytes,
+            remaining_xml_elements=scan_elements,
+        )
+        budgets.append(budget)
+        return budget
+
+    monkeypatch.setattr(workbook_module, "_ExternalLinkXmlBudget", budget_factory)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.external_link_packages.unrecognized_link_count == 1
+    assert budgets[0].remaining_bytes == 0
+    assert budgets[0].remaining_xml_elements == 0
+
+
+def test_external_link_xml_byte_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_external_link_package_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    external_link_xml = _external_link_xml_payload(candidate)
+    monkeypatch.setattr(
+        workbook_module,
+        "_EXTERNAL_LINK_MAX_PART_BYTES",
+        len(external_link_xml) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == external_link_xml:
+            raise AssertionError(
+                "the oversized external-link XML tree was materialized"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.external_link_packages.unrecognized_link_count >= 1
+    assert any(
+        "oversized external-link XML part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF025"} <= {finding.rule_id for finding in report.findings}
+
+
+@pytest.mark.parametrize(
+    ("budget", "warning"),
+    (
+        (
+            {"remaining_parts": 0},
+            "bounded external-link XML part count",
+        ),
+        (
+            {"remaining_bytes": 1},
+            "bounded external-link XML read budget",
+        ),
+    ),
+)
+def test_external_link_xml_scan_budgets_remain_visible(
+    tmp_path,
+    monkeypatch,
+    budget,
+    warning: str,
+) -> None:
+    baseline = make_external_link_package_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    budget_type = workbook_module._ExternalLinkXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_ExternalLinkXmlBudget",
+        lambda: budget_type(**budget),
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.external_link_packages.unrecognized_link_count == 3
+    assert any(warning in value for value in candidate_snapshot.parser_warnings)
+    assert {"FF010", "FF025"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_external_link_xml_budget_remains_visible_and_private(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_external_link_package_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    _append_external_link_xml_elements(candidate, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_EXTERNAL_LINK_MAX_XML_ELEMENT_COUNT",
+        _external_link_xml_element_count(candidate) - 1,
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+
+    assert candidate_snapshot.external_link_packages.unrecognized_link_count == 1
+    assert any(
+        "external-link XML part whose XML structure" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF025"} <= {finding.rule_id for finding in report.findings}
+    assert all("urn:formulafence:audit" not in artifact for artifact in rendered_artifacts)
+
+
+def test_external_link_xml_budget_accepts_the_default_capacity(tmp_path) -> None:
+    workbook = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    _append_external_link_xml_elements(
+        workbook,
+        workbook_module._EXTERNAL_LINK_MAX_XML_ELEMENT_COUNT
+        - _external_link_xml_element_count(workbook),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert not any(
+        "external-link XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_external_link_xml_budget_rejects_the_default_overage(tmp_path) -> None:
+    workbook = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    _append_external_link_xml_elements(
+        workbook,
+        workbook_module._EXTERNAL_LINK_MAX_XML_ELEMENT_COUNT
+        - _external_link_xml_element_count(workbook)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.external_link_packages.unrecognized_link_count == 1
+    assert any(
+        "external-link XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_external_link_xml_budget_aggregates_across_package_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_external_link_package_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    remaining_xml_elements = (
+        _external_link_xml_total_elements(candidate, _EXTERNAL_LINK_XML_SCAN_MEMBERS)
+        - 1
+    )
+    baseline_snapshot = load_snapshot(baseline)
+    budget_type = workbook_module._ExternalLinkXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_ExternalLinkXmlBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert any(
+        "external-link XML part whose XML structure" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF025"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_external_link_xml_budget_caches_reused_package_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_external_link_package_model(tmp_path / "candidate.xlsx")
+    budget_type = workbook_module._ExternalLinkXmlBudget
+    budgets = []
+
+    def budget_factory():
+        budget = budget_type(
+            remaining_xml_elements=_external_link_xml_total_elements(
+                workbook,
+                _EXTERNAL_LINK_XML_SCAN_MEMBERS,
+            )
+        )
+        budgets.append(budget)
+        return budget
+
+    monkeypatch.setattr(workbook_module, "_ExternalLinkXmlBudget", budget_factory)
+
+    snapshot = load_snapshot(workbook)
+
+    assert budgets[0].remaining_xml_elements == 0
+    assert not any(
+        "external-link XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_external_link_xml_budget_fingerprints_same_size_overages(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    first = make_external_link_package_model(tmp_path / "first.xlsx")
+    second = make_external_link_package_model(tmp_path / "second.xlsx")
+    _append_external_link_xml_elements(first, 1, entry_name="entrya")
+    _append_external_link_xml_elements(second, 1, entry_name="entryb")
+    with ZipFile(first) as archive:
+        first_info = archive.getinfo(_EXTERNAL_LINK_XML_MEMBER)
+    with ZipFile(second) as archive:
+        second_info = archive.getinfo(_EXTERNAL_LINK_XML_MEMBER)
+    monkeypatch.setattr(
+        workbook_module,
+        "_EXTERNAL_LINK_MAX_XML_ELEMENT_COUNT",
+        1,
+    )
+
+    first_snapshot = load_snapshot(first)
+    second_snapshot = load_snapshot(second)
+    report = compare_snapshots(first_snapshot, second_snapshot)
+
+    assert first_info.file_size == second_info.file_size
+    assert (
+        first_snapshot.external_link_packages.opaque_metadata.signature
+        != second_snapshot.external_link_packages.opaque_metadata.signature
+    )
+    assert "FF025" in {finding.rule_id for finding in report.findings}
+
+
 def test_external_link_declaration_rebinding_is_a_source_change(tmp_path) -> None:
     baseline = make_external_link_package_model(tmp_path / "baseline.xlsx")
     candidate = make_external_link_package_model(tmp_path / "candidate.xlsx")
@@ -10524,6 +10807,78 @@ def _shared_workbook_revision_xml_element_count(path, kind: str) -> int:
             _shared_workbook_revision_xml_payload(path, kind)
         ).iter()
     )
+
+
+_EXTERNAL_LINK_XML_MEMBER = "xl/externalLinks/externalLink3.xml"
+_EXTERNAL_LINK_XML_SCAN_MEMBERS = (
+    "xl/externalLinks/externalLink1.xml",
+    "xl/externalLinks/_rels/externalLink1.xml.rels",
+    "xl/externalLinks/externalLink2.xml",
+    _EXTERNAL_LINK_XML_MEMBER,
+    "xl/externalLinks/_rels/externalLink3.xml.rels",
+)
+
+
+def _external_link_xml_payload(
+    path,
+    member: str = _EXTERNAL_LINK_XML_MEMBER,
+) -> bytes:
+    """Return raw external-link XML from the synthetic package fixture."""
+    with ZipFile(path) as archive:
+        return archive.read(member)
+
+
+def _append_external_link_xml_elements(
+    path,
+    count: int,
+    *,
+    member: str = _EXTERNAL_LINK_XML_MEMBER,
+    nested: bool = False,
+    entry_name: str = "entry",
+) -> None:
+    """Add opaque external-link XML entries without FormulaFence's reader."""
+    staging = path.with_suffix(".external-link-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, f"{{urn:formulafence:audit}}{entry_name}")
+    contents[member] = ElementTree.tostring(
+        root,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _external_link_xml_element_count(
+    path,
+    member: str = _EXTERNAL_LINK_XML_MEMBER,
+) -> int:
+    """Count one complete synthetic external-link XML tree."""
+    return sum(
+        1 for _ in ElementTree.fromstring(_external_link_xml_payload(path, member)).iter()
+    )
+
+
+def _external_link_xml_total_bytes(path, members: tuple[str, ...]) -> int:
+    """Return ZIP metadata bytes for selected external-link XML scan members."""
+    with ZipFile(path) as archive:
+        return sum(archive.getinfo(member).file_size for member in members)
+
+
+def _external_link_xml_total_elements(path, members: tuple[str, ...]) -> int:
+    """Return total element counts for selected external-link XML scan members."""
+    return sum(_external_link_xml_element_count(path, member) for member in members)
 
 
 _EXTERNAL_DATA_CONNECTION_XML_MEMBER = "xl/connections.xml"

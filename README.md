@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.140.0/formulafence-0.140.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.141.0/formulafence-0.141.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.140.0
+  uses: SybilGambleyyu/formulafence@v0.141.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -828,6 +828,17 @@ emits `FF025`; enable `no_external_link_package_changes` for `FFP025`.
 FormulaFence never follows or executes these links, establishes source trust,
 or infers returned data. The package shape follows the
 [SpreadsheetML `externalLink` definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.externallink?view=openxml-3.0.1).
+
+Before FormulaFence privately parses a selected raw external-link XML part, it
+streams `xl/externalLinks/externalLink*.xml` and the direct `.rels` parts used
+by the external-link inventory or package-indexed resolver through a
+32,768-element per-part and 65,536-element shared-scan limit. The same boundary
+also allows 16 MiB per part, 64 MiB in aggregate, and 512 parts. A successfully
+streamed structural overage produces private opaque coverage evidence (`FF010`)
+that remains diff-visible through `FF025`; malformed XML keeps its ordinary
+parser diagnostic. This allocation boundary is specific to these raw
+external-link readers, not a claim that every package relationship reader has
+the same structural limit.
 
 FormulaFence also keeps a separate private **static external-workbook
 link-surface ledger**. It recognizes literal external endpoints persisted in

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.141.0 — 2026-07-26
+
+- Bound raw external-link package XML before FormulaFence can materialize and
+  privately canonicalize a highly repetitive link definition or its direct
+  relationship part. Each selected `xl/externalLinks/externalLink*.xml` or
+  direct `.rels` part allows 32,768 elements; the shared external-link scan
+  allows 65,536, alongside 16 MiB per-part, 64 MiB aggregate, and 512-part
+  limits.
+- Share the same cached boundary between external-link inventory and the
+  package-indexed external-workbook resolver, so a part cannot be reparsed
+  unboundedly on its second use. A successfully streamed structural overage
+  becomes explicit `FF010` plus `FF025`-visible opaque package evidence, with
+  a private streamed content fingerprint for same-size hostile changes.
+- Add fail-before-materialization, nested opaque, exact/default, aggregate,
+  reused-part cache, visibility, and same-size-fingerprint regressions for
+  external-link XML while retaining package-indexed portfolio resolution.
+
 ## 0.140.0 — 2026-07-26
 
 - Bound raw external-data `Connections` XML before FormulaFence can materialize

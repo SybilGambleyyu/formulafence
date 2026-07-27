@@ -5,6 +5,42 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## External-link package XML structural bounds — 2026-07-26
+
+Version 0.141.0 closes a compact-allocation path in raw external-link package
+XML. FormulaFence already inventories external-workbook, DDE, and OLE link
+definitions, but a byte-permitted `externalLink` part could first materialize a
+highly repetitive private tree and recursively canonicalize opaque children.
+The inventory and package-indexed external-workbook resolver can both read the
+same link part, so the boundary is shared and cached rather than allowing a
+second unbounded parse.
+
+FormulaFence now streams selected
+`xl/externalLinks/externalLink*.xml` parts and their direct relationship parts
+before private parsing. Each part allows 32,768 elements and the complete
+shared external-link scan allows 65,536, together with 16 MiB per-part, 64 MiB
+aggregate, and 512-part limits. A successfully streamed structural overage
+becomes explicit `FF010` plus `FF025`-visible opaque package evidence. Its
+private streamed SHA-256 content fingerprint keeps same-size hostile XML
+diff-visible without retaining package targets, names, DDE/OLE metadata, cache
+values, or raw XML. Malformed input retains its ordinary parser diagnostic.
+These are allocation limits for the named raw external-link readers, not
+general package-relationship validity rules.
+
+A controlled three-part external-link fixture added 1,000,000 foreign-namespace
+direct children to `xl/externalLinks/externalLink3.xml`. The affected part was
+6,000,645 bytes uncompressed, 9,134 bytes compressed, and the complete workbook
+was 17,577 bytes. In isolated source measurements, the released unguarded
+0.140.0 reader completed the hostile comparison in 8.561901 seconds / 714,764
+KiB and emitted only `FF025`. The 0.141.0 source completed the same comparison
+in 0.255000 seconds / 42,308 KiB without materializing the hostile tree,
+emitting `FF010` and `FF025` with
+`external_link_packages_changed` and `parser_coverage_warning_added` records.
+A normal baseline self-comparison had no findings or changes. The hostile JSON
+contained neither the injected namespace nor raw element tag. The full source
+suite passed 1,026 tests in 146.22 seconds; Ruff and bytecode compilation were
+clean.
+
 ## External-data Connections XML structural bounds — 2026-07-26
 
 Version 0.140.0 closes a compact-allocation path in raw external-data

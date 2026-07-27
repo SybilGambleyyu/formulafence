@@ -338,6 +338,16 @@ cached values never enter a profile or diff. Any material package change emits
 FormulaFence does not follow or execute these links, determine source trust, or
 infer returned data.
 
+Before private parsing, FormulaFence streams selected raw
+`xl/externalLinks/externalLink*.xml` parts and the direct `.rels` parts used by
+the external-link inventory or package-indexed resolver through
+32,768-element per-part and 65,536-element shared-scan structural limits, in
+addition to 16 MiB per part, 64 MiB aggregate, and 512-part read limits. A
+valid structural overage produces private opaque coverage evidence, emits
+`FF010`, and remains materially diff-visible through `FF025`; malformed input
+retains the ordinary parser warning. This allocation boundary is limited to
+these raw external-link readers, not every package relationship reader.
+
 FormulaFence separately maintains a private **static external-workbook
 link-surface ledger** across worksheet formulas, workbook/sheet-local defined
 names, data-validation criteria, and standard DrawingML/ChartEx chart formula

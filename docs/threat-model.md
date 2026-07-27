@@ -1392,6 +1392,16 @@ formula will produce.
   and can be blocked with `no_external_link_package_changes`. FormulaFence does
   **not** follow or execute these links, establish source trust, or infer
   returned data.
+- Before private parsing, selected raw
+  `xl/externalLinks/externalLink*.xml` parts and the direct `.rels` parts used
+  by the external-link inventory or package-indexed resolver are streamed
+  through 32,768-element per-part and 65,536-element shared-scan structural
+  limits, in addition to 16 MiB per part, 64 MiB aggregate, and 512-part read
+  limits. A valid structural overage is represented only by private opaque
+  coverage evidence, produces `FF010`, and remains materially diff-visible via
+  `FF025`; malformed input retains the ordinary parser warning. This allocation
+  boundary applies specifically to these raw external-link readers rather than
+  every package relationship reader.
 - A separate private static external-workbook link-surface ledger covers literal
   endpoints stored in worksheet formulas, workbook/sheet-local defined names,
   data-validation criteria, and standard DrawingML/ChartEx chart formula

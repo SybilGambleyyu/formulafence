@@ -5,6 +5,32 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Chart XML structural bounds — 2026-07-26
+
+Version 0.129.0 closes a compact allocation path in FormulaFence's private
+chart scanner. The scanner follows legacy chart, Office 2016+ ChartEx,
+chart-host DrawingML, and chart-overlay parts, then recursively canonicalizes
+private XML so relationship IDs and cached series data can be compared without
+being exposed. Its existing 16 MiB per-part, 64 MiB aggregate, and 512-part
+byte/count limits did not bound a broad but compact XML tree.
+
+Before a chart XML part is read into a tree, FormulaFence now streams it with a
+32,768-element per-part limit and a 65,536-element package budget. The larger
+capacity is deliberate: [Microsoft documents chart data-point capacity as
+memory-limited](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits)
+rather than as a small fixed catalog. A successfully streamed
+overage becomes chart coverage evidence before the recursive scanner starts;
+malformed or unreadable input retains the established full-parser diagnostic.
+
+Independent raw-ZIP fixtures measured the exact 0.128.0 wheel and the 0.129.0
+source candidate in the same Python 3.12 environment. A 12,453-byte workbook
+with 100,000 opaque chart children (1,401,828 bytes of chart XML) completed in
+0.9359 seconds at 84,948 KiB through the prior wheel with no unrecognized chart
+coverage. The candidate reports one structural chart coverage gap in 0.3739
+seconds at 46,756 KiB, before the chart XML tree is materialized. The complete
+905-test source suite passed in bounded runner batches (129.41 seconds
+aggregate), with Ruff, bytecode compilation, and `git diff --check` clean.
+
 ## Package relationship-part structural bounds — 2026-07-26
 
 Version 0.128.0 closes a shared allocation path across FormulaFence's raw OOXML

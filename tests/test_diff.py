@@ -9805,6 +9805,58 @@ def test_malformed_worksheet_embedded_control_activex_parts_fail_closed(tmp_path
     assert "FF029" in {finding.rule_id for finding in report.findings}
 
 
+def _chart_xml_members(path) -> tuple[str, str, str]:
+    """Return the chart fixture's DrawingML host, chart, and overlay XML parts."""
+    with ZipFile(path) as archive:
+        members = tuple(entry.filename for entry in archive.infolist())
+    drawing_member = next(
+        member
+        for member in members
+        if (
+            member.startswith("xl/drawings/drawing")
+            and member.endswith(".xml")
+            and "/_rels/" not in member
+        )
+    )
+    chart_member = next(
+        member
+        for member in members
+        if member.startswith("xl/charts/chart") and member.endswith(".xml")
+    )
+    overlay_member = "xl/drawings/chartDrawing1.xml"
+    if overlay_member not in members:
+        raise ValueError("chart fixture does not contain an overlay XML part")
+    return drawing_member, chart_member, overlay_member
+
+
+def _append_chart_xml_elements(path, member: str, count: int, *, nested: bool = False) -> None:
+    """Add opaque chart XML entries without invoking FormulaFence's reader."""
+    staging = path.with_suffix(".chart-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, "{urn:formulafence:audit}entry")
+    contents[member] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _chart_xml_element_count(path, member: str) -> int:
+    """Count one fixture's complete chart XML tree for exact budget tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member))
+    return sum(1 for _ in root.iter())
+
+
 def test_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
     baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
     candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
@@ -10127,6 +10179,160 @@ def test_malformed_chart_parts_fail_closed(tmp_path) -> None:
     )
     assert "chart_definitions_changed" in {change.kind for change in report.changes}
     assert "FF030" in {finding.rule_id for finding in report.findings}
+
+
+def test_chart_xml_element_budget_stops_before_materializing_the_tree(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    _drawing_member, chart_member, _overlay_member = _chart_xml_members(workbook)
+    _append_chart_xml_elements(workbook, chart_member, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_CHART_MAX_XML_ELEMENT_COUNT",
+        _chart_xml_element_count(workbook, chart_member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        chart_payload = archive.read(chart_member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == chart_payload:
+            raise AssertionError("the chart XML tree was materialized after its budget failed")
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+    warnings: set[str] = set()
+    with ZipFile(workbook) as archive:
+        inspection = workbook_module._chart_part_inspection(
+            archive,
+            chart_member,
+            warnings,
+            workbook_module._ChartXmlBudget(),
+        )
+
+    assert inspection.inspected is False
+    assert any("chart XML part whose XML structure" in warning for warning in warnings)
+
+
+def test_chart_xml_element_budget_remains_covered(tmp_path, monkeypatch) -> None:
+    baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
+    workbook = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    _drawing_member, chart_member, _overlay_member = _chart_xml_members(workbook)
+    _append_chart_xml_elements(workbook, chart_member, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_CHART_MAX_XML_ELEMENT_COUNT",
+        _chart_xml_element_count(workbook, chart_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+    report = compare_snapshots(load_snapshot(baseline), snapshot)
+
+    assert snapshot.chart_definitions.unrecognized_part_count >= 1
+    assert any(
+        "chart XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+    assert "FF030" in {finding.rule_id for finding in report.findings}
+
+
+def test_chart_xml_element_budget_accepts_the_configured_capacity(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    _drawing_member, chart_member, _overlay_member = _chart_xml_members(workbook)
+    _append_chart_xml_elements(workbook, chart_member, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_CHART_MAX_XML_ELEMENT_COUNT",
+        _chart_xml_element_count(workbook, chart_member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.chart_definitions.unrecognized_part_count == 0
+
+
+def test_chart_xml_element_budget_aggregates_across_package_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    xml_members = _chart_xml_members(workbook)
+    remaining_xml_elements = (
+        sum(_chart_xml_element_count(workbook, member) for member in xml_members) - 1
+    )
+    budget_type = workbook_module._ChartXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_ChartXmlBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.chart_definitions.unrecognized_part_count >= 1
+    assert any(
+        "chart XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_chart_xml_element_budget_accepts_the_default_capacity(tmp_path) -> None:
+    workbook = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    _drawing_member, chart_member, _overlay_member = _chart_xml_members(workbook)
+    _append_chart_xml_elements(
+        workbook,
+        chart_member,
+        workbook_module._CHART_MAX_XML_ELEMENT_COUNT
+        - _chart_xml_element_count(workbook, chart_member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.chart_definitions.unrecognized_part_count == 0
+
+
+def test_chart_xml_element_budget_rejects_the_default_overage(tmp_path) -> None:
+    workbook = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    _drawing_member, chart_member, _overlay_member = _chart_xml_members(workbook)
+    _append_chart_xml_elements(
+        workbook,
+        chart_member,
+        workbook_module._CHART_MAX_XML_ELEMENT_COUNT
+        - _chart_xml_element_count(workbook, chart_member)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.chart_definitions.unrecognized_part_count >= 1
+    assert any(
+        "chart XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_chart_xml_element_budget_counts_nested_opaque_subtrees(tmp_path, monkeypatch) -> None:
+    workbook = make_chart_definition_model(tmp_path / "candidate.xlsx")
+    _drawing_member, chart_member, _overlay_member = _chart_xml_members(workbook)
+    _append_chart_xml_elements(workbook, chart_member, 1, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_CHART_MAX_XML_ELEMENT_COUNT",
+        _chart_xml_element_count(workbook, chart_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.chart_definitions.unrecognized_part_count >= 1
+    assert any(
+        "chart XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_chart_xml_and_related_part_budgets_fail_closed(tmp_path, monkeypatch) -> None:

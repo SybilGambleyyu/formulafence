@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.129.0 — 2026-07-26
+
+- Bound legacy chart, ChartEx, chart-host DrawingML, and chart-overlay XML
+  before FormulaFence's private scanner can recursively canonicalize a compact
+  but oversized tree. Each scanned part allows 32,768 elements and the complete
+  chart package scan allows 65,536, alongside its existing 16 MiB per-part,
+  64 MiB aggregate, and 512-part byte/count limits.
+- Preserve practical chart-cache coverage while preventing opaque unknown XML
+  from bypassing the byte budget: a well-formed structural overage becomes
+  explicit chart coverage evidence before its tree is materialized, while
+  malformed input keeps the established parser diagnostic.
+- Add fail-before-tree-materialization, configured/default/exact/aggregate, and
+  opaque-nested boundary coverage, including the chart-control finding emitted
+  for a new structural coverage gap.
+
 ## 0.128.0 — 2026-07-26
 
 - Bound every OOXML package relationship (`.rels`) part in the shared semantic

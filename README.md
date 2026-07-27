@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.141.0/formulafence-0.141.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.142.0/formulafence-0.142.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.141.0
+  uses: SybilGambleyyu/formulafence@v0.142.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -816,6 +816,19 @@ private opaque coverage evidence (`FF010`) and remains diff-visible through
 `FF023`; malformed XML keeps its ordinary parser diagnostic. This bound applies
 to raw Connections XML, not to a claim that every external-data package reader
 has the same structural limit.
+
+FormulaFence applies the same bounded streaming pattern to selected raw
+query-table XML targets reached from worksheet or table `queryTable`
+relationships (normally `xl/queryTables/queryTable*.xml`): 32,768 elements per
+part, 65,536 across the shared query-table scan, 16 MiB per part, 64 MiB total,
+and 512 parts. A private template cache means one reused part is neither
+reparsed nor recursively canonicalized once per worksheet binding. A
+successfully streamed structural overage produces private opaque coverage
+evidence (`FF010`) that remains diff-visible through `FF023`; malformed XML
+keeps its ordinary parser diagnostic. This allocation boundary is specific to
+the raw query-table reader, not a claim that every table or external-data
+reader has the same structural limit. The part shape follows the
+[SpreadsheetML `queryTable` definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.querytable?view=openxml-3.0.1).
 
 FormulaFence separately inventories raw **external-link packages**
 (`xl/externalLinks/externalLink*.xml`). It recognizes external-workbook,

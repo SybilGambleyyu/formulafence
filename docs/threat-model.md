@@ -1382,6 +1382,16 @@ formula will produce.
   diff-visible via `FF023`; malformed input retains the ordinary parser warning.
   This allocation boundary applies specifically to Connections XML rather than
   every raw external-data package reader.
+- Before private parsing, selected raw query-table relationship targets are
+  streamed through 32,768-element per-part and 65,536-element shared-scan
+  structural limits, in addition to 16 MiB per part, 64 MiB aggregate, and
+  512-part read limits. A private snapshot template is reused when one target
+  is bound from more than one worksheet, avoiding repeated recursive opaque
+  metadata canonicalization. A valid structural overage is represented only by
+  private opaque coverage evidence, produces `FF010`, and remains materially
+  diff-visible via `FF023`; malformed input retains the ordinary parser
+  warning. This allocation boundary applies specifically to the raw query-table
+  reader rather than every table or external-data reader.
 - Raw `xl/externalLinks/externalLink*.xml` packages are separately inspected
   for external-workbook, DDE, and OLE definitions. FormulaFence privately binds
   workbook declarations to package parts and fingerprints endpoint

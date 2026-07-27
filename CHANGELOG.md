@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.142.0 — 2026-07-26
+
+- Bound raw query-table XML before FormulaFence can materialize and privately
+  canonicalize repetitive refresh-field, sort, or extension trees. Each
+  query-table relationship target allows 32,768 elements; the shared
+  query-table scan allows 65,536, alongside 16 MiB per-part, 64 MiB aggregate,
+  and 512-part limits.
+- Share the cached boundary and a sheet-neutral private snapshot template across
+  direct worksheet and table-mediated query-table references, so one part is
+  neither reparsed nor recursively canonicalized once per worksheet binding. A
+  successfully streamed structural overage becomes explicit `FF010` plus
+  `FF023`-visible opaque query-table evidence, with a private streamed content
+  fingerprint for same-size hostile changes.
+- Add fail-before-materialization, nested opaque, exact/default, aggregate,
+  reused-part cache, visibility, and same-size-fingerprint regressions for
+  query-table XML while retaining direct and table-mediated refresh coverage.
+
 ## 0.141.0 — 2026-07-26
 
 - Bound raw external-link package XML before FormulaFence can materialize and

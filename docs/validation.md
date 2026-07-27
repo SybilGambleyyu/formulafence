@@ -5,6 +5,41 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Query-table XML structural bounds — 2026-07-26
+
+Version 0.142.0 closes a compact-allocation path in raw query-table XML.
+FormulaFence already inspected query-table refresh controls reached directly
+from worksheets or through Excel tables, but a byte-permitted query-table part
+could first materialize a repetitive private tree and recursively canonicalize
+unsupported children. One target can be bound from multiple worksheets, so the
+boundary caches both the parsed root and a private sheet-neutral control
+template instead of repeating the parse or opaque traversal per binding.
+
+FormulaFence now streams each selected query-table relationship target before
+private parsing. Each part allows 32,768 elements and the complete shared
+query-table scan allows 65,536, together with 16 MiB per-part, 64 MiB aggregate,
+and 512-part limits. A successfully streamed structural overage becomes
+explicit `FF010` plus `FF023`-visible opaque query-table evidence. Its private
+streamed SHA-256 content fingerprint keeps same-size hostile XML diff-visible
+without retaining query-table names, connection metadata, field data, sort
+state, extension material, or raw XML. Malformed input retains its ordinary
+parser diagnostic. These are allocation limits for the raw query-table reader,
+not general table or external-data package validity rules.
+
+A controlled external-data fixture added 1,000,000 foreign-namespace direct
+children to `xl/queryTables/queryTable1.xml` through a direct worksheet
+relationship. The affected part was 6,000,506 bytes uncompressed, 9,118 bytes
+compressed, and the complete workbook was 17,431 bytes. In isolated source
+measurements, the released unguarded 0.141.0 reader completed the hostile
+comparison in 6.685531 seconds / 536,832 KiB and emitted only `FF023`. The
+0.142.0 source completed the same comparison in 0.260500 seconds / 44,292 KiB
+without materializing the hostile tree, emitting `FF010` and `FF023` with
+`parser_coverage_warning_added` and
+`query_table_refresh_controls_changed` records. A normal baseline
+self-comparison had no findings or changes. The hostile JSON contained neither
+the injected namespace nor raw element tag. The full source suite passed 1,037
+tests in 150.53 seconds; Ruff and bytecode compilation were clean.
+
 ## External-link package XML structural bounds — 2026-07-26
 
 Version 0.141.0 closes a compact-allocation path in raw external-link package

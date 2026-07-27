@@ -2704,6 +2704,298 @@ def test_external_data_connection_xml_budget_fingerprints_same_size_overages(
     assert "FF023" in {finding.rule_id for finding in report.findings}
 
 
+def test_query_table_xml_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _append_query_table_xml_elements(workbook, 8, nested=True)
+    query_table_xml = _query_table_xml_payload(workbook)
+    monkeypatch.setattr(
+        workbook_module,
+        "_QUERY_TABLE_MAX_XML_ELEMENT_COUNT",
+        _query_table_xml_element_count(workbook) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == query_table_xml:
+            raise AssertionError("the over-budget query-table XML tree was materialized")
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.query_table_refresh_controls) == 1
+    assert snapshot.query_table_refresh_controls[0].opaque_metadata.present is True
+    assert any(
+        "query-table XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_query_table_xml_structure_overage_spends_scan_budgets(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _append_query_table_xml_elements(workbook, 8)
+    with ZipFile(workbook) as archive:
+        query_table_size = archive.getinfo(_QUERY_TABLE_XML_MEMBER).file_size
+    budget_type = workbook_module._QueryTableXmlBudget
+    budgets = []
+
+    def budget_factory():
+        budget = budget_type(
+            remaining_bytes=query_table_size,
+            remaining_xml_elements=_query_table_xml_element_count(workbook) - 1,
+        )
+        budgets.append(budget)
+        return budget
+
+    monkeypatch.setattr(workbook_module, "_QueryTableXmlBudget", budget_factory)
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.query_table_refresh_controls) == 1
+    assert budgets[0].remaining_bytes == 0
+    assert budgets[0].remaining_xml_elements == 0
+
+
+def test_query_table_xml_byte_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_external_data_refresh_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    query_table_xml = _query_table_xml_payload(candidate)
+    monkeypatch.setattr(
+        workbook_module,
+        "_QUERY_TABLE_MAX_XML_PART_BYTES",
+        len(query_table_xml) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == query_table_xml:
+            raise AssertionError("the oversized query-table XML tree was materialized")
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert len(candidate_snapshot.query_table_refresh_controls) == 1
+    assert candidate_snapshot.query_table_refresh_controls[0].opaque_metadata.present is True
+    assert any(
+        "oversized query-table XML part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF023"} <= {finding.rule_id for finding in report.findings}
+
+
+@pytest.mark.parametrize(
+    ("budget", "warning"),
+    (
+        (
+            {"remaining_parts": 0},
+            "bounded query-table XML part count",
+        ),
+        (
+            {"remaining_bytes": 1},
+            "bounded query-table XML read budget",
+        ),
+    ),
+)
+def test_query_table_xml_scan_budgets_remain_visible(
+    tmp_path,
+    monkeypatch,
+    budget,
+    warning: str,
+) -> None:
+    baseline = make_external_data_refresh_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    budget_type = workbook_module._QueryTableXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_QueryTableXmlBudget",
+        lambda: budget_type(**budget),
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert len(candidate_snapshot.query_table_refresh_controls) == 1
+    assert any(warning in value for value in candidate_snapshot.parser_warnings)
+    assert {"FF010", "FF023"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_query_table_xml_budget_remains_visible_and_private(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_external_data_refresh_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _append_query_table_xml_elements(candidate, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_QUERY_TABLE_MAX_XML_ELEMENT_COUNT",
+        _query_table_xml_element_count(candidate) - 1,
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+
+    assert len(candidate_snapshot.query_table_refresh_controls) == 1
+    assert candidate_snapshot.query_table_refresh_controls[0].opaque_metadata.present is True
+    assert any(
+        "query-table XML part whose XML structure" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF023"} <= {finding.rule_id for finding in report.findings}
+    assert all("urn:formulafence:audit" not in artifact for artifact in rendered_artifacts)
+
+
+def test_query_table_xml_budget_accepts_the_default_capacity(tmp_path) -> None:
+    workbook = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _append_query_table_xml_elements(
+        workbook,
+        workbook_module._QUERY_TABLE_MAX_XML_ELEMENT_COUNT
+        - _query_table_xml_element_count(workbook),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert not any(
+        "query-table XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_query_table_xml_budget_rejects_the_default_overage(tmp_path) -> None:
+    workbook = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _append_query_table_xml_elements(
+        workbook,
+        workbook_module._QUERY_TABLE_MAX_XML_ELEMENT_COUNT
+        - _query_table_xml_element_count(workbook)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.query_table_refresh_controls) == 1
+    assert any(
+        "query-table XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_query_table_xml_budget_aggregates_across_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _duplicate_query_table_part(workbook)
+    query_table_xml_elements = _query_table_xml_element_count(workbook)
+    budget_type = workbook_module._QueryTableXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_QueryTableXmlBudget",
+        lambda: budget_type(
+            remaining_xml_elements=2 * query_table_xml_elements - 1
+        ),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.query_table_refresh_controls) == 2
+    assert any(
+        "query-table XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_query_table_xml_budget_caches_reused_package_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    _bind_query_table_to_second_worksheet(workbook)
+    budget_type = workbook_module._QueryTableXmlBudget
+    budgets = []
+    original_query_table_snapshot = workbook_module._query_table_snapshot
+    snapshot_calls = []
+
+    def budget_factory():
+        budget = budget_type(
+            remaining_xml_elements=_query_table_xml_element_count(workbook)
+        )
+        budgets.append(budget)
+        return budget
+
+    def record_query_table_snapshot(sheet, root, warnings):
+        snapshot_calls.append(sheet)
+        return original_query_table_snapshot(sheet, root, warnings)
+
+    monkeypatch.setattr(workbook_module, "_QueryTableXmlBudget", budget_factory)
+    monkeypatch.setattr(
+        workbook_module,
+        "_query_table_snapshot",
+        record_query_table_snapshot,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.query_table_refresh_controls) == 2
+    assert budgets[0].remaining_xml_elements == 0
+    assert len(budgets[0].roots) == 1
+    assert len(budgets[0].templates) == 1
+    assert len(snapshot_calls) == 1
+    assert not any(
+        "query-table XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_query_table_xml_budget_fingerprints_same_size_overages(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    first = make_external_data_refresh_model(tmp_path / "first.xlsx")
+    second = make_external_data_refresh_model(tmp_path / "second.xlsx")
+    _append_query_table_xml_elements(first, 1, entry_name="entrya")
+    _append_query_table_xml_elements(second, 1, entry_name="entryb")
+    with ZipFile(first) as archive:
+        first_info = archive.getinfo(_QUERY_TABLE_XML_MEMBER)
+    with ZipFile(second) as archive:
+        second_info = archive.getinfo(_QUERY_TABLE_XML_MEMBER)
+    monkeypatch.setattr(
+        workbook_module,
+        "_QUERY_TABLE_MAX_XML_ELEMENT_COUNT",
+        1,
+    )
+
+    first_snapshot = load_snapshot(first)
+    second_snapshot = load_snapshot(second)
+    report = compare_snapshots(first_snapshot, second_snapshot)
+
+    assert first_info.file_size == second_info.file_size
+    assert (
+        first_snapshot.query_table_refresh_controls[0].opaque_metadata.signature
+        != second_snapshot.query_table_refresh_controls[0].opaque_metadata.signature
+    )
+    assert "FF023" in {finding.rule_id for finding in report.findings}
+
+
 def test_package_wide_external_relationships_are_profiled_and_diffed_privately(
     tmp_path,
 ) -> None:
@@ -10976,6 +11268,151 @@ def _duplicate_external_data_connections_part(path) -> None:
     )
     contents["[Content_Types].xml"] = ElementTree.tostring(
         content_types,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+_QUERY_TABLE_XML_MEMBER = "xl/queryTables/queryTable1.xml"
+
+
+def _query_table_xml_payload(path) -> bytes:
+    """Return raw query-table XML from the synthetic refresh fixture."""
+    with ZipFile(path) as archive:
+        return archive.read(_QUERY_TABLE_XML_MEMBER)
+
+
+def _append_query_table_xml_elements(
+    path,
+    count: int,
+    *,
+    nested: bool = False,
+    entry_name: str = "entry",
+) -> None:
+    """Add opaque query-table XML entries without FormulaFence's reader."""
+    staging = path.with_suffix(".query-table-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[_QUERY_TABLE_XML_MEMBER])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, f"{{urn:formulafence:audit}}{entry_name}")
+    contents[_QUERY_TABLE_XML_MEMBER] = ElementTree.tostring(
+        root,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _query_table_xml_element_count(path) -> int:
+    """Count the synthetic query-table XML tree for exact budget tests."""
+    return sum(
+        1 for _ in ElementTree.fromstring(_query_table_xml_payload(path)).iter()
+    )
+
+
+def _duplicate_query_table_part(path) -> None:
+    """Bind a second query-table XML part for aggregate-budget coverage."""
+    staging = path.with_suffix(".query-table-duplicate.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    relationships_namespace = "http://schemas.openxmlformats.org/package/2006/relationships"
+    relationship_type = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/queryTable"
+    )
+    sheet_relationships = ElementTree.fromstring(
+        contents["xl/worksheets/_rels/sheet1.xml.rels"]
+    )
+    ElementTree.SubElement(
+        sheet_relationships,
+        f"{{{relationships_namespace}}}Relationship",
+        {
+            "Id": "rIdFormulaFenceQueryTable2",
+            "Type": relationship_type,
+            "Target": "../queryTables/queryTable2.xml",
+        },
+    )
+    contents["xl/worksheets/_rels/sheet1.xml.rels"] = ElementTree.tostring(
+        sheet_relationships,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    contents["xl/queryTables/queryTable2.xml"] = contents[_QUERY_TABLE_XML_MEMBER]
+    content_types_namespace = "http://schemas.openxmlformats.org/package/2006/content-types"
+    content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+    ElementTree.SubElement(
+        content_types,
+        f"{{{content_types_namespace}}}Override",
+        {
+            "PartName": "/xl/queryTables/queryTable2.xml",
+            "ContentType": (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml."
+                "queryTable+xml"
+            ),
+        },
+    )
+    contents["[Content_Types].xml"] = ElementTree.tostring(
+        content_types,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _bind_query_table_to_second_worksheet(path) -> None:
+    """Reuse one query-table part from a second worksheet for cache coverage."""
+    staging = path.with_suffix(".query-table-reused.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    if "xl/worksheets/sheet2.xml" not in contents:
+        raise ValueError("fixture needs a second worksheet")
+    relationships_namespace = "http://schemas.openxmlformats.org/package/2006/relationships"
+    relationship_type = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/queryTable"
+    )
+    relationships_member = "xl/worksheets/_rels/sheet2.xml.rels"
+    sheet_relationships = ElementTree.fromstring(
+        contents.get(
+            relationships_member,
+            (
+                f'<?xml version="1.0" encoding="utf-8"?>'
+                f'<Relationships xmlns="{relationships_namespace}"/>'
+            ).encode(),
+        )
+    )
+    ElementTree.SubElement(
+        sheet_relationships,
+        f"{{{relationships_namespace}}}Relationship",
+        {
+            "Id": "rIdFormulaFenceReusedQueryTable",
+            "Type": relationship_type,
+            "Target": "../queryTables/queryTable1.xml",
+        },
+    )
+    contents[relationships_member] = ElementTree.tostring(
+        sheet_relationships,
         encoding="utf-8",
         xml_declaration=True,
     )

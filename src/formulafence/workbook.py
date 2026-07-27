@@ -657,6 +657,14 @@ _EXTERNAL_DATA_CONNECTION_MAX_XML_ELEMENT_COUNT = 32_768
 _EXTERNAL_DATA_CONNECTION_TOTAL_XML_MAX_ELEMENT_COUNT = (
     2 * _EXTERNAL_DATA_CONNECTION_MAX_XML_ELEMENT_COUNT
 )
+_QUERY_TABLE_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_QUERY_TABLE_TOTAL_XML_BYTES = 64 * 1024 * 1024
+_QUERY_TABLE_TOTAL_XML_PARTS = 512
+# Query-table parts can retain private refresh-field, sort, and extension
+# subtrees outside the ordinary worksheet model. Stream their full structure
+# before opaque metadata canonicalization can build a large tree.
+_QUERY_TABLE_MAX_XML_ELEMENT_COUNT = 32_768
+_QUERY_TABLE_TOTAL_XML_MAX_ELEMENT_COUNT = 2 * _QUERY_TABLE_MAX_XML_ELEMENT_COUNT
 _EXTERNAL_LINK_RELATIONSHIP_TYPE = (
     f"{_DOCUMENT_RELATIONSHIP_NS}/externalLink"
 )
@@ -1956,6 +1964,19 @@ class _ExternalDataConnectionXmlBudget:
     remaining_xml_elements: int = (
         _EXTERNAL_DATA_CONNECTION_TOTAL_XML_MAX_ELEMENT_COUNT
     )
+
+
+@dataclass
+class _QueryTableXmlBudget:
+    """Bound and cache raw query-table XML in one package scan."""
+
+    remaining_bytes: int = _QUERY_TABLE_TOTAL_XML_BYTES
+    remaining_parts: int = _QUERY_TABLE_TOTAL_XML_PARTS
+    remaining_xml_elements: int = _QUERY_TABLE_TOTAL_XML_MAX_ELEMENT_COUNT
+    roots: dict[str, tuple[ElementTree.Element | None, str | None]] = field(
+        default_factory=dict
+    )
+    templates: dict[str, QueryTableRefreshSnapshot] = field(default_factory=dict)
 
 
 @dataclass
@@ -9132,6 +9153,135 @@ def _external_data_connection_bounded_root(
     )
 
 
+def _query_table_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info: ZipInfo,
+    budget: _QueryTableXmlBudget,
+) -> str | None:
+    """Stream a query-table XML part before its private tree is materialized."""
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if budget.remaining_xml_elements <= 0:
+        return _private_external_data_signature(
+            (("query-table-xml-structure-budget-exhausted", metadata),)
+        )
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _QUERY_TABLE_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the existing full-parser diagnostic for malformed or
+        # unreadable XML. Only a successfully streamed overage can bypass that
+        # materializing parser safely.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    # An overage can contain an unbounded number of unseen descendants. Stop
+    # spending the aggregate structural budget after its first failed part.
+    budget.remaining_xml_elements = 0
+    signature_entries = [("xml-structure-budget-exhausted", metadata)]
+    if (
+        payload_signature := _private_archive_member_payload_signature(archive, info)
+    ) is not None:
+        signature_entries.append(("payload", payload_signature))
+    return _private_external_data_signature(tuple(signature_entries))
+
+
+def _query_table_bounded_root(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _QueryTableXmlBudget,
+    *,
+    context: str,
+) -> tuple[ElementTree.Element | None, str | None]:
+    """Read one bounded, cached query-table XML root privately."""
+    if member in budget.roots:
+        return budget.roots[member]
+
+    def retain(
+        root: ElementTree.Element | None,
+        fallback_signature: str | None,
+    ) -> tuple[ElementTree.Element | None, str | None]:
+        result = (root, fallback_signature)
+        budget.roots[member] = result
+        return result
+
+    if budget.remaining_parts <= 0:
+        try:
+            info = archive.getinfo(member)
+            metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+        except KeyError:
+            metadata = repr((member, "missing"))
+        warnings.add(
+            "FormulaFence reached its bounded query-table XML part count; "
+            "affected query-table controls were not compared."
+        )
+        return retain(
+            None,
+            _private_external_data_signature(
+                (("query-table-xml-part-count-budget-exhausted", metadata),)
+            ),
+        )
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        return retain(
+            _external_data_part_root(archive, member, warnings, context=context),
+            None,
+        )
+    budget.remaining_parts -= 1
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if info.file_size > _QUERY_TABLE_MAX_XML_PART_BYTES:
+        warnings.add(
+            "FormulaFence did not fully read an oversized query-table XML part; "
+            "the affected query-table controls have a coverage gap."
+        )
+        return retain(
+            None,
+            _private_external_data_signature(
+                (("oversized-query-table-xml-part", metadata),)
+            ),
+        )
+    if info.file_size > budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded query-table XML read budget; "
+            "affected query-table controls were not compared."
+        )
+        return retain(
+            None,
+            _private_external_data_signature(
+                (("query-table-xml-read-budget-exhausted", metadata),)
+            ),
+        )
+    # Structural preflight reads the whole member even if parsing is then
+    # deliberately skipped, so it consumes the shared byte budget first.
+    budget.remaining_bytes -= info.file_size
+    structure_fallback_signature = _query_table_xml_structure_budget_fallback_signature(
+        archive,
+        member,
+        info,
+        budget,
+    )
+    if structure_fallback_signature is not None:
+        warnings.add(
+            "FormulaFence did not fully read a query-table XML part whose XML "
+            "structure exceeds the safety budget; affected query-table controls "
+            "have a coverage gap."
+        )
+        return retain(None, structure_fallback_signature)
+    return retain(
+        _external_data_part_root(archive, member, warnings, context=context),
+        None,
+    )
+
+
 def _external_data_part_relationships(
     archive: ZipFile,
     source_member: str,
@@ -9346,6 +9496,7 @@ def _query_table_refresh_snapshots(
     archive: ZipFile,
     sheet_parts: Mapping[str, tuple[str, str]],
     warnings: set[str],
+    budget: _QueryTableXmlBudget,
 ) -> tuple[QueryTableRefreshSnapshot, ...]:
     """Read query tables linked directly from worksheets or through Excel tables."""
     snapshots: list[QueryTableRefreshSnapshot] = []
@@ -9362,13 +9513,28 @@ def _query_table_refresh_snapshots(
         if part_key in seen_parts:
             return
         seen_parts.add(part_key)
-        root = _external_data_part_root(
+        if target in budget.templates:
+            snapshots.append(replace(budget.templates[target], sheet=sheet))
+            return
+        root, fallback_signature = _query_table_bounded_root(
             archive,
             target,
             warnings,
+            budget,
             context=context,
         )
         if root is None:
+            if fallback_signature is not None:
+                snapshots.append(
+                    QueryTableRefreshSnapshot(
+                        sheet=sheet,
+                        connection_id=None,
+                        opaque_metadata=ExternalDataOpaqueMetadataSnapshot(
+                            count=1,
+                            signature=fallback_signature,
+                        ),
+                    )
+                )
             return
         if (
             _xml_local_name(root.tag) != "queryTable"
@@ -9379,7 +9545,9 @@ def _query_table_refresh_snapshots(
                 "the affected controls were not compared."
             )
             return
-        snapshots.append(_query_table_snapshot(sheet, root, warnings))
+        snapshot = _query_table_snapshot(sheet, root, warnings)
+        budget.templates[target] = snapshot
+        snapshots.append(snapshot)
 
     for sheet, (sheet_member, sheet_type) in sheet_parts.items():
         if sheet_type != "worksheet":
@@ -9717,10 +9885,12 @@ def _external_data_metadata(
                     f"({type(error).__name__}); query-table controls were not compared."
                 )
                 sheet_parts = {}
+            query_table_xml_budget = _QueryTableXmlBudget()
             query_tables = _query_table_refresh_snapshots(
                 archive,
                 sheet_parts,
                 warnings,
+                query_table_xml_budget,
             )
             pivot_caches = _pivot_cache_refresh_snapshots(
                 archive,

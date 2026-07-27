@@ -327,6 +327,16 @@ privately diff-visible through `FF023`; malformed XML retains the ordinary
 parser warning. This allocation boundary is limited to Connections XML, not
 every external-data package reader.
 
+Before privately parsing a selected raw query-table relationship target,
+FormulaFence streams the XML through 32,768-element per-part and 65,536-element
+shared-scan limits, in addition to 16 MiB per part, 64 MiB aggregate, and
+512-part read limits. The cache also retains a private template so one reused
+query-table target is not recursively canonicalized once per worksheet binding.
+A valid structural overage produces private opaque coverage evidence, emits
+`FF010`, and remains materially diff-visible through `FF023`; malformed input
+retains the ordinary parser warning. This allocation boundary is limited to the
+raw query-table reader, not every table or external-data package reader.
+
 FormulaFence separately inventories raw `xl/externalLinks/externalLink*.xml`
 packages. It recognizes external-workbook, DDE, and OLE definitions; privately
 binds each workbook declaration to its package part; and compares link targets,

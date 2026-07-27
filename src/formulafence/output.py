@@ -1,10 +1,11 @@
-"""Deterministic JSON, Markdown, and SARIF renderers for review artifacts."""
+"""Deterministic JSON, Markdown, HTML, and SARIF renderers for review artifacts."""
 
 from __future__ import annotations
 
 import json
 import re
 from collections.abc import Iterable
+from html import escape as _html_escape
 from typing import Any
 
 from formulafence import __version__
@@ -5206,6 +5207,415 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _report_payload_for_rendering(
+    report: DiffReport,
+    extra_findings: Iterable[Finding] = (),
+    *,
+    redact_external_workbook_links: bool = False,
+    redact_formula_external_actions: bool = False,
+    redact_python_in_excel: bool = False,
+    redact_office_custom_functions: bool = False,
+    redact_unqualified_runtime_functions: bool = False,
+    redact_worksheet_code_resource_registrations: bool = False,
+    redact_formula_defined_xlm_registrations: bool = False,
+    redact_formula_defined_xlm_evaluations: bool = False,
+    redact_formula_defined_xlm_actions: bool = False,
+    redact_formula_defined_xlm_get_cell_calls: bool = False,
+    redact_formula_defined_xlm_environment_information_calls: bool = False,
+    redact_formula_environment_information: bool = False,
+) -> dict[str, Any]:
+    """Return a report payload with the requested sharing boundaries applied."""
+    payload = report.to_dict(extra_findings)
+    if redact_external_workbook_links:
+        payload = redact_external_workbook_link_material(payload)
+    if redact_formula_external_actions:
+        payload = redact_formula_external_action_report_payload(report, payload)
+    if redact_python_in_excel:
+        payload = redact_python_in_excel_report_payload(report, payload)
+    if redact_office_custom_functions:
+        payload = redact_office_custom_function_report_payload(report, payload)
+    if redact_unqualified_runtime_functions:
+        payload = redact_unqualified_runtime_function_report_payload(report, payload)
+    if redact_worksheet_code_resource_registrations:
+        payload = redact_worksheet_code_resource_registration_report_payload(
+            report, payload
+        )
+    if redact_formula_defined_xlm_registrations:
+        payload = redact_formula_defined_xlm_registration_report_payload(
+            report, payload
+        )
+    if redact_formula_defined_xlm_evaluations:
+        payload = redact_formula_defined_xlm_evaluation_report_payload(report, payload)
+    if redact_formula_defined_xlm_actions:
+        payload = redact_formula_defined_xlm_action_report_payload(report, payload)
+    if redact_formula_defined_xlm_get_cell_calls:
+        payload = redact_formula_defined_xlm_get_cell_report_payload(report, payload)
+    if redact_formula_defined_xlm_environment_information_calls:
+        payload = redact_formula_defined_xlm_environment_information_report_payload(
+            report, payload
+        )
+    if redact_formula_environment_information:
+        payload = redact_formula_environment_information_report_payload(report, payload)
+    return payload
+
+
+def _portfolio_payload_for_rendering(
+    report: PortfolioReport,
+    *,
+    redact_external_workbook_links: bool = False,
+    redact_formula_external_actions: bool = False,
+    redact_python_in_excel: bool = False,
+    redact_office_custom_functions: bool = False,
+    redact_unqualified_runtime_functions: bool = False,
+    redact_worksheet_code_resource_registrations: bool = False,
+    redact_formula_defined_xlm_registrations: bool = False,
+    redact_formula_defined_xlm_evaluations: bool = False,
+    redact_formula_defined_xlm_actions: bool = False,
+    redact_formula_defined_xlm_get_cell_calls: bool = False,
+    redact_formula_defined_xlm_environment_information_calls: bool = False,
+    redact_formula_environment_information: bool = False,
+) -> dict[str, Any]:
+    """Return a portfolio payload with the requested sharing boundaries applied."""
+    payload = report.to_dict()
+    if redact_external_workbook_links:
+        payload = redact_external_workbook_link_material(payload)
+    if redact_formula_external_actions:
+        payload = redact_formula_external_action_portfolio_payload(report, payload)
+    if redact_python_in_excel:
+        payload = redact_python_in_excel_portfolio_payload(report, payload)
+    if redact_office_custom_functions:
+        payload = redact_office_custom_function_portfolio_payload(report, payload)
+    if redact_unqualified_runtime_functions:
+        payload = redact_unqualified_runtime_function_portfolio_payload(report, payload)
+    if redact_worksheet_code_resource_registrations:
+        payload = redact_worksheet_code_resource_registration_portfolio_payload(
+            report, payload
+        )
+    if redact_formula_defined_xlm_registrations:
+        payload = redact_formula_defined_xlm_registration_portfolio_payload(
+            report, payload
+        )
+    if redact_formula_defined_xlm_evaluations:
+        payload = redact_formula_defined_xlm_evaluation_portfolio_payload(
+            report, payload
+        )
+    if redact_formula_defined_xlm_actions:
+        payload = redact_formula_defined_xlm_action_portfolio_payload(report, payload)
+    if redact_formula_defined_xlm_get_cell_calls:
+        payload = redact_formula_defined_xlm_get_cell_portfolio_payload(report, payload)
+    if redact_formula_defined_xlm_environment_information_calls:
+        payload = redact_formula_defined_xlm_environment_information_portfolio_payload(
+            report, payload
+        )
+    if redact_formula_environment_information:
+        payload = redact_formula_environment_information_portfolio_payload(
+            report, payload
+        )
+    return payload
+
+
+def _active_redaction_labels(
+    *,
+    redact_external_workbook_links: bool = False,
+    redact_formula_external_actions: bool = False,
+    redact_python_in_excel: bool = False,
+    redact_office_custom_functions: bool = False,
+    redact_unqualified_runtime_functions: bool = False,
+    redact_worksheet_code_resource_registrations: bool = False,
+    redact_formula_defined_xlm_registrations: bool = False,
+    redact_formula_defined_xlm_evaluations: bool = False,
+    redact_formula_defined_xlm_actions: bool = False,
+    redact_formula_defined_xlm_get_cell_calls: bool = False,
+    redact_formula_defined_xlm_environment_information_calls: bool = False,
+    redact_formula_environment_information: bool = False,
+) -> list[str]:
+    """Return stable labels for active output-only sharing boundaries."""
+    labels: list[str] = []
+    if redact_external_workbook_links:
+        labels.append("External-workbook link material redacted for sharing")
+    if redact_formula_external_actions:
+        labels.append("Formula external-action / DDE material redacted for sharing")
+    if redact_python_in_excel:
+        labels.append("Python-in-Excel material redacted for sharing")
+    if redact_office_custom_functions:
+        labels.append("Office custom-function material redacted for sharing")
+    if redact_unqualified_runtime_functions:
+        labels.append("Unqualified runtime-function material redacted for sharing")
+    if redact_worksheet_code_resource_registrations:
+        labels.append("Worksheet code-resource registration material redacted for sharing")
+    if redact_formula_defined_xlm_registrations:
+        labels.append("Formula-defined XLM registration material redacted for sharing")
+    if redact_formula_defined_xlm_evaluations:
+        labels.append("Formula-defined XLM evaluation material redacted for sharing")
+    if redact_formula_defined_xlm_actions:
+        labels.append("Formula-defined XLM action material redacted for sharing")
+    if redact_formula_defined_xlm_get_cell_calls:
+        labels.append("Formula-defined XLM GET.CELL material redacted for sharing")
+    if redact_formula_defined_xlm_environment_information_calls:
+        labels.append(
+            "Formula-defined XLM environment-information material redacted for sharing"
+        )
+    if redact_formula_environment_information:
+        labels.append("Formula environment-information material redacted for sharing")
+    return labels
+
+
+_HTML_STYLE = """
+:root {
+  color-scheme: light dark;
+  font-family: Inter, Arial, sans-serif;
+  line-height: 1.5;
+}
+body {
+  background: #f6f8fa;
+  color: #1f2328;
+  margin: 0;
+}
+main {
+  margin: 0 auto;
+  max-width: 1120px;
+  padding: 2.5rem 1.25rem 4rem;
+}
+h1, h2, h3, p { margin-top: 0; }
+header { margin-bottom: 1.5rem; }
+.lede { color: #57606a; max-width: 70ch; }
+.cards {
+  display: grid;
+  gap: .75rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin: 1.25rem 0;
+}
+.card, .review-entry, .workbook, .filters, .redactions {
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: .55rem;
+  box-shadow: 0 1px 2px rgb(31 35 40 / 4%);
+}
+.card { padding: .85rem 1rem; }
+.card dt { color: #57606a; font-size: .83rem; }
+.card dd { font-size: 1.45rem; font-weight: 700; margin: .2rem 0 0; }
+.filters { align-items: end; display: flex; flex-wrap: wrap; gap: .75rem; padding: 1rem; }
+.filters label { display: grid; font-weight: 600; gap: .25rem; }
+input, select { font: inherit; padding: .38rem .5rem; }
+#filter-status { color: #57606a; margin-left: auto; }
+.redactions { border-color: #bf8700; margin: 1rem 0; padding: .85rem 1rem; }
+.redactions ul { margin: .35rem 0 0; padding-left: 1.25rem; }
+.review-section { margin-top: 2rem; }
+.review-entry { border-left-width: .45rem; margin: .8rem 0; padding: 1rem; }
+.review-entry h3 {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-bottom: .75rem;
+}
+.severity-critical, .severity-high { border-left-color: #cf222e; }
+.severity-medium { border-left-color: #bf8700; }
+.severity-low { border-left-color: #0969da; }
+.severity-note { border-left-color: #57606a; }
+.severity {
+  border-radius: 999px;
+  font-size: .75rem;
+  font-weight: 700;
+  padding: .12rem .5rem;
+  text-transform: uppercase;
+}
+.severity-critical .severity, .severity-high .severity { color: #cf222e; }
+.severity-medium .severity { color: #9a6700; }
+.severity-low .severity { color: #0969da; }
+.severity-note .severity { color: #57606a; }
+.metadata { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin: 0 0 .8rem; }
+.metadata span { color: #57606a; }
+details { margin-top: .8rem; }
+summary { cursor: pointer; font-weight: 600; }
+pre {
+  background: #f6f8fa;
+  border-radius: .4rem;
+  overflow-x: auto;
+  padding: .8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.workbook { margin: 1.5rem 0; padding: 1.25rem; }
+.empty { color: #57606a; font-style: italic; }
+@media (prefers-color-scheme: dark) {
+  body { background: #0d1117; color: #e6edf3; }
+  .lede, #filter-status, .metadata span, .empty { color: #8b949e; }
+  .card, .review-entry, .workbook, .filters, .redactions {
+    background: #161b22;
+    border-color: #30363d;
+  }
+  pre { background: #0d1117; }
+}
+""".strip()
+
+
+_HTML_FILTER_SCRIPT = """
+(() => {
+  const query = document.getElementById("review-filter");
+  const severity = document.getElementById("severity-filter");
+  const status = document.getElementById("filter-status");
+  const entries = [...document.querySelectorAll(".review-entry")];
+  const apply = () => {
+    const text = query.value.trim().toLocaleLowerCase();
+    const level = severity.value;
+    let visible = 0;
+    for (const entry of entries) {
+      const matchesText = !text || entry.innerText.toLocaleLowerCase().includes(text);
+      const matchesSeverity = level === "all" || entry.dataset.severity === level;
+      entry.hidden = !(matchesText && matchesSeverity);
+      if (!entry.hidden) visible += 1;
+    }
+    status.textContent = `${visible} of ${entries.length} entries shown`;
+  };
+  query.addEventListener("input", apply);
+  severity.addEventListener("change", apply);
+  apply();
+})();
+""".strip()
+
+
+def _html_text(value: object) -> str:
+    """Escape untrusted review material before placing it in HTML text."""
+    return _html_escape(str(value), quote=True)
+
+
+def _html_json(value: object) -> str:
+    """Render JSON evidence as escaped text, never executable page content."""
+    return _html_text(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False))
+
+
+def _html_review_entry(entry: dict[str, Any], category: str) -> str:
+    """Render one finding or change with escaped expandable evidence."""
+    severity = str(entry.get("severity", "note"))
+    identifier = str(entry.get("rule_id") if category == "finding" else entry.get("kind"))
+    location = entry.get("location") or "workbook"
+    title = entry.get("message") if category == "finding" else identifier
+    metadata = [f"<span><strong>Location:</strong> {_html_text(location)}</span>"]
+    if category == "change":
+        metadata.append(
+            "<span><strong>Downstream formulas:</strong> "
+            f"{_html_text(entry.get('impact_count', 0))}</span>"
+        )
+    return "\n".join(
+        [
+            (
+                f'<article class="review-entry severity-{_html_text(severity)}" '
+                f'data-severity="{_html_text(severity)}">'
+            ),
+            "<h3>"
+            f"<code>{_html_text(identifier)}</code> "
+            f'<span class="severity">{_html_text(severity)}</span>'
+            "</h3>",
+            f"<p>{_html_text(title)}</p>",
+            f'<div class="metadata">{"".join(metadata)}</div>',
+            "<details>",
+            "<summary>Review evidence</summary>",
+            f"<pre>{_html_json(entry)}</pre>",
+            "</details>",
+            "</article>",
+        ]
+    )
+
+
+def _html_review_section(
+    heading: str, entries: list[dict[str, Any]], category: str
+) -> str:
+    """Render an HTML review section or an explicit empty-state note."""
+    content = (
+        "\n".join(_html_review_entry(entry, category) for entry in entries)
+        if entries
+        else '<p class="empty">No entries.</p>'
+    )
+    return "\n".join(
+        [
+            '<section class="review-section">',
+            f"<h2>{_html_text(heading)}</h2>",
+            content,
+            "</section>",
+        ]
+    )
+
+
+def _html_document(
+    title: str,
+    lede: str,
+    cards: Iterable[tuple[str, object]],
+    context: Iterable[str],
+    redactions: Iterable[str],
+    content: str,
+) -> str:
+    """Build a portable report with no external assets or network requests."""
+    card_markup = "\n".join(
+        "\n".join(
+            [
+                '<div class="card">',
+                f"<dt>{_html_text(label)}</dt>",
+                f"<dd>{_html_text(value)}</dd>",
+                "</div>",
+            ]
+        )
+        for label, value in cards
+    )
+    context_markup = "\n".join(f"<p>{_html_text(item)}</p>" for item in context)
+    redaction_items = "\n".join(
+        f"<li>{_html_text(label)}</li>" for label in redactions
+    )
+    redaction_markup = (
+        "\n".join(
+            [
+                '<aside class="redactions">',
+                "<strong>Sharing boundaries are active</strong>",
+                f"<ul>{redaction_items}</ul>",
+                "</aside>",
+            ]
+        )
+        if redaction_items
+        else ""
+    )
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="en">',
+            "<head>",
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            f"<title>{_html_text(title)}</title>",
+            f"<style>\n{_HTML_STYLE}\n</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<header>",
+            f"<h1>{_html_text(title)}</h1>",
+            f'<p class="lede">{_html_text(lede)}</p>',
+            context_markup,
+            f'<dl class="cards">{card_markup}</dl>',
+            redaction_markup,
+            "</header>",
+            '<section class="filters" aria-label="Review filters">',
+            '<label>Search <input id="review-filter" type="search" '
+            'placeholder="Rule, location, formula, or text"></label>',
+            '<label>Severity <select id="severity-filter">',
+            '<option value="all">All severities</option>',
+            '<option value="critical">Critical</option>',
+            '<option value="high">High</option>',
+            '<option value="medium">Medium</option>',
+            '<option value="low">Low</option>',
+            '<option value="note">Note</option>',
+            "</select></label>",
+            '<output id="filter-status" aria-live="polite"></output>',
+            "</section>",
+            content,
+            "</main>",
+            f"<script>\n{_HTML_FILTER_SCRIPT}\n</script>",
+            "</body>",
+            "</html>",
+            "",
+        ]
+    )
+
+
 def _append_report_markdown_sections(
     lines: list[str], payload: dict[str, Any], heading: str
 ) -> None:
@@ -5284,40 +5694,30 @@ def report_to_markdown(
     redact_formula_defined_xlm_environment_information_calls: bool = False,
     redact_formula_environment_information: bool = False,
 ) -> str:
-    policy_findings = list(extra_findings)
-    payload = report.to_dict(policy_findings)
-    if redact_external_workbook_links:
-        payload = redact_external_workbook_link_material(payload)
-    if redact_formula_external_actions:
-        payload = redact_formula_external_action_report_payload(report, payload)
-    if redact_python_in_excel:
-        payload = redact_python_in_excel_report_payload(report, payload)
-    if redact_office_custom_functions:
-        payload = redact_office_custom_function_report_payload(report, payload)
-    if redact_unqualified_runtime_functions:
-        payload = redact_unqualified_runtime_function_report_payload(report, payload)
-    if redact_worksheet_code_resource_registrations:
-        payload = redact_worksheet_code_resource_registration_report_payload(
-            report, payload
-        )
-    if redact_formula_defined_xlm_registrations:
-        payload = redact_formula_defined_xlm_registration_report_payload(
-            report, payload
-        )
-    if redact_formula_defined_xlm_evaluations:
-        payload = redact_formula_defined_xlm_evaluation_report_payload(
-            report, payload
-        )
-    if redact_formula_defined_xlm_actions:
-        payload = redact_formula_defined_xlm_action_report_payload(report, payload)
-    if redact_formula_defined_xlm_get_cell_calls:
-        payload = redact_formula_defined_xlm_get_cell_report_payload(report, payload)
-    if redact_formula_defined_xlm_environment_information_calls:
-        payload = redact_formula_defined_xlm_environment_information_report_payload(
-            report, payload
-        )
-    if redact_formula_environment_information:
-        payload = redact_formula_environment_information_report_payload(report, payload)
+    payload = _report_payload_for_rendering(
+        report,
+        extra_findings,
+        redact_external_workbook_links=redact_external_workbook_links,
+        redact_formula_external_actions=redact_formula_external_actions,
+        redact_python_in_excel=redact_python_in_excel,
+        redact_office_custom_functions=redact_office_custom_functions,
+        redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
+        redact_worksheet_code_resource_registrations=(
+            redact_worksheet_code_resource_registrations
+        ),
+        redact_formula_defined_xlm_registrations=(
+            redact_formula_defined_xlm_registrations
+        ),
+        redact_formula_defined_xlm_evaluations=redact_formula_defined_xlm_evaluations,
+        redact_formula_defined_xlm_actions=redact_formula_defined_xlm_actions,
+        redact_formula_defined_xlm_get_cell_calls=(
+            redact_formula_defined_xlm_get_cell_calls
+        ),
+        redact_formula_defined_xlm_environment_information_calls=(
+            redact_formula_defined_xlm_environment_information_calls
+        ),
+        redact_formula_environment_information=redact_formula_environment_information,
+    )
     summary = payload["summary"]
     lines = [
         "# FormulaFence change report",
@@ -5403,6 +5803,97 @@ def report_to_markdown(
     ]
     _append_report_markdown_sections(lines, payload, "##")
     return "\n".join(lines) + "\n"
+
+
+def report_to_html(
+    report: DiffReport,
+    extra_findings: Iterable[Finding] = (),
+    *,
+    redact_external_workbook_links: bool = False,
+    redact_formula_external_actions: bool = False,
+    redact_python_in_excel: bool = False,
+    redact_office_custom_functions: bool = False,
+    redact_unqualified_runtime_functions: bool = False,
+    redact_worksheet_code_resource_registrations: bool = False,
+    redact_formula_defined_xlm_registrations: bool = False,
+    redact_formula_defined_xlm_evaluations: bool = False,
+    redact_formula_defined_xlm_actions: bool = False,
+    redact_formula_defined_xlm_get_cell_calls: bool = False,
+    redact_formula_defined_xlm_environment_information_calls: bool = False,
+    redact_formula_environment_information: bool = False,
+) -> str:
+    """Render an escaped, filterable, self-contained HTML review artifact."""
+    payload = _report_payload_for_rendering(
+        report,
+        extra_findings,
+        redact_external_workbook_links=redact_external_workbook_links,
+        redact_formula_external_actions=redact_formula_external_actions,
+        redact_python_in_excel=redact_python_in_excel,
+        redact_office_custom_functions=redact_office_custom_functions,
+        redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
+        redact_worksheet_code_resource_registrations=(
+            redact_worksheet_code_resource_registrations
+        ),
+        redact_formula_defined_xlm_registrations=(
+            redact_formula_defined_xlm_registrations
+        ),
+        redact_formula_defined_xlm_evaluations=redact_formula_defined_xlm_evaluations,
+        redact_formula_defined_xlm_actions=redact_formula_defined_xlm_actions,
+        redact_formula_defined_xlm_get_cell_calls=(
+            redact_formula_defined_xlm_get_cell_calls
+        ),
+        redact_formula_defined_xlm_environment_information_calls=(
+            redact_formula_defined_xlm_environment_information_calls
+        ),
+        redact_formula_environment_information=redact_formula_environment_information,
+    )
+    summary = payload["summary"]
+    redactions = _active_redaction_labels(
+        redact_external_workbook_links=redact_external_workbook_links,
+        redact_formula_external_actions=redact_formula_external_actions,
+        redact_python_in_excel=redact_python_in_excel,
+        redact_office_custom_functions=redact_office_custom_functions,
+        redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
+        redact_worksheet_code_resource_registrations=(
+            redact_worksheet_code_resource_registrations
+        ),
+        redact_formula_defined_xlm_registrations=(
+            redact_formula_defined_xlm_registrations
+        ),
+        redact_formula_defined_xlm_evaluations=redact_formula_defined_xlm_evaluations,
+        redact_formula_defined_xlm_actions=redact_formula_defined_xlm_actions,
+        redact_formula_defined_xlm_get_cell_calls=(
+            redact_formula_defined_xlm_get_cell_calls
+        ),
+        redact_formula_defined_xlm_environment_information_calls=(
+            redact_formula_defined_xlm_environment_information_calls
+        ),
+        redact_formula_environment_information=redact_formula_environment_information,
+    )
+    content = "\n".join(
+        [
+            _html_review_section("Findings", payload["findings"], "finding"),
+            _html_review_section("Semantic changes", payload["changes"], "change"),
+        ]
+    )
+    return _html_document(
+        "FormulaFence change report",
+        (
+            "A portable local review artifact. Use the filters to narrow findings and "
+            "changes; expand an entry for its complete escaped review evidence."
+        ),
+        (
+            ("Changes", summary["change_count"]),
+            ("Findings", summary["finding_count"]),
+            ("Highest severity", summary["highest_severity"]),
+        ),
+        (
+            f"Baseline: {payload['before']['path']}",
+            f"Candidate: {payload['after']['path']}",
+        ),
+        redactions,
+        content,
+    )
 
 
 _SARIF_LEVELS = {
@@ -5587,43 +6078,29 @@ def portfolio_to_markdown(
     redact_formula_environment_information: bool = False,
 ) -> str:
     """Render a complete multi-workbook review without absolute filesystem paths."""
-    payload = report.to_dict()
-    if redact_external_workbook_links:
-        payload = redact_external_workbook_link_material(payload)
-    if redact_formula_external_actions:
-        payload = redact_formula_external_action_portfolio_payload(report, payload)
-    if redact_python_in_excel:
-        payload = redact_python_in_excel_portfolio_payload(report, payload)
-    if redact_office_custom_functions:
-        payload = redact_office_custom_function_portfolio_payload(report, payload)
-    if redact_unqualified_runtime_functions:
-        payload = redact_unqualified_runtime_function_portfolio_payload(report, payload)
-    if redact_worksheet_code_resource_registrations:
-        payload = redact_worksheet_code_resource_registration_portfolio_payload(
-            report, payload
-        )
-    if redact_formula_defined_xlm_registrations:
-        payload = redact_formula_defined_xlm_registration_portfolio_payload(
-            report, payload
-        )
-    if redact_formula_defined_xlm_evaluations:
-        payload = redact_formula_defined_xlm_evaluation_portfolio_payload(
-            report, payload
-        )
-    if redact_formula_defined_xlm_actions:
-        payload = redact_formula_defined_xlm_action_portfolio_payload(report, payload)
-    if redact_formula_defined_xlm_get_cell_calls:
-        payload = redact_formula_defined_xlm_get_cell_portfolio_payload(
-            report, payload
-        )
-    if redact_formula_defined_xlm_environment_information_calls:
-        payload = redact_formula_defined_xlm_environment_information_portfolio_payload(
-            report, payload
-        )
-    if redact_formula_environment_information:
-        payload = redact_formula_environment_information_portfolio_payload(
-            report, payload
-        )
+    payload = _portfolio_payload_for_rendering(
+        report,
+        redact_external_workbook_links=redact_external_workbook_links,
+        redact_formula_external_actions=redact_formula_external_actions,
+        redact_python_in_excel=redact_python_in_excel,
+        redact_office_custom_functions=redact_office_custom_functions,
+        redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
+        redact_worksheet_code_resource_registrations=(
+            redact_worksheet_code_resource_registrations
+        ),
+        redact_formula_defined_xlm_registrations=(
+            redact_formula_defined_xlm_registrations
+        ),
+        redact_formula_defined_xlm_evaluations=redact_formula_defined_xlm_evaluations,
+        redact_formula_defined_xlm_actions=redact_formula_defined_xlm_actions,
+        redact_formula_defined_xlm_get_cell_calls=(
+            redact_formula_defined_xlm_get_cell_calls
+        ),
+        redact_formula_defined_xlm_environment_information_calls=(
+            redact_formula_defined_xlm_environment_information_calls
+        ),
+        redact_formula_environment_information=redact_formula_environment_information,
+    )
     summary = payload["summary"]
     lines = [
         "# FormulaFence portfolio report",
@@ -5767,6 +6244,133 @@ def portfolio_to_markdown(
         _append_cross_workbook_impact_samples(lines, entry, "####")
         lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def portfolio_to_html(
+    report: PortfolioReport,
+    *,
+    redact_external_workbook_links: bool = False,
+    redact_formula_external_actions: bool = False,
+    redact_python_in_excel: bool = False,
+    redact_office_custom_functions: bool = False,
+    redact_unqualified_runtime_functions: bool = False,
+    redact_worksheet_code_resource_registrations: bool = False,
+    redact_formula_defined_xlm_registrations: bool = False,
+    redact_formula_defined_xlm_evaluations: bool = False,
+    redact_formula_defined_xlm_actions: bool = False,
+    redact_formula_defined_xlm_get_cell_calls: bool = False,
+    redact_formula_defined_xlm_environment_information_calls: bool = False,
+    redact_formula_environment_information: bool = False,
+) -> str:
+    """Render an escaped, filterable HTML review for a workbook portfolio."""
+    payload = _portfolio_payload_for_rendering(
+        report,
+        redact_external_workbook_links=redact_external_workbook_links,
+        redact_formula_external_actions=redact_formula_external_actions,
+        redact_python_in_excel=redact_python_in_excel,
+        redact_office_custom_functions=redact_office_custom_functions,
+        redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
+        redact_worksheet_code_resource_registrations=(
+            redact_worksheet_code_resource_registrations
+        ),
+        redact_formula_defined_xlm_registrations=(
+            redact_formula_defined_xlm_registrations
+        ),
+        redact_formula_defined_xlm_evaluations=redact_formula_defined_xlm_evaluations,
+        redact_formula_defined_xlm_actions=redact_formula_defined_xlm_actions,
+        redact_formula_defined_xlm_get_cell_calls=(
+            redact_formula_defined_xlm_get_cell_calls
+        ),
+        redact_formula_defined_xlm_environment_information_calls=(
+            redact_formula_defined_xlm_environment_information_calls
+        ),
+        redact_formula_environment_information=redact_formula_environment_information,
+    )
+    summary = payload["summary"]
+    redactions = _active_redaction_labels(
+        redact_external_workbook_links=redact_external_workbook_links,
+        redact_formula_external_actions=redact_formula_external_actions,
+        redact_python_in_excel=redact_python_in_excel,
+        redact_office_custom_functions=redact_office_custom_functions,
+        redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
+        redact_worksheet_code_resource_registrations=(
+            redact_worksheet_code_resource_registrations
+        ),
+        redact_formula_defined_xlm_registrations=(
+            redact_formula_defined_xlm_registrations
+        ),
+        redact_formula_defined_xlm_evaluations=redact_formula_defined_xlm_evaluations,
+        redact_formula_defined_xlm_actions=redact_formula_defined_xlm_actions,
+        redact_formula_defined_xlm_get_cell_calls=(
+            redact_formula_defined_xlm_get_cell_calls
+        ),
+        redact_formula_defined_xlm_environment_information_calls=(
+            redact_formula_defined_xlm_environment_information_calls
+        ),
+        redact_formula_environment_information=redact_formula_environment_information,
+    )
+    workbook_sections: list[str] = []
+    for entry in payload["workbooks"]:
+        entry_summary = entry["summary"]
+        workbook_sections.append(
+            "\n".join(
+                [
+                    '<section class="workbook">',
+                    f"<h2><code>{_html_text(entry['path'])}</code></h2>",
+                    (
+                        "<p>"
+                        f"Status: <strong>{_html_text(entry['status'])}</strong> · "
+                        f"Changes: {_html_text(entry_summary['change_count'])} · "
+                        f"Findings: {_html_text(entry_summary['finding_count'])} · "
+                        "Highest severity: "
+                        f"{_html_text(entry_summary['highest_severity'])}"
+                        "</p>"
+                    ),
+                    _html_review_section("Findings", entry["findings"], "finding"),
+                    _html_review_section(
+                        "Semantic changes", entry["changes"], "change"
+                    ),
+                    "</section>",
+                ]
+            )
+        )
+    content = "\n".join(
+        ["<h2>Workbook details</h2>", *workbook_sections]
+        if workbook_sections
+        else ['<p class="empty">No supported workbooks were found.</p>']
+    )
+    return _html_document(
+        "FormulaFence portfolio report",
+        (
+            "A portable local review artifact for recursively matched workbooks. "
+            "Use the filters to narrow findings and changes across the portfolio."
+        ),
+        (
+            ("Matched workbooks", summary["matched_workbook_count"]),
+            ("Semantic changes", summary["change_count"]),
+            ("Findings", summary["finding_count"]),
+            ("Highest severity", summary["highest_severity"]),
+        ),
+        (
+            (
+                "Baseline / candidate workbooks: "
+                f"{payload['before']['workbook_count']} / "
+                f"{payload['after']['workbook_count']}"
+            ),
+            (
+                "Added / removed / unreadable: "
+                f"{summary['added_workbook_count']} / "
+                f"{summary['removed_workbook_count']} / "
+                f"{summary['unreadable_workbook_count']}"
+            ),
+            (
+                "Cross-workbook impact analysis: "
+                f"{'incomplete' if summary['cross_workbook_impact_incomplete'] else 'complete'}"
+            ),
+        ),
+        redactions,
+        content,
+    )
 
 
 def portfolio_to_sarif(

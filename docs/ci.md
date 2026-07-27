@@ -8,9 +8,11 @@ same build job.
 
 FormulaFence ships as a root composite Action. It installs the selected Action
 source by default, generates the report inside `GITHUB_WORKSPACE`, adds a
-Markdown report to the job summary, and uploads that report before it returns a
-FormulaFence failure code. This means a policy failure still leaves evidence in
-the workflow run without needing an `if: always()` copy-paste wrapper.
+Markdown report to the job summary when that format is selected, and uploads the
+report before it returns a FormulaFence failure code. Other formats are linked
+by path in the summary and available as the artifact. This means a policy
+failure still leaves evidence in the workflow run without needing an
+`if: always()` copy-paste wrapper.
 
 ```yaml
 name: Spreadsheet controls
@@ -30,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.109.0
+        uses: SybilGambleyyu/formulafence@v0.110.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -42,7 +44,7 @@ jobs:
 
 `baseline` and `candidate` are required. When both are files, supplying
 `policy` selects `formulafence check`; omitting it selects `formulafence diff`.
-`format` accepts `markdown`, `json`, or `sarif`; `fail-on` accepts the CLI's
+`format` accepts `markdown`, `html`, `json`, or `sarif`; `fail-on` accepts the CLI's
 severity values.
 The Action exposes `steps.formulafence.outputs.report-path` and
 `steps.formulafence.outputs.exit-code`. It confines the report plus every
@@ -62,6 +64,14 @@ For systems that ingest SARIF, set `format: sarif` and consume the path output
 with the repository's chosen SARIF uploader. FormulaFence uses logical
 locations such as `Dashboard!B12`; consumers that do not understand Excel
 coordinates can still show the workbook path, rule, and message.
+
+For a reviewer-facing artifact, set `format: html` and use an `.html` output
+path. The generated page is self-contained: it has inline styles, local text
+and severity filters, and expandable escaped evidence, with no remote assets
+or browser network requests. The Action intentionally does not embed HTML in
+the job summary; download or open the uploaded artifact instead. The same
+sharing-redaction inputs apply before an HTML artifact leaves the trusted review
+boundary.
 
 ## Shared external-workbook-link, formula-action, Python-in-Excel, custom-function, runtime, registration, XLM-evaluation, XLM-action, XLM-GET.CELL, XLM-environment-information, and native environment-information artifacts
 
@@ -258,7 +268,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.109.0
+  uses: SybilGambleyyu/formulafence@v0.110.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -362,7 +372,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.109.0/formulafence-0.109.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.110.0/formulafence-0.110.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.110.0 — 2026-07-26
+
+- Add `--format html` for `diff`, `check`, and `portfolio`. It produces one
+  self-contained review artifact with inline styles, local text/severity
+  filters, expandable complete evidence, and no remote assets or network
+  requests.
+- Escape every workbook-derived value before it enters HTML, so evidence remains
+  text rather than executable markup. The report preserves the existing
+  deterministic JSON data model and visible finding/change semantics.
+- Apply every existing output-only sharing boundary to HTML, including external
+  workbook links, formula actions, Python-in-Excel, custom/runtime functions,
+  worksheet/formula-defined registrations, XLM evaluation/action/GET.CELL/
+  environment-information material, and native `CELL`/`INFO`/`SHEET`/`SHEETS`
+  material. Active boundaries remain explicit in the artifact.
+- Extend the composite GitHub Action's `format` input to accept `html`. HTML is
+  uploaded as the configured artifact and referenced from the job summary rather
+  than embedded into it.
+- Add direct escaping, all-sharing-boundary CLI, `check`, portfolio, and
+  composite-Action regression coverage.
+
 ## 0.109.0 — 2026-07-26
 
 - Add opt-in `--redact-formula-environment-information` rendering for `diff`,

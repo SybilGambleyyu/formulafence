@@ -5,6 +5,34 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Self-contained HTML review artifacts — 2026-07-26
+
+FormulaFence 0.110.0 adds `--format html` for `diff`, `check`, and `portfolio`.
+It is a deliberately local review artifact rather than a hosted viewer: the
+page contains inline CSS, a fixed text/severity filtering script, and escaped
+expandable evidence. It has no remote assets or report-initiated network
+requests. This keeps an uploaded CI artifact useful to reviewers without
+requiring a service that receives workbook data.
+
+The renderer starts from the same deterministic report payload as Markdown and
+applies every existing output-only sharing boundary before inserting anything
+into the page. A hostile workbook-derived string is escaped in both the summary
+and expanded JSON evidence, so it cannot become a report tag or script. The
+native environment-information fixture also caught an incidental static
+stylesheet word matching a controlled marker; that token was removed so exact
+redaction scans remain meaningful instead of merely hiding workbook evidence.
+
+The completed source tree passed **703 tests in 104.00 seconds**, including
+direct escaped-evidence tests, every sharing-redaction CLI path, HTML `check`
+policy evidence, HTML portfolios, and the composite Action contract. Ruff,
+`git diff --check`, Python bytecode compilation, and Action shell syntax checks
+were clean. A release-candidate wheel and source distribution passed `twine
+check`. The wheel was installed with declared dependencies into a fresh
+environment, reported `FormulaFence 0.110.0`, retained controlled markers in a
+default HTML diff, removed them from redacted `check` and portfolio HTML, and
+preserved `FF072` plus `FFP072` with a policy exit code of `1`. Final artifact
+digests are published with the GitHub release.
+
 ## Shared native environment-information report redaction — 2026-07-26
 
 FormulaFence 0.109.0 adds the separate, opt-in

@@ -51,6 +51,7 @@ from formulafence.output import (
     redact_unqualified_runtime_function_report_payload,
     redact_worksheet_code_resource_registration_material,
     redact_worksheet_code_resource_registration_report_payload,
+    report_to_html,
     report_to_markdown,
     report_to_sarif,
 )
@@ -518,6 +519,30 @@ def test_formula_to_value_traces_cross_sheet_downstream_impact(tmp_path) -> None
     ]
     assert any(finding.rule_id == "FF001" for finding in report.findings)
     assert "`Model!B2` → `Model!C2` → `Dashboard!B12`" in report_to_markdown(report)
+
+
+def test_html_report_is_self_contained_filterable_and_escapes_evidence(tmp_path) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    rewrite(
+        candidate,
+        lambda workbook: setattr(
+            workbook["Model"]["B2"], "value", "<script>alert(1)</script>"
+        ),
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    rendered = report_to_html(report)
+
+    assert rendered.startswith("<!doctype html>")
+    assert 'id="review-filter"' in rendered
+    assert 'id="severity-filter"' in rendered
+    assert "FormulaFence change report" in rendered
+    assert "FF001" in rendered
+    assert "<script>alert(1)</script>" not in rendered
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
+    assert "<script src=" not in rendered
+    assert "<link rel=" not in rendered
 
 
 def test_diff_detects_pattern_break_and_static_hazards(tmp_path) -> None:
@@ -6874,6 +6899,9 @@ def test_native_environment_information_report_redaction_hides_calls_and_inputs(
     redacted_markdown = report_to_markdown(
         report, redact_formula_environment_information=True
     )
+    redacted_html = report_to_html(
+        report, redact_formula_environment_information=True
+    )
     redacted_sarif = report_to_sarif(
         report, redact_formula_environment_information=True
     )
@@ -6881,8 +6909,10 @@ def test_native_environment_information_report_redaction_hides_calls_and_inputs(
         "Formula environment-information material:** redacted for sharing"
         in redacted_markdown
     )
+    assert "Sharing boundaries are active" in redacted_html
+    assert FORMULA_ENVIRONMENT_INFORMATION_REDACTION in redacted_html
     assert "FF072" in json.dumps(redacted_sarif)
-    for artifact in (redacted_markdown, json.dumps(redacted_sarif)):
+    for artifact in (redacted_markdown, redacted_html, json.dumps(redacted_sarif)):
         assert all(value not in artifact for value in sensitive_values)
 
     for environment_formula in (

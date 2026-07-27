@@ -12,6 +12,7 @@ from formulafence.diff import compare_snapshots, report_severities
 from formulafence.models import SEVERITY_ORDER, FormulaFenceError
 from formulafence.output import (
     as_json,
+    portfolio_to_html,
     portfolio_to_markdown,
     portfolio_to_sarif,
     profile_to_markdown,
@@ -38,6 +39,7 @@ from formulafence.output import (
     redact_unqualified_runtime_function_report_payload,
     redact_worksheet_code_resource_registration_portfolio_payload,
     redact_worksheet_code_resource_registration_report_payload,
+    report_to_html,
     report_to_markdown,
     report_to_sarif,
 )
@@ -239,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
     diff = commands.add_parser("diff", help="Compare two workbooks semantically")
     diff.add_argument("before", type=Path, help="Approved or baseline workbook")
     diff.add_argument("after", type=Path, help="Candidate workbook")
-    _add_output_arguments(diff, ("json", "markdown", "sarif"))
+    _add_output_arguments(diff, ("json", "markdown", "html", "sarif"))
     _add_external_workbook_link_redaction_argument(diff)
     _add_formula_external_action_redaction_argument(diff)
     _add_python_in_excel_redaction_argument(diff)
@@ -263,7 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("before", type=Path, help="Approved or baseline workbook")
     check.add_argument("after", type=Path, help="Candidate workbook")
     check.add_argument("--policy", required=True, type=Path, help="Path to formulafence.yml")
-    _add_output_arguments(check, ("json", "markdown", "sarif"))
+    _add_output_arguments(check, ("json", "markdown", "html", "sarif"))
     _add_external_workbook_link_redaction_argument(check)
     _add_formula_external_action_redaction_argument(check)
     _add_python_in_excel_redaction_argument(check)
@@ -308,7 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Fail closed after this many static cross-workbook dependency graph states"
         ),
     )
-    _add_output_arguments(portfolio, ("json", "markdown", "sarif"))
+    _add_output_arguments(portfolio, ("json", "markdown", "html", "sarif"))
     _add_external_workbook_link_redaction_argument(portfolio)
     _add_formula_external_action_redaction_argument(portfolio)
     _add_python_in_excel_redaction_argument(portfolio)
@@ -427,6 +429,39 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
                 report, payload
             )
         content = as_json(payload)
+    elif arguments.format == "html":
+        content = report_to_html(
+            report,
+            policy_findings,
+            redact_external_workbook_links=arguments.redact_external_workbook_links,
+            redact_formula_external_actions=arguments.redact_formula_external_actions,
+            redact_python_in_excel=arguments.redact_python_in_excel,
+            redact_office_custom_functions=arguments.redact_office_custom_functions,
+            redact_unqualified_runtime_functions=(
+                arguments.redact_unqualified_runtime_functions
+            ),
+            redact_worksheet_code_resource_registrations=(
+                arguments.redact_worksheet_code_resource_registrations
+            ),
+            redact_formula_defined_xlm_registrations=(
+                arguments.redact_formula_defined_xlm_registrations
+            ),
+            redact_formula_defined_xlm_evaluations=(
+                arguments.redact_formula_defined_xlm_evaluations
+            ),
+            redact_formula_defined_xlm_actions=(
+                arguments.redact_formula_defined_xlm_actions
+            ),
+            redact_formula_defined_xlm_get_cell_calls=(
+                arguments.redact_formula_defined_xlm_get_cell_calls
+            ),
+            redact_formula_defined_xlm_environment_information_calls=(
+                arguments.redact_formula_defined_xlm_environment_information_calls
+            ),
+            redact_formula_environment_information=(
+                arguments.redact_formula_environment_information
+            ),
+        )
     elif arguments.format == "sarif":
         content = as_json(
             report_to_sarif(
@@ -564,6 +599,38 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
                 report, payload
             )
         content = as_json(payload)
+    elif arguments.format == "html":
+        content = portfolio_to_html(
+            report,
+            redact_external_workbook_links=arguments.redact_external_workbook_links,
+            redact_formula_external_actions=arguments.redact_formula_external_actions,
+            redact_python_in_excel=arguments.redact_python_in_excel,
+            redact_office_custom_functions=arguments.redact_office_custom_functions,
+            redact_unqualified_runtime_functions=(
+                arguments.redact_unqualified_runtime_functions
+            ),
+            redact_worksheet_code_resource_registrations=(
+                arguments.redact_worksheet_code_resource_registrations
+            ),
+            redact_formula_defined_xlm_registrations=(
+                arguments.redact_formula_defined_xlm_registrations
+            ),
+            redact_formula_defined_xlm_evaluations=(
+                arguments.redact_formula_defined_xlm_evaluations
+            ),
+            redact_formula_defined_xlm_actions=(
+                arguments.redact_formula_defined_xlm_actions
+            ),
+            redact_formula_defined_xlm_get_cell_calls=(
+                arguments.redact_formula_defined_xlm_get_cell_calls
+            ),
+            redact_formula_defined_xlm_environment_information_calls=(
+                arguments.redact_formula_defined_xlm_environment_information_calls
+            ),
+            redact_formula_environment_information=(
+                arguments.redact_formula_environment_information
+            ),
+        )
     elif arguments.format == "sarif":
         content = as_json(
             portfolio_to_sarif(

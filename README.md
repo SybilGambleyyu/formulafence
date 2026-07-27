@@ -8,8 +8,8 @@ is shared or merged.
 It never executes formulas or macros, and it does not upload workbook contents.
 
 > Status: early alpha. The first release supports `.xlsx` and `.xlsm` inspection
-> with formula-aware diffs, dependency impact, policy checks, Markdown/JSON/SARIF
-> reports, and deterministic evidence metadata.
+> with formula-aware diffs, dependency impact, policy checks, Markdown/HTML/JSON/
+> SARIF reports, and deterministic evidence metadata.
 
 ## Why
 
@@ -40,13 +40,16 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.109.0/formulafence-0.109.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.110.0/formulafence-0.110.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
 
 # Enforce a policy in CI (non-zero when a rule fails)
 formulafence check baseline.xlsx candidate.xlsx --policy formulafence.yml --format sarif --output results.sarif
+
+# Self-contained browser review artifact
+formulafence check baseline.xlsx candidate.xlsx --policy formulafence.yml --format html --output review.html
 
 # Compare a recursively matched portfolio of workbooks.
 formulafence portfolio approved-models build/models --policy formulafence.yml --output portfolio-report.md
@@ -59,8 +62,9 @@ for the current version.
 ### GitHub Actions
 
 The public composite Action installs FormulaFence from the selected Action
-source, writes the report inside the workspace, adds a Markdown report to the job summary, and
-uploads the report before it re-emits a policy failure. It accepts a baseline,
+source, writes the report inside the workspace, embeds Markdown in the job
+summary when requested, and uploads the report before it re-emits a policy
+failure. It accepts a baseline,
 candidate, optional policy, report format, and output path; matching directory
 inputs invoke the portfolio mode. Its `report-path` and `exit-code` outputs are
 available to later steps. Use a tagged release for readability and pin to an
@@ -71,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.109.0
+  uses: SybilGambleyyu/formulafence@v0.110.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -79,13 +83,32 @@ immutable commit in a production workflow.
     output: reports/formulafence.md
 ```
 
-See [the CI integration guide](docs/ci.md) for SARIF, artifact, and
-preinstalled-package options.
+See [the CI integration guide](docs/ci.md) for browser-review, SARIF, artifact,
+and preinstalled-package options.
+
+### Review in a browser
+
+`--format html` creates one portable review page for `diff`, `check`, or
+`portfolio`. It has local text/severity filters and expandable complete evidence
+for every finding and semantic change:
+
+```bash
+formulafence check baseline.xlsx candidate.xlsx \
+  --policy formulafence.yml \
+  --format html \
+  --output reports/formulafence-review.html
+```
+
+The page contains only inline styles and a small local filtering script; it
+does not fetch remote assets or send workbook content anywhere. Workbook-derived
+text is HTML-escaped before rendering. The same sharing-redaction switches work
+with HTML, so apply them before uploading a report outside the trusted review
+boundary.
 
 ### Sharing reports with external-workbook links
 
 Ordinary diff reports deliberately retain full local reviewer evidence. When a
-JSON, Markdown, or SARIF artifact must leave that trusted review boundary, add
+JSON, Markdown, HTML, or SARIF artifact must leave that trusted review boundary, add
 `--redact-external-workbook-links` to `diff`, `check`, or `portfolio`:
 
 ```bash
@@ -426,7 +449,7 @@ DLL-access route.
 
 `formulafence portfolio BASELINE_DIRECTORY CANDIDATE_DIRECTORY` recursively
 matches supported `.xlsx` and `.xlsm` files by their relative paths, then
-produces one deterministic JSON, Markdown, or SARIF review artifact. A path
+produces one deterministic JSON, Markdown, HTML, or SARIF review artifact. A path
 present on only one side emits high-severity `FF077`; enable
 `no_portfolio_membership_changes` to fail it as `FFP077`. FormulaFence never
 guesses renames, so a move remains a visible removal plus addition.
@@ -615,7 +638,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Portfolio control | Recursive, relative-path workbook matching with per-file semantic reports, explicit additions/removals, bounded static cross-workbook impact evidence, unreadable-file evidence, bounded inventory/traversal, and consolidated JSON/Markdown/SARIF for CI |
+| Portfolio control | Recursive, relative-path workbook matching with per-file semantic reports, explicit additions/removals, bounded static cross-workbook impact evidence, unreadable-file evidence, bounded inventory/traversal, and consolidated JSON/Markdown/HTML/SARIF for CI |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function candidates, worksheet and formula-defined code-resource registration calls, formula-defined XLM `REGISTER`/`EVALUATE` calls, XLM macro-sheet programs and automatic-macro bindings, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | External-workbook link surfaces | Private static ledger across worksheet formulas, defined names, data-validation criteria, and standard/ChartEx chart formulas; catches same-location source or target swaps without evaluating, resolving, or exposing endpoint material |

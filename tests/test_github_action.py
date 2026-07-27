@@ -186,6 +186,42 @@ def test_action_preserves_a_policy_failure_until_after_report_generation(
     assert "\n**Report:" in summary_text
 
 
+def test_action_writes_a_self_contained_html_review_report(tmp_path: Path) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    policy = tmp_path / "formulafence.yml"
+    _workbook(baseline, "=1+1")
+    _workbook(candidate, 2)
+    policy.write_text(
+        "version: 1\nrules:\n  no_formula_to_value: true\n", encoding="utf-8"
+    )
+
+    result, outputs, summary = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        policy=policy,
+        report_format="html",
+        output="reports/formulafence.html",
+    )
+
+    assert result.returncode == 0
+    assert "exit-code=1" in outputs.read_text(encoding="utf-8")
+    assert "report-written=true" in outputs.read_text(encoding="utf-8")
+    rendered = (tmp_path / "reports" / "formulafence.html").read_text(
+        encoding="utf-8"
+    )
+    assert rendered.startswith("<!doctype html>")
+    assert 'id="review-filter"' in rendered
+    assert 'id="severity-filter"' in rendered
+    assert "FF001" in rendered
+    assert "FFP001" in rendered
+    assert "<script src=" not in rendered
+    assert "available at the path above and as the configured artifact" in (
+        summary.read_text(encoding="utf-8")
+    )
+
+
 def test_action_refuses_an_output_outside_the_workspace(tmp_path: Path) -> None:
     baseline = tmp_path / "approved.xlsx"
     candidate = tmp_path / "candidate.xlsx"

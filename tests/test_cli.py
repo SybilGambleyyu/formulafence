@@ -47,6 +47,14 @@ from .helpers import (
 )
 
 
+def _assert_html_review_artifact(rendered: str) -> None:
+    assert rendered.startswith("<!doctype html>")
+    assert 'id="review-filter"' in rendered
+    assert 'id="severity-filter"' in rendered
+    assert "<script src=" not in rendered
+    assert "<link rel=" not in rendered
+
+
 def test_check_emits_sarif_and_fails_for_a_policy_violation(tmp_path) -> None:
     baseline = make_model(tmp_path / "baseline.xlsx")
     candidate = make_model(tmp_path / "candidate.xlsx")
@@ -139,7 +147,12 @@ def test_cli_can_redact_external_workbook_link_material_from_shared_reports(tmp_
     assert baseline_marker in default_rendered
     assert candidate_marker in default_rendered
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"redacted.{suffix}"
         assert (
             main(
@@ -159,7 +172,9 @@ def test_cli_can_redact_external_workbook_link_material_from_shared_reports(tmp_
         rendered = output.read_text(encoding="utf-8")
         assert baseline_marker not in rendered
         assert candidate_marker not in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert "External-workbook link material:** redacted for sharing" in rendered
         else:
             assert "external-workbook link material redacted" in rendered
@@ -198,7 +213,12 @@ def test_cli_can_redact_external_workbook_link_material_from_shared_reports(tmp_
     candidate_directory.mkdir()
     external_model(baseline_directory / "model.xlsx", baseline_marker)
     external_model(candidate_directory / "model.xlsx", candidate_marker)
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"redacted-portfolio.{suffix}"
         assert (
             main(
@@ -218,7 +238,9 @@ def test_cli_can_redact_external_workbook_link_material_from_shared_reports(tmp_
         rendered = output.read_text(encoding="utf-8")
         assert baseline_marker not in rendered
         assert candidate_marker not in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert "External-workbook link material:** redacted for sharing" in rendered
         else:
             assert "external-workbook link material redacted" in rendered
@@ -252,7 +274,12 @@ def test_cli_can_redact_formula_external_action_and_dde_material_from_shared_rep
     assert action_baseline_marker in default_rendered
     assert action_candidate_marker in default_rendered
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"action-redacted.{suffix}"
         assert (
             main(
@@ -273,7 +300,9 @@ def test_cli_can_redact_formula_external_action_and_dde_material_from_shared_rep
         assert action_baseline_marker not in rendered
         assert action_candidate_marker not in rendered
         assert "FF064" in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert "Formula external-action / DDE material:** redacted for sharing" in rendered
         elif report_format == "json":
             assert "formula external-action material redacted" in rendered
@@ -430,7 +459,12 @@ def test_cli_can_redact_python_in_excel_material_from_shared_reports(tmp_path) -
     ):
         assert sensitive_value in default_rendered
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"python-redacted.{suffix}"
         assert (
             main(
@@ -456,7 +490,9 @@ def test_cli_can_redact_python_in_excel_material_from_shared_reports(tmp_path) -
         ):
             assert sensitive_value not in rendered
         assert "FF065" in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert "Python-in-Excel material:** redacted for sharing" in rendered
         elif report_format == "json":
             assert "Python-in-Excel material redacted" in rendered
@@ -566,7 +602,12 @@ def test_cli_can_redact_office_custom_function_material_from_shared_reports(
     default_rendered = default_json.read_text(encoding="utf-8")
     assert all(value in default_rendered for value in sensitive_values)
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"custom-function-redacted.{suffix}"
         assert (
             main(
@@ -586,7 +627,9 @@ def test_cli_can_redact_office_custom_function_material_from_shared_reports(
         rendered = output.read_text(encoding="utf-8")
         assert all(value not in rendered for value in sensitive_values)
         assert "FF066" in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert "Office custom-function material:** redacted for sharing" in rendered
         elif report_format == "json":
             assert "Office custom-function material redacted" in rendered
@@ -682,7 +725,12 @@ def test_cli_can_redact_unqualified_runtime_function_material_from_shared_report
     default_rendered = default_json.read_text(encoding="utf-8")
     assert all(value in default_rendered for value in sensitive_values)
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"runtime-function-redacted.{suffix}"
         assert (
             main(
@@ -702,7 +750,9 @@ def test_cli_can_redact_unqualified_runtime_function_material_from_shared_report
         rendered = output.read_text(encoding="utf-8")
         assert all(value not in rendered for value in sensitive_values)
         assert "FF075" in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert "Unqualified runtime-function material:** redacted for sharing" in rendered
         elif report_format == "json":
             assert "unqualified runtime-function material redacted" in rendered
@@ -804,7 +854,12 @@ def test_cli_can_redact_worksheet_code_resource_registration_material(
     default_rendered = default_json.read_text(encoding="utf-8")
     assert all(value in default_rendered for value in sensitive_values)
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"registration-redacted.{suffix}"
         assert (
             main(
@@ -824,7 +879,9 @@ def test_cli_can_redact_worksheet_code_resource_registration_material(
         rendered = output.read_text(encoding="utf-8")
         assert all(value not in rendered for value in sensitive_values)
         assert "FF067" in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert (
                 "Worksheet code-resource registration material:** redacted for sharing"
                 in rendered
@@ -929,7 +986,12 @@ def test_cli_can_redact_formula_defined_xlm_registration_material(tmp_path) -> N
     default_rendered = default_json.read_text(encoding="utf-8")
     assert all(value in default_rendered for value in sensitive_values)
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"xlm-registration-redacted.{suffix}"
         assert (
             main(
@@ -949,7 +1011,9 @@ def test_cli_can_redact_formula_defined_xlm_registration_material(tmp_path) -> N
         rendered = output.read_text(encoding="utf-8")
         assert all(value not in rendered for value in sensitive_values)
         assert "FF068" in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert (
                 "Formula-defined XLM registration material:** redacted for sharing"
                 in rendered
@@ -1050,7 +1114,12 @@ def test_cli_can_redact_formula_defined_xlm_evaluation_material(tmp_path) -> Non
     default_rendered = default_json.read_text(encoding="utf-8")
     assert all(value in default_rendered for value in sensitive_values)
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"xlm-evaluation-redacted.{suffix}"
         assert (
             main(
@@ -1070,7 +1139,9 @@ def test_cli_can_redact_formula_defined_xlm_evaluation_material(tmp_path) -> Non
         rendered = output.read_text(encoding="utf-8")
         assert all(value not in rendered for value in sensitive_values)
         assert "FF069" in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert (
                 "Formula-defined XLM evaluation material:** redacted for sharing"
                 in rendered
@@ -1167,7 +1238,12 @@ def test_cli_can_redact_formula_defined_xlm_action_material(tmp_path) -> None:
     default_rendered = default_json.read_text(encoding="utf-8")
     assert all(value in default_rendered for value in sensitive_values)
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"xlm-action-redacted.{suffix}"
         assert (
             main(
@@ -1187,7 +1263,9 @@ def test_cli_can_redact_formula_defined_xlm_action_material(tmp_path) -> None:
         rendered = output.read_text(encoding="utf-8")
         assert all(value not in rendered for value in sensitive_values)
         assert "FF073" in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert "Formula-defined XLM action material:** redacted for sharing" in rendered
         elif report_format == "json":
             assert "formula-defined XLM action material redacted" in rendered
@@ -1281,7 +1359,12 @@ def test_cli_can_redact_formula_defined_xlm_get_cell_material(tmp_path) -> None:
     default_rendered = default_json.read_text(encoding="utf-8")
     assert all(value in default_rendered for value in sensitive_values)
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"xlm-get-cell-redacted.{suffix}"
         assert (
             main(
@@ -1301,7 +1384,9 @@ def test_cli_can_redact_formula_defined_xlm_get_cell_material(tmp_path) -> None:
         rendered = output.read_text(encoding="utf-8")
         assert all(value not in rendered for value in sensitive_values)
         assert "FF070" in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert (
                 "Formula-defined XLM GET.CELL material:** redacted for sharing"
                 in rendered
@@ -1404,7 +1489,12 @@ def test_cli_can_redact_formula_defined_xlm_environment_information_material(
     default_rendered = default_json.read_text(encoding="utf-8")
     assert all(value in default_rendered for value in sensitive_values)
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"xlm-environment-redacted.{suffix}"
         assert (
             main(
@@ -1424,7 +1514,9 @@ def test_cli_can_redact_formula_defined_xlm_environment_information_material(
         rendered = output.read_text(encoding="utf-8")
         assert all(value not in rendered for value in sensitive_values)
         assert "FF071" in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert (
                 "Formula-defined XLM environment-information material:** redacted for "
                 "sharing"
@@ -1523,7 +1615,12 @@ def test_cli_can_redact_formula_environment_information_material(tmp_path) -> No
     default_rendered = default_json.read_text(encoding="utf-8")
     assert all(value in default_rendered for value in sensitive_values)
 
-    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+    for report_format, suffix in (
+        ("json", "json"),
+        ("markdown", "md"),
+        ("html", "html"),
+        ("sarif", "sarif"),
+    ):
         output = tmp_path / f"native-environment-redacted.{suffix}"
         assert (
             main(
@@ -1543,7 +1640,9 @@ def test_cli_can_redact_formula_environment_information_material(tmp_path) -> No
         rendered = output.read_text(encoding="utf-8")
         assert all(value not in rendered for value in sensitive_values)
         assert "FF072" in rendered
-        if report_format == "markdown":
+        if report_format == "html":
+            _assert_html_review_artifact(rendered)
+        elif report_format == "markdown":
             assert "Formula environment-information material:** redacted for sharing" in rendered
         elif report_format == "json":
             assert "formula environment-information material redacted" in rendered
@@ -1605,6 +1704,28 @@ def test_cli_can_redact_formula_environment_information_material(tmp_path) -> No
     portfolio_rendered = portfolio_output.read_text(encoding="utf-8")
     assert "formula environment-information material redacted" in portfolio_rendered
     assert all(value not in portfolio_rendered for value in sensitive_values)
+
+    portfolio_html_output = tmp_path / "native-environment-portfolio-redacted.html"
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline_directory),
+                str(candidate_directory),
+                "--format",
+                "html",
+                "--redact-formula-environment-information",
+                "--output",
+                str(portfolio_html_output),
+            ]
+        )
+        == 0
+    )
+    portfolio_html = portfolio_html_output.read_text(encoding="utf-8")
+    _assert_html_review_artifact(portfolio_html)
+    assert "FF072" in portfolio_html
+    assert "Formula environment-information material redacted for sharing" in portfolio_html
+    assert all(value not in portfolio_html for value in sensitive_values)
 
 
 def test_cli_refuses_to_overwrite_an_input_workbook(tmp_path) -> None:

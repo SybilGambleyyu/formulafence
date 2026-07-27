@@ -8,6 +8,11 @@ financial correctness or replace model review.
 
 - Workbook content stays on the machine running FormulaFence. The CLI makes no
   network requests.
+- HTML review artifacts contain only inline styles and a fixed local filtering
+  script; they load no remote assets and make no browser network requests.
+  Workbook-derived text is HTML-escaped before rendering, so it is review
+  evidence rather than executable page content. The report still reflects the
+  sharing boundary selected by the caller; HTML is not a general secret scrubber.
 - It loads formulas as text with `data_only=False`; it does not calculate them.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web

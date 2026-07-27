@@ -41,8 +41,8 @@ upload_artifact=${INPUT_UPLOAD_ARTIFACT:-true}
 command -v python >/dev/null 2>&1 || fail 'Python is required; add actions/setup-python first.'
 
 case "$format" in
-  markdown|json|sarif) ;;
-  *) fail "Unsupported format: $format (expected markdown, json, or sarif)." ;;
+  markdown|html|json|sarif) ;;
+  *) fail "Unsupported format: $format (expected markdown, html, json, or sarif)." ;;
 esac
 
 case "$fail_on" in

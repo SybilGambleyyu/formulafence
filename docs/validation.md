@@ -34,7 +34,11 @@ materialized, and recorded one structural coverage warning. A normal candidate
 CLI diff completed successfully; the baseline-to-fixture diff emitted `FF032`
 and returned status 1 with `--fail-on medium`. The complete 920-test source
 suite passed in 126.68 seconds, with Ruff, bytecode compilation, and
-`git diff --check` clean.
+`git diff --check` clean. A fresh Python 3.12 environment installed the exact
+candidate wheel, confirmed FormulaFence 0.131.0 with `openpyxl.DEFUSEDXML`
+enabled, and completed a normal CLI diff; its fixture diff retained one
+structural coverage warning, emitted `FF032`, and returned the expected status
+1 at `--fail-on medium`.
 
 ## PivotTable XML structural bounds — 2026-07-26
 

@@ -23,7 +23,7 @@ reader; oversized members and aggregate expansion, compression bombs,
 traversal and case-colliding paths, duplicate members, encrypted records, ZIP
 Unicode-path aliases, malformed ZIP64 metadata, local-header disagreement,
 symbolic links, and the CLI error path all fail closed. The completed source
-tree passed **719 tests in 103.64 seconds**. This follows Python's warning about
+tree passed **719 tests in 105.67 seconds**. This follows Python's warning about
 ZIP decompression resource pitfalls and Microsoft's archive-validation guidance
 on entry counts and expanded-size limits: [Python `zipfile` documentation](https://docs.python.org/3/library/zipfile.html#decompression-pitfalls)
 and [Microsoft archive best practices](https://learn.microsoft.com/en-us/dotnet/standard/io/zip-tar-best-practices).

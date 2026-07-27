@@ -6,6 +6,7 @@ import warnings
 from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import pytest
 from openpyxl import load_workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Protection
@@ -10391,6 +10392,86 @@ def _worksheet_control_xml_element_count(path, member: str) -> int:
     return sum(1 for _ in root.iter())
 
 
+def _raw_inventory_xml_members(path, inventory: str) -> tuple[str, ...]:
+    """Return XML roots materialized by one raw-package inventory fixture."""
+    with ZipFile(path) as archive:
+        members = {entry.filename for entry in archive.infolist()}
+    if inventory == "xml-mapping":
+        expected_members = (
+            "xl/xmlMaps.xml",
+            "xl/tables/table1.xml",
+            "xl/singleCellTables/singleCellTable1.xml",
+        )
+    elif inventory == "digital-signature":
+        expected_members = ("[Content_Types].xml", "_xmlsignatures/sig1.xml")
+    elif inventory == "python-in-excel":
+        expected_members = (
+            "[Content_Types].xml",
+            "xl/_rels/workbook.xml.rels",
+            "xl/python.xml",
+        )
+    elif inventory == "rich-data":
+        expected_members = (
+            "[Content_Types].xml",
+            "xl/_rels/workbook.xml.rels",
+            "xl/metadata.xml",
+            *sorted(
+                member
+                for member in members
+                if (
+                    member.startswith("xl/richData/")
+                    and member.endswith(".xml")
+                    and "/_rels/" not in member
+                )
+            ),
+            *sorted(
+                member
+                for member in members
+                if (
+                    member.startswith("xl/richData/_rels/")
+                    and member.endswith(".xml.rels")
+                )
+            ),
+        )
+    else:
+        raise ValueError(f"Unknown raw inventory fixture: {inventory}")
+    return tuple(member for member in expected_members if member in members)
+
+
+def _append_raw_inventory_xml_elements(
+    path,
+    member: str,
+    count: int,
+    *,
+    nested: bool = False,
+) -> None:
+    """Add opaque raw-inventory XML entries without FormulaFence's reader."""
+    staging = path.with_suffix(".raw-inventory-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, "{urn:formulafence:audit}entry")
+    contents[member] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _raw_inventory_xml_element_count(path, member: str) -> int:
+    """Count one raw-inventory XML tree for exact structural budget tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member))
+    return sum(1 for _ in root.iter())
+
+
 def test_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
     baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
     candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
@@ -15536,6 +15617,392 @@ def test_rich_data_read_budget_fails_closed(tmp_path, monkeypatch) -> None:
         for warning in candidate_snapshot.parser_warnings
     )
     assert {"FF010", "FF051"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_digital_signature_binary_payload_does_not_consume_xml_budget(tmp_path) -> None:
+    workbook = make_digital_signature_model(tmp_path / "candidate.xlsx")
+    budget = workbook_module._DigitalSignatureBudget(remaining_xml_elements=0)
+    warnings: set[str] = set()
+
+    with ZipFile(workbook) as archive:
+        payload, fallback_signature = workbook_module._digital_signature_bounded_payload(
+            archive,
+            "xl/vbaProjectSignature.bin",
+            warnings,
+            budget,
+            kind="VBA",
+        )
+
+    assert payload is not None
+    assert fallback_signature is None
+    assert budget.remaining_xml_elements == 0
+    assert not warnings
+
+
+def test_digital_signature_content_types_share_the_xml_structure_budget(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_digital_signature_model(tmp_path / "candidate.xlsx")
+    member = "[Content_Types].xml"
+    _append_raw_inventory_xml_elements(workbook, member, 8, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_DIGITAL_SIGNATURE_MAX_XML_ELEMENT_COUNT",
+        _raw_inventory_xml_element_count(workbook, member) - 1,
+    )
+    warnings: set[str] = set()
+    issues: list[tuple[str, str]] = []
+    budget = workbook_module._DigitalSignatureBudget()
+    with ZipFile(workbook) as archive:
+        payload = archive.read(member)
+        original_tree_parse = workbook_module._xml_root_from_payload
+
+        def unexpected_tree_parse(candidate_payload):
+            if candidate_payload == payload:
+                raise AssertionError(
+                    "digital-signature content types were materialized after their budget failed"
+                )
+            return original_tree_parse(candidate_payload)
+
+        monkeypatch.setattr(
+            workbook_module,
+            "_xml_root_from_payload",
+            unexpected_tree_parse,
+        )
+        overrides, defaults = workbook_module._digital_signature_content_type_declarations(
+            archive,
+            warnings,
+            budget,
+            issues,
+        )
+
+    assert overrides == {}
+    assert defaults == {}
+    assert issues
+    assert any("could not inspect OPC content types" in warning for warning in warnings)
+
+
+@pytest.mark.parametrize(
+    (
+        "inventory, factory, member, maximum_name, snapshot_attribute, "
+        "unrecognized_attribute, warning_fragment, rule_id"
+    ),
+    (
+        (
+            "xml-mapping",
+            make_xml_mapping_model,
+            "xl/xmlMaps.xml",
+            "_XML_MAPPING_MAX_XML_ELEMENT_COUNT",
+            "xml_mapping_controls",
+            "unrecognized_xml_mapping_count",
+            "XML-mapping XML part whose XML structure",
+            "FF049",
+        ),
+        (
+            "digital-signature",
+            make_digital_signature_model,
+            "_xmlsignatures/sig1.xml",
+            "_DIGITAL_SIGNATURE_MAX_XML_ELEMENT_COUNT",
+            "digital_signatures",
+            "unrecognized_digital_signature_count",
+            "digital-signature XML part whose XML structure",
+            "FF050",
+        ),
+        (
+            "python-in-excel",
+            make_python_in_excel_model,
+            "xl/python.xml",
+            "_PYTHON_IN_EXCEL_MAX_XML_ELEMENT_COUNT",
+            "python_in_excel",
+            "unrecognized_python_in_excel_count",
+            "Python-in-Excel XML part whose XML structure",
+            "FF065",
+        ),
+        (
+            "rich-data",
+            make_rich_data_model,
+            "xl/richData/rdrichvalue.xml",
+            "_RICH_DATA_MAX_XML_ELEMENT_COUNT",
+            "rich_data",
+            "unrecognized_rich_data_count",
+            "rich-data XML part whose XML structure",
+            "FF051",
+        ),
+    ),
+)
+def test_raw_inventory_xml_element_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+    inventory,
+    factory,
+    member,
+    maximum_name,
+    snapshot_attribute,
+    unrecognized_attribute,
+    warning_fragment,
+    rule_id,
+) -> None:
+    baseline = factory(tmp_path / f"{inventory}-baseline.xlsx")
+    workbook = factory(tmp_path / f"{inventory}-candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    _append_raw_inventory_xml_elements(workbook, member, 8, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        maximum_name,
+        _raw_inventory_xml_element_count(workbook, member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        payload = archive.read(member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(candidate_payload):
+        if candidate_payload == payload:
+            raise AssertionError(
+                f"the {inventory} XML tree was materialized after its budget failed"
+            )
+        return original_tree_parse(candidate_payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+    report = compare_snapshots(baseline_snapshot, snapshot)
+
+    feature = getattr(snapshot, snapshot_attribute)
+    assert getattr(feature, unrecognized_attribute) >= 1
+    assert any(warning_fragment in warning for warning in snapshot.parser_warnings)
+    assert {"FF010", rule_id} <= {finding.rule_id for finding in report.findings}
+
+
+@pytest.mark.parametrize(
+    (
+        "inventory, factory, member, maximum_name, snapshot_attribute, "
+        "unrecognized_attribute, warning_fragment, overage"
+    ),
+    (
+        (
+            "xml-mapping",
+            make_xml_mapping_model,
+            "xl/xmlMaps.xml",
+            "_XML_MAPPING_MAX_XML_ELEMENT_COUNT",
+            "xml_mapping_controls",
+            "unrecognized_xml_mapping_count",
+            "XML-mapping XML part whose XML structure",
+            False,
+        ),
+        (
+            "xml-mapping",
+            make_xml_mapping_model,
+            "xl/xmlMaps.xml",
+            "_XML_MAPPING_MAX_XML_ELEMENT_COUNT",
+            "xml_mapping_controls",
+            "unrecognized_xml_mapping_count",
+            "XML-mapping XML part whose XML structure",
+            True,
+        ),
+        (
+            "digital-signature",
+            make_digital_signature_model,
+            "_xmlsignatures/sig1.xml",
+            "_DIGITAL_SIGNATURE_MAX_XML_ELEMENT_COUNT",
+            "digital_signatures",
+            "unrecognized_digital_signature_count",
+            "digital-signature XML part whose XML structure",
+            False,
+        ),
+        (
+            "digital-signature",
+            make_digital_signature_model,
+            "_xmlsignatures/sig1.xml",
+            "_DIGITAL_SIGNATURE_MAX_XML_ELEMENT_COUNT",
+            "digital_signatures",
+            "unrecognized_digital_signature_count",
+            "digital-signature XML part whose XML structure",
+            True,
+        ),
+        (
+            "python-in-excel",
+            make_python_in_excel_model,
+            "xl/python.xml",
+            "_PYTHON_IN_EXCEL_MAX_XML_ELEMENT_COUNT",
+            "python_in_excel",
+            "unrecognized_python_in_excel_count",
+            "Python-in-Excel XML part whose XML structure",
+            False,
+        ),
+        (
+            "python-in-excel",
+            make_python_in_excel_model,
+            "xl/python.xml",
+            "_PYTHON_IN_EXCEL_MAX_XML_ELEMENT_COUNT",
+            "python_in_excel",
+            "unrecognized_python_in_excel_count",
+            "Python-in-Excel XML part whose XML structure",
+            True,
+        ),
+        (
+            "rich-data",
+            make_rich_data_model,
+            "xl/richData/rdrichvalue.xml",
+            "_RICH_DATA_MAX_XML_ELEMENT_COUNT",
+            "rich_data",
+            "unrecognized_rich_data_count",
+            "rich-data XML part whose XML structure",
+            False,
+        ),
+        (
+            "rich-data",
+            make_rich_data_model,
+            "xl/richData/rdrichvalue.xml",
+            "_RICH_DATA_MAX_XML_ELEMENT_COUNT",
+            "rich_data",
+            "unrecognized_rich_data_count",
+            "rich-data XML part whose XML structure",
+            True,
+        ),
+    ),
+)
+def test_raw_inventory_xml_element_budget_accepts_capacity_and_rejects_overage(
+    tmp_path,
+    inventory,
+    factory,
+    member,
+    maximum_name,
+    snapshot_attribute,
+    unrecognized_attribute,
+    warning_fragment,
+    overage,
+) -> None:
+    workbook = factory(tmp_path / f"{inventory}-candidate.xlsx")
+    maximum_element_count = getattr(workbook_module, maximum_name)
+    additional_element_count = (
+        maximum_element_count
+        - _raw_inventory_xml_element_count(workbook, member)
+        + int(overage)
+    )
+    _append_raw_inventory_xml_elements(
+        workbook,
+        member,
+        additional_element_count,
+    )
+
+    snapshot = load_snapshot(workbook)
+    feature = getattr(snapshot, snapshot_attribute)
+
+    if overage:
+        assert getattr(feature, unrecognized_attribute) >= 1
+        assert any(warning_fragment in warning for warning in snapshot.parser_warnings)
+    else:
+        assert not any(warning_fragment in warning for warning in snapshot.parser_warnings)
+
+
+@pytest.mark.parametrize(
+    (
+        "inventory, factory, budget_name, snapshot_attribute, "
+        "unrecognized_attribute, warning_fragment"
+    ),
+    (
+        (
+            "xml-mapping",
+            make_xml_mapping_model,
+            "_XmlMappingBudget",
+            "xml_mapping_controls",
+            "unrecognized_xml_mapping_count",
+            "XML-mapping XML part whose XML structure",
+        ),
+        (
+            "digital-signature",
+            make_digital_signature_model,
+            "_DigitalSignatureBudget",
+            "digital_signatures",
+            "unrecognized_digital_signature_count",
+            "digital-signature XML part whose XML structure",
+        ),
+        (
+            "python-in-excel",
+            make_python_in_excel_model,
+            "_PythonInExcelBudget",
+            "python_in_excel",
+            "unrecognized_python_in_excel_count",
+            "Python-in-Excel XML part whose XML structure",
+        ),
+        (
+            "rich-data",
+            make_rich_data_model,
+            "_RichDataBudget",
+            "rich_data",
+            "unrecognized_rich_data_count",
+            "rich-data XML part whose XML structure",
+        ),
+    ),
+)
+def test_raw_inventory_xml_element_budget_aggregates_across_roots(
+    tmp_path,
+    monkeypatch,
+    inventory,
+    factory,
+    budget_name,
+    snapshot_attribute,
+    unrecognized_attribute,
+    warning_fragment,
+) -> None:
+    workbook = factory(tmp_path / f"{inventory}-candidate.xlsx")
+    xml_members = _raw_inventory_xml_members(workbook, inventory)
+    remaining_xml_elements = (
+        sum(_raw_inventory_xml_element_count(workbook, member) for member in xml_members)
+        - 1
+    )
+    budget_type = getattr(workbook_module, budget_name)
+    monkeypatch.setattr(
+        workbook_module,
+        budget_name,
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+    feature = getattr(snapshot, snapshot_attribute)
+
+    assert getattr(feature, unrecognized_attribute) >= 1
+    assert any(warning_fragment in warning for warning in snapshot.parser_warnings)
+
+
+def test_rich_data_streams_worksheet_bindings_without_materializing_a_second_tree(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_rich_data_model(tmp_path / "candidate.xlsx")
+    xml_members = _raw_inventory_xml_members(workbook, "rich-data")
+    remaining_xml_elements = sum(
+        _raw_inventory_xml_element_count(workbook, member) for member in xml_members
+    )
+    budget_type = workbook_module._RichDataBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_RichDataBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+    worksheet_member = "xl/worksheets/sheet1.xml"
+    original_bounded_root = workbook_module._rich_data_bounded_root
+
+    def unexpected_rich_data_root(archive, member, *args, **kwargs):
+        if member == worksheet_member:
+            raise AssertionError("the rich-data worksheet scan materialized a full XML tree")
+        return original_bounded_root(archive, member, *args, **kwargs)
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_rich_data_bounded_root",
+        unexpected_rich_data_root,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.rich_data.unrecognized_rich_data_count == 0
+    assert snapshot.rich_data.rich_value_bound_cell_count == 1
+    assert not any(
+        "rich-data XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_custom_data_stores_are_profiled_diffed_and_redacted(tmp_path) -> None:

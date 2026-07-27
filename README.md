@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.136.0/formulafence-0.136.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.137.0/formulafence-0.137.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.136.0
+  uses: SybilGambleyyu/formulafence@v0.137.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -950,7 +950,10 @@ such as `=_xlfn._xlws.PY(0,0,A1)` without interpreting `A1` or Python code.
 Relationship-ID-only rewrites normalize. Missing, malformed, unbound,
 oversized, unreadable, or over-budget package material remains visible as a
 coverage gap. The scan is bounded to 16 MiB per XML part, 64 MiB per workbook,
-and 512 parts.
+and 512 parts. Before it materializes package XML, FormulaFence streams each
+part under a 32,768-element limit and the complete Python-in-Excel scan under a
+65,536-element limit. A successfully parsed structural overage remains visible
+as `FF010`/`FF065` coverage evidence rather than allocating its private tree.
 
 FormulaFence does not parse Python source as Python, run code, evaluate `PY`,
 resolve its result, contact Microsoft Cloud, or verify runtime package support.
@@ -2162,7 +2165,10 @@ relationship IDs, relationship ordering, and equivalent internal target
 spelling stay quiet. Missing, duplicate, malformed, unsafe, unbound,
 unreadable, oversized, or over-budget metadata becomes a visible coverage
 warning; raw reads are bounded to 16 MiB per part, 64 MiB per workbook, and 512
-parts.
+parts. Before any XML Map, mapped-table, or single-cell table tree is
+materialized, FormulaFence streams a 32,768-element per-part and
+65,536-element aggregate boundary. A successfully parsed structural overage
+becomes visible `FF010`/`FF049` coverage evidence rather than a private tree.
 
 This is a stored-declaration boundary, not XML data execution. FormulaFence
 does not import or export XML, validate an XML instance against a schema, open a
@@ -2195,7 +2201,12 @@ bound-cell locations never enter profiles, Markdown, JSON, or SARIF.
 Writer-selected relationship IDs/order and equivalent internal-target spelling
 stay quiet. Missing, duplicate, malformed, unsafe, unreadable, oversized, or
 over-budget metadata becomes a visible coverage warning; raw reads are bounded
-to 16 MiB per XML part, 64 MiB per workbook, and 512 parts.
+to 16 MiB per XML part, 64 MiB per workbook, and 512 parts. Before raw
+rich-data package XML is materialized, FormulaFence streams 32,768 elements per
+part and 65,536 across the inventory; a successfully parsed structural overage
+becomes visible `FF010`/`FF051` coverage evidence. The separate worksheet
+binding pass streams only required cell attributes after the shared
+semantic-reader preflight, so it does not retain a second worksheet XML tree.
 
 This is a stored-data-control boundary, not provider execution or validation.
 FormulaFence does not contact providers, refresh entity values, calculate
@@ -2274,7 +2285,11 @@ relationship IDs/order and internal-target spelling, plus whitespace in XMLDSIG
 base64 values, stay quiet. Missing, duplicate, malformed, unsafe, unbound,
 unreadable, oversized, or over-budget metadata becomes a visible coverage
 warning; raw signature reads are bounded to 16 MiB per part, 64 MiB per
-workbook, and 512 parts.
+workbook, and 512 parts. Before an XMLDSIG envelope is materialized,
+FormulaFence streams a 32,768-element per-part and 65,536-element aggregate
+boundary; a successfully parsed structural overage becomes visible
+`FF010`/`FF050` coverage evidence. Certificate and VBA-signature binary
+payloads remain byte-bounded rather than being interpreted as XML.
 
 This is an envelope-integrity boundary, **not cryptographic validation**.
 FormulaFence does not verify signature or digest values, XML transforms,

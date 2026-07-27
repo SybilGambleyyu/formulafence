@@ -447,6 +447,10 @@ _PYTHON_IN_EXCEL_VARIANT_BY_ROOT = {
 _PYTHON_IN_EXCEL_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _PYTHON_IN_EXCEL_TOTAL_XML_BYTES = 64 * 1024 * 1024
 _PYTHON_IN_EXCEL_TOTAL_XML_PARTS = 512
+_PYTHON_IN_EXCEL_MAX_XML_ELEMENT_COUNT = 32_768
+_PYTHON_IN_EXCEL_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _PYTHON_IN_EXCEL_MAX_XML_ELEMENT_COUNT
+)
 _XML_NAMESPACE_PREFIXES = {
     _SPREADSHEETML_NS: "",
     _OFFICE_2010_SPREADSHEET_NS: "x14:",
@@ -500,6 +504,8 @@ _XML_MAPPING_UNSIGNED_PATTERN = re.compile(r"^\+?[0-9]+$")
 _XML_MAPPING_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _XML_MAPPING_TOTAL_XML_BYTES = 64 * 1024 * 1024
 _XML_MAPPING_TOTAL_XML_PARTS = 512
+_XML_MAPPING_MAX_XML_ELEMENT_COUNT = 32_768
+_XML_MAPPING_TOTAL_XML_MAX_ELEMENT_COUNT = 2 * _XML_MAPPING_MAX_XML_ELEMENT_COUNT
 _DIGITAL_SIGNATURE_ORIGIN_RELATIONSHIP = (
     "http://schemas.openxmlformats.org/package/2006/relationships/"
     "digital-signature/origin"
@@ -537,9 +543,15 @@ _VBA_PROJECT_SIGNATURE_PART_PATTERN = re.compile(
 _DIGITAL_SIGNATURE_MAX_PART_BYTES = 16 * 1024 * 1024
 _DIGITAL_SIGNATURE_TOTAL_BYTES = 64 * 1024 * 1024
 _DIGITAL_SIGNATURE_TOTAL_PARTS = 512
+_DIGITAL_SIGNATURE_MAX_XML_ELEMENT_COUNT = 32_768
+_DIGITAL_SIGNATURE_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _DIGITAL_SIGNATURE_MAX_XML_ELEMENT_COUNT
+)
 _RICH_DATA_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _RICH_DATA_TOTAL_XML_BYTES = 64 * 1024 * 1024
 _RICH_DATA_TOTAL_XML_PARTS = 512
+_RICH_DATA_MAX_XML_ELEMENT_COUNT = 32_768
+_RICH_DATA_TOTAL_XML_MAX_ELEMENT_COUNT = 2 * _RICH_DATA_MAX_XML_ELEMENT_COUNT
 _RICH_DATA_METADATA_TYPE_NAME = "XLRICHVALUE"
 _RICH_DATA_METADATA_EXTENSION_URI = "{3E2802C4-A4D2-4D8B-9148-E3BE6C30E623}"
 _RICH_DATA_PART_CONTENT_TYPES = {
@@ -33183,6 +33195,7 @@ class _XmlMappingBudget:
 
     remaining_parts: int = _XML_MAPPING_TOTAL_XML_PARTS
     remaining_bytes: int = _XML_MAPPING_TOTAL_XML_BYTES
+    remaining_xml_elements: int = _XML_MAPPING_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 @dataclass(frozen=True)
@@ -33207,6 +33220,46 @@ def _xml_mapping_issue(
 ) -> None:
     """Record private malformed XML-map evidence without serialising it."""
     issues.append((context, repr(detail)))
+
+
+def _xml_mapping_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _XmlMappingBudget,
+) -> str | None:
+    """Stream XML-map XML before recursively canonicalizing its private tree."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _XML_MAPPING_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    warnings.add(
+        "FormulaFence did not fully read an XML-mapping XML part whose XML "
+        "structure exceeds the safety budget; affected XML mappings have a "
+        "coverage gap."
+    )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
 
 
 def _xml_mapping_bounded_payload(
@@ -33252,6 +33305,17 @@ def _xml_mapping_bounded_payload(
         return None, _private_external_data_signature(
             (("xml-mapping-read-budget-exhausted", metadata),)
         )
+    structure_fallback_signature = (
+        _xml_mapping_xml_structure_budget_fallback_signature(
+            archive,
+            member,
+            info,
+            warnings,
+            budget,
+        )
+    )
+    if structure_fallback_signature is not None:
+        return None, structure_fallback_signature
     budget.remaining_bytes -= info.file_size
     try:
         return archive.read(member), None
@@ -34613,6 +34677,7 @@ class _DigitalSignatureBudget:
 
     remaining_parts: int = _DIGITAL_SIGNATURE_TOTAL_PARTS
     remaining_bytes: int = _DIGITAL_SIGNATURE_TOTAL_BYTES
+    remaining_xml_elements: int = _DIGITAL_SIGNATURE_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 @dataclass(frozen=True)
@@ -34635,6 +34700,49 @@ def _digital_signature_issue(
     issues.append((context, repr(detail)))
 
 
+def _digital_signature_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _DigitalSignatureBudget,
+    *,
+    report_failure: bool,
+) -> str | None:
+    """Stream signature XML before recursively canonicalizing its private tree."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _DIGITAL_SIGNATURE_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    if report_failure:
+        warnings.add(
+            "FormulaFence did not fully read a digital-signature XML part whose XML "
+            "structure exceeds the safety budget; affected signature controls have a "
+            "coverage gap."
+        )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
+
+
 def _digital_signature_bounded_payload(
     archive: ZipFile,
     member: str,
@@ -34642,13 +34750,16 @@ def _digital_signature_bounded_payload(
     budget: _DigitalSignatureBudget,
     *,
     kind: str,
+    structural_xml: bool = False,
+    report_failure: bool = True,
 ) -> tuple[bytes | None, str | None]:
     """Read one signature package member within fixed defensive limits."""
     if budget.remaining_parts <= 0:
-        warnings.add(
-            "FormulaFence reached its bounded digital-signature part-count budget; "
-            "affected signature controls have a coverage gap."
-        )
+        if report_failure:
+            warnings.add(
+                "FormulaFence reached its bounded digital-signature part-count budget; "
+                "affected signature controls have a coverage gap."
+            )
         return None, _private_external_data_signature(
             (("digital-signature-part-budget-exhausted", member),)
         )
@@ -34656,39 +34767,56 @@ def _digital_signature_bounded_payload(
     try:
         info = archive.getinfo(member)
     except KeyError:
-        warnings.add(
-            "FormulaFence could not locate a digital-signature package member; "
-            "affected signature controls were not compared."
-        )
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not locate a digital-signature package member; "
+                "affected signature controls were not compared."
+            )
         return None, _private_external_data_signature(
             (("missing-digital-signature-member", member),)
         )
     metadata = repr((member, info.file_size, info.compress_size, info.CRC))
     if info.file_size > _DIGITAL_SIGNATURE_MAX_PART_BYTES:
-        warnings.add(
-            "FormulaFence did not fully read an oversized digital-signature "
-            f"{kind} part; affected signature controls have a coverage gap."
-        )
+        if report_failure:
+            warnings.add(
+                "FormulaFence did not fully read an oversized digital-signature "
+                f"{kind} part; affected signature controls have a coverage gap."
+            )
         return None, _private_external_data_signature(
             (("oversized-digital-signature-member", metadata),)
         )
     if info.file_size > budget.remaining_bytes:
-        warnings.add(
-            "FormulaFence reached its bounded digital-signature read budget; "
-            "affected signature controls have a coverage gap."
-        )
+        if report_failure:
+            warnings.add(
+                "FormulaFence reached its bounded digital-signature read budget; "
+                "affected signature controls have a coverage gap."
+            )
         return None, _private_external_data_signature(
             (("digital-signature-read-budget-exhausted", metadata),)
         )
+    if structural_xml:
+        structure_fallback_signature = (
+            _digital_signature_xml_structure_budget_fallback_signature(
+                archive,
+                member,
+                info,
+                warnings,
+                budget,
+                report_failure=report_failure,
+            )
+        )
+        if structure_fallback_signature is not None:
+            return None, structure_fallback_signature
     budget.remaining_bytes -= info.file_size
     try:
         return archive.read(member), None
     except (BadZipFile, OSError, RuntimeError, ValueError) as error:
-        warnings.add(
-            "FormulaFence could not read a digital-signature "
-            f"{kind} part ({type(error).__name__}); affected signature controls "
-            "were not compared."
-        )
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not read a digital-signature "
+                f"{kind} part ({type(error).__name__}); affected signature controls "
+                "were not compared."
+            )
         return None, _private_external_data_signature(
             (("unreadable-digital-signature-member", metadata),)
         )
@@ -34699,6 +34827,8 @@ def _digital_signature_bounded_root(
     member: str,
     warnings: set[str],
     budget: _DigitalSignatureBudget,
+    *,
+    report_failure: bool = True,
 ) -> tuple[ElementTree.Element | None, str | None]:
     """Return one bounded XML-signature root or a private failure fingerprint."""
     payload, fallback_signature = _digital_signature_bounded_payload(
@@ -34707,16 +34837,19 @@ def _digital_signature_bounded_root(
         warnings,
         budget,
         kind="XML",
+        structural_xml=True,
+        report_failure=report_failure,
     )
     if payload is None:
         return None, fallback_signature
     try:
         return _xml_root_from_payload(payload), None
     except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
-        warnings.add(
-            "FormulaFence could not parse a digital-signature XML part "
-            f"({type(error).__name__}); affected signature controls were not compared."
-        )
+        if report_failure:
+            warnings.add(
+                "FormulaFence could not parse a digital-signature XML part "
+                f"({type(error).__name__}); affected signature controls were not compared."
+            )
         return None, _private_payload_signature(payload)
 
 
@@ -34732,14 +34865,35 @@ def _digital_signature_target(relationship: _PackageRelationship) -> str | None:
 def _digital_signature_content_type_declarations(
     archive: ZipFile,
     warnings: set[str],
+    budget: _DigitalSignatureBudget,
     issues: list[tuple[str, str]],
 ) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
     """Read only signature-relevant OPC content-type declarations."""
     overrides: dict[str, list[str]] = defaultdict(list)
     defaults: dict[str, list[str]] = defaultdict(list)
+    payload, fallback_signature = _digital_signature_bounded_payload(
+        archive,
+        "[Content_Types].xml",
+        warnings,
+        budget,
+        kind="XML",
+        structural_xml=True,
+        report_failure=False,
+    )
+    if payload is None:
+        warnings.add(
+            "FormulaFence could not inspect OPC content types for digital signatures; "
+            "affected signature controls may be incomplete."
+        )
+        _digital_signature_issue(
+            issues,
+            "digital-signature-content-type-scan",
+            fallback_signature or "unreadable",
+        )
+        return {}, {}
     try:
-        root = _xml_root(archive, "[Content_Types].xml")
-    except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        root = _xml_root_from_payload(payload)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
         warnings.add(
             "FormulaFence could not inspect OPC content types for digital "
             f"signatures ({type(error).__name__}); affected signature controls may be incomplete."
@@ -34984,9 +35138,11 @@ def _digital_signature_metadata(path: Path) -> _DigitalSignatureMetadata:
             for entry in archive.infolist():
                 member_counts[entry.filename] += 1
 
+            budget = _DigitalSignatureBudget()
             overrides, defaults = _digital_signature_content_type_declarations(
                 archive,
                 warnings,
+                budget,
                 issues,
             )
             discovered_origins = {
@@ -35086,7 +35242,6 @@ def _digital_signature_metadata(path: Path) -> _DigitalSignatureMetadata:
 
             declared_xml_signatures: set[str] = set()
             declared_xml_signature_relationship_count = 0
-            budget = _DigitalSignatureBudget()
             for origin_member in sorted(origin_members, key=str.casefold):
                 origin_status = _digital_signature_content_type_status(
                     origin_member,
@@ -35563,6 +35718,7 @@ class _PythonInExcelBudget:
 
     remaining_parts: int = _PYTHON_IN_EXCEL_TOTAL_XML_PARTS
     remaining_bytes: int = _PYTHON_IN_EXCEL_TOTAL_XML_BYTES
+    remaining_xml_elements: int = _PYTHON_IN_EXCEL_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 def _python_in_excel_issue(
@@ -35572,6 +35728,49 @@ def _python_in_excel_issue(
 ) -> None:
     """Record private Python-in-Excel coverage evidence without source code."""
     issues.append((context, repr(detail)))
+
+
+def _python_in_excel_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _PythonInExcelBudget,
+    *,
+    report_failure: bool,
+) -> str | None:
+    """Stream Python-in-Excel XML before recursively canonicalizing its tree."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _PYTHON_IN_EXCEL_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    if report_failure:
+        warnings.add(
+            "FormulaFence did not fully read a Python-in-Excel XML part whose XML "
+            "structure exceeds the safety budget; affected Python code has a "
+            "coverage gap."
+        )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
 
 
 def _python_in_excel_variant_for_member(member: str | None) -> str | None:
@@ -35657,6 +35856,18 @@ def _python_in_excel_bounded_payload(
         return None, _private_external_data_signature(
             (("python-in-excel-read-budget-exhausted", metadata),)
         )
+    structure_fallback_signature = (
+        _python_in_excel_xml_structure_budget_fallback_signature(
+            archive,
+            member,
+            info,
+            warnings,
+            budget,
+            report_failure=report_failure,
+        )
+    )
+    if structure_fallback_signature is not None:
+        return None, structure_fallback_signature
     budget.remaining_bytes -= info.file_size
     try:
         return archive.read(member), None
@@ -36299,6 +36510,7 @@ class _RichDataBudget:
 
     remaining_parts: int = _RICH_DATA_TOTAL_XML_PARTS
     remaining_bytes: int = _RICH_DATA_TOTAL_XML_BYTES
+    remaining_xml_elements: int = _RICH_DATA_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 def _rich_data_issue(
@@ -36310,15 +36522,58 @@ def _rich_data_issue(
     issues.append((context, repr(detail)))
 
 
-def _rich_data_bounded_payload(
+def _rich_data_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _RichDataBudget,
+    *,
+    report_failure: bool,
+) -> str | None:
+    """Stream rich-data XML before recursively canonicalizing its private tree."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _RICH_DATA_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    if report_failure:
+        warnings.add(
+            "FormulaFence did not fully read a rich-data XML part whose XML "
+            "structure exceeds the safety budget; affected rich data has a "
+            "coverage gap."
+        )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
+
+
+def _rich_data_bounded_member_info(
     archive: ZipFile,
     member: str,
     warnings: set[str],
     budget: _RichDataBudget,
     *,
-    report_failure: bool = True,
-) -> tuple[bytes | None, str | None]:
-    """Read one rich-data XML member within fixed scan budgets."""
+    report_failure: bool,
+):
+    """Reserve one raw rich-data member before reading or streaming it."""
     if budget.remaining_parts <= 0:
         if report_failure:
             warnings.add(
@@ -36359,6 +36614,38 @@ def _rich_data_bounded_payload(
         return None, _private_external_data_signature(
             (("rich-data-read-budget-exhausted", metadata),)
         )
+    return info, None
+
+
+def _rich_data_bounded_payload(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _RichDataBudget,
+    *,
+    report_failure: bool = True,
+) -> tuple[bytes | None, str | None]:
+    """Read one rich-data XML member within fixed scan budgets."""
+    info, fallback_signature = _rich_data_bounded_member_info(
+        archive,
+        member,
+        warnings,
+        budget,
+        report_failure=report_failure,
+    )
+    if info is None:
+        return None, fallback_signature
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    structure_fallback_signature = _rich_data_xml_structure_budget_fallback_signature(
+        archive,
+        member,
+        info,
+        warnings,
+        budget,
+        report_failure=report_failure,
+    )
+    if structure_fallback_signature is not None:
+        return None, structure_fallback_signature
     budget.remaining_bytes -= info.file_size
     try:
         return archive.read(member), None
@@ -36427,6 +36714,99 @@ def _rich_data_unsigned(
         _rich_data_issue(issues, f"out-of-range-{context}", value)
         return None
     return parsed
+
+
+def _rich_data_worksheet_value_metadata_bindings(
+    archive: ZipFile,
+    member: str,
+    warnings: set[str],
+    budget: _RichDataBudget,
+    issues: list[tuple[str, str]],
+    value_metadata_indexes: frozenset[int],
+    *,
+    worksheet_tag: str,
+    cell_tag: str,
+) -> tuple[str | None, tuple[tuple[str, int], ...], str | None]:
+    """Stream rich-value cell bindings without building a worksheet XML tree.
+
+    Worksheet XML has already passed the shared semantic-reader preflight. This
+    raw pass needs only ``vm`` and ``r`` attributes from matching cells, so
+    retaining a second complete tree would impose a separate allocation cost on
+    otherwise ordinary large worksheets.
+    """
+    info, fallback_signature = _rich_data_bounded_member_info(
+        archive,
+        member,
+        warnings,
+        budget,
+        report_failure=True,
+    )
+    if info is None:
+        return None, (), fallback_signature
+
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    budget.remaining_bytes -= info.file_size
+    root_tag: str | None = None
+    bindings: list[tuple[str, int]] = []
+    parents: list[ElementTree.Element] = []
+    try:
+        with archive.open(member) as xml_stream:
+            for event, element in ElementTree.iterparse(
+                xml_stream,
+                events=("start", "end"),
+            ):
+                if event == "start":
+                    if not parents:
+                        root_tag = element.tag
+                    parents.append(element)
+                    if root_tag != worksheet_tag or element.tag != cell_tag:
+                        continue
+                    raw_value_metadata_index = element.get("vm")
+                    if raw_value_metadata_index is None:
+                        continue
+                    value_metadata_index = _rich_data_unsigned(
+                        raw_value_metadata_index,
+                        issues,
+                        context="rich-data-cell-value-metadata-index",
+                    )
+                    if value_metadata_index is None:
+                        continue
+                    if value_metadata_index <= 0:
+                        _rich_data_issue(
+                            issues,
+                            "out-of-range-rich-data-cell-value-metadata-index",
+                            (member, value_metadata_index),
+                        )
+                        continue
+                    if value_metadata_index not in value_metadata_indexes:
+                        continue
+                    coordinate = element.get("r")
+                    if not coordinate:
+                        _rich_data_issue(
+                            issues,
+                            "missing-rich-data-bound-cell-coordinate",
+                            member,
+                        )
+                        continue
+                    bindings.append((coordinate, value_metadata_index))
+                    continue
+
+                parents.pop()
+                if parents:
+                    parents[-1].remove(element)
+                element.clear()
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        warnings.add(
+            "FormulaFence could not parse a rich-data worksheet XML package part "
+            f"({type(error).__name__}); affected rich data was not compared."
+        )
+        return None, (), _private_external_data_signature(
+            (
+                ("unparseable-rich-data-worksheet", metadata),
+                ("error", type(error).__name__),
+            )
+        )
+    return root_tag, tuple(bindings), None
 
 
 def _rich_data_declared_count(
@@ -37470,67 +37850,48 @@ def _rich_data_metadata(path: Path) -> _RichDataMetadata:
                     and member.casefold().endswith(".xml")
                 )
                 for worksheet_member in worksheet_members:
-                    worksheet_root, worksheet_fallback = _rich_data_bounded_root(
+                    (
+                        worksheet_root_tag,
+                        worksheet_bindings,
+                        worksheet_fallback,
+                    ) = _rich_data_worksheet_value_metadata_bindings(
                         archive,
                         worksheet_member,
                         warnings,
                         budget,
+                        issues,
+                        value_metadata_indexes,
+                        worksheet_tag=worksheet_tag,
+                        cell_tag=cell_tag,
                     )
-                    if worksheet_root is None:
+                    if worksheet_root_tag is None:
                         _rich_data_issue(
                             issues,
                             "unreadable-rich-data-worksheet",
                             (worksheet_member, worksheet_fallback),
                         )
                         continue
-                    if worksheet_root.tag != worksheet_tag:
+                    if worksheet_root_tag != worksheet_tag:
                         _rich_data_issue(
                             issues,
                             "unexpected-rich-data-worksheet-root",
-                            (worksheet_member, _xml_display_name(worksheet_root.tag)),
+                            (worksheet_member, _xml_display_name(worksheet_root_tag)),
                         )
                         continue
-                    for cell in worksheet_root.iter(cell_tag):
-                        raw_value_metadata_index = cell.get("vm")
-                        if raw_value_metadata_index is None:
-                            continue
-                        value_metadata_index = _rich_data_unsigned(
-                            raw_value_metadata_index,
-                            issues,
-                            context="rich-data-cell-value-metadata-index",
+                    rich_value_bound_cell_count += len(worksheet_bindings)
+                    metadata_entries.extend(
+                        (
+                            "rich-data-cell-binding",
+                            repr(
+                                (
+                                    worksheet_member,
+                                    coordinate,
+                                    value_metadata_index,
+                                )
+                            ),
                         )
-                        if value_metadata_index is None:
-                            continue
-                        if value_metadata_index <= 0:
-                            _rich_data_issue(
-                                issues,
-                                "out-of-range-rich-data-cell-value-metadata-index",
-                                (worksheet_member, value_metadata_index),
-                            )
-                            continue
-                        if value_metadata_index not in value_metadata_indexes:
-                            continue
-                        coordinate = cell.get("r")
-                        if not coordinate:
-                            _rich_data_issue(
-                                issues,
-                                "missing-rich-data-bound-cell-coordinate",
-                                worksheet_member,
-                            )
-                            continue
-                        rich_value_bound_cell_count += 1
-                        metadata_entries.append(
-                            (
-                                "rich-data-cell-binding",
-                                repr(
-                                    (
-                                        worksheet_member,
-                                        coordinate,
-                                        value_metadata_index,
-                                    )
-                                ),
-                            )
-                        )
+                        for coordinate, value_metadata_index in worksheet_bindings
+                    )
 
             web_image_relationship_count = 0
             external_web_image_relationship_count = 0

@@ -5,6 +5,47 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## XML Maps, signatures, Python, and Rich Data structural bounds — 2026-07-26
+
+Version 0.137.0 closes four compact-allocation paths in raw OOXML inventories:
+SpreadsheetML XML Maps/table bindings, OPC package-signature envelopes,
+Python-in-Excel package XML, and Excel Rich Data package XML. Each inventory
+already imposed a 16 MiB per-part, 64 MiB aggregate, and 512-part byte/count
+limit, but a highly compressible XML part could still contain enough elements
+to allocate a large private tree before its scanner compared it.
+
+The release streams each materialized package XML part before tree parsing,
+with a 32,768-element per-part limit and a 65,536-element aggregate limit for
+each inventory. A successfully parsed overage becomes explicit `FF010` plus
+the relevant `FF049`, `FF050`, `FF051`, or `FF065` coverage evidence; malformed
+or unreadable input keeps its established parser diagnostic. Package-signature
+certificate and VBA-signature binaries remain byte-bounded, never XML parsed.
+Rich Data now streams only `vm` and `r` attributes from worksheet cells after
+the shared reader preflight, avoiding a second full worksheet tree.
+
+Four controlled fixtures each inserted 1,000,000 opaque direct children into a
+selected raw XML root. The expanded parts were 5,000,776 bytes for XML Maps,
+5,000,726 for a package XMLDSIG envelope, 5,000,562 for Python-in-Excel, and
+5,000,280 for Rich Data; their compressed members were 7,772, 7,691, 7,601,
+and 7,516 bytes respectively. In the same Python 3.12 environment, the prior
+0.136 source completed those loads in 5.992546 seconds / 418,768 KiB, 3.262024
+seconds / 382,864 KiB, 7.227243 seconds / 660,168 KiB, and 5.476918 seconds /
+503,312 KiB. The 0.137 source completed them in 0.425491 seconds / 37,992 KiB,
+0.458029 seconds / 38,540 KiB, 0.408754 seconds / 38,128 KiB, and 0.466614
+seconds / 38,640 KiB without materializing the hostile tree.
+
+The exact final wheel completed the same four loads in 0.488242 seconds /
+36,316 KiB, 0.534549 seconds / 36,708 KiB, 0.431343 seconds / 36,716 KiB, and
+0.513357 seconds / 36,320 KiB. Normal baseline-to-baseline diffs had no
+findings or changes; the hostile reports contained `FF010`/`FF049`,
+`FF010`/`FF050`, `FF010`/`FF065`, and `FF010`/`FF051`, respectively. The final
+wheel SHA-256 is
+`ee5317b6ea93a374c6a84715b7040ad5dde752819f17782ee3897117f5c42d16`.
+The source suite passed 985 tests in 138.92 seconds with Ruff, bytecode
+compilation, and artifact metadata checks clean. A fresh Python 3.12
+environment installed that exact wheel, passed `pip check`, imported
+FormulaFence 0.137.0 from `site-packages`, and confirmed `openpyxl.DEFUSEDXML`.
+
 ## Legacy Note and embedded-control XML structural bounds — 2026-07-26
 
 Version 0.136.0 closes compact-allocation paths in two raw OOXML inventories.

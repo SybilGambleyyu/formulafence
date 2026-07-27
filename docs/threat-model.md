@@ -830,7 +830,10 @@ formula will produce.
   remain formula-coverage limits. Relationship-ID-only rewrites normalize;
   missing, malformed, unbound, oversized, unreadable, or over-budget metadata
   remains coverage evidence. XML reads are bounded to 16 MiB per part, 64 MiB
-  per workbook, and 512 parts. FormulaFence does **not** execute Python,
+  per workbook, and 512 parts. Before private package XML is materialized,
+  FormulaFence streams 32,768 elements per part and 65,536 across the complete
+  Python-in-Excel scan; a successfully parsed structural overage becomes visible
+  `FF010`/`FF065` coverage evidence. FormulaFence does **not** execute Python,
   evaluate a PY formula, resolve a result, contact Microsoft Cloud, or validate
   runtime package availability. Changed PY formulas and values remain in the
   ordinary semantic diff by design, so it is not a redacted source-code vault.
@@ -1105,7 +1108,11 @@ formula will produce.
   equivalent internal target spelling stay quiet. Missing, duplicate,
   malformed, unsafe, unbound, unreadable, oversized, or over-budget metadata
   becomes a coverage warning; reads are bounded to 16 MiB per part, 64 MiB per
-  workbook, and 512 parts. FormulaFence does **not** import/export XML,
+  workbook, and 512 parts. Before an XML Map, mapped-table, or single-cell
+  table tree is materialized, FormulaFence streams 32,768 elements per part and
+  65,536 across the complete inventory; a successfully parsed structural
+  overage becomes visible `FF010`/`FF049` coverage evidence. FormulaFence does
+  **not** import/export XML,
   validate XML data or schemas, open a file/connection, fetch data, calculate
   a refresh, or infer Excel client behavior. This boundary follows the Open XML
   [Map](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.map?view=openxml-3.0.1),
@@ -1126,7 +1133,12 @@ formula will produce.
   relationship IDs/order and equivalent internal targets normalize away.
   Missing, duplicate, malformed, unsafe, unreadable, oversized, or over-budget
   metadata becomes a coverage warning; reads are bounded to 16 MiB per XML
-  part, 64 MiB per workbook, and 512 parts. FormulaFence does **not** contact
+  part, 64 MiB per workbook, and 512 parts. Before raw rich-data package XML is
+  materialized, FormulaFence streams 32,768 elements per part and 65,536 across
+  the inventory; a successfully parsed structural overage becomes visible
+  `FF010`/`FF051` coverage evidence. Its worksheet-binding pass streams only
+  required cell attributes after the shared semantic-reader preflight, so it
+  does not retain a second worksheet tree. FormulaFence does **not** contact
   providers, refresh values, calculate formulas, fetch or validate targets, or
   infer Excel client behavior. This boundary follows Microsoft's
   [Rich Value Data](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/896934fd-8df7-43f4-b154-2d39371c270d),
@@ -1180,7 +1192,12 @@ formula will produce.
   base64 whitespace normalize away. Missing, duplicate, malformed, unsafe,
   unbound, unreadable, oversized, or over-budget metadata becomes a coverage
   warning; reads are bounded to 16 MiB per part, 64 MiB per workbook, and 512
-  parts. FormulaFence does **not** validate a signature/digest/transform,
+  parts. Before an XMLDSIG envelope is materialized, FormulaFence streams
+  32,768 elements per part and 65,536 across the signature inventory; a
+  successfully parsed structural overage becomes visible `FF010`/`FF050`
+  coverage evidence. Certificate and VBA-signature binary payloads remain
+  byte-bounded rather than being interpreted as XML. FormulaFence does **not**
+  validate a signature/digest/transform,
   reference coverage, certificate chain/identity/trust/expiry/revocation,
   timestamp, signed contents, or VBA code; it does not fetch certificates or
   contact trust services. Microsoft's [OPC digital-signature

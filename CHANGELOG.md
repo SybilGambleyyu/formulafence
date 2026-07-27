@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.137.0 — 2026-07-26
+
+- Bound raw SpreadsheetML XML Maps, OPC package-signature XML, Python-in-Excel,
+  and Rich Data package XML before FormulaFence can materialize and recursively
+  canonicalize private trees. Each inventory allows 32,768 XML elements per
+  part and 65,536 across its complete bounded XML scan, alongside the existing
+  16 MiB per-part, 64 MiB aggregate, and 512-part byte/count limits.
+- Include the digital-signature content-types reader in the same structural
+  budget, while keeping certificate and VBA-signature binary payloads strictly
+  byte-bounded rather than treating them as XML.
+- Convert a successfully parsed structural overage into explicit `FF010` plus
+  `FF049` XML Map, `FF050` digital-signature, `FF051` Rich Data, or `FF065`
+  Python-in-Excel coverage evidence. Malformed or unreadable input retains its
+  established diagnostic.
+- Stream Rich Data worksheet binding attributes after the shared semantic-reader
+  preflight instead of retaining a second complete worksheet XML tree.
+- Add fail-before-materialization, nested opaque, exact/default, aggregate,
+  binary-payload, content-types, and Rich Data streaming regressions across all
+  four raw inventories.
+
 ## 0.136.0 — 2026-07-26
 
 - Bound raw traditional Excel Note comments/VML layout XML before FormulaFence

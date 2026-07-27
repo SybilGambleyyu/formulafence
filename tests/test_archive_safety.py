@@ -5,7 +5,9 @@ import hashlib
 import stat
 import struct
 import zipfile
+from copy import deepcopy
 from pathlib import Path
+from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 import pytest
@@ -15,7 +17,11 @@ from formulafence.cli import main
 from formulafence.models import WorkbookLoadError
 from formulafence.workbook import load_snapshot
 
-from .helpers import make_model
+from .helpers import (
+    make_external_data_refresh_model,
+    make_external_link_package_model,
+    make_model,
+)
 
 
 def _append_member(
@@ -109,6 +115,45 @@ def _append_workbook_defined_name_declarations(
             b"</definedNames>",
             declarations + b"</definedNames>",
         ),
+    )
+
+
+def _append_workbook_relationship_catalog_declarations(
+    path: Path,
+    catalog_name: str,
+    count: int,
+    *,
+    alternate_namespace: str | None = None,
+) -> None:
+    """Repeat one relationship-backed workbook declaration in a test package."""
+    member_name = "xl/workbook.xml"
+    with ZipFile(path) as archive:
+        workbook = archive.read(member_name)
+    root = ElementTree.fromstring(workbook)
+    container = next(
+        (
+            child
+            for child in root
+            if child.tag.rsplit("}", maxsplit=1)[-1] == catalog_name
+        ),
+        None,
+    )
+    if container is None:
+        raise ValueError(f"workbook fixture has no {catalog_name!r} catalog")
+    declaration = next(iter(container), None)
+    if declaration is None:
+        raise ValueError(f"workbook fixture has an empty {catalog_name!r} catalog")
+    if alternate_namespace is not None:
+        declaration = deepcopy(declaration)
+        declaration.tag = (
+            f"{{{alternate_namespace}}}" + declaration.tag.rsplit("}", maxsplit=1)[-1]
+        )
+    for _ in range(count):
+        container.append(deepcopy(declaration))
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
     )
 
 
@@ -408,6 +453,126 @@ def test_semantic_reader_preflight_rejects_default_defined_name_declaration_limi
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "workbook defined-name declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_workbook_external_references_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_external_link_package_model(
+        tmp_path / "too-many-workbook-external-references.xlsx"
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT",
+        0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook external-reference declarations" in message
+
+
+def test_semantic_reader_preflight_counts_alternate_namespace_workbook_external_references(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_external_link_package_model(
+        tmp_path / "alternate-namespace-workbook-external-references.xlsx"
+    )
+    _append_workbook_relationship_catalog_declarations(
+        workbook,
+        "externalReferences",
+        1,
+        alternate_namespace="urn:formulafence:archive-safety",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT",
+        3,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook external-reference declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_default_external_reference_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_external_link_package_model(
+        tmp_path / "repeated-workbook-external-references.xlsx"
+    )
+    _append_workbook_relationship_catalog_declarations(
+        workbook,
+        "externalReferences",
+        workbook_module._OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook external-reference declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_workbook_pivot_caches_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_external_data_refresh_model(
+        tmp_path / "too-many-workbook-pivot-caches.xlsx"
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKBOOK_PIVOT_CACHE_COUNT",
+        0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook pivot-cache declarations" in message
+
+
+def test_semantic_reader_preflight_counts_alternate_namespace_workbook_pivot_caches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_external_data_refresh_model(
+        tmp_path / "alternate-namespace-workbook-pivot-caches.xlsx"
+    )
+    _append_workbook_relationship_catalog_declarations(
+        workbook,
+        "pivotCaches",
+        1,
+        alternate_namespace="urn:formulafence:archive-safety",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKBOOK_PIVOT_CACHE_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook pivot-cache declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_default_pivot_cache_declaration_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_external_data_refresh_model(
+        tmp_path / "repeated-workbook-pivot-caches.xlsx"
+    )
+    _append_workbook_relationship_catalog_declarations(
+        workbook,
+        "pivotCaches",
+        workbook_module._OOXML_READER_MAX_WORKBOOK_PIVOT_CACHE_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "workbook pivot-cache declarations" in message
 
 
 def test_semantic_reader_preflight_rejects_excessive_xml_nesting_before_scanners(

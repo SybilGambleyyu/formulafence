@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.115.0/formulafence-0.115.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.116.0/formulafence-0.116.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.115.0
+  uses: SybilGambleyyu/formulafence@v0.116.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2552,7 +2552,9 @@ cell text, and 8,192 characters of stored formula/defined-name text. It also
 caps the bootstrap catalog at 4,096 content-type declarations, 4,096 workbook
 relationships, 512 workbook sheet declarations (including repeated
 declarations of one target part), and 100,000 direct workbook defined-name
-declarations. The catalog counters follow the reader's local-name behavior, so
+declarations. It also caps direct workbook external-reference and pivot-cache
+declarations at 4,096 each, matching the bounded relationship catalog they
+select. The catalog counters follow the reader's local-name behavior, so
 alternate-namespace entries cannot bypass a limit. The text,
 formula, and style ceilings match [Excel's published limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits);
 valid workbooks above FormulaFence's separate CI-oriented cardinality bounds

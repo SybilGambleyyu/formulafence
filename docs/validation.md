@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Reader relationship-backed catalog bounds — 2026-07-26
+
+Version 0.116.0 closes the next workbook-level repetition path. An
+`externalReference` and a `pivotCache` each select a workbook relationship, but
+the relationship inventory alone cannot prevent a compact workbook XML part
+from declaring the same relationship thousands of times. `openpyxl` first
+materializes both direct catalogs; FormulaFence then inventories external-link
+declarations and rereads each declared pivot-cache definition while collecting
+refresh controls.
+
+The semantic-reader preflight now rejects the 4,097th direct external-reference
+or pivot-cache declaration before any raw OOXML scanner or complete reader
+starts. The limits preserve every distinct relationship allowed by FormulaFence's
+existing 4,096-record relationship catalog, while making duplicate declarations
+finite. As with sheets and defined names, direct alternate-namespace catalog
+entries count because the reader's nested-sequence parser materializes them.
+
+Before the gate, a 10,000-declaration repeated-pivot-cache fixture had a
+491,026-byte `xl/workbook.xml` and a 10,130-byte package, yet FormulaFence
+spent 7.350 seconds and retained 10,000 cache controls. A corresponding
+10,000-declaration repeated-external-reference fixture was a 10,452-byte
+package and took 1.277 seconds despite pointing at only three external-link
+parts. The new gate rejected those inputs in 0.018 and 0.016 seconds,
+respectively, with stable catalog-specific errors before downstream reader work.
+Focused archive-safety and version coverage passed **49 tests in 1.95 seconds**;
+the completed source tree passed **751 tests in 131.91 seconds**, plus Ruff,
+bytecode compilation, and `git diff --check` before final package verification.
+Both final distribution artifacts passed `twine check`; a fresh Python 3.12
+environment installed the wheel, returned `FormulaFence 0.116.0`, confirmed
+`openpyxl.DEFUSEDXML`, profiled an ordinary workbook, and returned the normal
+input-error exit status (2) for both 4,097-declaration catalog fixtures.
+
 ## Reader defined-name catalog bound — 2026-07-26
 
 Version 0.115.0 closes a workbook-level allocation path that remained after

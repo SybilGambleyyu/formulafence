@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.116.0 — 2026-07-26
+
+- Bound the reader-materialized `<externalReferences>` and `<pivotCaches>`
+  workbook catalogs to 4,096 direct entries each before FormulaFence starts
+  raw OOXML scanners or `openpyxl`. The bound aligns with the existing bounded
+  workbook relationship catalog while preventing repeated declarations from
+  revisiting one safe external-link or pivot-cache target unboundedly.
+- Count every direct catalog child that the reader's nested-sequence parser can
+  materialize, including alternate-namespace entries, rather than only
+  conventional namespace-qualified declaration tags.
+- Add fail-before-reader regression coverage for ordinary, alternate-namespace,
+  and real default-limit external-reference and pivot-cache fixtures.
+
 ## 0.115.0 — 2026-07-26
 
 - Bound the reader-materialized workbook `<definedNames>` catalog to 100,000

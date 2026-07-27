@@ -176,11 +176,17 @@ _OOXML_READER_MAX_WORKSHEET_CELL_COUNT = 500_000
 # then indexed and traversed across FormulaFence's formula-control analyses.
 # Excel permits a vastly larger collection, but 100,000 definitions already
 # represent substantial CI memory and repeated semantic work, so retain a
-# separate, explicit reader-safety boundary.
+# separate, explicit reader-safety boundary. External references and pivot
+# caches each select a workbook relationship. Keep their declaration counts at
+# the same 4,096 boundary as that relationship catalog so repetitions of one
+# valid target cannot make the reader or raw control scanners revisit it
+# unboundedly.
 _OOXML_READER_MAX_CONTENT_TYPE_DECLARATION_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_RELATIONSHIP_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
 _OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT = 100_000
+_OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_WORKBOOK_PIVOT_CACHE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 # Reader-facing XML can still be hostile within its byte limit: the ordinary
 # workbook model materializes shared-string entries and style objects, while
 # deep XML can impose disproportionate parser work.  Keep the streaming gate
@@ -3303,6 +3309,8 @@ def _validate_ooxml_semantic_reader_resources(
     workbook_relationship_count = 0
     workbook_sheet_count = 0
     workbook_defined_name_count = 0
+    workbook_external_reference_count = 0
+    workbook_pivot_cache_count = 0
     populated_cell_count = 0
     shared_string_count = 0
     cell_tags = _spreadsheetml_tags("c")
@@ -3342,16 +3350,21 @@ def _validate_ooxml_semantic_reader_resources(
         element: ElementTree.Element,
         tags: list[str],
     ) -> None:
-        nonlocal workbook_defined_name_count, workbook_sheet_count
+        nonlocal workbook_defined_name_count
+        nonlocal workbook_external_reference_count
+        nonlocal workbook_pivot_cache_count
+        nonlocal workbook_sheet_count
         # ``openpyxl``'s workbook package parser uses local XML names while
-        # constructing these two catalogs.  A direct alternate-namespace
-        # ``definedName`` is therefore still materialized, and its nested
-        # ``sheets`` sequence constructs a child-sheet object for every direct
-        # child. Count the same direct catalog entries rather than allowing a
-        # namespace variation to evade the allocation bound.
+        # constructing these catalogs. A direct alternate-namespace
+        # ``definedName`` is therefore still materialized, and nested-sequence
+        # catalogs construct an object for every direct child. Count the same
+        # direct catalog entries rather than allowing a namespace variation to
+        # evade an allocation bound.
+        is_direct_workbook_catalog_child = (
+            len(tags) == 3 and _xml_local_name(tags[0]) == "workbook"
+        )
         if (
-            len(tags) == 3
-            and _xml_local_name(tags[0]) == "workbook"
+            is_direct_workbook_catalog_child
             and _xml_local_name(tags[-2]) == "definedNames"
             and _xml_local_name(element.tag) == "definedName"
         ):
@@ -3366,14 +3379,39 @@ def _validate_ooxml_semantic_reader_resources(
                     "semantic-reader safety limit."
                 )
         elif (
-            len(tags) == 3
-            and _xml_local_name(tags[0]) == "workbook"
+            is_direct_workbook_catalog_child
             and _xml_local_name(tags[-2]) == "sheets"
         ):
             workbook_sheet_count += 1
             if workbook_sheet_count > _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT:
                 raise _reader_preflight_error(
                     "workbook sheet declarations exceed the semantic-reader safety limit."
+                )
+        elif (
+            is_direct_workbook_catalog_child
+            and _xml_local_name(tags[-2]) == "externalReferences"
+        ):
+            workbook_external_reference_count += 1
+            if (
+                workbook_external_reference_count
+                > _OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "workbook external-reference declarations exceed the "
+                    "semantic-reader safety limit."
+                )
+        elif (
+            is_direct_workbook_catalog_child
+            and _xml_local_name(tags[-2]) == "pivotCaches"
+        ):
+            workbook_pivot_cache_count += 1
+            if (
+                workbook_pivot_cache_count
+                > _OOXML_READER_MAX_WORKBOOK_PIVOT_CACHE_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "workbook pivot-cache declarations exceed the "
+                    "semantic-reader safety limit."
                 )
 
     def workbook_relationships_end(

@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared formula external-action / DDE report redaction — 2026-07-26
+
+FormulaFence 0.99.0 adds the separate, opt-in
+`--redact-formula-external-actions` rendering boundary for generic reports. It
+is deliberately separate from the count-only `FF064` and `FF074` ledgers. The
+default local-review output remains unchanged. When enabled, JSON, Markdown,
+and SARIF hide direct inventoried action/provider or DDE formula material,
+changed action/DDE cell evidence, and exact changed static input evidence that
+the private dependency analysis recorded as reaching one. A changed resolved
+formula-name chain can carry an endpoint without spelling the native action, so
+the mode conservatively hides changed defined-name before/after values in that
+case. It does not evaluate a formula, contact a provider or DDE server, change
+a comparison/policy result, or reconstruct a dynamically assembled endpoint.
+
+A disposable release-validation pair outside this repository contained a direct
+`HYPERLINK`, a `HYPERLINK(A9, ...)` static input, and a formula-defined direct
+DDE link. Candidate-only action, input, and DDE markers changed. The exact
+wheel's unredacted JSON retained all six controlled markers, confirming the
+normal local-review contract. With the redaction option, wheel-produced JSON,
+Markdown, SARIF, and a one-workbook portfolio JSON artifact omitted every
+marker. The redacted policy check still exited `1` with `FF064`, `FF074`,
+`FFP064`, and `FFP074`, proving output redaction did not weaken the policy
+boundary.
+
+The isolated environment reported `FormulaFence 0.99.0`. The built wheel
+`formulafence-0.99.0-py3-none-any.whl` passed `twine check` with SHA-256
+`a72c646d3de630b230078f39eadb5c0958f905a4b21ce2788a457551b4917eaf`.
+The source distribution passed `twine check`; its digest is intentionally
+omitted because this validation note is included in that source archive. The
+final source tree passed **642 tests in 86.63 seconds**, plus a clean Ruff
+check, `git diff --check`, and shell syntax check for the composite Action.
+
 ## Shared external-workbook-link report redaction — 2026-07-26
 
 FormulaFence 0.98.0 adds an explicit rendering boundary for generic reports:

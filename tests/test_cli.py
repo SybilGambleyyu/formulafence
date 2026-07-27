@@ -7,7 +7,15 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from formulafence.cli import main
 
-from .helpers import make_model, rewrite
+from .helpers import (
+    change_formula_dde_link_input,
+    change_formula_external_action_input,
+    change_formula_external_action_target,
+    make_formula_dde_link_model,
+    make_formula_external_action_model,
+    make_model,
+    rewrite,
+)
 
 
 def test_check_emits_sarif_and_fails_for_a_policy_violation(tmp_path) -> None:
@@ -185,6 +193,172 @@ def test_cli_can_redact_external_workbook_link_material_from_shared_reports(tmp_
             assert "External-workbook link material:** redacted for sharing" in rendered
         else:
             assert "external-workbook link material redacted" in rendered
+
+
+def test_cli_can_redact_formula_external_action_and_dde_material_from_shared_reports(
+    tmp_path,
+) -> None:
+    action_baseline_marker = "PRIVATE-LINK-BASELINE"
+    action_candidate_marker = "PRIVATE-LINK-CANDIDATE"
+    baseline = make_formula_external_action_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_external_action_model(tmp_path / "candidate.xlsx")
+    change_formula_external_action_target(candidate)
+
+    default_json = tmp_path / "default.json"
+    assert (
+        main(
+            [
+                "diff",
+                str(baseline),
+                str(candidate),
+                "--format",
+                "json",
+                "--output",
+                str(default_json),
+            ]
+        )
+        == 0
+    )
+    default_rendered = default_json.read_text(encoding="utf-8")
+    assert action_baseline_marker in default_rendered
+    assert action_candidate_marker in default_rendered
+
+    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+        output = tmp_path / f"action-redacted.{suffix}"
+        assert (
+            main(
+                [
+                    "diff",
+                    str(baseline),
+                    str(candidate),
+                    "--format",
+                    report_format,
+                    "--redact-formula-external-actions",
+                    "--output",
+                    str(output),
+                ]
+            )
+            == 0
+        )
+        rendered = output.read_text(encoding="utf-8")
+        assert action_baseline_marker not in rendered
+        assert action_candidate_marker not in rendered
+        assert "FF064" in rendered
+        if report_format == "markdown":
+            assert "Formula external-action / DDE material:** redacted for sharing" in rendered
+        elif report_format == "json":
+            assert "formula external-action material redacted" in rendered
+
+    action_input_baseline = make_formula_external_action_model(
+        tmp_path / "action-input-baseline.xlsx"
+    )
+    action_input_candidate = make_formula_external_action_model(
+        tmp_path / "action-input-candidate.xlsx"
+    )
+    change_formula_external_action_input(action_input_candidate)
+    action_input_output = tmp_path / "action-input-redacted.json"
+    assert (
+        main(
+            [
+                "diff",
+                str(action_input_baseline),
+                str(action_input_candidate),
+                "--format",
+                "json",
+                "--redact-formula-external-actions",
+                "--output",
+                str(action_input_output),
+            ]
+        )
+        == 0
+    )
+    action_input_rendered = action_input_output.read_text(encoding="utf-8")
+    assert "PRIVATE-REFERENCED-LINK-BASELINE" not in action_input_rendered
+    assert "PRIVATE-REFERENCED-LINK-CANDIDATE" not in action_input_rendered
+    assert "formula external-action material redacted" in action_input_rendered
+
+    dde_baseline = make_formula_dde_link_model(tmp_path / "dde-baseline.xlsx")
+    dde_candidate = make_formula_dde_link_model(tmp_path / "dde-candidate.xlsx")
+    change_formula_dde_link_input(dde_candidate)
+    dde_output = tmp_path / "dde-redacted.json"
+    assert (
+        main(
+            [
+                "diff",
+                str(dde_baseline),
+                str(dde_candidate),
+                "--format",
+                "json",
+                "--redact-formula-external-actions",
+                "--output",
+                str(dde_output),
+            ]
+        )
+        == 0
+    )
+    dde_rendered = dde_output.read_text(encoding="utf-8")
+    assert "PRIVATE-DDE-INPUT-BASELINE" not in dde_rendered
+    assert "PRIVATE-DDE-INPUT-CANDIDATE" not in dde_rendered
+    assert "FF074" in dde_rendered
+
+    policy = tmp_path / "formulafence.yml"
+    policy.write_text(
+        "version: 1\nrules:\n  no_formula_external_action_changes: true\n",
+        encoding="utf-8",
+    )
+    policy_output = tmp_path / "policy-redacted.json"
+    assert (
+        main(
+            [
+                "check",
+                str(baseline),
+                str(candidate),
+                "--policy",
+                str(policy),
+                "--format",
+                "json",
+                "--redact-formula-external-actions",
+                "--output",
+                str(policy_output),
+            ]
+        )
+        == 1
+    )
+    policy_rendered = policy_output.read_text(encoding="utf-8")
+    assert "FF064" in policy_rendered
+    assert "FFP064" in policy_rendered
+    assert action_baseline_marker not in policy_rendered
+    assert action_candidate_marker not in policy_rendered
+
+    baseline_directory = tmp_path / "baseline-portfolio"
+    candidate_directory = tmp_path / "candidate-portfolio"
+    baseline_directory.mkdir()
+    candidate_directory.mkdir()
+    make_formula_external_action_model(baseline_directory / "model.xlsx")
+    portfolio_candidate = make_formula_external_action_model(
+        candidate_directory / "model.xlsx"
+    )
+    change_formula_external_action_target(portfolio_candidate)
+    portfolio_output = tmp_path / "portfolio-redacted.json"
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline_directory),
+                str(candidate_directory),
+                "--format",
+                "json",
+                "--redact-formula-external-actions",
+                "--output",
+                str(portfolio_output),
+            ]
+        )
+        == 0
+    )
+    portfolio_rendered = portfolio_output.read_text(encoding="utf-8")
+    assert action_baseline_marker not in portfolio_rendered
+    assert action_candidate_marker not in portfolio_rendered
+    assert "formula external-action material redacted" in portfolio_rendered
 
 
 def test_cli_refuses_to_overwrite_an_input_workbook(tmp_path) -> None:

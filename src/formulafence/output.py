@@ -13,6 +13,7 @@ from formulafence.models import DiffReport, Finding, display_location
 from formulafence.portfolio import PortfolioReport
 
 EXTERNAL_WORKBOOK_LINK_REDACTION = "[external-workbook link material redacted]"
+FORMULA_EXTERNAL_ACTION_REDACTION = "[formula external-action material redacted]"
 
 # This fallback deliberately supplements, rather than replaces, FormulaFence's
 # static formula inspection below.  A visible `INDIRECT("'[Book]Sheet'!A1")`
@@ -27,6 +28,14 @@ _VISIBLE_EXTERNAL_WORKBOOK_LITERAL = re.compile(
     r"[A-Za-z_\\]"
     r"|['\"][^'\"\r\n]{1,1024}\.(?:xls(?:x|m|b)?|xlt(?:x|m)?|xlam)['\"]!",
     re.IGNORECASE,
+)
+_FORMULA_EXTERNAL_ACTION_HINTS = (
+    "HYPERLINK",
+    "WEBSERVICE",
+    "IMAGE",
+    "RTD",
+    "STOCKHISTORY",
+    "CUBE",
 )
 
 
@@ -85,6 +94,174 @@ def redact_external_workbook_link_material(payload: Any) -> Any:
     if isinstance(payload, str) and _contains_external_workbook_link_material(payload):
         return EXTERNAL_WORKBOOK_LINK_REDACTION
     return payload
+
+
+def _contains_formula_external_action_material(value: str) -> bool:
+    """Return whether one rendered string exposes an inventoried action or DDE.
+
+    This keeps the redaction boundary aligned with FormulaFence's existing
+    ``FF064`` and ``FF074`` scanners.  A stored formula can carry a private URL,
+    provider, Cube connection, DDE application/topic/item, or related argument;
+    FormulaFence only recognizes the function/syntax, never evaluates it.
+    """
+    upper_value = value.upper()
+    if "|" not in value and not any(
+        hint in upper_value for hint in _FORMULA_EXTERNAL_ACTION_HINTS
+    ):
+        return False
+    formula = value if value.lstrip().startswith("=") else f"={value}"
+    inspection = inspect_formula(formula)
+    return bool(
+        inspection.external_action_functions or inspection.formula_dde_link_markers
+    )
+
+
+def redact_formula_external_action_material(payload: Any) -> Any:
+    """Return an output-only copy with direct action and DDE formula text hidden.
+
+    This handles formula-bearing strings directly.  Report-level helpers below
+    also hide a changed cell value when its static impact reaches one of those
+    inventoried formulas, because an endpoint can live in an ordinary input
+    cell such as ``HYPERLINK(A9, ...)`` rather than in the action formula.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: redact_formula_external_action_material(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [redact_formula_external_action_material(value) for value in payload]
+    if isinstance(payload, tuple):
+        return tuple(redact_formula_external_action_material(value) for value in payload)
+    if isinstance(payload, str) and _contains_formula_external_action_material(payload):
+        return FORMULA_EXTERNAL_ACTION_REDACTION
+    return payload
+
+
+def _formula_external_action_sensitive_change_locations(report: DiffReport) -> set[str]:
+    """Return changed cells whose evidence can carry a static action input."""
+    sensitive_cells = (
+        report.before.formula_external_actions.action_cells
+        | report.after.formula_external_actions.action_cells
+        | report.before.formula_dde_links.dde_cells
+        | report.after.formula_dde_links.dde_cells
+        | report.formula_external_action_static_input_cells
+        | report.formula_dde_link_static_input_cells
+    )
+    if not sensitive_cells:
+        return set()
+
+    locations: set[str] = set()
+    for change in report.changes:
+        if change.location is None or change.location not in sensitive_cells:
+            continue
+        location = display_location(change.location)
+        if location is not None:
+            locations.add(location)
+    return locations
+
+
+def _redact_formula_external_action_change_cells(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide raw before/after cells that are an action/DDE formula or input."""
+    sensitive_locations = _formula_external_action_sensitive_change_locations(report)
+    if not sensitive_locations:
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("location") not in sensitive_locations:
+            continue
+        for side in ("before", "after"):
+            snapshot = change.get(side)
+            if not isinstance(snapshot, dict):
+                continue
+            for field in ("value", "formula", "formula_fingerprint"):
+                if snapshot.get(field) is not None:
+                    snapshot[field] = FORMULA_EXTERNAL_ACTION_REDACTION
+    return payload
+
+
+def _formula_external_action_definition_material_changed(report: DiffReport) -> bool:
+    """Return whether a named action/DDE definition changed privately."""
+    return (
+        report.before.formula_external_actions.definition_signature
+        != report.after.formula_external_actions.definition_signature
+        or report.before.formula_dde_links.definition_signature
+        != report.after.formula_dde_links.definition_signature
+    )
+
+
+def _redact_formula_external_action_defined_name_details(
+    details: dict[str, Any], report: DiffReport
+) -> None:
+    """Hide FF008 formula evidence when a resolved action-name chain changed.
+
+    A named definition can invoke another named LAMBDA that contains the action
+    or DDE syntax.  Its own text may therefore be an ordinary-looking
+    ``=FENCE.WRAPPER(\"endpoint\")`` value which a lexical formula scan cannot
+    classify in isolation.  The comparison already has a private resolved
+    definition signature; when it changed, replacing every changed defined-name
+    before/after value is the safe output boundary.  This is deliberately
+    conservative and never changes the name, finding, or policy result.
+    """
+    if not _formula_external_action_definition_material_changed(report):
+        return
+    for field in ("before", "after"):
+        if isinstance(details.get(field), str):
+            details[field] = FORMULA_EXTERNAL_ACTION_REDACTION
+
+
+def _redact_formula_external_action_defined_name_evidence(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide resolved action/DDE name-chain text in JSON-shaped report evidence."""
+    if not _formula_external_action_definition_material_changed(report):
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("kind") == "defined_name_changed":
+            details = change.get("details")
+            if isinstance(details, dict):
+                _redact_formula_external_action_defined_name_details(details, report)
+    for finding in payload.get("findings", []):
+        if finding.get("rule_id") != "FF008":
+            continue
+        details = finding.get("details")
+        if isinstance(details, dict):
+            _redact_formula_external_action_defined_name_details(details, report)
+    return payload
+
+
+def _formula_external_action_safe_finding_details(
+    finding: Finding, report: DiffReport | None
+) -> dict[str, Any]:
+    """Copy one SARIF finding's properties through the name-chain boundary."""
+    details = dict(finding.details)
+    if report is not None and finding.rule_id == "FF008":
+        _redact_formula_external_action_defined_name_details(details, report)
+    return details
+
+
+def redact_formula_external_action_report_payload(
+    report: DiffReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Redact direct action text and private static action-input cell evidence."""
+    redacted = redact_formula_external_action_material(payload)
+    _redact_formula_external_action_change_cells(redacted, report)
+    return _redact_formula_external_action_defined_name_evidence(redacted, report)
+
+
+def redact_formula_external_action_portfolio_payload(
+    report: PortfolioReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply the same action/DDE boundary to nested portfolio reports."""
+    redacted = redact_formula_external_action_material(payload)
+    for workbook, entry in zip(
+        report.workbooks, redacted.get("workbooks", []), strict=False
+    ):
+        if workbook.report is not None and isinstance(entry, dict):
+            _redact_formula_external_action_change_cells(entry, workbook.report)
+            _redact_formula_external_action_defined_name_evidence(entry, workbook.report)
+    return redacted
 
 
 def _markdown_escape(value: object) -> str:
@@ -3381,11 +3558,14 @@ def report_to_markdown(
     extra_findings: Iterable[Finding] = (),
     *,
     redact_external_workbook_links: bool = False,
+    redact_formula_external_actions: bool = False,
 ) -> str:
     policy_findings = list(extra_findings)
     payload = report.to_dict(policy_findings)
     if redact_external_workbook_links:
         payload = redact_external_workbook_link_material(payload)
+    if redact_formula_external_actions:
+        payload = redact_formula_external_action_report_payload(report, payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence change report",
@@ -3395,6 +3575,11 @@ def report_to_markdown(
         *(
             ["- **External-workbook link material:** redacted for sharing"]
             if redact_external_workbook_links
+            else []
+        ),
+        *(
+            ["- **Formula external-action / DDE material:** redacted for sharing"]
+            if redact_formula_external_actions
             else []
         ),
         f"- **Changes:** {summary['change_count']}",
@@ -3420,6 +3605,7 @@ def report_to_sarif(
     extra_findings: Iterable[Finding] = (),
     *,
     redact_external_workbook_links: bool = False,
+    redact_formula_external_actions: bool = False,
 ) -> dict[str, Any]:
     findings = [*report.findings, *extra_findings]
     rule_ids = sorted({finding.rule_id for finding in findings})
@@ -3433,11 +3619,16 @@ def report_to_sarif(
     ]
     results: list[dict[str, Any]] = []
     for finding in findings:
+        finding_details = (
+            _formula_external_action_safe_finding_details(finding, report)
+            if redact_formula_external_actions
+            else finding.details
+        )
         result: dict[str, Any] = {
             "ruleId": finding.rule_id,
             "level": _SARIF_LEVELS.get(finding.severity, "warning"),
             "message": {"text": finding.message},
-            "properties": {"severity": finding.severity, **finding.details},
+            "properties": {"severity": finding.severity, **finding_details},
         }
         if finding.location is not None:
             result["locations"] = [
@@ -3472,7 +3663,9 @@ def report_to_sarif(
         ],
     }
     if redact_external_workbook_links:
-        return redact_external_workbook_link_material(payload)
+        payload = redact_external_workbook_link_material(payload)
+    if redact_formula_external_actions:
+        payload = redact_formula_external_action_material(payload)
     return payload
 
 
@@ -3515,12 +3708,17 @@ def _append_cross_workbook_impact_samples(
 
 
 def portfolio_to_markdown(
-    report: PortfolioReport, *, redact_external_workbook_links: bool = False
+    report: PortfolioReport,
+    *,
+    redact_external_workbook_links: bool = False,
+    redact_formula_external_actions: bool = False,
 ) -> str:
     """Render a complete multi-workbook review without absolute filesystem paths."""
     payload = report.to_dict()
     if redact_external_workbook_links:
         payload = redact_external_workbook_link_material(payload)
+    if redact_formula_external_actions:
+        payload = redact_formula_external_action_portfolio_payload(report, payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence portfolio report",
@@ -3550,6 +3748,11 @@ def portfolio_to_markdown(
         *(
             ["- **External-workbook link material:** redacted for sharing"]
             if redact_external_workbook_links
+            else []
+        ),
+        *(
+            ["- **Formula external-action / DDE material:** redacted for sharing"]
+            if redact_formula_external_actions
             else []
         ),
         "",
@@ -3600,7 +3803,10 @@ def portfolio_to_markdown(
 
 
 def portfolio_to_sarif(
-    report: PortfolioReport, *, redact_external_workbook_links: bool = False
+    report: PortfolioReport,
+    *,
+    redact_external_workbook_links: bool = False,
+    redact_formula_external_actions: bool = False,
 ) -> dict[str, Any]:
     """Render every portfolio finding in one SARIF run with relative artifacts."""
     rule_ids = sorted(
@@ -3621,6 +3827,13 @@ def portfolio_to_sarif(
     results: list[dict[str, Any]] = []
     for workbook in report.workbooks:
         for finding in workbook.findings:
+            finding_details = (
+                _formula_external_action_safe_finding_details(
+                    finding, workbook.report
+                )
+                if redact_formula_external_actions
+                else finding.details
+            )
             location: dict[str, Any] = {
                 "physicalLocation": {"artifactLocation": {"uri": workbook.path}},
             }
@@ -3637,7 +3850,7 @@ def portfolio_to_sarif(
                     "level": _SARIF_LEVELS.get(finding.severity, "warning"),
                     "message": {"text": finding.message},
                     "properties": {
-                        **finding.details,
+                        **finding_details,
                         "severity": finding.severity,
                         "portfolio_status": workbook.status,
                     },
@@ -3662,5 +3875,7 @@ def portfolio_to_sarif(
         ],
     }
     if redact_external_workbook_links:
-        return redact_external_workbook_link_material(payload)
+        payload = redact_external_workbook_link_material(payload)
+    if redact_formula_external_actions:
+        payload = redact_formula_external_action_material(payload)
     return payload

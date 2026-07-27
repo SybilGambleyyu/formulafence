@@ -32,6 +32,7 @@ def _run_action_script(
     output: str = "reports/formulafence.md",
     report_format: str = "markdown",
     redact_external_workbook_links: str = "false",
+    redact_formula_external_actions: str = "false",
     max_workbooks: str = "512",
     max_link_impact: str = "100000",
     upload_artifact: str = "true",
@@ -58,6 +59,7 @@ def _run_action_script(
             "INPUT_FORMAT": report_format,
             "INPUT_OUTPUT": output,
             "INPUT_REDACT_EXTERNAL_WORKBOOK_LINKS": redact_external_workbook_links,
+            "INPUT_REDACT_FORMULA_EXTERNAL_ACTIONS": redact_formula_external_actions,
             "INPUT_FAIL_ON": "none",
             "INPUT_MAX_WORKBOOKS": max_workbooks,
             "INPUT_MAX_LINK_IMPACT": max_link_impact,
@@ -89,6 +91,7 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
         "format",
         "output",
         "redact-external-workbook-links",
+        "redact-formula-external-actions",
         "max-workbooks",
         "max-link-impact",
     } <= set(action["inputs"])
@@ -226,6 +229,55 @@ def test_action_rejects_an_invalid_external_workbook_redaction_switch(tmp_path: 
 
     assert result.returncode == 2
     assert "Unsupported redact-external-workbook-links value" in result.stderr
+
+
+def test_action_can_redact_formula_external_action_material(tmp_path: Path) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    baseline_marker = "PRIVATE-ACTION-LINK-BASELINE"
+    candidate_marker = "PRIVATE-ACTION-LINK-CANDIDATE"
+    _workbook(
+        baseline,
+        f'=HYPERLINK("https://private.example.test/{baseline_marker}", "Open")',
+    )
+    _workbook(
+        candidate,
+        f'=HYPERLINK("https://private.example.test/{candidate_marker}", "Open")',
+    )
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        report_format="json",
+        output="reports/formulafence.json",
+        redact_formula_external_actions="true",
+    )
+
+    assert result.returncode == 0
+    rendered = (tmp_path / "reports" / "formulafence.json").read_text(encoding="utf-8")
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+    assert "formula external-action material redacted" in rendered
+
+
+def test_action_rejects_an_invalid_formula_external_action_redaction_switch(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    _workbook(baseline, "=1+1")
+    _workbook(candidate, "=1+1")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        redact_formula_external_actions="sometimes",
+    )
+
+    assert result.returncode == 2
+    assert "Unsupported redact-formula-external-actions value" in result.stderr
 
 
 def test_action_runs_a_directory_portfolio_and_preserves_membership_evidence(

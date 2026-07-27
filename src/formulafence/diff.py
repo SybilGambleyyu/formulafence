@@ -4135,7 +4135,18 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
 
     changes.sort(key=lambda change: (_location_sort_key(change.location), change.kind))
     findings.sort(key=lambda finding: (_location_sort_key(finding.location), finding.rule_id))
-    return DiffReport(before=before, after=after, changes=changes, findings=findings)
+    return DiffReport(
+        before=before,
+        after=after,
+        changes=changes,
+        findings=findings,
+        formula_external_action_static_input_cells=frozenset(
+            formula_external_action_static_input_changes
+        ),
+        formula_dde_link_static_input_cells=frozenset(
+            formula_dde_link_static_input_changes
+        ),
+    )
 
 
 def report_severities(report: DiffReport, extra_findings: Iterable[Finding] = ()) -> list[str]:

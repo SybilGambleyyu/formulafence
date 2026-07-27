@@ -1170,6 +1170,19 @@ formula will produce.
   exit status; it does not follow a link, recover a value assembled from text
   fragments, or claim to redact unrelated sensitive workbook material. It is
   opt-in so ordinary local reports retain their established detailed evidence.
+- The separate `--redact-formula-external-actions` rendering mode is for the
+  stored `FF064` formula-action/provider and `FF074` direct-DDE boundary. After
+  comparison and policy evaluation, it replaces serialized direct action/DDE
+  formula material and the before/after evidence for a changed action/DDE cell
+  or an exact private static input recorded as reaching one. A formula-defined
+  name can route to an action through another name without spelling a native
+  action itself, so a relevant private definition-chain change conservatively
+  redacts changed defined-name before/after values as well. The mode never
+  exposes the private cell/name set used for that decision; it does not mutate
+  a snapshot, finding, policy fact, or exit status; and it does not calculate a
+  formula, contact a provider or DDE server, follow a link, or reconstruct a
+  dynamically assembled destination. It is not a general secret scrubber and
+  does not replace the external-workbook-link sharing boundary.
 - Every canonical root or part-level OPC relationship part is also inspected
   independently for `TargetMode="External"`, including opaque relationships
   no feature-specific scanner can reach. FormulaFence retains source, type,

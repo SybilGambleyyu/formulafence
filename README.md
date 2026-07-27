@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.98.0/formulafence-0.98.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.99.0/formulafence-0.99.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.98.0
+  uses: SybilGambleyyu/formulafence@v0.99.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -108,6 +108,42 @@ sensitive-data vault or a guarantee to redact every dynamic Excel expression.
 Without the option, existing local-review output is unchanged. Markdown notes
 when the option was used. The GitHub Action exposes the same behavior through
 `redact-external-workbook-links: 'true'`.
+
+### Sharing reports with formula actions or DDE links
+
+Formula action and provider formulas can contain URLs, provider names,
+connection/query text, DDE service/topic/item values, or static input cells
+that route into those formulas. For an artifact that crosses the local review
+boundary, add `--redact-formula-external-actions` to `diff`, `check`, or
+`portfolio`:
+
+```bash
+formulafence check baseline.xlsx candidate.xlsx \
+  --policy formulafence.yml \
+  --format json \
+  --redact-formula-external-actions \
+  --output shared-report.json
+```
+
+This output-only mode covers direct stored formulas that FormulaFence already
+inventories under `FF064` (`HYPERLINK`, `WEBSERVICE`, `IMAGE`, `RTD`,
+`STOCKHISTORY`, and the documented Cube family) and `FF074` direct DDE syntax.
+It replaces the whole serialized action/DDE formula value with
+`[formula external-action material redacted]`. It also hides before/after cell
+evidence for a changed action/DDE formula or for an exact changed static input
+that FormulaFence's private dependency analysis recorded as reaching one. When
+a relevant formula-defined-name chain changes, it conservatively hides changed
+defined-name before/after values as well, since a wrapper can carry an endpoint
+without spelling the action itself.
+
+The switch does not mutate snapshots, alter findings, policy evaluation, or an
+exit status; it does not calculate formulas, contact a provider or DDE server,
+or reconstruct a destination assembled dynamically at Excel calculation time.
+It is not a general secret scrubber and does not replace
+`--redact-external-workbook-links` for workbook-link material. Use both options
+when a shared report can contain both surfaces. Without the option, ordinary
+local-review output remains unchanged. The GitHub Action exposes the same
+boundary through `redact-formula-external-actions: 'true'`.
 
 ### Portfolio gates
 
@@ -554,9 +590,11 @@ invoking action/provider formula through its static dependency graph, catching
 without evaluating `A1`. Dynamic or unresolvable arguments remain explicit
 parser-coverage limits. The ordinary semantic cell diff intentionally continues
 to show changed formulas to reviewers; its general payload is not a redacted
-formula vault. `--redact-external-workbook-links` is a narrower, output-only
-sharing boundary for literal external-workbook link material; it does not turn
-the general payload into a redacted formula vault. FormulaFence does not
+formula vault. `--redact-formula-external-actions` is an opt-in, output-only
+sharing boundary for the action/DDE formulas and exact static input evidence
+described above; `--redact-external-workbook-links` independently covers
+literal external-workbook link material. Neither option turns the general
+payload into a redacted formula vault. FormulaFence does not
 calculate, resolve, fetch, open, click, follow, authenticate to, query, or
 execute any formula action/provider, and it
 does not decide whether a dynamic `HYPERLINK` destination is local or remote.

@@ -16,6 +16,8 @@ from formulafence.output import (
     portfolio_to_sarif,
     profile_to_markdown,
     redact_external_workbook_link_material,
+    redact_formula_external_action_portfolio_payload,
+    redact_formula_external_action_report_payload,
     report_to_markdown,
     report_to_sarif,
 )
@@ -38,6 +40,17 @@ def _add_external_workbook_link_redaction_argument(parser: argparse.ArgumentPars
         help=(
             "Replace visible literal external-workbook link material in this shared "
             "report without changing comparison or policy results"
+        ),
+    )
+
+
+def _add_formula_external_action_redaction_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--redact-formula-external-actions",
+        action="store_true",
+        help=(
+            "Replace visible formula external-action/DDE material and known static "
+            "action inputs in this shared report without changing comparison or policy results"
         ),
     )
 
@@ -71,6 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("after", type=Path, help="Candidate workbook")
     _add_output_arguments(diff, ("json", "markdown", "sarif"))
     _add_external_workbook_link_redaction_argument(diff)
+    _add_formula_external_action_redaction_argument(diff)
     diff.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -84,6 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--policy", required=True, type=Path, help="Path to formulafence.yml")
     _add_output_arguments(check, ("json", "markdown", "sarif"))
     _add_external_workbook_link_redaction_argument(check)
+    _add_formula_external_action_redaction_argument(check)
     check.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -118,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_output_arguments(portfolio, ("json", "markdown", "sarif"))
     _add_external_workbook_link_redaction_argument(portfolio)
+    _add_formula_external_action_redaction_argument(portfolio)
     portfolio.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -191,6 +207,8 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
         payload = report.to_dict(policy_findings)
         if arguments.redact_external_workbook_links:
             payload = redact_external_workbook_link_material(payload)
+        if arguments.redact_formula_external_actions:
+            payload = redact_formula_external_action_report_payload(report, payload)
         content = as_json(payload)
     elif arguments.format == "sarif":
         content = as_json(
@@ -198,6 +216,7 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
                 report,
                 policy_findings,
                 redact_external_workbook_links=arguments.redact_external_workbook_links,
+                redact_formula_external_actions=arguments.redact_formula_external_actions,
             )
         )
     else:
@@ -205,6 +224,7 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
             report,
             policy_findings,
             redact_external_workbook_links=arguments.redact_external_workbook_links,
+            redact_formula_external_actions=arguments.redact_formula_external_actions,
         )
     _emit(content, arguments.output)
 
@@ -236,18 +256,22 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
         payload = report.to_dict()
         if arguments.redact_external_workbook_links:
             payload = redact_external_workbook_link_material(payload)
+        if arguments.redact_formula_external_actions:
+            payload = redact_formula_external_action_portfolio_payload(report, payload)
         content = as_json(payload)
     elif arguments.format == "sarif":
         content = as_json(
             portfolio_to_sarif(
                 report,
                 redact_external_workbook_links=arguments.redact_external_workbook_links,
+                redact_formula_external_actions=arguments.redact_formula_external_actions,
             )
         )
     else:
         content = portfolio_to_markdown(
             report,
             redact_external_workbook_links=arguments.redact_external_workbook_links,
+            redact_formula_external_actions=arguments.redact_formula_external_actions,
         )
     _emit(content, arguments.output)
 

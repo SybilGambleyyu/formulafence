@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.98.0
+        uses: SybilGambleyyu/formulafence@v0.99.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -63,7 +63,7 @@ with the repository's chosen SARIF uploader. FormulaFence uses logical
 locations such as `Dashboard!B12`; consumers that do not understand Excel
 coordinates can still show the workbook path, rule, and message.
 
-## Shared external-workbook-link artifacts
+## Shared external-workbook-link and formula-action artifacts
 
 The default report preserves full local reviewer evidence. If an artifact or
 Markdown job summary will be shared outside that review boundary, set the
@@ -72,6 +72,7 @@ Action input below (or pass the same CLI flag to `diff`, `check`, or
 
 ```yaml
           redact-external-workbook-links: 'true'
+          redact-formula-external-actions: 'true'
 ```
 
 This maps directly to `--redact-external-workbook-links`. It replaces a whole
@@ -84,6 +85,23 @@ assembled at Excel calculation time. It is not a general sensitive-data
 redaction guarantee, so keep the default local-review artifact when reviewers
 need the complete formula evidence.
 
+`redact-formula-external-actions: 'true'` maps directly to
+`--redact-formula-external-actions`. It replaces direct stored `FF064`
+formula-action/provider and `FF074` DDE formula material with
+`[formula external-action material redacted]`. It also hides before/after cell
+evidence for an action/DDE formula and for an exact changed static input that
+the private dependency analysis recorded as reaching one. If a relevant
+formula-defined-name chain changed, it conservatively replaces changed
+defined-name before/after values too, because a wrapper can carry an endpoint
+without spelling the action. It leaves comparison facts, policy, exit-code, and
+the in-memory report unchanged; it never evaluates formulas, contacts a
+provider/DDE server, or reconstructs a dynamically assembled destination.
+
+This is not a general sensitive-data redaction guarantee. It does not replace
+the external-workbook-link switch, so set both inputs when a shared artifact
+may contain both kinds of material. Leave both off for the established complete
+local-review report.
+
 ## Directory portfolios
 
 When both Action inputs are directories, the Action automatically runs
@@ -93,7 +111,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.98.0
+  uses: SybilGambleyyu/formulafence@v0.99.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -197,7 +215,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.98.0/formulafence-0.98.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.99.0/formulafence-0.99.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

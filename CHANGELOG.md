@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.99.0 — 2026-07-26
+
+- Add opt-in `--redact-formula-external-actions` rendering for `diff`, `check`,
+  and `portfolio` JSON, Markdown, and SARIF artifacts. It keeps ordinary local
+  review output unchanged by default while hiding direct stored `FF064`
+  formula-action/provider and `FF074` DDE formula material with a stable
+  marker.
+- Extend the output-only boundary to changed action/DDE cells and the exact
+  statically visible input cells that the private dependency analysis recorded
+  as reaching them. Conservatively hide changed defined-name before/after
+  evidence when a relevant resolved action/DDE name chain changes, so a wrapper
+  cannot expose an endpoint without spelling a native action itself.
+- Keep comparison facts, policy evaluation, findings, and exit status unchanged.
+  The composite GitHub Action exposes the switch as
+  `redact-formula-external-actions: 'true'`. The mode does not evaluate
+  formulas, contact a provider/DDE server, reconstruct dynamic destinations, or
+  claim to be a general sensitive-data scrubber.
+- Add direct-action/DDE, exact static-input beyond the bounded impact sample,
+  resolved named-chain, default-evidence, policy, portfolio, JSON/Markdown/
+  SARIF, and composite-Action regression coverage.
+
 ## 0.98.0 — 2026-07-26
 
 - Add opt-in `--redact-external-workbook-links` rendering for `diff`, `check`,

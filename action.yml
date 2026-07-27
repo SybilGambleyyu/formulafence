@@ -29,6 +29,10 @@ inputs:
     description: Replace visible literal external-workbook link material in the shared report without changing comparison or policy results.
     required: false
     default: 'false'
+  redact-formula-external-actions:
+    description: Replace visible formula external-action/DDE material and known static action inputs in the shared report without changing comparison or policy results.
+    required: false
+    default: 'false'
   fail-on:
     description: Also fail when a non-policy change or finding reaches this severity.
     required: false
@@ -75,6 +79,7 @@ runs:
         INPUT_FORMAT: ${{ inputs.format }}
         INPUT_OUTPUT: ${{ inputs.output }}
         INPUT_REDACT_EXTERNAL_WORKBOOK_LINKS: ${{ inputs.redact-external-workbook-links }}
+        INPUT_REDACT_FORMULA_EXTERNAL_ACTIONS: ${{ inputs.redact-formula-external-actions }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_MAX_WORKBOOKS: ${{ inputs.max-workbooks }}
         INPUT_MAX_LINK_IMPACT: ${{ inputs.max-link-impact }}

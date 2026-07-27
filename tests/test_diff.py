@@ -16,8 +16,11 @@ import formulafence.workbook as workbook_module
 from formulafence.diff import compare_snapshots
 from formulafence.output import (
     EXTERNAL_WORKBOOK_LINK_REDACTION,
+    FORMULA_EXTERNAL_ACTION_REDACTION,
     profile_to_markdown,
     redact_external_workbook_link_material,
+    redact_formula_external_action_material,
+    redact_formula_external_action_report_payload,
     report_to_markdown,
     report_to_sarif,
 )
@@ -1352,6 +1355,77 @@ def test_external_workbook_link_report_redaction_hides_static_and_dynamic_litera
         assert private_value not in json.dumps(redacted)
     assert redacted["cell"] == EXTERNAL_WORKBOOK_LINK_REDACTION
     assert redacted["nested"] == [EXTERNAL_WORKBOOK_LINK_REDACTION]
+
+
+def test_formula_external_action_redaction_hides_direct_action_and_dde_formulas() -> None:
+    payload = {
+        "hyperlink": '=HYPERLINK("https://private.example.test/PRIVATE-LINK", "Open")',
+        "webservice": '=WEBSERVICE("https://private.example.test/PRIVATE-WEB")',
+        "cube": '=CUBEVALUE("PRIVATE-CUBE-CONNECTION", "[Measures].[PRIVATE-REVENUE]")',
+        "dde": "=DDE.TEST|'PRIVATE-DDE-TOPIC'!PRIVATE_ITEM",
+        "ordinary": "=SUM(A1:A2)",
+        "plain": "ordinary local review evidence",
+    }
+
+    redacted = redact_formula_external_action_material(payload)
+
+    assert redacted["ordinary"] == payload["ordinary"]
+    assert redacted["plain"] == payload["plain"]
+    assert all(
+        redacted[key] == FORMULA_EXTERNAL_ACTION_REDACTION
+        for key in ("hyperlink", "webservice", "cube", "dde")
+    )
+    for private_value in (
+        "PRIVATE-LINK",
+        "PRIVATE-WEB",
+        "PRIVATE-CUBE-CONNECTION",
+        "PRIVATE-REVENUE",
+        "PRIVATE-DDE-TOPIC",
+        "PRIVATE_ITEM",
+    ):
+        assert private_value not in json.dumps(redacted)
+
+
+def test_formula_external_action_report_redaction_hides_unsampled_static_inputs(
+    tmp_path,
+) -> None:
+    """A shared report must not depend on its bounded impact sample for privacy."""
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    baseline_marker = "PRIVATE-UNSAMPLED-ACTION-BASELINE"
+    candidate_marker = "PRIVATE-UNSAMPLED-ACTION-CANDIDATE"
+
+    def add_action_fanout(workbook, marker: str) -> None:
+        inputs = workbook["Inputs"]
+        inputs["A9"] = marker
+        # The report only keeps the first 20 sorted impact samples.  Z1 is a
+        # known HYPERLINK consumer but intentionally falls beyond B1:U1.
+        for column in range(2, 22):
+            inputs.cell(row=1, column=column).value = "=A9"
+        inputs["Z1"] = '=HYPERLINK(A9, "Open")'
+
+    rewrite(baseline, lambda workbook: add_action_fanout(workbook, baseline_marker))
+    rewrite(candidate, lambda workbook: add_action_fanout(workbook, candidate_marker))
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    input_change = next(
+        change for change in raw_payload["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert "Inputs!Z1" not in input_change["impacted_cells"]
+    assert report.formula_external_action_static_input_cells == frozenset(
+        {("Inputs", "A9")}
+    )
+
+    redacted = redact_formula_external_action_report_payload(report, raw_payload)
+    redacted_change = next(
+        change for change in redacted["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert redacted_change["before"]["value"] == FORMULA_EXTERNAL_ACTION_REDACTION
+    assert redacted_change["after"]["value"] == FORMULA_EXTERNAL_ACTION_REDACTION
+    rendered = json.dumps(redacted)
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
 
 
 def test_external_workbook_link_surface_ledger_covers_direct_external_names(
@@ -2797,6 +2871,47 @@ def test_named_formula_external_actions_are_propagated_diffed_and_private(tmp_pa
         "PRIVATE-NAMED-ACTION-INPUT-BASELINE",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_ledger_artifacts)
+
+
+def test_formula_external_action_report_redaction_hides_resolved_named_chain_inputs(
+    tmp_path,
+) -> None:
+    """A name that calls an action-bearing name can still carry an endpoint."""
+    baseline = make_named_formula_external_action_model(tmp_path / "baseline.xlsx")
+    candidate = make_named_formula_external_action_model(tmp_path / "candidate.xlsx")
+    private_marker = "PRIVATE-INDIRECT-NAMED-ENDPOINT-CANDIDATE"
+    workbook = load_workbook(candidate)
+    workbook.defined_names["FENCE.CHAIN"].attr_text = (
+        '=LAMBDA(value,FENCE.WRAPPER("PRIVATE-INDIRECT-NAMED-ENDPOINT-CANDIDATE"))'
+    )
+    workbook.save(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    assert (
+        report.before.formula_external_actions.definition_signature
+        != report.after.formula_external_actions.definition_signature
+    )
+    assert private_marker in json.dumps(report.to_dict())
+
+    redacted_payload = redact_formula_external_action_report_payload(report, report.to_dict())
+    assert private_marker not in json.dumps(redacted_payload)
+    changed_name = next(
+        change
+        for change in redacted_payload["changes"]
+        if change["kind"] == "defined_name_changed"
+    )
+    assert changed_name["details"]["before"] == FORMULA_EXTERNAL_ACTION_REDACTION
+    assert changed_name["details"]["after"] == FORMULA_EXTERNAL_ACTION_REDACTION
+
+    redacted_sarif = report_to_sarif(report, redact_formula_external_actions=True)
+    assert private_marker not in json.dumps(redacted_sarif)
+    ff008 = next(
+        result
+        for result in redacted_sarif["runs"][0]["results"]
+        if result["ruleId"] == "FF008"
+    )
+    assert ff008["properties"]["before"] == FORMULA_EXTERNAL_ACTION_REDACTION
+    assert ff008["properties"]["after"] == FORMULA_EXTERNAL_ACTION_REDACTION
 
 
 def test_named_formula_external_action_static_inputs_are_guarded(tmp_path) -> None:

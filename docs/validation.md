@@ -32,7 +32,11 @@ in 0.002 seconds at 34,672 KiB with the range-specific safety error; a
 34,804 KiB before `openpyxl` could expand the grid. The completed source tree
 passed **779 tests in 127.54 seconds**. Focused archive-safety and version
 coverage also passed **77 tests in 2.32 seconds**, along with Ruff, bytecode
-compilation, and `git diff --check`.
+compilation, and `git diff --check`. The release wheel and source distribution
+passed `twine check`; a clean Python 3.12 environment installed the exact wheel,
+confirmed `FormulaFence 0.118.0` and `openpyxl.DEFUSEDXML`, compared a normal
+workbook successfully, and returned the normal input-error exit status (2) for
+an independently generated full-grid `A1:XFD1048576` merge declaration.
 
 ## Reader view and auxiliary catalog bounds — 2026-07-26
 

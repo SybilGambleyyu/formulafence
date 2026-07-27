@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.126.0 — 2026-07-26
+
+- Bound each RibbonX `customUI` XML part before FormulaFence's private
+  customization scanner can materialize its full XML tree or recursively
+  canonicalize opaque control fragments. The new 4,096-element-per-part
+  structural budget complements the existing 16 MiB part, 32 MiB aggregate,
+  and eight-part byte/count limits.
+- Stream the structural preflight directly from the ZIP member and fail closed
+  to unrecognized RibbonX coverage when its element or nesting budget is
+  exceeded. Valid but complex customizations within the exact boundary retain
+  their existing callback/control coverage and malformed inputs retain their
+  established full-parser diagnostics.
+- Add fail-before-tree-materialization coverage for configured/default and
+  exact limits, including compact direct and nested opaque RibbonX subtrees.
+
 ## 0.125.0 — 2026-07-26
 
 - Bound every descendant below a direct `customSheetView` in a supported legacy

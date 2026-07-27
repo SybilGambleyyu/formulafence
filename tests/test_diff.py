@@ -4,7 +4,7 @@ import json
 import shutil
 import warnings
 from xml.etree import ElementTree
-from zipfile import ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import load_workbook
 from openpyxl.chart import BarChart, Reference
@@ -8379,6 +8379,41 @@ def test_malformed_xlm_macro_sheet_parts_fail_closed(tmp_path) -> None:
     assert "FF026" in {finding.rule_id for finding in report.findings}
 
 
+def _append_ribbon_customization_xml_elements(
+    path,
+    count: int,
+    *,
+    nested: bool = False,
+) -> None:
+    """Add opaque RibbonX XML entries without relying on a workbook reader."""
+    member = "customUI/customUI.xml"
+    staging = path.with_suffix(".ribbon-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, f"{{{namespace}}}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, f"{{{namespace}}}entry")
+    contents[member] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _ribbon_customization_xml_element_count(path) -> int:
+    """Count one fixture's RibbonX elements for exact budget tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read("customUI/customUI.xml"))
+    return sum(1 for _ in root.iter())
+
+
 def test_ribbon_callback_changes_are_profiled_and_diffed_privately(tmp_path) -> None:
     baseline = make_ribbon_customization_model(tmp_path / "baseline.xlsx")
     candidate = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
@@ -8550,6 +8585,117 @@ def test_ribbon_customization_byte_budget_remains_covered(tmp_path, monkeypatch)
     assert snapshot.ribbon_customization.unrecognized_ribbon_part_count == 1
     assert any(
         "RibbonX customization part read budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_ribbon_xml_element_budget_stops_before_materializing_the_tree(
+    tmp_path, monkeypatch
+) -> None:
+    workbook = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    _append_ribbon_customization_xml_elements(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_RIBBON_CUSTOM_UI_MAX_XML_ELEMENT_COUNT",
+        _ribbon_customization_xml_element_count(workbook) - 1,
+    )
+
+    def unexpected_tree_parse(*args, **kwargs):
+        raise AssertionError("the RibbonX XML tree was materialized after its budget failed")
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+    warnings: set[str] = set()
+    with ZipFile(workbook) as archive:
+        inspection = workbook_module._ribbon_part_inspection(
+            archive,
+            "customUI/customUI.xml",
+            warnings,
+            workbook_module._RibbonCustomizationBudget(),
+        )
+
+    assert inspection.inspected is False
+    assert any("RibbonX customization XML part whose structure" in warning for warning in warnings)
+
+
+def test_ribbon_xml_element_budget_remains_covered(tmp_path, monkeypatch) -> None:
+    workbook = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    _append_ribbon_customization_xml_elements(workbook, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_RIBBON_CUSTOM_UI_MAX_XML_ELEMENT_COUNT",
+        _ribbon_customization_xml_element_count(workbook) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.ribbon_customization.unrecognized_ribbon_part_count == 1
+    assert any(
+        "RibbonX customization XML part whose structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_ribbon_xml_element_budget_accepts_the_configured_capacity(
+    tmp_path, monkeypatch
+) -> None:
+    workbook = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    _append_ribbon_customization_xml_elements(workbook, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_RIBBON_CUSTOM_UI_MAX_XML_ELEMENT_COUNT",
+        _ribbon_customization_xml_element_count(workbook),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.ribbon_customization.unrecognized_ribbon_part_count == 0
+
+
+def test_ribbon_xml_element_budget_accepts_the_default_capacity(tmp_path) -> None:
+    workbook = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    _append_ribbon_customization_xml_elements(
+        workbook,
+        workbook_module._RIBBON_CUSTOM_UI_MAX_XML_ELEMENT_COUNT
+        - _ribbon_customization_xml_element_count(workbook),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.ribbon_customization.unrecognized_ribbon_part_count == 0
+
+
+def test_ribbon_xml_element_budget_rejects_the_default_overage(tmp_path) -> None:
+    workbook = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    _append_ribbon_customization_xml_elements(
+        workbook,
+        workbook_module._RIBBON_CUSTOM_UI_MAX_XML_ELEMENT_COUNT
+        - _ribbon_customization_xml_element_count(workbook)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.ribbon_customization.unrecognized_ribbon_part_count == 1
+    assert any(
+        "RibbonX customization XML part whose structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_ribbon_xml_element_budget_counts_nested_opaque_subtrees(tmp_path, monkeypatch) -> None:
+    workbook = make_ribbon_customization_model(tmp_path / "candidate.xlsx")
+    _append_ribbon_customization_xml_elements(workbook, 1, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_RIBBON_CUSTOM_UI_MAX_XML_ELEMENT_COUNT",
+        _ribbon_customization_xml_element_count(workbook) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.ribbon_customization.unrecognized_ribbon_part_count == 1
+    assert any(
+        "RibbonX customization XML part whose structure" in warning
         for warning in snapshot.parser_warnings
     )
 

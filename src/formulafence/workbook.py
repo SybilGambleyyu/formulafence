@@ -640,6 +640,11 @@ _RIBBON_CUSTOM_UI_PART_PATTERN = re.compile(
 _RIBBON_CUSTOM_UI_MAX_PART_BYTES = 16 * 1024 * 1024
 _RIBBON_CUSTOM_UI_TOTAL_MAX_BYTES = 32 * 1024 * 1024
 _RIBBON_CUSTOM_UI_TOTAL_MAX_COUNT = 8
+# RibbonX parts are retained through a recursive canonical fragment, so a part
+# byte ceiling alone still permits a tiny compressed package to create a large
+# temporary XML tree and signature tuple. Preserve generous complex ribbons
+# while bounding the raw parser before it materializes every element.
+_RIBBON_CUSTOM_UI_MAX_XML_ELEMENT_COUNT = 4_096
 _RIBBON_CUSTOM_UI_NAMESPACES = {
     "http://schemas.microsoft.com/office/2006/01/customui": "2007",
     "http://schemas.microsoft.com/office/2007/10/customui": "2010",
@@ -3313,6 +3318,35 @@ def _stream_ooxml_reader_xml(
             element.clear()
             tags.pop()
             depth -= 1
+
+
+def _ooxml_xml_structure_within_budget(
+    archive: ZipFile,
+    member: str,
+    *,
+    maximum_element_count: int,
+    maximum_nesting_depth: int = _OOXML_READER_MAX_XML_NESTING_DEPTH,
+) -> bool:
+    """Stream one raw XML part without retaining an unbounded element tree."""
+    depth = 0
+    element_count = 0
+    with archive.open(member) as xml_stream:
+        for event, element in ElementTree.iterparse(
+            xml_stream,
+            events=("start", "end"),
+        ):
+            if event == "start":
+                depth += 1
+                element_count += 1
+                if (
+                    depth > maximum_nesting_depth
+                    or element_count > maximum_element_count
+                ):
+                    return False
+                continue
+            element.clear()
+            depth -= 1
+    return True
 
 
 def _reader_shared_string_xml_paths(
@@ -10082,6 +10116,34 @@ def _ribbon_part_inspection(
             definition_signature=_private_external_data_signature(
                 (
                     ("read-budget-exhausted", member),
+                    ("size", str(info.file_size)),
+                    ("compressed-size", str(info.compress_size)),
+                    ("crc", str(info.CRC)),
+                )
+            ),
+        )
+    try:
+        within_structure_budget = _ooxml_xml_structure_within_budget(
+            archive,
+            member,
+            maximum_element_count=_RIBBON_CUSTOM_UI_MAX_XML_ELEMENT_COUNT,
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        within_structure_budget = True
+    if not within_structure_budget:
+        warnings.add(
+            "FormulaFence did not fully read a RibbonX customization XML part whose "
+            "structure exceeds the safety budget; the affected controls have a "
+            "coverage gap."
+        )
+        return _RibbonPartInspection(
+            member=member,
+            definition_signature=_private_external_data_signature(
+                (
+                    ("xml-structure-budget-exhausted", member),
                     ("size", str(info.file_size)),
                     ("compressed-size", str(info.compress_size)),
                     ("crc", str(info.CRC)),

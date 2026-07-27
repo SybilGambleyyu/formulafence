@@ -5,6 +5,34 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## RibbonX structural XML bounds — 2026-07-26
+
+Version 0.126.0 closes a compact allocation path in FormulaFence's private
+RibbonX customization scanner. The existing 16 MiB per-part, 32 MiB aggregate,
+and eight-part limits bound raw `customUI` payload size and count, but a small
+compressed XML part can still expand into a broad or deeply nested element tree.
+The scanner then creates a recursive canonical fragment for unknown controls,
+so a workbook can consume substantial memory without a populated worksheet.
+
+Before the scanner reads a bounded RibbonX part into memory, it now streams the
+ZIP member and counts every XML element while enforcing the existing nesting
+limit. Each part permits 4,096 elements, including its root. A successfully
+streamed part that exceeds either structural bound becomes unrecognized RibbonX
+coverage with an explicit warning; malformed or unreadable input still reaches
+the established parser so its normal diagnostic is preserved. An exact
+4,096-element customization remains fully covered, and both direct opaque
+controls and one opaque nested subtree consume the same boundary.
+
+Independent raw-ZIP fixtures measured the exact 0.125.0 wheel and the 0.126.0
+source candidate in the same Python 3.12 environment. A 10,158-byte workbook
+with 100,000 direct opaque RibbonX children (1,400,497 bytes of `customUI` XML)
+loaded through 0.125.0 in 0.559 seconds at 93,568 KiB resident; the candidate
+marks it unrecognized in 0.137 seconds at 33,352 KiB. A 9,976-byte workbook
+with one opaque RibbonX child containing 100,000 nested entries (1,300,522
+bytes of XML) loaded in 0.578 seconds at 92,872 KiB and now stops in 0.137
+seconds at 34,092 KiB. The completed source suite passed **885 tests in 124.65
+seconds**, with Ruff and `git diff --check` clean.
+
 ## Legacy Custom View descendant bounds — 2026-07-26
 
 Version 0.125.0 closes the remaining compact subtree path in the legacy Custom

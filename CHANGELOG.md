@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.143.0 — 2026-07-26
+
+- Bound raw XLM macro-sheet XML before FormulaFence, its temporary
+  ordinary-workbook reader, or Custom View sanitization can materialize and
+  privately canonicalize a repetitive macro-program tree. Each selected
+  macro-sheet part allows 32,768 elements; the shared macro-sheet scan allows
+  65,536, alongside 16 MiB per-part, 64 MiB aggregate, and 512-part limits.
+- Convert a successfully streamed structural overage into explicit `FF010`
+  plus `FF026`-visible opaque macro-sheet evidence, retaining only a private
+  streamed content fingerprint for same-size hostile changes. Preserve the
+  ordinary parser diagnostic when the structural preflight reaches malformed
+  XML before an overage, and leave non-XLM raw workbook XML outside this
+  scanner's scope.
+- Give only selected XLM targets an empty worksheet replacement in the
+  temporary ordinary reader after raw scanning, and exclude XLM targets from
+  Custom View sanitization, association parsing, and generic sheet metadata.
+  This includes an invalid ordinary relationship alias to the same raw target:
+  the regular sheet declaration remains while a visible coverage warning
+  prevents a secondary unbounded parse of macro XML.
+- Add fail-before-materialization, byte/part/aggregate, exact/default,
+  private-fingerprint, same-size, malformed-input, and XLM reader-isolation
+  regressions for raw macro-sheet XML.
+
 ## 0.142.0 — 2026-07-26
 
 - Bound raw query-table XML before FormulaFence can materialize and privately

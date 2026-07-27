@@ -5,6 +5,46 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## XLM macro-sheet XML structural bounds — 2026-07-26
+
+Version 0.143.0 closes a compact-allocation path in raw Excel 4.0 / XLM
+macro-sheet XML. FormulaFence already scanned macro-sheet formulas before the
+ordinary workbook library could omit them, but a byte-permitted macro part
+could first materialize a repetitive private tree and recursively canonicalize
+unsupported children. The ordinary workbook reader and Custom View
+sanitization also had secondary paths that could reopen that same raw macro
+tree.
+
+FormulaFence now streams each selected raw macro-sheet XML part before private
+parsing. Each part allows 32,768 elements and the complete shared macro-sheet
+scan allows 65,536, together with 16 MiB per-part, 64 MiB aggregate, and
+512-part limits. A successfully streamed structural overage becomes explicit
+`FF010` plus `FF026`-visible opaque macro-sheet evidence. Its private streamed
+SHA-256 content fingerprint keeps same-size hostile XML diff-visible without
+retaining macro commands, cell values, relationships, embedded payloads, or
+raw XML. After the raw scan, the temporary ordinary-workbook reader gets an
+empty worksheet replacement for selected XLM targets, while Custom View
+sanitization and association parsing exclude them. An invalid ordinary-sheet
+relationship alias to the same raw target is likewise excluded from generic
+sheet metadata and receives a visible coverage warning. Malformed macro XML
+reached before a structural overage retains its ordinary parser diagnostic.
+These are allocation limits for the named raw macro-sheet readers, not general
+legacy-workbook package validity rules.
+
+A controlled XLM fixture added 1,000,000 foreign-namespace direct children to
+`xl/macrosheets/sheet1.xml`. The affected macro part was 6,000,635 bytes
+uncompressed, 9,146 bytes compressed, and the complete workbook was 16,685
+bytes. In isolated source measurements, the released unguarded 0.142.0 reader
+completed the hostile comparison in 7.090131 seconds / 528,944 KiB and emitted
+only `FF026`. The 0.143.0 source completed the same comparison in 0.262575
+seconds / 44,808 KiB without materializing the hostile tree, emitting `FF010`
+and `FF026` with `parser_coverage_warning_added` and
+`xlm_macro_sheets_changed` records. A normal baseline self-comparison completed
+in 0.198028 seconds / 38,128 KiB with no findings or changes. The hostile JSON
+contained neither the injected namespace nor the raw element tag. The full
+source suite passed 1,051 tests in 156.63 seconds; Ruff and bytecode
+compilation were clean.
+
 ## Query-table XML structural bounds — 2026-07-26
 
 Version 0.142.0 closes a compact-allocation path in raw query-table XML.

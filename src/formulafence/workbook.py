@@ -673,6 +673,15 @@ _EXTERNAL_LINK_PATH_RELATIONSHIP_TYPE = (
 )
 _XLM_MACRO_SHEET_PART_PATTERN = re.compile(r"^xl/macrosheets/[^/]+\.xml$", re.IGNORECASE)
 _XLM_MACRO_SHEET_MAX_PART_BYTES = 16 * 1024 * 1024
+_XLM_MACRO_SHEET_TOTAL_XML_BYTES = 64 * 1024 * 1024
+_XLM_MACRO_SHEET_TOTAL_XML_PARTS = 512
+# Legacy Excel 4.0 macro programs live in raw XML parts and are recursively
+# canonicalized for private change evidence. Stream their complete structure
+# before a compact hostile program can materialize an impractical tree.
+_XLM_MACRO_SHEET_MAX_XML_ELEMENT_COUNT = 32_768
+_XLM_MACRO_SHEET_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _XLM_MACRO_SHEET_MAX_XML_ELEMENT_COUNT
+)
 _XLM_RELATED_PART_MAX_BYTES = 32 * 1024 * 1024
 _XLM_RELATED_PART_TOTAL_MAX_BYTES = 64 * 1024 * 1024
 _XLM_RELATED_PART_TOTAL_MAX_COUNT = 256
@@ -2071,6 +2080,15 @@ class _XlmRelatedPartBudget:
 
     remaining_bytes: int = _XLM_RELATED_PART_TOTAL_MAX_BYTES
     remaining_parts: int = _XLM_RELATED_PART_TOTAL_MAX_COUNT
+
+
+@dataclass
+class _XlmMacroXmlBudget:
+    """Bound raw XLM macro-sheet XML before private canonicalization."""
+
+    remaining_bytes: int = _XLM_MACRO_SHEET_TOTAL_XML_BYTES
+    remaining_parts: int = _XLM_MACRO_SHEET_TOTAL_XML_PARTS
+    remaining_xml_elements: int = _XLM_MACRO_SHEET_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 @dataclass(frozen=True)
@@ -4788,9 +4806,27 @@ def _package_relationships(
     return tuple(parsed)
 
 
+def _xlm_macro_sheet_target_members(archive: ZipFile) -> frozenset[str]:
+    """Return safe workbook targets declared as raw XLM macro sheets.
+
+    A malformed package can point an ordinary worksheet relationship at the
+    same target. Secondary worksheet metadata readers must still leave that
+    executable XML to the dedicated bounded XLM scanner.
+    """
+    return frozenset(
+        relationship.target
+        for relationship in _package_relationships(archive, "xl/workbook.xml")
+        if (
+            relationship.target is not None
+            and relationship.relationship_type in _XLM_MACRO_SHEET_RELATIONSHIPS
+        )
+    )
+
+
 def _sheet_xml_parts(archive: ZipFile) -> dict[str, tuple[str, str]]:
     """Map workbook sheet titles to safe OOXML parts and their sheet kind."""
     workbook = _xml_root(archive, "xl/workbook.xml")
+    xlm_macro_targets = _xlm_macro_sheet_target_members(archive)
     relationship_targets: dict[str, tuple[str, str]] = {}
     for relationship in _package_relationships(archive, "xl/workbook.xml"):
         sheet_type = relationship.relationship_type.rsplit("/", maxsplit=1)[-1]
@@ -4798,6 +4834,7 @@ def _sheet_xml_parts(archive: ZipFile) -> dict[str, tuple[str, str]]:
             sheet_type not in {"worksheet", "chartsheet", "dialogsheet"}
             or not relationship.relationship_id
             or relationship.target is None
+            or relationship.target in xlm_macro_targets
         ):
             continue
         relationship_targets[relationship.relationship_id] = (
@@ -4986,12 +5023,14 @@ def _worksheet_display_xml_paths(archive: ZipFile) -> tuple[str, ...]:
     workbook/cell reader or unrelated raw-control boundaries.
     """
     workbook = _xml_root(archive, "xl/workbook.xml")
+    xlm_macro_targets = _xlm_macro_sheet_target_members(archive)
     relationship_targets = {
         relationship.relationship_id: relationship.target
         for relationship in _package_relationships(archive, "xl/workbook.xml")
         if (
             relationship.relationship_id
             and relationship.target is not None
+            and relationship.target not in xlm_macro_targets
             and relationship.relationship_type.rsplit("/", maxsplit=1)[-1]
             == "worksheet"
         )
@@ -5020,12 +5059,14 @@ def _visual_worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
     SpreadsheetML.
     """
     workbook = _xml_root(archive, "xl/workbook.xml")
+    xlm_macro_targets = _xlm_macro_sheet_target_members(archive)
     relationship_targets = {
         relationship.relationship_id: relationship.target
         for relationship in _package_relationships(archive, "xl/workbook.xml")
         if (
             relationship.relationship_id
             and relationship.target is not None
+            and relationship.target not in xlm_macro_targets
             and relationship.relationship_type.rsplit("/", maxsplit=1)[-1]
             == "worksheet"
         )
@@ -10211,6 +10252,46 @@ def _xlm_macro_fragment(
     )
 
 
+def _xlm_macro_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info: ZipInfo,
+    budget: _XlmMacroXmlBudget,
+) -> str | None:
+    """Stream an XLM macro-sheet part before its private tree is materialized."""
+    metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+    if budget.remaining_xml_elements <= 0:
+        return _private_external_data_signature(
+            (("xlm-macro-sheet-xml-structure-budget-exhausted", metadata),)
+        )
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _XLM_MACRO_SHEET_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the existing full-parser diagnostic for malformed or
+        # unreadable XML. Only a successfully streamed overage can bypass that
+        # materializing parser safely.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    # An overage can contain an unbounded number of unseen descendants. Stop
+    # spending the aggregate structural budget after its first failed part.
+    budget.remaining_xml_elements = 0
+    signature_entries = [("xml-structure-budget-exhausted", metadata)]
+    if (
+        payload_signature := _private_archive_member_payload_signature(archive, info)
+    ) is not None:
+        signature_entries.append(("payload", payload_signature))
+    return _private_external_data_signature(tuple(signature_entries))
+
+
 def _xlm_macro_formula_cell_count(root: ElementTree.Element) -> int:
     """Count macro-sheet cells with a formula without evaluating the formula."""
     return sum(
@@ -10224,6 +10305,7 @@ def _xlm_macro_part_inspection(
     archive: ZipFile,
     member: str,
     warnings: set[str],
+    xml_budget: _XlmMacroXmlBudget,
     related_part_budget: _XlmRelatedPartBudget,
 ) -> _XlmMacroSheetInspection:
     """Fingerprint one XLM macro-sheet part and its relationships privately."""
@@ -10240,6 +10322,19 @@ def _xlm_macro_part_inspection(
                 (("missing-member", member),)
             ),
         )
+    if xml_budget.remaining_parts <= 0:
+        metadata = repr((member, info.file_size, info.compress_size, info.CRC))
+        warnings.add(
+            "FormulaFence reached its bounded XLM macro-sheet XML part count; "
+            "affected macro-sheet controls were not compared."
+        )
+        return _XlmMacroSheetInspection(
+            member=member,
+            program_signature=_private_external_data_signature(
+                (("xlm-macro-sheet-xml-part-count-budget-exhausted", metadata),)
+            ),
+        )
+    xml_budget.remaining_parts -= 1
     if info.file_size > _XLM_MACRO_SHEET_MAX_PART_BYTES:
         warnings.add(
             "FormulaFence did not fully read an oversized XLM macro-sheet part; "
@@ -10254,6 +10349,41 @@ def _xlm_macro_part_inspection(
                     ("crc", str(info.CRC)),
                 )
             ),
+        )
+    if info.file_size > xml_budget.remaining_bytes:
+        warnings.add(
+            "FormulaFence reached its bounded XLM macro-sheet XML read budget; "
+            "affected macro-sheet controls were not compared."
+        )
+        return _XlmMacroSheetInspection(
+            member=member,
+            program_signature=_private_external_data_signature(
+                (
+                    (
+                        "xlm-macro-sheet-xml-read-budget-exhausted",
+                        repr((member, info.file_size, info.compress_size, info.CRC)),
+                    ),
+                )
+            ),
+        )
+    # Structural preflight reads the whole member even if parsing is then
+    # deliberately skipped, so it consumes the shared byte budget first.
+    xml_budget.remaining_bytes -= info.file_size
+    structure_fallback_signature = _xlm_macro_xml_structure_budget_fallback_signature(
+        archive,
+        member,
+        info,
+        xml_budget,
+    )
+    if structure_fallback_signature is not None:
+        warnings.add(
+            "FormulaFence did not fully read an XLM macro-sheet XML part whose XML "
+            "structure exceeds the safety budget; affected macro-sheet controls "
+            "have a coverage gap."
+        )
+        return _XlmMacroSheetInspection(
+            member=member,
+            program_signature=structure_fallback_signature,
         )
     payload: bytes | None = None
     try:
@@ -10561,6 +10691,7 @@ def _xlm_macro_metadata(path: Path) -> _XlmMacroMetadata:
             inspections: list[_XlmMacroSheetInspection] = []
             unrecognized_macro_sheet_members: set[str] = set()
             international_macro_sheet_count = 0
+            macro_sheet_xml_budget = _XlmMacroXmlBudget()
             related_part_budget = _XlmRelatedPartBudget()
             for member in sorted(candidate_kinds, key=str.casefold):
                 kinds = candidate_kinds[member]
@@ -10576,6 +10707,7 @@ def _xlm_macro_metadata(path: Path) -> _XlmMacroMetadata:
                     archive,
                     member,
                     warnings,
+                    macro_sheet_xml_budget,
                     related_part_budget,
                 )
                 inspections.append(inspection)
@@ -17637,11 +17769,44 @@ def _custom_workbook_view_reader_replacements(
                         xml_declaration=True,
                     )
 
+            xlm_macro_targets: set[str] = set()
+            relationship_member = _relationship_part_path("xl/workbook.xml")
+            try:
+                relationships = reader_xml_root(relationship_member)
+            except (
+                KeyError,
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ):
+                relationships = None
+            if (
+                relationships is not None
+                and _xml_namespace(relationships.tag) == _PACKAGE_RELATIONSHIP_NS
+                and _xml_local_name(relationships.tag) == "Relationships"
+            ):
+                relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+                for relationship in relationships.findall(relationship_tag):
+                    if (
+                        relationship.get("Type")
+                        not in _XLM_MACRO_SHEET_RELATIONSHIPS
+                    ):
+                        continue
+                    target = relationship.get("Target")
+                    if (
+                        target is not None
+                        and relationship.get("TargetMode", "Internal").casefold()
+                        == "internal"
+                        and (safe_target := _normalise_part_target("xl/workbook.xml", target))
+                        is not None
+                    ):
+                        xlm_macro_targets.add(safe_target)
+
             sheet_prefixes = (
                 "xl/worksheets/",
                 "xl/chartsheets/",
                 "xl/dialogsheets/",
-                "xl/macrosheets/",
             )
             for member in archive.namelist():
                 if not (
@@ -17649,6 +17814,8 @@ def _custom_workbook_view_reader_replacements(
                     and member.startswith(sheet_prefixes)
                     and "/_rels/" not in member
                 ):
+                    continue
+                if member in xlm_macro_targets:
                     continue
                 try:
                     sheet = reader_xml_root(member)
@@ -17812,6 +17979,107 @@ def _table_style_control_reader_replacements(
     return replacements, tuple(sorted(reader_warnings))
 
 
+def _xlm_macro_sheet_reader_replacements(
+    path: Path,
+    prior_replacements: Mapping[str, bytes] | None = None,
+) -> tuple[dict[str, bytes], tuple[str, ...]]:
+    """Keep raw XLM macro programs out of the ordinary workbook reader.
+
+    FormulaFence has already inspected the original macro sheet through its
+    bounded raw scanner. ``openpyxl`` otherwise dispatches an XLM relationship
+    through its regular worksheet reader, which has no use for the legacy
+    program but can still materialize the complete macro XML tree. Preserve the
+    sheet declaration and its ordinary workbook position by substituting an
+    empty SpreadsheetML worksheet only in the temporary reader copy.
+    """
+    replacements: dict[str, bytes] = {}
+    reader_warnings: set[str] = set()
+    prior_replacements = prior_replacements or {}
+    try:
+        with ZipFile(path) as archive:
+            def reader_xml_root(member: str) -> ElementTree.Element:
+                """Read an earlier safe overlay before falling back to the package."""
+                if (payload := prior_replacements.get(member)) is not None:
+                    return _xml_root_from_payload(payload)
+                return _xml_root(archive, member)
+
+            archive_members = set(archive.namelist())
+            candidate_members = {
+                member
+                for member in archive_members
+                if _XLM_MACRO_SHEET_PART_PATTERN.fullmatch(member)
+            }
+            relationship_member = _relationship_part_path("xl/workbook.xml")
+            try:
+                relationships = reader_xml_root(relationship_member)
+            except (
+                KeyError,
+                ElementTree.ParseError,
+                OSError,
+                RuntimeError,
+                ValueError,
+            ) as error:
+                relationships = None
+                reader_warnings.add(
+                    "FormulaFence could not inspect workbook relationships while "
+                    "isolating XLM macro-sheet XML before the underlying workbook "
+                    f"reader ran ({type(error).__name__}); conventional macro-sheet "
+                    "paths remain isolated."
+                )
+            if (
+                relationships is not None
+                and _xml_namespace(relationships.tag) == _PACKAGE_RELATIONSHIP_NS
+                and _xml_local_name(relationships.tag) == "Relationships"
+            ):
+                relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+                xlm_targets: set[str] = set()
+                ordinary_targets: set[str] = set()
+                for relationship in relationships.findall(relationship_tag):
+                    target = relationship.get("Target")
+                    target_mode = relationship.get("TargetMode", "Internal")
+                    safe_target = (
+                        _normalise_part_target("xl/workbook.xml", target)
+                        if target is not None and target_mode.casefold() == "internal"
+                        else None
+                    )
+                    if safe_target is None:
+                        continue
+                    if relationship.get("Type") in _XLM_MACRO_SHEET_RELATIONSHIPS:
+                        xlm_targets.add(safe_target)
+                    else:
+                        ordinary_targets.add(safe_target)
+                ambiguous_targets = xlm_targets & ordinary_targets
+                if ambiguous_targets:
+                    reader_warnings.add(
+                        "FormulaFence isolated an XLM macro-sheet target also bound "
+                        "through an ordinary workbook relationship before the underlying "
+                        "reader ran; the ordinary-sheet view has a coverage gap."
+                    )
+                candidate_members.update(xlm_targets)
+            elif relationships is not None:
+                reader_warnings.add(
+                    "FormulaFence found an unexpected workbook relationship root while "
+                    "isolating XLM macro-sheet XML; conventional macro-sheet paths "
+                    "remain isolated."
+                )
+            empty_worksheet = (
+                b'<?xml version="1.0" encoding="utf-8"?>'
+                b'<worksheet xmlns="http://schemas.openxmlformats.org/'
+                b'spreadsheetml/2006/main"><sheetData/></worksheet>'
+            )
+            for member in sorted(candidate_members, key=str.casefold):
+                if member not in archive_members:
+                    continue
+                replacements[member] = empty_worksheet
+    except (BadZipFile, ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        reader_warnings.add(
+            "FormulaFence could not isolate XLM macro-sheet XML before the underlying "
+            f"workbook reader ran ({type(error).__name__}); raw macro metadata remains "
+            "fail-closed."
+        )
+    return replacements, tuple(sorted(reader_warnings))
+
+
 def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...]]:
     """Return a temporary source that limits unsafe ordinary-reader behavior."""
     replacements, reader_warnings = _pivot_reader_cache_record_replacements(path)
@@ -17864,6 +18132,13 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
     table_style_control_replacements, table_style_control_reader_warnings = (
         _table_style_control_reader_replacements(path, prior_replacements)
     )
+    prior_replacements = {
+        **prior_replacements,
+        **table_style_control_replacements,
+    }
+    xlm_macro_sheet_replacements, xlm_macro_sheet_reader_warnings = (
+        _xlm_macro_sheet_reader_replacements(path, prior_replacements)
+    )
     replacements.update(legacy_replacements)
     replacements.update(threaded_comment_replacements)
     replacements.update(cell_hyperlink_replacements)
@@ -17872,6 +18147,7 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
     replacements.update(worksheet_dimension_replacements)
     replacements.update(custom_workbook_view_replacements)
     replacements.update(table_style_control_replacements)
+    replacements.update(xlm_macro_sheet_replacements)
     reader_warnings = tuple(
         sorted(
             {
@@ -17884,6 +18160,7 @@ def _openpyxl_safe_source(path: Path) -> tuple[Path, Path | None, tuple[str, ...
                 *worksheet_dimension_reader_warnings,
                 *custom_workbook_view_reader_warnings,
                 *table_style_control_reader_warnings,
+                *xlm_macro_sheet_reader_warnings,
             }
         )
     )
@@ -23585,6 +23862,15 @@ def _custom_workbook_view_metadata(path: Path) -> _CustomWorkbookViewMetadata:
             bindings = _custom_workbook_view_sheet_bindings(
                 archive, workbook, note_issue=note_association_issue
             )
+            xlm_macro_members = {
+                binding.member
+                for binding in bindings
+                if (
+                    binding.member is not None
+                    and (binding.kind or "").casefold()
+                    in {"xlmacrosheet", "xlintlmacrosheet"}
+                )
+            }
             sheet_index_by_id: dict[int, int] = {}
             duplicate_sheet_ids: set[int] = set()
             for binding in bindings:
@@ -23661,6 +23947,19 @@ def _custom_workbook_view_metadata(path: Path) -> _CustomWorkbookViewMetadata:
             for binding in bindings:
                 context = f"sheet:{binding.index}"
                 if binding.member is None:
+                    continue
+                if binding.member in xlm_macro_members:
+                    # XLM source is privately covered by its dedicated raw
+                    # macro scanner. This also covers an invalid second ordinary
+                    # relationship to the same part. A Custom View can only be
+                    # meaningful when its workbook-level declarations are
+                    # present; defer an explicit association gap until that
+                    # boundary exists rather than materializing an executable
+                    # macro tree in an unrelated presentation scanner.
+                    note_association_issue(
+                        f"{context}:xlm-macro-sheet-not-scanned",
+                        binding.member,
+                    )
                     continue
                 if binding.member in inspected_members:
                     note_association_issue(

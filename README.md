@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.142.0/formulafence-0.142.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.143.0/formulafence-0.143.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.142.0
+  uses: SybilGambleyyu/formulafence@v0.143.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1320,7 +1320,7 @@ FormulaFence separately inventories **Excel 4.0 / XLM macro sheets**. Unlike
 VBA, this executable automation is stored in raw macro-sheet XML parts (usually
 `xl/macrosheets/*.xml`), not `xl/vbaProject.bin`. FormulaFence binds the
 documented `xlMacrosheet` and `xlIntlMacrosheet` workbook relationships to
-their parts, privately fingerprints complete macro XML and related package
+their parts, privately fingerprints accepted macro XML and related package
 relationships, then streams direct safe internal relationship targets into
 private payload fingerprints. Profiles expose only safe counts for sheets,
 formula cells, visibility, related OLE/package parts, and fingerprinted versus
@@ -1333,6 +1333,21 @@ coverage warning remains visible. The package shape follows Microsoft's [Macro S
 part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-offmacro/b8bee527-ef5a-4734-bb8c-6eae4166b6c9)
 and [International Macro Sheet
 part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-offmacro/450634cb-ca5a-4350-9edb-940a90707f49).
+
+Before private tree parsing, the macro-sheet scanner streams raw macro XML and
+allows 32,768 XML elements per part and 65,536 across its scan, alongside 16
+MiB per part, 64 MiB in aggregate, and 512 parts. A successfully streamed
+structural overage remains opaque program evidence with a private streamed
+content fingerprint and explicit parser-coverage warning, so a comparison can
+surface `FF010` and `FF026` without retaining raw macro XML. After this raw
+scan, FormulaFence gives its temporary ordinary-workbook reader an empty
+worksheet replacement for the selected XLM targets, preventing that reader
+from materializing the macro program; Custom View sanitization also excludes
+those targets. An invalid ordinary-sheet relationship alias to the same target
+is treated as XLM too and leaves visible coverage evidence. Malformed macro XML
+reached before a structural overage retains its ordinary parser diagnostic.
+These are bounds for the named raw macro-sheet XML readers, not a claim that
+all legacy workbook XML is semantically interpreted.
 
 FormulaFence also guards **XLM automatic-macro bindings**, the legacy
 workbook-name dispatch path for `Auto_Open`, `Auto_Close`, `Auto_Activate`, and

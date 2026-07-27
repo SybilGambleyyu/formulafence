@@ -819,7 +819,7 @@ Excel 4.0 / XLM macro sheets are separate from the VBA binary: their executable
 commands live in Macro Sheet XML package parts, typically under
 `xl/macrosheets/`. FormulaFence reads those parts before the workbook library
 can omit their cells. It privately binds documented macro-sheet workbook
-relationships to parts, fingerprints complete XML and related package
+relationships to parts, fingerprints accepted XML and related package
 relationships, and streams direct safe internal relationship targets into
 private payload fingerprints. It reports only safe counts for formula cells,
 visibility, international-sheet status, related OLE/package parts, and
@@ -830,6 +830,21 @@ payloads never enter a profile or diff. FormulaFence does not execute, emulate,
 resolve, or parse any of them; it never follows external targets. Direct
 internal payload scanning is bounded to 32 MiB per part, 64 MiB per workbook,
 and 256 parts, with an explicit coverage warning once a bound is reached.
+
+Before private tree parsing, the raw macro-sheet scanner streams each selected
+macro XML part. It allows 32,768 elements per part and 65,536 over its scan,
+with 16 MiB per part, 64 MiB aggregate, and 512 parts. A valid structural
+overage remains opaque private program evidence with a streamed content
+fingerprint and parser-coverage warning, making `FF010` and `FF026` visible
+without retaining macro XML. The temporary ordinary-workbook reader receives
+an empty worksheet replacement only after the raw scan, and Custom View
+sanitization excludes macro-sheet targets, so those secondary readers cannot
+materialize the original macro program. An invalid ordinary-sheet relationship
+alias to an XLM target is treated as XLM as well and leaves visible coverage
+evidence. Malformed macro XML reached before a structural overage retains its
+normal parser diagnostic. These limits cover the named raw macro-sheet XML
+readers; they do not imply that every legacy workbook XML part is parsed
+semantically.
 
 FormulaFence separately inventories **XLM automatic-macro bindings**. Excel's
 backward-compatible workbook automatic-macro API names four events:

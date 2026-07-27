@@ -1507,7 +1507,7 @@ formula will produce.
 - Excel 4.0 / XLM macro sheets are read directly from their raw Macro Sheet XML
   package parts before a workbook library can omit their executable cells.
   FormulaFence binds the documented workbook relationships to those parts,
-  privately fingerprints complete XML plus related-part relationships, and
+  privately fingerprints accepted XML plus related-part relationships, and
   streams direct safe internal targets into private payload fingerprints. It
   reports only structural counts. Commands, cell values, relationship targets,
   and embedded-object payloads remain private. A material change emits `FF026`
@@ -1518,6 +1518,20 @@ formula will produce.
   parts. Oversized, missing, unreadable, over-budget, malformed, unbound, or
   unrecognized parts remain visible parser-coverage warnings rather than being
   silently ignored.
+- Before private tree parsing of a selected XLM macro-sheet part, FormulaFence
+  streams its XML structure. The macro-sheet scanner permits 32,768 elements
+  per part and 65,536 across its scan, alongside 16 MiB per part, 64 MiB
+  aggregate, and 512 parts. A valid structural overage becomes opaque private
+  program evidence with a streamed content fingerprint and explicit coverage
+  warning, keeping `FF010` and `FF026` diff-visible without retaining raw macro
+  XML. After raw scanning, the temporary ordinary-workbook reader gets an
+  empty worksheet replacement for selected macro targets; Custom View
+  sanitization excludes them as well. An invalid ordinary-sheet relationship
+  alias to the same target is treated as XLM, with explicit coverage evidence.
+  Thus neither secondary reader materializes the original program. Malformed
+  macro XML reached before a structural overage retains its ordinary parser
+  diagnostic. This boundary applies to the named raw macro-sheet XML readers,
+  not every legacy workbook XML part.
 - Legacy XLM automatic-macro routing is separately inspected from raw workbook
   defined names. Microsoft documents four workbook automatic-macro events:
   `Auto_Open`, `Auto_Close`, `Auto_Activate`, and `Auto_Deactivate`. FormulaFence

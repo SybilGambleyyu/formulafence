@@ -9228,6 +9228,377 @@ def test_malformed_xlm_macro_sheet_parts_fail_closed(tmp_path) -> None:
     assert "FF026" in {finding.rule_id for finding in report.findings}
 
 
+def test_xlm_macro_sheet_xml_budget_stops_all_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    _append_xlm_macro_sheet_xml_elements(workbook, 8, nested=True)
+    macro_sheet_xml = _xlm_macro_sheet_xml_payload(workbook)
+    monkeypatch.setattr(
+        workbook_module,
+        "_XLM_MACRO_SHEET_MAX_XML_ELEMENT_COUNT",
+        _xlm_macro_sheet_xml_element_count(workbook) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == macro_sheet_xml:
+            raise AssertionError("the over-budget XLM macro-sheet XML tree was materialized")
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.sheets["Macro Automation"].formula_cells == 0
+    assert snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 1
+    assert any(
+        "XLM macro-sheet XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_xlm_macro_sheet_reader_replaces_raw_program_before_openpyxl(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    _append_xlm_macro_sheet_xml_elements(workbook, 8, nested=True)
+    macro_sheet_xml = _xlm_macro_sheet_xml_payload(workbook)
+    monkeypatch.setattr(
+        workbook_module,
+        "_XLM_MACRO_SHEET_MAX_XML_ELEMENT_COUNT",
+        _xlm_macro_sheet_xml_element_count(workbook) - 1,
+    )
+    original_load_workbook = workbook_module.load_workbook
+    reader_sources = []
+
+    def isolated_load_workbook(reader_source, *args, **kwargs):
+        reader_sources.append(reader_source)
+        with ZipFile(reader_source) as archive:
+            replacement = archive.read(_XLM_MACRO_SHEET_XML_MEMBER)
+        assert replacement != macro_sheet_xml
+        assert b"urn:formulafence:audit" not in replacement
+        assert ElementTree.fromstring(replacement).tag == (
+            "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}worksheet"
+        )
+        return original_load_workbook(reader_source, *args, **kwargs)
+
+    monkeypatch.setattr(workbook_module, "load_workbook", isolated_load_workbook)
+
+    snapshot = load_snapshot(workbook)
+
+    assert len(reader_sources) == 1
+    assert reader_sources[0] != workbook
+    assert snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 1
+
+
+def test_xlm_macro_sheet_shared_with_ordinary_binding_remains_quarantined(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    _append_xlm_macro_sheet_xml_elements(workbook, 8, nested=True)
+    _bind_xlm_macro_sheet_through_ordinary_workbook_relationship(workbook)
+    macro_sheet_xml = _xlm_macro_sheet_xml_payload(workbook)
+    monkeypatch.setattr(
+        workbook_module,
+        "_XLM_MACRO_SHEET_MAX_XML_ELEMENT_COUNT",
+        _xlm_macro_sheet_xml_element_count(workbook) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+    original_load_workbook = workbook_module.load_workbook
+
+    def unexpected_tree_parse(payload):
+        if payload == macro_sheet_xml:
+            raise AssertionError("the shared XLM macro-sheet XML tree was materialized")
+        return original_tree_parse(payload)
+
+    def isolated_load_workbook(reader_source, *args, **kwargs):
+        with ZipFile(reader_source) as archive:
+            replacement = archive.read(_XLM_MACRO_SHEET_XML_MEMBER)
+        assert replacement != macro_sheet_xml
+        return original_load_workbook(reader_source, *args, **kwargs)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+    monkeypatch.setattr(workbook_module, "load_workbook", isolated_load_workbook)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 1
+    assert any(
+        "also bound through an ordinary workbook relationship" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_xlm_macro_sheet_reader_keeps_default_paths_isolated_on_bad_relationships(
+    tmp_path,
+) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    macro_sheet_xml = _xlm_macro_sheet_xml_payload(workbook)
+    _rewrite_xlm_macro_sheet_workbook_relationships(
+        workbook,
+        b'<?xml version="1.0"?><Relationships>',
+    )
+
+    reader_source, temporary_path, reader_warnings = (
+        workbook_module._openpyxl_safe_source(workbook)
+    )
+    try:
+        with ZipFile(reader_source) as archive:
+            replacement = archive.read(_XLM_MACRO_SHEET_XML_MEMBER)
+
+        assert replacement != macro_sheet_xml
+        assert ElementTree.fromstring(replacement).tag == (
+            "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}worksheet"
+        )
+        assert any(
+            "could not inspect workbook relationships while isolating XLM macro-sheet XML"
+            in warning
+            for warning in reader_warnings
+        )
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def test_xlm_macro_sheet_xml_structure_overage_spends_scan_budgets(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    _append_xlm_macro_sheet_xml_elements(workbook, 8)
+    with ZipFile(workbook) as archive:
+        macro_sheet_size = archive.getinfo(_XLM_MACRO_SHEET_XML_MEMBER).file_size
+    budget_type = workbook_module._XlmMacroXmlBudget
+    budgets = []
+
+    def budget_factory():
+        budget = budget_type(
+            remaining_bytes=macro_sheet_size,
+            remaining_xml_elements=_xlm_macro_sheet_xml_element_count(workbook) - 1,
+        )
+        budgets.append(budget)
+        return budget
+
+    monkeypatch.setattr(workbook_module, "_XlmMacroXmlBudget", budget_factory)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 1
+    assert budgets[0].remaining_bytes == 0
+    assert budgets[0].remaining_xml_elements == 0
+
+
+def test_xlm_macro_sheet_xml_byte_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    baseline_snapshot = load_snapshot(baseline)
+    macro_sheet_xml = _xlm_macro_sheet_xml_payload(candidate)
+    monkeypatch.setattr(
+        workbook_module,
+        "_XLM_MACRO_SHEET_MAX_PART_BYTES",
+        len(macro_sheet_xml) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == macro_sheet_xml:
+            raise AssertionError("the oversized XLM macro-sheet XML tree was materialized")
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 1
+    assert any(
+        "oversized XLM macro-sheet part" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF026"} <= {finding.rule_id for finding in report.findings}
+
+
+@pytest.mark.parametrize(
+    ("budget", "warning"),
+    (
+        (
+            {"remaining_parts": 0},
+            "bounded XLM macro-sheet XML part count",
+        ),
+        (
+            {"remaining_bytes": 1},
+            "bounded XLM macro-sheet XML read budget",
+        ),
+    ),
+)
+def test_xlm_macro_sheet_xml_scan_budgets_remain_visible(
+    tmp_path,
+    monkeypatch,
+    budget,
+    warning: str,
+) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    baseline_snapshot = load_snapshot(baseline)
+    budget_type = workbook_module._XlmMacroXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_XlmMacroXmlBudget",
+        lambda: budget_type(**budget),
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+
+    assert candidate_snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 1
+    assert any(warning in value for value in candidate_snapshot.parser_warnings)
+    assert {"FF010", "FF026"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_xlm_macro_sheet_xml_budget_remains_visible_and_private(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_xlm_macro_sheet_model(tmp_path / "baseline.xlsm")
+    candidate = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    _append_xlm_macro_sheet_xml_elements(candidate, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_XLM_MACRO_SHEET_MAX_XML_ELEMENT_COUNT",
+        _xlm_macro_sheet_xml_element_count(candidate) - 1,
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+
+    assert candidate_snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 1
+    assert any(
+        "XLM macro-sheet XML part whose XML structure" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF026"} <= {finding.rule_id for finding in report.findings}
+    assert all("urn:formulafence:audit" not in artifact for artifact in rendered_artifacts)
+
+
+def test_xlm_macro_sheet_xml_budget_accepts_the_default_capacity(tmp_path) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    _append_xlm_macro_sheet_xml_elements(
+        workbook,
+        workbook_module._XLM_MACRO_SHEET_MAX_XML_ELEMENT_COUNT
+        - _xlm_macro_sheet_xml_element_count(workbook),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 0
+    assert not any(
+        "XLM macro-sheet XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_xlm_macro_sheet_xml_budget_rejects_the_default_overage(tmp_path) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    _append_xlm_macro_sheet_xml_elements(
+        workbook,
+        workbook_module._XLM_MACRO_SHEET_MAX_XML_ELEMENT_COUNT
+        - _xlm_macro_sheet_xml_element_count(workbook)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 1
+    assert any(
+        "XLM macro-sheet XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_xlm_macro_sheet_xml_budget_aggregates_across_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    _duplicate_xlm_macro_sheet_xml_part(workbook)
+    macro_sheet_xml_elements = _xlm_macro_sheet_xml_element_count(workbook)
+    budget_type = workbook_module._XlmMacroXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_XlmMacroXmlBudget",
+        lambda: budget_type(
+            remaining_xml_elements=2 * macro_sheet_xml_elements - 1
+        ),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.xlm_macro_sheets.macro_sheet_count == 2
+    assert snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 1
+    assert any(
+        "XLM macro-sheet XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_xlm_macro_sheet_xml_budget_fingerprints_same_size_overages(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    first = make_xlm_macro_sheet_model(tmp_path / "first.xlsm")
+    second = make_xlm_macro_sheet_model(tmp_path / "second.xlsm")
+    _append_xlm_macro_sheet_xml_elements(first, 1, entry_name="entrya")
+    _append_xlm_macro_sheet_xml_elements(second, 1, entry_name="entryb")
+    with ZipFile(first) as archive:
+        first_info = archive.getinfo(_XLM_MACRO_SHEET_XML_MEMBER)
+    with ZipFile(second) as archive:
+        second_info = archive.getinfo(_XLM_MACRO_SHEET_XML_MEMBER)
+    monkeypatch.setattr(
+        workbook_module,
+        "_XLM_MACRO_SHEET_MAX_XML_ELEMENT_COUNT",
+        1,
+    )
+
+    first_snapshot = load_snapshot(first)
+    second_snapshot = load_snapshot(second)
+    report = compare_snapshots(first_snapshot, second_snapshot)
+
+    assert first_info.file_size == second_info.file_size
+    assert (
+        first_snapshot.xlm_macro_sheets.program_signature
+        != second_snapshot.xlm_macro_sheets.program_signature
+    )
+    assert "FF026" in {finding.rule_id for finding in report.findings}
+
+
+def test_malformed_xlm_macro_sheet_xml_keeps_full_parser_diagnostic(tmp_path) -> None:
+    workbook = make_xlm_macro_sheet_model(tmp_path / "candidate.xlsm")
+    _rewrite_xlm_macro_sheet_xml(
+        workbook,
+        b'<?xml version="1.0"?><macrosheet><sheetData>',
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.xlm_macro_sheets.unrecognized_macro_sheet_count == 1
+    assert any(
+        "could not inspect an XLM macro-sheet XML part (ParseError)" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
 def _append_ribbon_customization_xml_elements(
     path,
     count: int,
@@ -11274,6 +11645,218 @@ def _duplicate_external_data_connections_part(path) -> None:
     with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
         for name, payload in contents.items():
             archive.writestr(name, payload)
+    staging.replace(path)
+
+
+_XLM_MACRO_SHEET_XML_MEMBER = "xl/macrosheets/sheet1.xml"
+
+
+def _rewrite_xlm_macro_sheet_xml(path, payload: bytes) -> None:
+    """Replace the synthetic XLM macro program without FormulaFence's reader."""
+    staging = path.with_suffix(".xlm-macro-sheet-xml.tmp.xlsm")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+            if not entry.is_dir()
+        }
+    contents[_XLM_MACRO_SHEET_XML_MEMBER] = payload
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+    staging.replace(path)
+
+
+def _xlm_macro_sheet_xml_payload(path) -> bytes:
+    """Return raw macro-sheet XML from the synthetic XLM fixture."""
+    with ZipFile(path) as archive:
+        return archive.read(_XLM_MACRO_SHEET_XML_MEMBER)
+
+
+def _append_xlm_macro_sheet_xml_elements(
+    path,
+    count: int,
+    *,
+    nested: bool = False,
+    entry_name: str = "entry",
+) -> None:
+    """Add opaque XLM macro-sheet XML entries without a workbook reader."""
+    root = ElementTree.fromstring(_xlm_macro_sheet_xml_payload(path))
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, f"{{urn:formulafence:audit}}{entry_name}")
+    _rewrite_xlm_macro_sheet_xml(
+        path,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _xlm_macro_sheet_xml_element_count(path) -> int:
+    """Count the synthetic macro-sheet tree for exact budget tests."""
+    return sum(
+        1 for _ in ElementTree.fromstring(_xlm_macro_sheet_xml_payload(path)).iter()
+    )
+
+
+def _duplicate_xlm_macro_sheet_xml_part(path) -> None:
+    """Bind a second physical macro-sheet XML part for aggregate-budget coverage."""
+    staging = path.with_suffix(".xlm-macro-sheet-duplicate.tmp.xlsm")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+            if not entry.is_dir()
+        }
+    spreadsheet_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    document_relationships = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    )
+    content_types_namespace = (
+        "http://schemas.openxmlformats.org/package/2006/content-types"
+    )
+    workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+    sheets = workbook.find(f"{{{spreadsheet_namespace}}}sheets")
+    if sheets is None:
+        raise ValueError("fixture does not contain workbook sheets")
+    sheet_ids = [int(sheet.get("sheetId", "0")) for sheet in sheets]
+    ElementTree.SubElement(
+        sheets,
+        f"{{{spreadsheet_namespace}}}sheet",
+        {
+            "name": "Macro Automation 2",
+            "sheetId": str(max(sheet_ids) + 1),
+            "state": "veryHidden",
+            f"{{{document_relationships}}}id": "rIdFormulaFenceXlmMacro2",
+        },
+    )
+    contents["xl/workbook.xml"] = ElementTree.tostring(
+        workbook,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    workbook_relationships = ElementTree.fromstring(
+        contents["xl/_rels/workbook.xml.rels"]
+    )
+    ElementTree.SubElement(
+        workbook_relationships,
+        f"{{{package_relationships}}}Relationship",
+        {
+            "Id": "rIdFormulaFenceXlmMacro2",
+            "Type": (
+                "http://schemas.microsoft.com/office/2006/relationships/"
+                "xlMacrosheet"
+            ),
+            "Target": "macrosheets/sheet2.xml",
+        },
+    )
+    contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+        workbook_relationships,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    contents["xl/macrosheets/sheet2.xml"] = contents[_XLM_MACRO_SHEET_XML_MEMBER]
+    contents["xl/macrosheets/_rels/sheet2.xml.rels"] = contents[
+        "xl/macrosheets/_rels/sheet1.xml.rels"
+    ]
+    content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+    ElementTree.SubElement(
+        content_types,
+        f"{{{content_types_namespace}}}Override",
+        {
+            "PartName": "/xl/macrosheets/sheet2.xml",
+            "ContentType": "application/vnd.ms-excel.macrosheet+xml",
+        },
+    )
+    contents["[Content_Types].xml"] = ElementTree.tostring(
+        content_types,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+    staging.replace(path)
+
+
+def _bind_xlm_macro_sheet_through_ordinary_workbook_relationship(path) -> None:
+    """Add an invalid ordinary binding to the raw XLM target for reader isolation."""
+    staging = path.with_suffix(".xlm-macro-sheet-ordinary-binding.tmp.xlsm")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+            if not entry.is_dir()
+        }
+    spreadsheet_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    package_relationships = (
+        "http://schemas.openxmlformats.org/package/2006/relationships"
+    )
+    document_relationships = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    )
+    workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+    sheets = workbook.find(f"{{{spreadsheet_namespace}}}sheets")
+    if sheets is None:
+        raise ValueError("fixture does not contain workbook sheets")
+    sheet_ids = [int(sheet.get("sheetId", "0")) for sheet in sheets]
+    ElementTree.SubElement(
+        sheets,
+        f"{{{spreadsheet_namespace}}}sheet",
+        {
+            "name": "Ordinary Binding to XLM",
+            "sheetId": str(max(sheet_ids) + 1),
+            f"{{{document_relationships}}}id": "rIdFormulaFenceOrdinaryXlm",
+        },
+    )
+    contents["xl/workbook.xml"] = ElementTree.tostring(
+        workbook,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    workbook_relationships = ElementTree.fromstring(
+        contents["xl/_rels/workbook.xml.rels"]
+    )
+    ElementTree.SubElement(
+        workbook_relationships,
+        f"{{{package_relationships}}}Relationship",
+        {
+            "Id": "rIdFormulaFenceOrdinaryXlm",
+            "Type": (
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+                "worksheet"
+            ),
+            "Target": "macrosheets/sheet1.xml",
+        },
+    )
+    contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+        workbook_relationships,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+    staging.replace(path)
+
+
+def _rewrite_xlm_macro_sheet_workbook_relationships(path, payload: bytes) -> None:
+    """Replace synthetic workbook relationships without involving a workbook reader."""
+    staging = path.with_suffix(".xlm-macro-sheet-workbook-rels.tmp.xlsm")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+            if not entry.is_dir()
+        }
+    contents["xl/_rels/workbook.xml.rels"] = payload
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
     staging.replace(path)
 
 

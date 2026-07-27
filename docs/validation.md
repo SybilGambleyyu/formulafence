@@ -37,7 +37,11 @@ with 100,000 empty direct row-break containers (1,200,466 bytes of worksheet
 XML) loaded in 4.077 seconds at 39,036 KiB and now rejects in 0.015 seconds at
 33,796 KiB. Focused archive-safety and version coverage passed **157 tests in
 5.50 seconds**; the completed source tree passed **859 tests in 122.86
-seconds**, with Ruff, bytecode compilation, and `git diff --check` clean.
+seconds**, with Ruff, bytecode compilation, and `git diff --check` clean. A
+fresh Python 3.12 environment installed the exact release-candidate wheel,
+confirmed `FormulaFence 0.123.0` and `openpyxl.DEFUSEDXML`, completed a normal
+CLI comparison, and returned the normal input-error exit status (2) for both
+independently generated 100,000-entry page-break fixtures.
 
 ## Column-dimension declaration and container bounds — 2026-07-26
 

@@ -35,7 +35,10 @@ candidate rejects it in 0.012 seconds at 33,272 KiB. A 9,138-byte workbook with
 loaded in 3.981 seconds at 74,332 KiB and now rejects in 0.023 seconds at
 33,852 KiB. Focused standard, Strict, opaque-path, aggregation, and exact-limit
 regressions passed alongside the completed source suite: **869 tests in 121.67
-seconds**.
+seconds**. A fresh Python 3.12 environment installed the exact candidate wheel,
+confirmed `FormulaFence 0.124.0` and `openpyxl.DEFUSEDXML`, completed a normal
+CLI comparison, and returned the normal input-error exit status (2) for both
+independently generated 100,000-entry Custom View fixtures.
 
 ## Worksheet page-break catalog bounds — 2026-07-26
 

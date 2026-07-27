@@ -5,6 +5,37 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Office Web Add-in task-pane and definition XML bounds — 2026-07-26
+
+Version 0.127.0 closes two compact allocation paths in FormulaFence's private
+Office Web Add-in scanner. Task-pane and `webextension` definition parts have
+16 MiB per-part, 32 MiB aggregate, and 64-part byte/count limits, but their raw
+XML is then recursively canonicalized to preserve unsupported configuration
+without exposing it in reports. A small compressed part can therefore still
+make a CI worker construct a broad or deeply nested XML tree even when no
+worksheet cell is populated.
+
+Before either scanner reads the XML payload, it now streams the ZIP member and
+counts elements under the existing nesting limit. Each task-pane or definition
+part permits 4,096 elements, including its root, and their package scan permits
+16,384 elements in aggregate. An over-budget part becomes unrecognized Office
+Web Add-in coverage with an explicit warning; malformed or unreadable input
+still reaches the established parser so its normal diagnostic remains visible.
+Exact per-part capacity remains covered, and the aggregate counter prevents a
+many-small-parts bypass.
+
+Independent raw-ZIP fixtures measured the exact 0.126.0 wheel and the 0.127.0
+source candidate in the same Python 3.12 environment. An 11,021-byte workbook
+with 100,000 direct opaque task-pane children (1,300,374 bytes of XML) loaded
+through 0.126.0 in 0.586 seconds at 97,840 KiB resident; the candidate marks it
+unrecognized in 0.135 seconds at 34,116 KiB. An 11,041-byte workbook with
+100,000 direct opaque `webextension` children (1,300,917 bytes of XML) loaded
+in 0.579 seconds at 98,104 KiB and now stops in 0.135 seconds at 34,124 KiB.
+The nested equivalents likewise moved from 0.597/97,592 KiB and 0.573/97,704
+KiB to about 0.145 seconds and 34 MiB. The completed Office Web Add-in diff
+suite passed **496 tests in 79.87 seconds**, with Ruff and `git diff --check`
+clean.
+
 ## RibbonX structural XML bounds — 2026-07-26
 
 Version 0.126.0 closes a compact allocation path in FormulaFence's private

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.127.0 — 2026-07-26
+
+- Bound Office Web Add-in task-pane and definition XML before FormulaFence's
+  private scanner can materialize their full element tree or recursively
+  canonicalize opaque configuration fragments. Each part now permits 4,096
+  elements and the task-pane-plus-definition package scan permits 16,384 in
+  aggregate, alongside its existing 16 MiB part, 32 MiB byte, and 64-part
+  limits.
+- Stream the structural preflight directly from each ZIP member and fail closed
+  to unrecognized Office Web Add-in coverage when its element or nesting budget
+  is exceeded. Well-formed inputs at the exact boundary retain their existing
+  control coverage, while malformed input preserves the established full-parser
+  diagnostic.
+- Add fail-before-tree-materialization coverage for both task-pane and
+  definition paths, configured/default and aggregate limits, exact capacity,
+  and compact direct/nested opaque XML subtrees.
+
 ## 0.126.0 — 2026-07-26
 
 - Bound each RibbonX `customUI` XML part before FormulaFence's private

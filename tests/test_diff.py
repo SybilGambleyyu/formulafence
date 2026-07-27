@@ -8717,6 +8717,41 @@ def test_malformed_ribbon_customization_parts_fail_closed(tmp_path) -> None:
     assert "FF027" in {finding.rule_id for finding in report.findings}
 
 
+def _append_office_web_addin_xml_elements(
+    path,
+    member: str,
+    count: int,
+    *,
+    nested: bool = False,
+) -> None:
+    """Add opaque Office Web Add-in XML entries without using a workbook reader."""
+    staging = path.with_suffix(".office-web-addin-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, f"{{{namespace}}}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, f"{{{namespace}}}entry")
+    contents[member] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _office_web_addin_xml_element_count(path, member: str) -> int:
+    """Count one fixture's Office Web Add-in XML elements for exact budget tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member))
+    return sum(1 for _ in root.iter())
+
+
 def test_office_web_addin_auto_show_changes_are_profiled_and_diffed_privately(
     tmp_path,
 ) -> None:
@@ -8905,6 +8940,171 @@ def test_office_web_addin_byte_budget_remains_covered(tmp_path, monkeypatch) -> 
     assert snapshot.office_web_addins.unrecognized_part_count >= 1
     assert any(
         "Office Web Add-in part read budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_office_web_addin_xml_element_budget_stops_before_materializing_the_tree(
+    tmp_path, monkeypatch
+) -> None:
+    parts = (
+        (
+            "xl/webextensions/taskpanes.xml",
+            workbook_module._office_web_addin_taskpane_inspection,
+        ),
+        (
+            "xl/webextensions/webextension1.xml",
+            workbook_module._office_web_addin_extension_inspection,
+        ),
+    )
+
+    def unexpected_tree_parse(*args, **kwargs):
+        raise AssertionError(
+            "the Office Web Add-in XML tree was materialized after its budget failed"
+        )
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+    for member, inspection_function in parts:
+        workbook = make_office_web_addin_model(
+            tmp_path / f"{member.rsplit('/', 1)[-1]}.xlsx"
+        )
+        _append_office_web_addin_xml_elements(workbook, member, 1)
+        monkeypatch.setattr(
+            workbook_module,
+            "_WEB_EXTENSION_MAX_XML_ELEMENT_COUNT",
+            _office_web_addin_xml_element_count(workbook, member) - 1,
+        )
+        warnings: set[str] = set()
+        with ZipFile(workbook) as archive:
+            inspection = inspection_function(
+                archive,
+                member,
+                warnings,
+                workbook_module._OfficeWebAddinBudget(),
+            )
+
+        assert inspection.inspected is False
+        assert any(
+            "Office Web Add-in package part whose XML structure" in warning
+            for warning in warnings
+        )
+
+
+def test_office_web_addin_xml_element_budget_remains_covered(tmp_path, monkeypatch) -> None:
+    member = "xl/webextensions/taskpanes.xml"
+    workbook = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    _append_office_web_addin_xml_elements(workbook, member, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_WEB_EXTENSION_MAX_XML_ELEMENT_COUNT",
+        _office_web_addin_xml_element_count(workbook, member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.office_web_addins.unrecognized_part_count >= 1
+    assert any(
+        "Office Web Add-in package part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_office_web_addin_xml_element_budget_accepts_the_configured_capacity(
+    tmp_path, monkeypatch
+) -> None:
+    member = "xl/webextensions/webextension1.xml"
+    workbook = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    _append_office_web_addin_xml_elements(workbook, member, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_WEB_EXTENSION_MAX_XML_ELEMENT_COUNT",
+        _office_web_addin_xml_element_count(workbook, member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.office_web_addins.unrecognized_part_count == 0
+
+
+def test_office_web_addin_xml_element_budget_aggregates_across_package_parts(
+    tmp_path, monkeypatch
+) -> None:
+    taskpane_member = "xl/webextensions/taskpanes.xml"
+    extension_member = "xl/webextensions/webextension1.xml"
+    workbook = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    remaining_xml_elements = (
+        _office_web_addin_xml_element_count(workbook, taskpane_member)
+        + _office_web_addin_xml_element_count(workbook, extension_member)
+        - 1
+    )
+    budget_type = workbook_module._OfficeWebAddinBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_OfficeWebAddinBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.office_web_addins.unrecognized_part_count >= 1
+    assert any(
+        "Office Web Add-in package part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_office_web_addin_xml_element_budget_accepts_the_default_capacity(tmp_path) -> None:
+    member = "xl/webextensions/webextension1.xml"
+    workbook = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    _append_office_web_addin_xml_elements(
+        workbook,
+        member,
+        workbook_module._WEB_EXTENSION_MAX_XML_ELEMENT_COUNT
+        - _office_web_addin_xml_element_count(workbook, member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.office_web_addins.unrecognized_part_count == 0
+
+
+def test_office_web_addin_xml_element_budget_rejects_the_default_overage(tmp_path) -> None:
+    member = "xl/webextensions/taskpanes.xml"
+    workbook = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    _append_office_web_addin_xml_elements(
+        workbook,
+        member,
+        workbook_module._WEB_EXTENSION_MAX_XML_ELEMENT_COUNT
+        - _office_web_addin_xml_element_count(workbook, member)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.office_web_addins.unrecognized_part_count >= 1
+    assert any(
+        "Office Web Add-in package part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_office_web_addin_xml_element_budget_counts_nested_opaque_subtrees(
+    tmp_path, monkeypatch
+) -> None:
+    member = "xl/webextensions/webextension1.xml"
+    workbook = make_office_web_addin_model(tmp_path / "candidate.xlsx")
+    _append_office_web_addin_xml_elements(workbook, member, 1, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_WEB_EXTENSION_MAX_XML_ELEMENT_COUNT",
+        _office_web_addin_xml_element_count(workbook, member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.office_web_addins.unrecognized_part_count >= 1
+    assert any(
+        "Office Web Add-in package part whose XML structure" in warning
         for warning in snapshot.parser_warnings
     )
 

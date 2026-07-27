@@ -663,6 +663,12 @@ _WEB_EXTENSION_PART_PATTERN = re.compile(
 _WEB_EXTENSION_MAX_PART_BYTES = 16 * 1024 * 1024
 _WEB_EXTENSION_TOTAL_MAX_BYTES = 32 * 1024 * 1024
 _WEB_EXTENSION_TOTAL_MAX_COUNT = 64
+# Task-pane and definition parts are retained through recursive canonical
+# fragments, so byte ceilings alone permit a compact package to make the raw
+# scanner build an unbounded element tree. Keep normal complex add-ins covered
+# while stopping before their full XML payload is materialized.
+_WEB_EXTENSION_MAX_XML_ELEMENT_COUNT = 4_096
+_WEB_EXTENSION_TOTAL_MAX_XML_ELEMENT_COUNT = 16_384
 _WEB_EXTENSION_TASKPANES_NS = (
     "http://schemas.microsoft.com/office/webextensions/taskpanes/2010/11"
 )
@@ -1762,6 +1768,7 @@ class _OfficeWebAddinBudget:
 
     remaining_bytes: int = _WEB_EXTENSION_TOTAL_MAX_BYTES
     remaining_parts: int = _WEB_EXTENSION_TOTAL_MAX_COUNT
+    remaining_xml_elements: int = _WEB_EXTENSION_TOTAL_MAX_XML_ELEMENT_COUNT
 
 
 @dataclass
@@ -3320,14 +3327,14 @@ def _stream_ooxml_reader_xml(
             depth -= 1
 
 
-def _ooxml_xml_structure_within_budget(
+def _ooxml_xml_structure_element_count_within_budget(
     archive: ZipFile,
     member: str,
     *,
     maximum_element_count: int,
     maximum_nesting_depth: int = _OOXML_READER_MAX_XML_NESTING_DEPTH,
-) -> bool:
-    """Stream one raw XML part without retaining an unbounded element tree."""
+) -> int | None:
+    """Return a bounded raw XML element count without retaining its full tree."""
     depth = 0
     element_count = 0
     with archive.open(member) as xml_stream:
@@ -3342,11 +3349,30 @@ def _ooxml_xml_structure_within_budget(
                     depth > maximum_nesting_depth
                     or element_count > maximum_element_count
                 ):
-                    return False
+                    return None
                 continue
             element.clear()
             depth -= 1
-    return True
+    return element_count
+
+
+def _ooxml_xml_structure_within_budget(
+    archive: ZipFile,
+    member: str,
+    *,
+    maximum_element_count: int,
+    maximum_nesting_depth: int = _OOXML_READER_MAX_XML_NESTING_DEPTH,
+) -> bool:
+    """Stream one raw XML part without retaining an unbounded element tree."""
+    return (
+        _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=maximum_element_count,
+            maximum_nesting_depth=maximum_nesting_depth,
+        )
+        is not None
+    )
 
 
 def _reader_shared_string_xml_paths(
@@ -10560,6 +10586,45 @@ def _office_web_addin_fragment(
     )
 
 
+def _office_web_addin_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _OfficeWebAddinBudget,
+) -> str | None:
+    """Stream a Web Add-in part before its recursive private fragment is built."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _WEB_EXTENSION_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    warnings.add(
+        "FormulaFence did not fully read an Office Web Add-in package part whose XML "
+        "structure exceeds the safety budget; the affected controls have a coverage gap."
+    )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
+
+
 def _office_web_addin_boolean(
     value: str | None,
     default: bool,
@@ -10645,6 +10710,18 @@ def _office_web_addin_taskpane_inspection(
                     ("crc", str(info.CRC)),
                 )
             ),
+        )
+    structure_fallback_signature = _office_web_addin_xml_structure_budget_fallback_signature(
+        archive,
+        member,
+        info,
+        warnings,
+        budget,
+    )
+    if structure_fallback_signature is not None:
+        return _OfficeWebAddinTaskpaneInspection(
+            member=member,
+            definition_signature=structure_fallback_signature,
         )
     budget.remaining_bytes -= info.file_size
     payload: bytes | None = None
@@ -10905,6 +10982,18 @@ def _office_web_addin_extension_inspection(
                     ("crc", str(info.CRC)),
                 )
             ),
+        )
+    structure_fallback_signature = _office_web_addin_xml_structure_budget_fallback_signature(
+        archive,
+        member,
+        info,
+        warnings,
+        budget,
+    )
+    if structure_fallback_signature is not None:
+        return _OfficeWebAddinExtensionInspection(
+            member=member,
+            definition_signature=structure_fallback_signature,
         )
     budget.remaining_bytes -= info.file_size
     payload: bytes | None = None

@@ -19,10 +19,14 @@ financial correctness or replace model review.
 - Embedded Power Pivot/Data Model declarations and bounded raw model payloads
   are compared through private fingerprints only; table names, relationships,
   DAX, stored values, and connection details are never emitted.
-- Python-in-Excel source, environment definitions/identifiers, script indexes,
-  formula arguments and locations, and raw XML are compared through private
-  fingerprints only. Public output retains aggregate package, formula-call,
-  script, environment, initialization, and coverage counts.
+- The dedicated Python-in-Excel ledger compares package source, environment
+  definitions/identifiers, script indexes, formula arguments and locations,
+  and raw XML through private fingerprints only. Its public ledger retains
+  aggregate package, formula-call, script, environment, initialization, and
+  coverage counts. Generic semantic cell reports deliberately retain changed
+  formula and value evidence for local review; the separate
+  `--redact-python-in-excel` rendering boundary covers direct PY source and
+  exact changed static PY inputs when that artifact is shared.
 - The dedicated namespaced custom-function ledger compares candidate names,
   namespaces, cells, formulas, and arguments through private signatures only.
   Its public inventory retains aggregate formula-cell, call, and namespace
@@ -661,12 +665,13 @@ formula will produce.
   server, send a DDE command, or determine whether Excel's local DDE security
   settings permit any action. Raw external-link DDE/OLE metadata remains under
   `FF025`.
-- Python in Excel keeps executable source separately from its `PY` formula
-  placeholder. FormulaFence recognizes stored `PY` spellings, privately
-  fingerprints the documented 2023 `python.xml` package part and the
-  separately stored 2022 `pythonScripts.xml` compatibility contract—their
-  relationships, content types, code/environment/script XML, and stored
-  formula binding—then exposes only safe aggregate counts. Both physical parts
+- Python in Excel can retain executable source in its `PY` formula and in
+  related workbook package material. FormulaFence recognizes stored `PY`
+  spellings, privately fingerprints the documented 2023 `python.xml` package
+  part and the separately stored 2022 `pythonScripts.xml` compatibility
+  contract—including relationships, content types, code/environment/script XML,
+  and stored formula binding—then exposes only safe aggregate counts. Both
+  physical parts
   remain independently compared when they coexist; FormulaFence does not
   choose one runtime representation or assume they agree. A
   code/package/environment change, formula-binding change, or ordinary cell
@@ -681,7 +686,10 @@ formula will produce.
   evaluate a PY formula, resolve a result, contact Microsoft Cloud, or validate
   runtime package availability. Changed PY formulas and values remain in the
   ordinary semantic diff by design, so it is not a redacted source-code vault.
-  This boundary follows Microsoft's [Python in Excel introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel)
+  `--redact-python-in-excel` is the separate output-only sharing boundary for
+  direct stored PY material and exact changed static cells that reach a PY
+  formula. It follows Microsoft's [PY function reference](https://support.microsoft.com/en-us/excel/functions/py-function),
+  [Python in Excel introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel),
   and the OOXML [Python part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/151e4bcd-90a0-4d82-8b98-f16bf273e4ff)
   definition.
 - Office Add-in custom functions are defined in JavaScript or TypeScript and
@@ -1183,6 +1191,16 @@ formula will produce.
   formula, contact a provider or DDE server, follow a link, or reconstruct a
   dynamically assembled destination. It is not a general secret scrubber and
   does not replace the external-workbook-link sharing boundary.
+- The separate `--redact-python-in-excel` rendering mode is for direct stored
+  `PY` source/material and exact changed static cells recorded by the private
+  dependency graph as reaching an inventoried PY formula. It runs after
+  comparison and policy evaluation, replaces whole direct PY formula strings
+  and before/after evidence for those changed formula/input cells, and never
+  exposes the private source-cell set used for that decision. It does not parse
+  or execute Python, calculate a formula, contact Microsoft Cloud, reconstruct
+  a runtime value, mutate a snapshot/policy fact/exit status, or claim to
+  redact arbitrary workbook material. It does not replace the external-link or
+  formula-action sharing boundaries.
 - Every canonical root or part-level OPC relationship part is also inspected
   independently for `TargetMode="External"`, including opaque relationships
   no feature-specific scanner can reach. FormulaFence retains source, type,

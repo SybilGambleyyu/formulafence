@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared Python-in-Excel report redaction — 2026-07-26
+
+FormulaFence 0.100.0 adds the separate, opt-in
+`--redact-python-in-excel` rendering boundary for generic reports. It is
+deliberately separate from the count-only `FF065` ledger and from the
+external-workbook-link / formula-action redaction modes. Default local-review
+output remains unchanged. When enabled, JSON, Markdown, and SARIF hide direct
+inventoried `PY` formula material, changed PY-cell evidence, and exact changed
+static input evidence that the private dependency analysis recorded as reaching
+an inventoried PY cell. It does not parse Python, evaluate a formula, contact
+Microsoft Cloud, change comparison/policy results, or reconstruct a runtime
+value.
+
+Microsoft's [PY function reference](https://support.microsoft.com/en-us/excel/functions/py-function)
+documents static Python source in `PY(python_code, return_type)`; the OOXML
+[Python in Excel definition](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/151e4bcd-90a0-4d82-8b98-f16bf273e4ff)
+also describes the associated Python script contract. A disposable
+baseline/candidate pair outside this repository changed both direct PY source
+and a static input reaching a separate stored PY binding. The exact wheel's
+unredacted JSON retained every controlled marker, confirming the established
+local-review contract. Redacted JSON, Markdown, SARIF, and a one-workbook
+portfolio JSON artifact omitted every marker. A redacted policy check still
+exited `1` with `FF065` and `FFP065`, proving the rendering boundary did not
+weaken the policy control.
+
+The isolated environment reported `FormulaFence 0.100.0`. The built wheel
+`formulafence-0.100.0-py3-none-any.whl` passed `twine check` with SHA-256
+`25d951f45de5520f1052abf51c812b529009721692a1fc377c69cc3070bcc427`.
+The source distribution passed `twine check`; its digest is intentionally
+omitted because this validation note is included in that source archive. The
+final source tree passed **647 tests in 87.73 seconds**, plus a clean Ruff
+check, `git diff --check`, and shell syntax check for the composite Action.
+
 ## Shared formula external-action / DDE report redaction — 2026-07-26
 
 FormulaFence 0.99.0 adds the separate, opt-in

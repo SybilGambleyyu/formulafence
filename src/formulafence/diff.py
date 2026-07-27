@@ -4146,6 +4146,9 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         formula_dde_link_static_input_cells=frozenset(
             formula_dde_link_static_input_changes
         ),
+        python_in_excel_static_input_cells=frozenset(
+            python_in_excel_static_input_changes
+        ),
     )
 
 

@@ -14,7 +14,9 @@ from .helpers import (
     make_formula_dde_link_model,
     make_formula_external_action_model,
     make_model,
+    make_python_in_excel_model,
     rewrite,
+    set_python_in_excel_formula_source,
 )
 
 
@@ -359,6 +361,148 @@ def test_cli_can_redact_formula_external_action_and_dde_material_from_shared_rep
     assert action_baseline_marker not in portfolio_rendered
     assert action_candidate_marker not in portfolio_rendered
     assert "formula external-action material redacted" in portfolio_rendered
+
+
+def test_cli_can_redact_python_in_excel_material_from_shared_reports(tmp_path) -> None:
+    source_baseline = "PRIVATE-PY-SOURCE-BASELINE"
+    source_candidate = "PRIVATE-PY-SOURCE-CANDIDATE"
+    input_baseline = "PRIVATE-PY-INPUT-BASELINE"
+    input_candidate = "PRIVATE-PY-INPUT-CANDIDATE"
+
+    def python_source_model(path, source: str, input_value: str):
+        workbook = make_python_in_excel_model(path, input_value=input_value)
+        return set_python_in_excel_formula_source(workbook, source)
+
+    baseline = python_source_model(
+        tmp_path / "baseline.xlsx", source_baseline, input_baseline
+    )
+    candidate = python_source_model(
+        tmp_path / "candidate.xlsx", source_candidate, input_candidate
+    )
+    default_json = tmp_path / "default.json"
+    assert (
+        main(
+            [
+                "diff",
+                str(baseline),
+                str(candidate),
+                "--format",
+                "json",
+                "--output",
+                str(default_json),
+            ]
+        )
+        == 0
+    )
+    default_rendered = default_json.read_text(encoding="utf-8")
+    for sensitive_value in (
+        source_baseline,
+        source_candidate,
+        input_baseline,
+        input_candidate,
+    ):
+        assert sensitive_value in default_rendered
+
+    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+        output = tmp_path / f"python-redacted.{suffix}"
+        assert (
+            main(
+                [
+                    "diff",
+                    str(baseline),
+                    str(candidate),
+                    "--format",
+                    report_format,
+                    "--redact-python-in-excel",
+                    "--output",
+                    str(output),
+                ]
+            )
+            == 0
+        )
+        rendered = output.read_text(encoding="utf-8")
+        for sensitive_value in (
+            source_baseline,
+            source_candidate,
+            input_baseline,
+            input_candidate,
+        ):
+            assert sensitive_value not in rendered
+        assert "FF065" in rendered
+        if report_format == "markdown":
+            assert "Python-in-Excel material:** redacted for sharing" in rendered
+        elif report_format == "json":
+            assert "Python-in-Excel material redacted" in rendered
+
+    policy = tmp_path / "formulafence.yml"
+    policy.write_text(
+        "version: 1\nrules:\n  no_python_in_excel_changes: true\n",
+        encoding="utf-8",
+    )
+    policy_output = tmp_path / "python-policy-redacted.json"
+    assert (
+        main(
+            [
+                "check",
+                str(baseline),
+                str(candidate),
+                "--policy",
+                str(policy),
+                "--format",
+                "json",
+                "--redact-python-in-excel",
+                "--output",
+                str(policy_output),
+            ]
+        )
+        == 1
+    )
+    policy_rendered = policy_output.read_text(encoding="utf-8")
+    assert "FF065" in policy_rendered
+    assert "FFP065" in policy_rendered
+    for sensitive_value in (
+        source_baseline,
+        source_candidate,
+        input_baseline,
+        input_candidate,
+    ):
+        assert sensitive_value not in policy_rendered
+
+    baseline_directory = tmp_path / "baseline-portfolio"
+    candidate_directory = tmp_path / "candidate-portfolio"
+    baseline_directory.mkdir()
+    candidate_directory.mkdir()
+    python_source_model(
+        baseline_directory / "model.xlsx", source_baseline, input_baseline
+    )
+    python_source_model(
+        candidate_directory / "model.xlsx", source_candidate, input_candidate
+    )
+    portfolio_output = tmp_path / "python-portfolio-redacted.json"
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline_directory),
+                str(candidate_directory),
+                "--format",
+                "json",
+                "--redact-python-in-excel",
+                "--output",
+                str(portfolio_output),
+            ]
+        )
+        == 0
+    )
+    portfolio_rendered = portfolio_output.read_text(encoding="utf-8")
+    assert "Python-in-Excel material redacted" in portfolio_rendered
+    for sensitive_value in (
+        source_baseline,
+        source_candidate,
+        input_baseline,
+        input_candidate,
+    ):
+        assert sensitive_value not in portfolio_rendered
 
 
 def test_cli_refuses_to_overwrite_an_input_workbook(tmp_path) -> None:

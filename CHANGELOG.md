@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.100.0 — 2026-07-26
+
+- Add opt-in `--redact-python-in-excel` rendering for `diff`, `check`, and
+  `portfolio` JSON, Markdown, and SARIF artifacts. Default local-review output
+  remains unchanged; the new output-only boundary replaces direct stored `PY`
+  formula material with `[Python-in-Excel material redacted]`.
+- Extend that boundary to the before/after evidence for changed PY-formula
+  cells and exact changed static input cells that the private dependency graph
+  recorded as reaching an inventoried PY cell. This uses the full private
+  impact set rather than the bounded sample displayed to reviewers.
+- Keep the pre-existing private `FF065` package/source ledger intact, while
+  protecting ordinary semantic JSON evidence where Microsoft's static `PY`
+  source can be visible. Comparison facts, findings, policy evaluation, and
+  exit status are unchanged. The composite GitHub Action exposes the switch as
+  `redact-python-in-excel: 'true'`; the mode does not parse/execute Python,
+  calculate formulas, contact Microsoft Cloud, or claim to redact arbitrary
+  workbook material.
+- Add direct source, static-input, local-LAMBDA non-match, default-evidence,
+  policy, portfolio, JSON/Markdown/SARIF, and composite-Action regression
+  coverage.
+
 ## 0.99.0 — 2026-07-26
 
 - Add opt-in `--redact-formula-external-actions` rendering for `diff`, `check`,

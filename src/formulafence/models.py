@@ -5152,14 +5152,17 @@ class DiffReport:
     after: WorkbookSnapshot
     changes: list[Change]
     findings: list[Finding]
-    # These are intentionally private comparison facts.  Public reports retain
-    # only aggregate FF064/FF074 evidence, while shared-artifact rendering can
-    # use the exact source cells to hide a static endpoint even when dependency
-    # samples were truncated before the action/DDE consumer.
+    # These are intentionally private comparison facts. Public reports retain
+    # only aggregate boundary evidence, while shared-artifact rendering can use
+    # exact source cells to hide a static value even when dependency samples
+    # were truncated before the guarded consumer.
     formula_external_action_static_input_cells: frozenset[CellKey] = field(
         default_factory=frozenset, repr=False
     )
     formula_dde_link_static_input_cells: frozenset[CellKey] = field(
+        default_factory=frozenset, repr=False
+    )
+    python_in_excel_static_input_cells: frozenset[CellKey] = field(
         default_factory=frozenset, repr=False
     )
 

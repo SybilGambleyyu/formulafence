@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.99.0/formulafence-0.99.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.100.0/formulafence-0.100.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.99.0
+  uses: SybilGambleyyu/formulafence@v0.100.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -144,6 +144,39 @@ It is not a general secret scrubber and does not replace
 when a shared report can contain both surfaces. Without the option, ordinary
 local-review output remains unchanged. The GitHub Action exposes the same
 boundary through `redact-formula-external-actions: 'true'`.
+
+### Sharing reports with Python in Excel
+
+Microsoft documents `PY(python_code, return_type)` with static Python source,
+so an ordinary changed formula can reveal source text, an `xl()` reference, or
+a changed ordinary input used by a stored PY binding. For an artifact that
+crosses the local review boundary, add `--redact-python-in-excel` to `diff`,
+`check`, or `portfolio`:
+
+```bash
+formulafence check baseline.xlsx candidate.xlsx \
+  --policy formulafence.yml \
+  --format json \
+  --redact-python-in-excel \
+  --output shared-report.json
+```
+
+This output-only mode covers direct stored `PY` formula text that FormulaFence
+already inventories under `FF065`. It replaces the whole serialized formula
+value with `[Python-in-Excel material redacted]`, and also hides before/after
+cell evidence for a changed PY formula or for an exact changed static input
+that FormulaFence's private dependency analysis recorded as reaching one.
+Stored `python.xml` / `pythonScripts.xml` source remains private under the
+existing Python ledger regardless of this switch.
+
+The switch does not mutate snapshots, alter findings, policy evaluation, or an
+exit status; it does not parse Python, calculate a formula, contact Microsoft
+Cloud, or reconstruct a value at Excel calculation time. It is not a general
+secret scrubber, does not redact arbitrary workbook cells, and does not replace
+the external-workbook-link or formula-action sharing boundaries. Use the
+relevant switches together when a report contains multiple sensitive surfaces.
+Without the option, ordinary local-review output remains unchanged. The GitHub
+Action exposes the same boundary through `redact-python-in-excel: 'true'`.
 
 ### Portfolio gates
 
@@ -629,10 +662,10 @@ because package metadata can exist without a direct formula. Enable
 `no_formula_dde_link_changes` to block this surface in CI.
 
 FormulaFence separately inventories **Python in Excel** workbooks. Microsoft
-documents that Python in Excel runs through a Microsoft Cloud runtime, while
-the OOXML specification stores a `PY` formula's script in a workbook Python
-part. FormulaFence recognizes stored `PY` formula spellings, the documented
-2023 `python.xml` package contract, and the separately stored 2022
+documents that `PY` has static Python source and runs through a Microsoft Cloud
+runtime; related workbook package material can also retain script state.
+FormulaFence recognizes stored `PY` formula spellings, the documented 2023
+`python.xml` package contract, and the separately stored 2022
 `pythonScripts.xml` compatibility contract before the ordinary reader can
 discard that material. It privately fingerprints bounded raw Python XML,
 including code, environment definitions, script ordering, and extensions, then
@@ -656,9 +689,12 @@ FormulaFence does not parse Python source as Python, run code, evaluate `PY`,
 resolve its result, contact Microsoft Cloud, or verify runtime package support.
 Dynamic or unresolved formula inputs stay explicit parser-coverage limits. The
 ordinary semantic diff deliberately retains changed PY formulas and values for
-review; its general payload is not a redacted code vault. Enable
-`no_python_in_excel_changes` to block this boundary in CI. This scope follows
-Microsoft's [Python in Excel introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel)
+local review; its general payload is not a redacted code vault.
+`--redact-python-in-excel` is an opt-in, output-only sharing boundary for
+direct PY source and exact static input evidence, while
+`no_python_in_excel_changes` blocks the boundary in CI. This scope follows
+Microsoft's [PY function reference](https://support.microsoft.com/en-us/excel/functions/py-function),
+[Python in Excel introduction](https://support.microsoft.com/en-US/Excel/python/introduction-to-python-in-excel),
 and the [Python part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/151e4bcd-90a0-4d82-8b98-f16bf273e4ff)
 definition.
 

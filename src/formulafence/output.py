@@ -14,6 +14,7 @@ from formulafence.portfolio import PortfolioReport
 
 EXTERNAL_WORKBOOK_LINK_REDACTION = "[external-workbook link material redacted]"
 FORMULA_EXTERNAL_ACTION_REDACTION = "[formula external-action material redacted]"
+PYTHON_IN_EXCEL_REDACTION = "[Python-in-Excel material redacted]"
 
 # This fallback deliberately supplements, rather than replaces, FormulaFence's
 # static formula inspection below.  A visible `INDIRECT("'[Book]Sheet'!A1")`
@@ -261,6 +262,103 @@ def redact_formula_external_action_portfolio_payload(
         if workbook.report is not None and isinstance(entry, dict):
             _redact_formula_external_action_change_cells(entry, workbook.report)
             _redact_formula_external_action_defined_name_evidence(entry, workbook.report)
+    return redacted
+
+
+def _contains_python_in_excel_material(value: str) -> bool:
+    """Return whether one rendered string exposes a direct stored ``PY`` call.
+
+    Microsoft documents ``PY``'s first argument as static Python source text.
+    The formula can therefore disclose source or an ``xl()`` reference even
+    though FormulaFence's FF065 ledger deliberately publishes only safe
+    aggregates. Keep this lexical prefilter small, then defer recognition to
+    the same formula inspector that inventories Python-in-Excel cells.
+    """
+    if "PY" not in value.upper() or "(" not in value:
+        return False
+    formula = value if value.lstrip().startswith("=") else f"={value}"
+    return bool(inspect_formula(formula).python_functions)
+
+
+def redact_python_in_excel_material(payload: Any) -> Any:
+    """Return an output-only copy with direct ``PY`` formula text hidden.
+
+    This covers source text held directly in a formula. Report-level helpers
+    additionally hide changed ordinary cells whose complete static impact set
+    reaches an inventoried PY cell, because an ``xl()`` input can be visible as
+    a normal semantic cell change rather than inside the Python formula.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: redact_python_in_excel_material(value) for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [redact_python_in_excel_material(value) for value in payload]
+    if isinstance(payload, tuple):
+        return tuple(redact_python_in_excel_material(value) for value in payload)
+    if isinstance(payload, str) and _contains_python_in_excel_material(payload):
+        return PYTHON_IN_EXCEL_REDACTION
+    return payload
+
+
+def _python_in_excel_sensitive_change_locations(report: DiffReport) -> set[str]:
+    """Return changed cells whose evidence can expose PY source or input data."""
+    sensitive_cells = (
+        report.before.python_in_excel.python_cells
+        | report.after.python_in_excel.python_cells
+        | report.python_in_excel_static_input_cells
+    )
+    if not sensitive_cells:
+        return set()
+
+    locations: set[str] = set()
+    for change in report.changes:
+        if change.location is None or change.location not in sensitive_cells:
+            continue
+        location = display_location(change.location)
+        if location is not None:
+            locations.add(location)
+    return locations
+
+
+def _redact_python_in_excel_change_cells(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide raw before/after cells that are a PY formula or exact static input."""
+    sensitive_locations = _python_in_excel_sensitive_change_locations(report)
+    if not sensitive_locations:
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("location") not in sensitive_locations:
+            continue
+        for side in ("before", "after"):
+            snapshot = change.get(side)
+            if not isinstance(snapshot, dict):
+                continue
+            for field in ("value", "formula", "formula_fingerprint"):
+                if snapshot.get(field) is not None:
+                    snapshot[field] = PYTHON_IN_EXCEL_REDACTION
+    return payload
+
+
+def redact_python_in_excel_report_payload(
+    report: DiffReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Redact direct PY source and private static-input cell evidence."""
+    redacted = redact_python_in_excel_material(payload)
+    return _redact_python_in_excel_change_cells(redacted, report)
+
+
+def redact_python_in_excel_portfolio_payload(
+    report: PortfolioReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply the Python-in-Excel sharing boundary to nested reports."""
+    redacted = redact_python_in_excel_material(payload)
+    for workbook, entry in zip(
+        report.workbooks, redacted.get("workbooks", []), strict=False
+    ):
+        if workbook.report is not None and isinstance(entry, dict):
+            _redact_python_in_excel_change_cells(entry, workbook.report)
     return redacted
 
 
@@ -3559,6 +3657,7 @@ def report_to_markdown(
     *,
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
+    redact_python_in_excel: bool = False,
 ) -> str:
     policy_findings = list(extra_findings)
     payload = report.to_dict(policy_findings)
@@ -3566,6 +3665,8 @@ def report_to_markdown(
         payload = redact_external_workbook_link_material(payload)
     if redact_formula_external_actions:
         payload = redact_formula_external_action_report_payload(report, payload)
+    if redact_python_in_excel:
+        payload = redact_python_in_excel_report_payload(report, payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence change report",
@@ -3580,6 +3681,11 @@ def report_to_markdown(
         *(
             ["- **Formula external-action / DDE material:** redacted for sharing"]
             if redact_formula_external_actions
+            else []
+        ),
+        *(
+            ["- **Python-in-Excel material:** redacted for sharing"]
+            if redact_python_in_excel
             else []
         ),
         f"- **Changes:** {summary['change_count']}",
@@ -3606,6 +3712,7 @@ def report_to_sarif(
     *,
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
+    redact_python_in_excel: bool = False,
 ) -> dict[str, Any]:
     findings = [*report.findings, *extra_findings]
     rule_ids = sorted({finding.rule_id for finding in findings})
@@ -3666,6 +3773,8 @@ def report_to_sarif(
         payload = redact_external_workbook_link_material(payload)
     if redact_formula_external_actions:
         payload = redact_formula_external_action_material(payload)
+    if redact_python_in_excel:
+        payload = redact_python_in_excel_material(payload)
     return payload
 
 
@@ -3712,6 +3821,7 @@ def portfolio_to_markdown(
     *,
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
+    redact_python_in_excel: bool = False,
 ) -> str:
     """Render a complete multi-workbook review without absolute filesystem paths."""
     payload = report.to_dict()
@@ -3719,6 +3829,8 @@ def portfolio_to_markdown(
         payload = redact_external_workbook_link_material(payload)
     if redact_formula_external_actions:
         payload = redact_formula_external_action_portfolio_payload(report, payload)
+    if redact_python_in_excel:
+        payload = redact_python_in_excel_portfolio_payload(report, payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence portfolio report",
@@ -3753,6 +3865,11 @@ def portfolio_to_markdown(
         *(
             ["- **Formula external-action / DDE material:** redacted for sharing"]
             if redact_formula_external_actions
+            else []
+        ),
+        *(
+            ["- **Python-in-Excel material:** redacted for sharing"]
+            if redact_python_in_excel
             else []
         ),
         "",
@@ -3807,6 +3924,7 @@ def portfolio_to_sarif(
     *,
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
+    redact_python_in_excel: bool = False,
 ) -> dict[str, Any]:
     """Render every portfolio finding in one SARIF run with relative artifacts."""
     rule_ids = sorted(
@@ -3878,4 +3996,6 @@ def portfolio_to_sarif(
         payload = redact_external_workbook_link_material(payload)
     if redact_formula_external_actions:
         payload = redact_formula_external_action_material(payload)
+    if redact_python_in_excel:
+        payload = redact_python_in_excel_material(payload)
     return payload

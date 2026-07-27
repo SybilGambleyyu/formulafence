@@ -1142,7 +1142,7 @@ def change_formula_workbook_structure_information_input(path: Path) -> Path:
     return path
 
 
-def make_python_in_excel_model(path: Path) -> Path:
+def make_python_in_excel_model(path: Path, *, input_value: int | str = 7) -> Path:
     """Create a workbook with stored Python-in-Excel package code.
 
     ``openpyxl`` does not write Python-in-Excel parts, so the controlled
@@ -1154,7 +1154,7 @@ def make_python_in_excel_model(path: Path) -> Path:
     inputs = workbook.active
     inputs.title = "Inputs"
     inputs["A1"] = "Python in Excel controls"
-    inputs["A9"] = 7
+    inputs["A9"] = input_value
     inputs["B2"] = "=_xlfn._xlws.PY(0,0,A9)"
     inputs["B3"] = "=_xlws.PY(1,1,A9)"
     workbook.save(path)
@@ -1458,6 +1458,29 @@ def change_python_in_excel_formula_binding(path: Path) -> Path:
         _save_inputs_worksheet(contents, worksheet)
 
     return _rewrite_archive(path, mutate, ".python-in-excel-binding.tmp.xlsx")
+
+
+def set_python_in_excel_formula_source(path: Path, source: str) -> Path:
+    """Set direct static PY source while preserving the package declarations."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = _inputs_worksheet_root(contents)
+        cell = next(
+            (
+                current
+                for current in worksheet.iter(f"{{{_SPREADSHEETML_NS}}}c")
+                if current.get("r") == "B2"
+            ),
+            None,
+        )
+        formula = (
+            cell.find(f"{{{_SPREADSHEETML_NS}}}f") if cell is not None else None
+        )
+        if formula is None:
+            raise ValueError("Fixture does not contain Python-in-Excel formula B2")
+        formula.text = f'_xlfn._xlws.PY("{source}",0)'
+        _save_inputs_worksheet(contents, worksheet)
+
+    return _rewrite_archive(path, mutate, ".python-in-excel-source.tmp.xlsx")
 
 
 def renumber_python_in_excel_relationship_identifier(path: Path) -> Path:

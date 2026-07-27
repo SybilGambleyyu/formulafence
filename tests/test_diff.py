@@ -17,10 +17,13 @@ from formulafence.diff import compare_snapshots
 from formulafence.output import (
     EXTERNAL_WORKBOOK_LINK_REDACTION,
     FORMULA_EXTERNAL_ACTION_REDACTION,
+    PYTHON_IN_EXCEL_REDACTION,
     profile_to_markdown,
     redact_external_workbook_link_material,
     redact_formula_external_action_material,
     redact_formula_external_action_report_payload,
+    redact_python_in_excel_material,
+    redact_python_in_excel_report_payload,
     report_to_markdown,
     report_to_sarif,
 )
@@ -443,6 +446,7 @@ from .helpers import (
     set_chart_formula_external_workbook_target,
     set_external_data_connection_defaults,
     set_power_pivot_data_model_equivalent_guids,
+    set_python_in_excel_formula_source,
     set_sheet_protection_defaults,
     set_sheet_protection_modern_verifier,
     set_slicer_timeline_equivalent_defaults,
@@ -1423,6 +1427,46 @@ def test_formula_external_action_report_redaction_hides_unsampled_static_inputs(
     )
     assert redacted_change["before"]["value"] == FORMULA_EXTERNAL_ACTION_REDACTION
     assert redacted_change["after"]["value"] == FORMULA_EXTERNAL_ACTION_REDACTION
+    rendered = json.dumps(redacted)
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+
+
+def test_python_in_excel_report_redaction_hides_unsampled_static_inputs(
+    tmp_path,
+) -> None:
+    """PY input redaction must use full private impact, not displayed samples."""
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    baseline_marker = "PRIVATE-UNSAMPLED-PY-BASELINE"
+    candidate_marker = "PRIVATE-UNSAMPLED-PY-CANDIDATE"
+
+    def add_python_fanout(workbook, marker: str) -> None:
+        inputs = workbook["Inputs"]
+        inputs["A9"] = marker
+        # Z1 is a known PY consumer but falls after B1:U1 in the report's
+        # bounded sorted impact sample.
+        for column in range(2, 22):
+            inputs.cell(row=1, column=column).value = "=A9"
+        inputs["Z1"] = "=_xlfn._xlws.PY(0,0,A9)"
+
+    rewrite(baseline, lambda workbook: add_python_fanout(workbook, baseline_marker))
+    rewrite(candidate, lambda workbook: add_python_fanout(workbook, candidate_marker))
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    input_change = next(
+        change for change in raw_payload["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert "Inputs!Z1" not in input_change["impacted_cells"]
+    assert report.python_in_excel_static_input_cells == frozenset({("Inputs", "A9")})
+
+    redacted = redact_python_in_excel_report_payload(report, raw_payload)
+    redacted_change = next(
+        change for change in redacted["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert redacted_change["before"]["value"] == PYTHON_IN_EXCEL_REDACTION
+    assert redacted_change["after"]["value"] == PYTHON_IN_EXCEL_REDACTION
     rendered = json.dumps(redacted)
     assert baseline_marker not in rendered
     assert candidate_marker not in rendered
@@ -3177,6 +3221,77 @@ def test_python_in_excel_static_inputs_are_guarded(tmp_path) -> None:
     assert "python_in_excel_definition_changed" not in python_change.details
     assert "python_in_excel_formula_binding_changed" not in python_change.details
     assert "FF065" in {finding.rule_id for finding in report.findings}
+    assert report.python_in_excel_static_input_cells == frozenset({("Inputs", "A9")})
+
+
+def test_python_in_excel_shared_report_redaction_hides_source_and_static_inputs(
+    tmp_path,
+) -> None:
+    source_baseline = "PRIVATE-PY-SOURCE-BASELINE"
+    source_candidate = "PRIVATE-PY-SOURCE-CANDIDATE"
+    input_baseline = "PRIVATE-PY-INPUT-BASELINE"
+    input_candidate = "PRIVATE-PY-INPUT-CANDIDATE"
+    baseline = make_python_in_excel_model(
+        tmp_path / "baseline.xlsx", input_value=input_baseline
+    )
+    candidate = make_python_in_excel_model(
+        tmp_path / "candidate.xlsx", input_value=input_candidate
+    )
+    set_python_in_excel_formula_source(baseline, source_baseline)
+    set_python_in_excel_formula_source(candidate, source_candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    assert report.python_in_excel_static_input_cells == frozenset({("Inputs", "A9")})
+    assert "FF065" in {finding.rule_id for finding in report.findings}
+
+    default_payload = report.to_dict()
+    default_rendered = json.dumps(default_payload)
+    for sensitive_value in (
+        source_baseline,
+        source_candidate,
+        input_baseline,
+        input_candidate,
+    ):
+        assert sensitive_value in default_rendered
+
+    action_only_rendered = json.dumps(
+        redact_formula_external_action_report_payload(report, report.to_dict())
+    )
+    for sensitive_value in (
+        source_baseline,
+        source_candidate,
+        input_baseline,
+        input_candidate,
+    ):
+        assert sensitive_value in action_only_rendered
+
+    redacted_payload = redact_python_in_excel_report_payload(report, default_payload)
+    redacted_rendered = json.dumps(redacted_payload)
+    for sensitive_value in (
+        source_baseline,
+        source_candidate,
+        input_baseline,
+        input_candidate,
+    ):
+        assert sensitive_value not in redacted_rendered
+    assert PYTHON_IN_EXCEL_REDACTION in redacted_rendered
+    assert redacted_payload["summary"] == default_payload["summary"]
+
+    redacted_markdown = report_to_markdown(report, redact_python_in_excel=True)
+    redacted_sarif = report_to_sarif(report, redact_python_in_excel=True)
+    assert "Python-in-Excel material:** redacted for sharing" in redacted_markdown
+    assert "FF065" in json.dumps(redacted_sarif)
+    for artifact in (redacted_markdown, json.dumps(redacted_sarif)):
+        for sensitive_value in (
+            source_baseline,
+            source_candidate,
+            input_baseline,
+            input_candidate,
+        ):
+            assert sensitive_value not in artifact
+
+    local_lambda = '=LET(PY,LAMBDA(value,value),PY("ordinary local lambda"))'
+    assert redact_python_in_excel_material(local_lambda) == local_lambda
 
 
 def test_python_in_excel_formula_bindings_are_guarded_separately(tmp_path) -> None:

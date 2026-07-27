@@ -17,6 +17,7 @@ format=${INPUT_FORMAT:-markdown}
 output=${INPUT_OUTPUT:-formulafence-report.md}
 redact_external_workbook_links=${INPUT_REDACT_EXTERNAL_WORKBOOK_LINKS:-false}
 redact_formula_external_actions=${INPUT_REDACT_FORMULA_EXTERNAL_ACTIONS:-false}
+redact_python_in_excel=${INPUT_REDACT_PYTHON_IN_EXCEL:-false}
 fail_on=${INPUT_FAIL_ON:-none}
 max_workbooks=${INPUT_MAX_WORKBOOKS:-512}
 max_link_impact=${INPUT_MAX_LINK_IMPACT:-100000}
@@ -48,6 +49,11 @@ esac
 case "$redact_formula_external_actions" in
   true|false) ;;
   *) fail "Unsupported redact-formula-external-actions value: $redact_formula_external_actions (expected true or false)." ;;
+esac
+
+case "$redact_python_in_excel" in
+  true|false) ;;
+  *) fail "Unsupported redact-python-in-excel value: $redact_python_in_excel (expected true or false)." ;;
 esac
 
 if ! [[ "$max_workbooks" =~ ^[1-9][0-9]*$ ]]; then
@@ -152,6 +158,9 @@ if [[ "$redact_external_workbook_links" == true ]]; then
 fi
 if [[ "$redact_formula_external_actions" == true ]]; then
   command+=(--redact-formula-external-actions)
+fi
+if [[ "$redact_python_in_excel" == true ]]; then
+  command+=(--redact-python-in-excel)
 fi
 
 if "${command[@]}"; then

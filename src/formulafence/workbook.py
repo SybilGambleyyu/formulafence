@@ -243,7 +243,31 @@ _OOXML_READER_MAX_SCENARIO_TARGET_RANGE_COUNT = 2 * _OOXML_ARCHIVE_MAX_ENTRY_COU
 _OOXML_READER_MAX_XML_ELEMENT_COUNT = 4_000_000
 _OOXML_READER_MAX_XML_NESTING_DEPTH = 256
 _OOXML_READER_MAX_SHARED_STRING_COUNT = 500_000
+# ``Stylesheet.from_tree`` dispatches its direct children by local name, then
+# eagerly builds lists for number formats, fonts, fills, borders, base/effective
+# cell styles, named styles, differential styles, colours, table styles, and
+# extension records. ``NestedSequence`` additionally turns *every* direct child
+# of a font/fill/border-style container into an object, even when its namespace
+# or local name is unexpected. Excel's published limits for fonts, fills, and
+# number formats are lower than this common ceiling; the explicit 4,096-record
+# allowance leaves room for compatible producer variance while keeping a small
+# styles.xml part from creating an impractical reader catalog. ``cellXfs``
+# retains Excel's documented 65,490 unique-cell-style ceiling.
+_OOXML_READER_MAX_STYLESHEET_CONTAINER_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_NUMBER_FORMAT_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_FONT_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_FILL_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_FILL_CHILD_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_GRADIENT_FILL_STOP_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_BORDER_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_BASE_CELL_STYLE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_CELL_STYLE_COUNT = 65_490
+_OOXML_READER_MAX_NAMED_CELL_STYLE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_DIFFERENTIAL_STYLE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_STYLE_COLOR_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_TABLE_STYLE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_TABLE_STYLE_ELEMENT_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_STYLE_EXTENSION_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_CELL_TEXT_CHARACTERS = 32_767
 _OOXML_READER_MAX_FORMULA_CHARACTERS = 8_192
 _OOXML_SHARED_STRINGS_CONTENT_TYPE = (
@@ -3380,8 +3404,6 @@ def _validate_ooxml_semantic_reader_resources(
     shared_string_tags = _spreadsheetml_tags("si")
     text_tags = _spreadsheetml_tags("t")
     value_tags = _spreadsheetml_tags("v")
-    cell_xfs_tags = _spreadsheetml_tags("cellXfs")
-    xf_tags = _spreadsheetml_tags("xf")
     data_validation_container_tags = _spreadsheetml_tags("dataValidations")
     conditional_formatting_tags = _spreadsheetml_tags("conditionalFormatting")
     scenario_container_tags = _spreadsheetml_tags("scenarios")
@@ -3849,22 +3871,174 @@ def _validate_ooxml_semantic_reader_resources(
                 )
 
     cell_style_count = 0
+    stylesheet_container_count = 0
+    stylesheet_catalog_counts: dict[str, int] = {}
+
+    def increment_stylesheet_catalog(
+        catalog: str,
+        *,
+        limit: int,
+        message: str,
+    ) -> None:
+        count = stylesheet_catalog_counts.get(catalog, 0) + 1
+        stylesheet_catalog_counts[catalog] = count
+        if count > limit:
+            raise _reader_preflight_error(message)
 
     def stylesheet_end(
         element: ElementTree.Element,
         tags: list[str],
     ) -> None:
-        nonlocal cell_style_count
-        if (
-            element.tag in xf_tags
-            and len(tags) > 1
-            and tags[-2] in cell_xfs_tags
-        ):
-            cell_style_count += 1
-            if cell_style_count > _OOXML_READER_MAX_CELL_STYLE_COUNT:
+        nonlocal cell_style_count, stylesheet_container_count
+        element_name = _xml_local_name(element.tag)
+
+        # ``Stylesheet.from_tree`` recognizes direct child containers by local
+        # name. Repeated containers are individually materialized before later
+        # declarations overwrite the stored attribute, so cap those too rather
+        # than only counting records inside the last conventional container.
+        if len(tags) == 2 and element_name in {
+            "numFmts",
+            "fonts",
+            "fills",
+            "borders",
+            "cellStyleXfs",
+            "cellXfs",
+            "cellStyles",
+            "dxfs",
+            "tableStyles",
+            "colors",
+            "extLst",
+        }:
+            stylesheet_container_count += 1
+            if (
+                stylesheet_container_count
+                > _OOXML_READER_MAX_STYLESHEET_CONTAINER_COUNT
+            ):
                 raise _reader_preflight_error(
-                    "cell styles exceed the semantic-reader safety limit."
+                    "stylesheet containers exceed the semantic-reader safety limit."
                 )
+            return
+
+        if len(tags) == 3:
+            parent_name = _xml_local_name(tags[-2])
+            # ``NestedSequence.from_tree`` constructs its expected object for
+            # every direct child, regardless of that child's namespace or local
+            # name. Count all direct records in those containers to follow the
+            # same allocation behavior.
+            if parent_name == "fonts":
+                increment_stylesheet_catalog(
+                    "fonts",
+                    limit=_OOXML_READER_MAX_FONT_COUNT,
+                    message="font records exceed the semantic-reader safety limit.",
+                )
+                return
+            if parent_name == "fills":
+                increment_stylesheet_catalog(
+                    "fills",
+                    limit=_OOXML_READER_MAX_FILL_COUNT,
+                    message="fill records exceed the semantic-reader safety limit.",
+                )
+                return
+            if parent_name == "borders":
+                increment_stylesheet_catalog(
+                    "borders",
+                    limit=_OOXML_READER_MAX_BORDER_COUNT,
+                    message="border records exceed the semantic-reader safety limit.",
+                )
+                return
+
+            if parent_name == "numFmts" and element_name == "numFmt":
+                increment_stylesheet_catalog(
+                    "number-formats",
+                    limit=_OOXML_READER_MAX_NUMBER_FORMAT_COUNT,
+                    message="number-format records exceed the semantic-reader safety limit.",
+                )
+                return
+            if parent_name == "cellStyleXfs" and element_name == "xf":
+                increment_stylesheet_catalog(
+                    "base-cell-styles",
+                    limit=_OOXML_READER_MAX_BASE_CELL_STYLE_COUNT,
+                    message="base cell styles exceed the semantic-reader safety limit.",
+                )
+                return
+            if parent_name == "cellXfs" and element_name == "xf":
+                # ``CellStyleList`` also dispatches direct ``xf`` children by
+                # local name, so an alternate-namespace container cannot evade
+                # the established effective-cell-style ceiling.
+                cell_style_count += 1
+                if cell_style_count > _OOXML_READER_MAX_CELL_STYLE_COUNT:
+                    raise _reader_preflight_error(
+                        "cell styles exceed the semantic-reader safety limit."
+                    )
+                return
+            if parent_name == "cellStyles" and element_name == "cellStyle":
+                increment_stylesheet_catalog(
+                    "named-cell-styles",
+                    limit=_OOXML_READER_MAX_NAMED_CELL_STYLE_COUNT,
+                    message="named cell styles exceed the semantic-reader safety limit.",
+                )
+                return
+            if parent_name == "dxfs":
+                increment_stylesheet_catalog(
+                    "differential-styles",
+                    limit=_OOXML_READER_MAX_DIFFERENTIAL_STYLE_COUNT,
+                    message="differential styles exceed the semantic-reader safety limit.",
+                )
+                return
+            if parent_name == "tableStyles" and element_name == "tableStyle":
+                increment_stylesheet_catalog(
+                    "table-styles",
+                    limit=_OOXML_READER_MAX_TABLE_STYLE_COUNT,
+                    message="table styles exceed the semantic-reader safety limit.",
+                )
+                return
+            if parent_name == "extLst" and element_name == "ext":
+                increment_stylesheet_catalog(
+                    "style-extensions",
+                    limit=_OOXML_READER_MAX_STYLE_EXTENSION_COUNT,
+                    message="stylesheet extension records exceed the semantic-reader safety limit.",
+                )
+                return
+
+        if len(tags) == 4:
+            grandparent_name = _xml_local_name(tags[-3])
+            parent_name = _xml_local_name(tags[-2])
+            if grandparent_name == "fills" and parent_name == "fill":
+                # ``Fill.from_tree`` first builds a list of every direct child
+                # before selecting its pattern or gradient representation.
+                increment_stylesheet_catalog(
+                    "fill-children",
+                    limit=_OOXML_READER_MAX_FILL_CHILD_COUNT,
+                    message="fill child records exceed the semantic-reader safety limit.",
+                )
+                return
+            if parent_name in {"indexedColors", "mruColors"}:
+                increment_stylesheet_catalog(
+                    "style-colors",
+                    limit=_OOXML_READER_MAX_STYLE_COLOR_COUNT,
+                    message="stylesheet colour records exceed the semantic-reader safety limit.",
+                )
+                return
+            if parent_name == "tableStyle" and element_name == "tableStyleElement":
+                increment_stylesheet_catalog(
+                    "table-style-elements",
+                    limit=_OOXML_READER_MAX_TABLE_STYLE_ELEMENT_COUNT,
+                    message="table-style elements exceed the semantic-reader safety limit.",
+                )
+                return
+
+        if (
+            len(tags) == 5
+            and _xml_local_name(tags[-4]) == "fills"
+            and _xml_local_name(tags[-3]) == "fill"
+            and _xml_local_name(tags[-2]) == "gradientFill"
+            and element_name == "stop"
+        ):
+            increment_stylesheet_catalog(
+                "gradient-fill-stops",
+                limit=_OOXML_READER_MAX_GRADIENT_FILL_STOP_COUNT,
+                message="gradient-fill stops exceed the semantic-reader safety limit.",
+            )
 
     try:
         with ZipFile(path) as archive:

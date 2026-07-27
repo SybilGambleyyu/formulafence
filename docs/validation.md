@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Stylesheet catalog bounds — 2026-07-26
+
+Version 0.120.0 closes compact allocation paths in `styles.xml`. Excel's
+[published workbook limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits)
+list 512 fonts per workbook, 256 fill styles, roughly 200–250 number formats,
+and 65,490 unique cell styles. `openpyxl`, however, dispatches stylesheet
+containers by local name and builds Python records for every direct child of
+its `NestedSequence` containers, including unexpected or alternate-namespace
+children. Before this gate, the existing preflight counted only conventional
+namespace `cellXfs` children, leaving the rest of the stylesheet catalog and an
+alternate-namespace `cellXfs` container outside that cardinality boundary.
+
+FormulaFence now streams the stylesheet before any raw scanner or complete
+reader runs. It permits 4,096 repeated known stylesheet containers in aggregate
+and 4,096 records in each number-format, font, fill, fill-child, gradient-stop,
+border, base-XF, named-style, differential-style, palette, table-style,
+table-style-element, and extension catalog. The existing 65,490 effective
+`cellXfs` ceiling remains intact. Counts match the reader's local-name and
+nested-sequence behavior, so namespace decoration and unexpected direct records
+cannot evade the gate.
+
+Independent raw-ZIP fixtures established the impact. A normal workbook loaded
+in 0.041 seconds at 35,092 KiB. Adding 100,000 valid font records produced a
+285,934-byte package with 13,802,886 bytes of `styles.xml`; before the gate it
+loaded in 18.321 seconds at 336,052 KiB. With the gate it rejects before any
+scanner or workbook reader in 0.068 seconds at 34,868 KiB. A 10,000-font
+fixture previously reached 65,464 KiB in 1.663 seconds. The regression suite
+covers every stylesheet list, repeated containers, exact configured and default
+font limits, unexpected nested children, and alternate-namespace `cellXfs`.
+The completed source tree passed **828 tests in 122.30 seconds**; focused
+archive-safety and version coverage passed **126 tests in 3.54 seconds** with
+Ruff, bytecode compilation, and `git diff --check` clean. A clean Python 3.12
+environment installed the exact release-candidate wheel, confirmed
+`FormulaFence 0.120.0` and `openpyxl.DEFUSEDXML`, completed a normal comparison,
+and returned the normal input-error exit status (2) for the independently
+generated 100,000-font workbook.
+
 ## Worksheet control catalog and `sqref` bounds — 2026-07-26
 
 Version 0.119.0 closes three related allocation paths in ordinary worksheet

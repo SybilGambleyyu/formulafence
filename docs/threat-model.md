@@ -131,8 +131,14 @@ financial correctness or replace model review.
   MiB and aggregate XML material at 256 MiB. Each streamed reader part is also
   capped at 4,000,000 elements and 256 nesting levels. The gate limits
   populated SpreadsheetML cell records and shared-string entries to 500,000
-  each, `cellXfs` styles to 65,490, cell text to 32,767 characters, and stored
-  formula/defined-name text to 8,192 characters. It separately caps the
+  each, effective `cellXfs` styles to 65,490, cell text to 32,767 characters,
+  and stored formula/defined-name text to 8,192 characters. It separately caps
+  repeated known stylesheet containers and every reader-materialized number-
+  format, font, fill, fill-child, gradient-stop, border, base-XF, named-style,
+  differential-style, palette, table-style, table-style-element, and extension
+  catalog at 4,096 records. Those counters follow the stylesheet reader's
+  local-name and nested-sequence behavior, including alternate namespaces and
+  unexpected direct nested records. It separately caps the
   reader-materialized bootstrap catalogs at 4,096 content-type declarations,
   4,096 workbook relationships, 512 workbook sheet declarations, and 100,000
   direct workbook defined-name declarations, including repeated declarations of
@@ -254,8 +260,13 @@ formula will produce.
   XML/relationship part, 256 MiB for aggregate XML material, 4,000,000 XML
   elements and 256 nesting levels for every reader-visible part it streams,
   500,000 populated SpreadsheetML cell records, 500,000 shared-string entries,
-  and 65,490 `cellXfs` styles. It also rejects a cell text value above 32,767
-  characters or stored formula/defined-name text above 8,192 characters, using
+  and 65,490 effective `cellXfs` styles. It also caps repeated known stylesheet
+  containers plus number-format, font, fill, fill-child, gradient-stop, border,
+  base-XF, named-style, differential-style, palette, table-style,
+  table-style-element, and extension records at 4,096 each. It follows
+  `openpyxl`'s local-name and nested-sequence behavior so alternate namespaces
+  and unexpected direct records cannot bypass those style bounds. It also
+  rejects a cell text value above 32,767 characters or stored formula/defined-name text above 8,192 characters, using
   [Excel's published specifications and limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits)
   for the text, formula, and style compatibility ceilings. It caps manifest
   declarations and workbook relationships at 4,096 each, workbook sheet

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.119.0/formulafence-0.119.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.120.0/formulafence-0.120.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.119.0
+  uses: SybilGambleyyu/formulafence@v0.120.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2547,8 +2547,9 @@ the reader-visible manifest, workbook, styles, shared strings, and bounded
 workbook-selected sheets before FormulaFence starts a complete in-memory reader
 or downstream raw OOXML scanning. It allows at most 4,000,000 XML elements per
 streamed part and 256 nesting levels, 500,000 populated SpreadsheetML cells,
-500,000 shared-string entries, 65,490 `cellXfs` styles, 32,767 characters of
-cell text, and 8,192 characters of stored formula/defined-name text. It also
+500,000 shared-string entries, 65,490 effective `cellXfs` styles, 32,767
+characters of cell text, and 8,192 characters of stored formula/defined-name
+text. It also
 caps the bootstrap catalog at 4,096 content-type declarations, 4,096 workbook
 relationships, 512 workbook sheet declarations (including repeated
 declarations of one target part), and 100,000 direct workbook defined-name
@@ -2570,9 +2571,15 @@ targets in aggregate for each catalog, before `openpyxl` creates a `CellRange`
 object for every target; data-validation and conditional-formatting formulas
 also follow the 8,192-character stored-formula ceiling. The catalog counters
 follow the reader's local-name behavior, so
-alternate-namespace entries cannot bypass a limit. The text,
-formula, and style ceilings match [Excel's published limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits);
-valid workbooks above FormulaFence's separate CI-oriented cardinality bounds
+alternate-namespace entries cannot bypass a limit. The cell-text, formula, and
+effective-cell-style ceilings match [Excel's published limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits).
+The preflight also caps repeated known stylesheet containers and every
+reader-materialized number-format, font, fill, fill-child, gradient-stop,
+border, base-XF, named-style, differential-style, palette, table-style,
+table-style-element, and extension catalog at 4,096 records. It follows
+`openpyxl`'s local-name and nested-sequence behavior, so alternate namespaces
+or an unexpected direct child cannot evade a stylesheet bound. Valid workbooks
+above FormulaFence's separate CI-oriented cardinality bounds
 are deliberately rejected rather than partially inspected. FormulaFence
 requires `defusedxml` for its XML parser, which also enables `openpyxl`'s
 defused XML path in the supported installation. Partition unusually large data

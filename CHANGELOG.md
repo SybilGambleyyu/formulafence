@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.120.0 — 2026-07-26
+
+- Bound every `openpyxl` reader-materialized stylesheet catalog before raw
+  OOXML scanners or the complete workbook reader can allocate it. Number-format,
+  font, fill, fill-child, gradient-stop, border, base-XF, named-style,
+  differential-style, palette, table-style, table-style-element, and extension
+  records each allow at most 4,096 entries; repeated known stylesheet
+  containers are also capped at 4,096 in aggregate.
+- Preserve the published 65,490 effective `cellXfs` style ceiling, while making
+  its counter follow the reader's local-name behavior. Alternate-namespace
+  `cellXfs` containers can no longer bypass the bound, and all direct children
+  of `NestedSequence` style catalogs count even when they have unexpected names
+  or namespaces.
+- Add fail-before-reader coverage for every stylesheet catalog, repeated
+  containers, unexpected nested records, alternate namespaces, an over-limit
+  default font fixture, and exact configured/default font limits.
+
 ## 0.119.0 — 2026-07-26
 
 - Bound the reader-materialized worksheet control catalogs: direct data-

@@ -439,6 +439,85 @@ def _append_scenario_manager_containers(
     )
 
 
+def _append_stylesheet_catalog_declarations(
+    path: Path,
+    parent_names: tuple[str, ...],
+    child_name: str,
+    count: int,
+    *,
+    alternate_parent_namespace: str | None = None,
+) -> int:
+    """Append reader-visible style records and return their direct-child count."""
+    member_name = "xl/styles.xml"
+    with ZipFile(path) as archive:
+        styles = archive.read(member_name)
+    root = ElementTree.fromstring(styles)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+
+    def qualified(name: str) -> str:
+        return f"{{{namespace}}}{name}" if namespace else name
+
+    parent = root
+    for parent_name in parent_names:
+        child = next(
+            (
+                current
+                for current in parent
+                if current.tag.rsplit("}", maxsplit=1)[-1] == parent_name
+            ),
+            None,
+        )
+        if child is None:
+            child = ElementTree.Element(qualified(parent_name))
+            parent.append(child)
+        parent = child
+    if alternate_parent_namespace is not None:
+        parent.tag = f"{{{alternate_parent_namespace}}}{parent_names[-1]}"
+
+    for index in range(count):
+        declaration = ElementTree.Element(qualified(child_name))
+        if child_name == "numFmt":
+            declaration.attrib.update(
+                {"numFmtId": str(164 + index), "formatCode": "0.000"}
+            )
+        elif child_name == "font":
+            ElementTree.SubElement(declaration, qualified("name"), {"val": "Arial"})
+        elif child_name == "fill":
+            ElementTree.SubElement(
+                declaration,
+                qualified("patternFill"),
+                {"patternType": "none"},
+            )
+        elif child_name == "xf":
+            declaration.attrib.update(
+                {"numFmtId": "0", "fontId": "0", "fillId": "0", "borderId": "0"}
+            )
+        elif child_name == "cellStyle":
+            declaration.attrib.update(
+                {"name": f"FormulaFence audit {index}", "xfId": "0"}
+            )
+        elif child_name in {"rgbColor", "color"}:
+            declaration.set("rgb", "FF000000")
+        elif child_name == "tableStyle":
+            declaration.set("name", f"FormulaFence audit {index}")
+        elif child_name == "tableStyleElement":
+            declaration.set("type", "wholeTable")
+        elif child_name == "ext":
+            declaration.set("uri", f"urn:formulafence:archive-safety:{index}")
+        elif child_name == "patternFill":
+            declaration.set("patternType", "none")
+        elif child_name == "stop":
+            declaration.set("position", str(index))
+        parent.append(declaration)
+
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+    return len(parent)
+
+
 def _last_central_directory_offset(contents: bytes | bytearray) -> int:
     offset = contents.rfind(b"PK\x01\x02")
     assert offset >= 0
@@ -500,6 +579,85 @@ _WORKBOOK_AUXILIARY_CATALOG_CASES = (
         {"id": "1", "divId": "audit", "destinationFile": "audit.html"},
         "_OOXML_READER_MAX_WORKBOOK_WEB_PUBLISH_OBJECT_COUNT",
         "workbook web-publish-object declarations",
+    ),
+)
+
+
+_STYLESHEET_CATALOG_CASES = (
+    (
+        ("numFmts",),
+        "numFmt",
+        "_OOXML_READER_MAX_NUMBER_FORMAT_COUNT",
+        "number-format records",
+    ),
+    (("fonts",), "font", "_OOXML_READER_MAX_FONT_COUNT", "font records"),
+    (("fills",), "fill", "_OOXML_READER_MAX_FILL_COUNT", "fill records"),
+    (
+        ("fills", "fill"),
+        "patternFill",
+        "_OOXML_READER_MAX_FILL_CHILD_COUNT",
+        "fill child records",
+    ),
+    (
+        ("fills", "fill", "gradientFill"),
+        "stop",
+        "_OOXML_READER_MAX_GRADIENT_FILL_STOP_COUNT",
+        "gradient-fill stops",
+    ),
+    (("borders",), "border", "_OOXML_READER_MAX_BORDER_COUNT", "border records"),
+    (
+        ("cellStyleXfs",),
+        "xf",
+        "_OOXML_READER_MAX_BASE_CELL_STYLE_COUNT",
+        "base cell styles",
+    ),
+    (
+        ("cellXfs",),
+        "xf",
+        "_OOXML_READER_MAX_CELL_STYLE_COUNT",
+        "cell styles",
+    ),
+    (
+        ("cellStyles",),
+        "cellStyle",
+        "_OOXML_READER_MAX_NAMED_CELL_STYLE_COUNT",
+        "named cell styles",
+    ),
+    (
+        ("dxfs",),
+        "dxf",
+        "_OOXML_READER_MAX_DIFFERENTIAL_STYLE_COUNT",
+        "differential styles",
+    ),
+    (
+        ("colors", "indexedColors"),
+        "rgbColor",
+        "_OOXML_READER_MAX_STYLE_COLOR_COUNT",
+        "stylesheet colour records",
+    ),
+    (
+        ("colors", "mruColors"),
+        "color",
+        "_OOXML_READER_MAX_STYLE_COLOR_COUNT",
+        "stylesheet colour records",
+    ),
+    (
+        ("tableStyles",),
+        "tableStyle",
+        "_OOXML_READER_MAX_TABLE_STYLE_COUNT",
+        "table styles",
+    ),
+    (
+        ("tableStyles", "tableStyle"),
+        "tableStyleElement",
+        "_OOXML_READER_MAX_TABLE_STYLE_ELEMENT_COUNT",
+        "table-style elements",
+    ),
+    (
+        ("extLst",),
+        "ext",
+        "_OOXML_READER_MAX_STYLE_EXTENSION_COUNT",
+        "stylesheet extension records",
     ),
 )
 
@@ -1670,6 +1828,137 @@ def test_semantic_reader_preflight_rejects_excessive_cell_styles_before_scanners
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "cell styles" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_stylesheet_containers_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-stylesheet-containers.xlsx")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_STYLESHEET_CONTAINER_COUNT", 0)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet containers" in message
+
+
+@pytest.mark.parametrize(
+    ("parent_names", "child_name", "limit_name", "message_fragment"),
+    _STYLESHEET_CATALOG_CASES,
+)
+def test_semantic_reader_preflight_rejects_excessive_stylesheet_catalogs_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parent_names: tuple[str, ...],
+    child_name: str,
+    limit_name: str,
+    message_fragment: str,
+) -> None:
+    workbook = make_model(tmp_path / f"too-many-stylesheet-{child_name}.xlsx")
+    record_count = _append_stylesheet_catalog_declarations(
+        workbook,
+        parent_names,
+        child_name,
+        1,
+    )
+    monkeypatch.setattr(workbook_module, limit_name, record_count - 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert message_fragment in message
+
+
+def test_semantic_reader_preflight_rejects_default_font_catalog_over_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-font-records.xlsx")
+    _append_stylesheet_catalog_declarations(
+        workbook,
+        ("fonts",),
+        "font",
+        workbook_module._OOXML_READER_MAX_FONT_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "font records" in message
+
+
+def test_semantic_reader_preflight_accepts_font_catalog_at_configured_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "font-records-at-limit.xlsx")
+    record_count = _append_stylesheet_catalog_declarations(
+        workbook,
+        ("fonts",),
+        "font",
+        1,
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_FONT_COUNT", record_count)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_accepts_font_catalog_at_default_limit(
+    tmp_path: Path,
+) -> None:
+    workbook = make_model(tmp_path / "font-records-at-default-limit.xlsx")
+    existing_count = _append_stylesheet_catalog_declarations(
+        workbook,
+        ("fonts",),
+        "font",
+        0,
+    )
+    record_count = _append_stylesheet_catalog_declarations(
+        workbook,
+        ("fonts",),
+        "font",
+        workbook_module._OOXML_READER_MAX_FONT_COUNT - existing_count,
+    )
+
+    assert record_count == workbook_module._OOXML_READER_MAX_FONT_COUNT
+    assert load_snapshot(workbook).file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_counts_alternate_namespace_cell_styles_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "alternate-cell-styles.xlsx")
+    _append_stylesheet_catalog_declarations(
+        workbook,
+        ("cellXfs",),
+        "xf",
+        0,
+        alternate_parent_namespace="urn:formulafence:alternate-style",
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_CELL_STYLE_COUNT", 0)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "cell styles" in message
+
+
+def test_semantic_reader_preflight_counts_unknown_font_children_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "unexpected-font-record.xlsx")
+    record_count = _append_stylesheet_catalog_declarations(
+        workbook,
+        ("fonts",),
+        "unexpectedFontRecord",
+        1,
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_FONT_COUNT", record_count - 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "font records" in message
 
 
 def test_semantic_reader_preflight_rejects_excessive_cell_text_before_scanners(

@@ -9956,6 +9956,57 @@ def _slicer_timeline_xml_element_count(path, member: str) -> int:
     return sum(1 for _ in root.iter())
 
 
+def _custom_data_store_xml_members(path) -> tuple[str, ...]:
+    """Return every XML part materialized by the custom-state fixture scanner."""
+    expected_members = (
+        "_rels/.rels",
+        "xl/_rels/workbook.xml.rels",
+        "customXml/item1.xml",
+        "customXml/_rels/item1.xml.rels",
+        "customXml/itemProps1.xml",
+        "xl/customData/itemProps1.xml",
+        "xl/customData/_rels/itemProps1.xml.rels",
+        "docProps/custom.xml",
+    )
+    with ZipFile(path) as archive:
+        members = {entry.filename for entry in archive.infolist()}
+    return tuple(member for member in expected_members if member in members)
+
+
+def _append_custom_data_store_xml_elements(
+    path,
+    member: str,
+    count: int,
+    *,
+    nested: bool = False,
+) -> None:
+    """Add opaque custom-state XML entries without invoking FormulaFence's reader."""
+    staging = path.with_suffix(".custom-data-store-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, "{urn:formulafence:audit}entry")
+    contents[member] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _custom_data_store_xml_element_count(path, member: str) -> int:
+    """Count one fixture XML tree for exact custom-state budget tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member))
+    return sum(1 for _ in root.iter())
+
+
 def test_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
     baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
     candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
@@ -15095,6 +15146,230 @@ def test_custom_data_store_read_budget_fails_closed(tmp_path, monkeypatch) -> No
         for warning in candidate_snapshot.parser_warnings
     )
     assert {"FF010", "FF052"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_custom_data_store_xml_element_budget_stops_all_materializing_readers(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_custom_data_store_model(tmp_path / "candidate.xlsx")
+    custom_xml_member = "customXml/item1.xml"
+    _append_custom_data_store_xml_elements(workbook, custom_xml_member, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_CUSTOM_DATA_STORE_MAX_XML_ELEMENT_COUNT",
+        _custom_data_store_xml_element_count(workbook, custom_xml_member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        custom_xml_payload = archive.read(custom_xml_member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == custom_xml_payload:
+            raise AssertionError(
+                "the custom data-store XML tree was materialized after its budget failed"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.custom_data_stores.unrecognized_custom_data_store_count >= 1
+    assert any(
+        "custom data-store XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_custom_data_store_binary_payload_does_not_consume_xml_budget(tmp_path) -> None:
+    workbook = make_custom_data_store_model(tmp_path / "candidate.xlsx")
+    budget = workbook_module._CustomDataStoreBudget(remaining_xml_elements=0)
+    warnings: set[str] = set()
+
+    with ZipFile(workbook) as archive:
+        payload, fallback_signature = workbook_module._custom_data_store_bounded_payload(
+            archive,
+            "xl/customData/item1.bin",
+            warnings,
+            budget,
+        )
+
+    assert payload == b"PRIVATE-CUSTOM-DATA-BASELINE"
+    assert fallback_signature is None
+    assert budget.remaining_xml_elements == 0
+    assert not warnings
+
+
+def test_custom_data_store_xml_element_budget_remains_covered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baseline = make_custom_data_store_model(tmp_path / "baseline.xlsx")
+    workbook = make_custom_data_store_model(tmp_path / "candidate.xlsx")
+    baseline_snapshot = load_snapshot(baseline)
+    custom_xml_member = "customXml/item1.xml"
+    _append_custom_data_store_xml_elements(workbook, custom_xml_member, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_CUSTOM_DATA_STORE_MAX_XML_ELEMENT_COUNT",
+        _custom_data_store_xml_element_count(workbook, custom_xml_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+    report = compare_snapshots(baseline_snapshot, snapshot)
+
+    assert snapshot.custom_data_stores.unrecognized_custom_data_store_count >= 1
+    assert any(
+        "custom data-store XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+    assert {"FF010", "FF052"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_custom_data_store_xml_element_budget_accepts_the_configured_capacity(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_custom_data_store_model(tmp_path / "candidate.xlsx")
+    custom_xml_member = "customXml/item1.xml"
+    _append_custom_data_store_xml_elements(workbook, custom_xml_member, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_CUSTOM_DATA_STORE_MAX_XML_ELEMENT_COUNT",
+        _custom_data_store_xml_element_count(workbook, custom_xml_member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.custom_data_stores.unrecognized_custom_data_store_count == 0
+
+
+def test_custom_data_store_xml_element_budget_aggregates_across_package_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_custom_data_store_model(tmp_path / "candidate.xlsx")
+    xml_members = _custom_data_store_xml_members(workbook)
+    remaining_xml_elements = (
+        sum(_custom_data_store_xml_element_count(workbook, member) for member in xml_members)
+        - 1
+    )
+    budget_type = workbook_module._CustomDataStoreBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_CustomDataStoreBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.custom_data_stores.unrecognized_custom_data_store_count >= 1
+    assert any(
+        "custom data-store XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_custom_data_store_xml_element_budget_accepts_the_default_capacity(
+    tmp_path,
+) -> None:
+    workbook = make_custom_data_store_model(tmp_path / "candidate.xlsx")
+    custom_xml_member = "customXml/item1.xml"
+    _append_custom_data_store_xml_elements(
+        workbook,
+        custom_xml_member,
+        workbook_module._CUSTOM_DATA_STORE_MAX_XML_ELEMENT_COUNT
+        - _custom_data_store_xml_element_count(workbook, custom_xml_member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.custom_data_stores.unrecognized_custom_data_store_count == 0
+
+
+def test_custom_data_store_xml_element_budget_rejects_the_default_overage(
+    tmp_path,
+) -> None:
+    workbook = make_custom_data_store_model(tmp_path / "candidate.xlsx")
+    custom_xml_member = "customXml/item1.xml"
+    _append_custom_data_store_xml_elements(
+        workbook,
+        custom_xml_member,
+        workbook_module._CUSTOM_DATA_STORE_MAX_XML_ELEMENT_COUNT
+        - _custom_data_store_xml_element_count(workbook, custom_xml_member)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.custom_data_stores.unrecognized_custom_data_store_count >= 1
+    assert any(
+        "custom data-store XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_custom_data_store_xml_element_budget_counts_nested_opaque_subtrees(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_custom_data_store_model(tmp_path / "candidate.xlsx")
+    custom_xml_member = "customXml/item1.xml"
+    _append_custom_data_store_xml_elements(
+        workbook,
+        custom_xml_member,
+        8,
+        nested=True,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_CUSTOM_DATA_STORE_MAX_XML_ELEMENT_COUNT",
+        _custom_data_store_xml_element_count(workbook, custom_xml_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.custom_data_stores.unrecognized_custom_data_store_count >= 1
+    assert any(
+        "custom data-store XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_power_query_discovery_does_not_reparse_custom_xml_rejected_by_the_boundary(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_power_query_model(tmp_path / "candidate.xlsx")
+    custom_xml_member = "customXml/item1.xml"
+    _append_custom_data_store_xml_elements(workbook, custom_xml_member, 16)
+    monkeypatch.setattr(
+        workbook_module,
+        "_CUSTOM_DATA_STORE_MAX_XML_ELEMENT_COUNT",
+        _custom_data_store_xml_element_count(workbook, custom_xml_member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        custom_xml_payload = archive.read(custom_xml_member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == custom_xml_payload:
+            raise AssertionError(
+                "the Power Query discovery pass reparsed rejected custom XML"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.power_query.present is False
+    assert snapshot.custom_data_stores.unrecognized_custom_data_store_count >= 1
+    assert any(
+        "custom data-store XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_power_query_custom_xml_is_not_double_counted_as_generic_state(tmp_path) -> None:

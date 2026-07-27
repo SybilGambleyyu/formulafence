@@ -1138,10 +1138,18 @@ formula will produce.
   are compared privately because add-ins can bind state to them. Missing,
   duplicate, malformed, unsafe, unbound, unreadable, oversized, or over-budget
   metadata becomes a coverage warning; reads are bounded to 16 MiB per part,
-  64 MiB per workbook, and 512 parts. FormulaFence does **not** execute an
-  add-in, resolve a property, follow or fetch a target, interpret a binary
-  payload, calculate formulas, or infer Excel client behavior. This boundary
-  follows Microsoft's guidance on
+  64 MiB per workbook, and 512 parts. Before any custom-state XML tree is
+  materialized, FormulaFence streams its complete structure with a
+  32,768-element per-part limit and a 65,536-element aggregate limit. These
+  limits bound CI allocation and make a well-formed overage visible `FF052`
+  coverage evidence; they do not define Excel file validity. Opaque binary
+  Custom Data remains byte-bounded rather than being interpreted as XML. The
+  Power Query scanner receives only `DataMashup` parts safely classified by the
+  same bounded custom-state pass, so a rejected generic custom XML tree is not
+  materialized again. FormulaFence does **not** execute an add-in, resolve a
+  property, follow or fetch a target, interpret a binary payload, calculate
+  formulas, or infer Excel client behavior. This boundary follows Microsoft's
+  guidance on
   [persisting add-in state](https://learn.microsoft.com/en-us/office/dev/add-ins/develop/persisting-add-in-state-and-settings),
   [Custom Data](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/7c53f6f4-fea8-43f7-a4b0-ba6e14d0eb78),
   and [Custom Data Properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1f4aa666-c966-4ecf-8399-28390399c891).

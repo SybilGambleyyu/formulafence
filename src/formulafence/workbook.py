@@ -473,6 +473,10 @@ _CUSTOM_DOCUMENT_PROPERTIES_MEMBER = "docProps/custom.xml"
 _CUSTOM_DATA_STORE_MAX_PART_BYTES = 16 * 1024 * 1024
 _CUSTOM_DATA_STORE_TOTAL_BYTES = 64 * 1024 * 1024
 _CUSTOM_DATA_STORE_TOTAL_PARTS = 512
+_CUSTOM_DATA_STORE_MAX_XML_ELEMENT_COUNT = 32_768
+_CUSTOM_DATA_STORE_TOTAL_XML_MAX_ELEMENT_COUNT = (
+    2 * _CUSTOM_DATA_STORE_MAX_XML_ELEMENT_COUNT
+)
 _XML_MAPPING_MAP_PART_PATTERN = re.compile(
     r"^xl/xmlMaps(?:\d+)?\.xml$", re.IGNORECASE
 )
@@ -1449,6 +1453,7 @@ class _CustomDataStoreMetadata:
 
     stores: CustomDataStoreSnapshot
     warnings: tuple[str, ...]
+    power_query_item_members: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -7126,12 +7131,11 @@ def _power_query_mashup_inspection(
 def _power_query_snapshot(
     archive: ZipFile,
     warnings: set[str],
+    power_query_item_members: tuple[str, ...],
 ) -> PowerQuerySnapshot:
-    """Inventory all Data Mashup custom XML parts without exposing their payloads."""
+    """Inventory Data Mashup parts identified by the custom-state structural pass."""
     inspections: list[tuple[str, _PowerQueryMashupInspection]] = []
-    for member in sorted(archive.namelist(), key=str.casefold):
-        if not _CUSTOM_XML_ITEM_PATTERN.fullmatch(member):
-            continue
+    for member in sorted(set(power_query_item_members), key=str.casefold):
         try:
             root = _xml_root(archive, member)
         except (KeyError, ElementTree.ParseError, ValueError) as error:
@@ -9043,7 +9047,11 @@ def _pivot_cache_refresh_snapshots(
     return tuple(sorted(snapshots, key=PivotCacheRefreshSnapshot.sort_key))
 
 
-def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
+def _external_data_metadata(
+    path: Path,
+    *,
+    power_query_item_members: tuple[str, ...],
+) -> _ExternalDataMetadata:
     """Read external-data refresh controls before the workbook reader drops them."""
     warnings: set[str] = set()
     default_settings = ExternalDataRefreshSettingsSnapshot()
@@ -9111,7 +9119,11 @@ def _external_data_metadata(path: Path) -> _ExternalDataMetadata:
                 workbook_relationships,
                 warnings,
             )
-            power_query = _power_query_snapshot(archive, warnings)
+            power_query = _power_query_snapshot(
+                archive,
+                warnings,
+                power_query_item_members,
+            )
     except (BadZipFile, OSError, ValueError) as error:
         return _ExternalDataMetadata(
             refresh_settings=default_settings,
@@ -37378,6 +37390,7 @@ class _CustomDataStoreBudget:
 
     remaining_parts: int = _CUSTOM_DATA_STORE_TOTAL_PARTS
     remaining_bytes: int = _CUSTOM_DATA_STORE_TOTAL_BYTES
+    remaining_xml_elements: int = _CUSTOM_DATA_STORE_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 def _custom_data_store_issue(
@@ -37389,6 +37402,49 @@ def _custom_data_store_issue(
     issues.append((context, repr(detail)))
 
 
+def _custom_data_store_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _CustomDataStoreBudget,
+    *,
+    report_failure: bool,
+) -> str | None:
+    """Stream custom-state XML before recursively canonicalizing its private tree."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _CUSTOM_DATA_STORE_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    if report_failure:
+        warnings.add(
+            "FormulaFence did not fully read a custom data-store XML part whose XML "
+            "structure exceeds the safety budget; affected persisted state has a "
+            "coverage gap."
+        )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
+
+
 def _custom_data_store_bounded_payload(
     archive: ZipFile,
     member: str,
@@ -37396,6 +37452,7 @@ def _custom_data_store_bounded_payload(
     budget: _CustomDataStoreBudget,
     *,
     report_failure: bool = True,
+    structural_xml: bool = False,
 ) -> tuple[bytes | None, str | None]:
     """Read one custom workbook data-store part within fixed scan budgets."""
     if budget.remaining_parts <= 0:
@@ -37438,6 +37495,19 @@ def _custom_data_store_bounded_payload(
         return None, _private_external_data_signature(
             (("custom-data-store-read-budget-exhausted", metadata),)
         )
+    if structural_xml:
+        structure_fallback_signature = (
+            _custom_data_store_xml_structure_budget_fallback_signature(
+                archive,
+                member,
+                info,
+                warnings,
+                budget,
+                report_failure=report_failure,
+            )
+        )
+        if structure_fallback_signature is not None:
+            return None, structure_fallback_signature
     budget.remaining_bytes -= info.file_size
     try:
         return archive.read(member), None
@@ -37467,6 +37537,7 @@ def _custom_data_store_bounded_root(
         warnings,
         budget,
         report_failure=report_failure,
+        structural_xml=True,
     )
     if payload is None:
         return None, fallback_signature
@@ -38430,7 +38501,11 @@ def _custom_data_store_metadata(path: Path) -> _CustomDataStoreMetadata:
                 f"OOXML ({type(error).__name__}); affected persisted state was not compared.",
             ),
         )
-    return _CustomDataStoreMetadata(snapshot, tuple(sorted(warnings)))
+    return _CustomDataStoreMetadata(
+        snapshot,
+        tuple(sorted(warnings)),
+        tuple(sorted(power_query_item_members, key=str.casefold)),
+    )
 
 
 @dataclass(frozen=True)
@@ -47720,7 +47795,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     parser_warnings.update(conditional_formatting_metadata.warnings)
     protection_metadata = _protection_metadata(source)
     parser_warnings.update(protection_metadata.warnings)
-    external_data_metadata = _external_data_metadata(source)
+    external_data_metadata = _external_data_metadata(
+        source,
+        power_query_item_members=custom_data_store_metadata.power_query_item_members,
+    )
     parser_warnings.update(external_data_metadata.warnings)
 
     sheets: dict[str, SheetSnapshot] = {}

@@ -1521,7 +1521,14 @@ normalize away. Custom XML `itemID` and Custom Data `id` storage identities
 are compared privately because an add-in can bind state to them. Missing,
 duplicate, malformed, unsafe, unbound, unreadable, oversized, or over-budget
 metadata produces a coverage warning; reads are bounded to 16 MiB per part, 64
-MiB per workbook, and 512 parts.
+MiB per workbook, and 512 parts. Before materializing a custom-state XML tree,
+FormulaFence streams its full structure with a 32,768-element per-part limit
+and a 65,536-element aggregate limit. These are FormulaFence CI allocation and
+coverage limits, not Excel file-validity limits: a well-formed structural
+overage becomes visible `FF052` coverage evidence. Opaque binary Custom Data
+remains byte-bounded rather than being treated as XML. The Power Query scanner
+receives only `DataMashup` members safely classified by that bounded pass, so a
+rejected generic Custom XML part is not materialized by a second scanner.
 
 This policy guards persisted package state only. FormulaFence does **not**
 execute an add-in, resolve a property, follow or fetch a target, interpret a

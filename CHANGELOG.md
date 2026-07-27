@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.113.0 — 2026-07-26
+
+- Extend the fail-closed semantic-reader preflight to stream the OOXML manifest,
+  workbook metadata, styles, shared-string table, and workbook-selected sheet
+  parts under a 4,000,000-element-per-part and 256-level nesting bound before
+  downstream scanners or `openpyxl` allocate their complete models.
+- Limit reader-visible shared-string entries to 500,000, `cellXfs` styles to
+  Excel's 65,490 style limit, text values to Excel's 32,767-character cell
+  limit, and stored formula/defined-name text to Excel's 8,192-character
+  formula limit. Shared strings follow the first manifest-selected target that
+  `openpyxl` reads, then a sole workbook relationship or canonical fallback.
+- Add regression coverage for structural XML, styles, cell/formula scalar
+  limits, and noncanonical relationship- and manifest-selected shared-string
+  parts, all proved to reject before any downstream reader starts.
+
 ## 0.112.0 — 2026-07-26
 
 - Require `defusedxml` for FormulaFence's OOXML parsing, which also enables

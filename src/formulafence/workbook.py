@@ -163,6 +163,20 @@ _OOXML_ARCHIVE_ALLOWED_COMPRESSION_METHODS = frozenset({ZIP_STORED, ZIP_DEFLATED
 _OOXML_READER_MAX_XML_PART_BYTES = 64 * 1024 * 1024
 _OOXML_READER_MAX_TOTAL_XML_BYTES = 256 * 1024 * 1024
 _OOXML_READER_MAX_WORKSHEET_CELL_COUNT = 500_000
+# Reader-facing XML can still be hostile within its byte limit: the ordinary
+# workbook model materializes shared-string entries and style objects, while
+# deep XML can impose disproportionate parser work.  Keep the streaming gate
+# compatible with Excel's published cell/formula limits and with the existing
+# 500,000-cell CI boundary.
+_OOXML_READER_MAX_XML_ELEMENT_COUNT = 4_000_000
+_OOXML_READER_MAX_XML_NESTING_DEPTH = 256
+_OOXML_READER_MAX_SHARED_STRING_COUNT = 500_000
+_OOXML_READER_MAX_CELL_STYLE_COUNT = 65_490
+_OOXML_READER_MAX_CELL_TEXT_CHARACTERS = 32_767
+_OOXML_READER_MAX_FORMULA_CHARACTERS = 8_192
+_OOXML_SHARED_STRINGS_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+)
 _ZIP_LOCAL_FILE_HEADER_SIGNATURE = b"PK\x03\x04"
 _ZIP_CENTRAL_DIRECTORY_HEADER_SIGNATURE = b"PK\x01\x02"
 _ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE = b"PK\x05\x06"
@@ -3120,6 +3134,79 @@ def _is_ooxml_xml_member(member: _OoxmlArchiveMember) -> bool:
     return member.name.casefold().endswith((".xml", ".rels"))
 
 
+def _spreadsheetml_tags(*local_names: str) -> frozenset[str]:
+    """Build tags for the transitional and Strict SpreadsheetML namespaces."""
+    return frozenset(
+        f"{{{namespace}}}{local_name}"
+        for namespace in (_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS)
+        for local_name in local_names
+    )
+
+
+def _stream_ooxml_reader_xml(
+    archive: ZipFile,
+    member: str,
+    *,
+    on_start: Callable[[ElementTree.Element], None] | None = None,
+    on_end: Callable[[ElementTree.Element, list[str]], None] | None = None,
+) -> None:
+    """Stream one reader-visible XML part under structural resource limits."""
+    depth = 0
+    element_count = 0
+    tags: list[str] = []
+    with archive.open(member) as xml_stream:
+        for event, element in ElementTree.iterparse(
+            xml_stream,
+            events=("start", "end"),
+        ):
+            if event == "start":
+                depth += 1
+                if depth > _OOXML_READER_MAX_XML_NESTING_DEPTH:
+                    raise _reader_preflight_error(
+                        "XML nesting exceeds the semantic-reader safety limit."
+                    )
+                element_count += 1
+                if element_count > _OOXML_READER_MAX_XML_ELEMENT_COUNT:
+                    raise _reader_preflight_error(
+                        "XML element count exceeds the semantic-reader safety limit."
+                    )
+                tags.append(element.tag)
+                if on_start is not None:
+                    on_start(element)
+                continue
+
+            if on_end is not None:
+                on_end(element, tags)
+            element.clear()
+            tags.pop()
+            depth -= 1
+
+
+def _reader_shared_string_xml_paths(
+    archive: ZipFile,
+    *,
+    manifest_targets: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Find reader-visible shared-string parts without trusting a fixed path."""
+    if manifest_targets:
+        # ``openpyxl`` reads the first matching manifest Override.
+        return (manifest_targets[0],)
+    relationship_targets = [
+        relationship.target
+        for relationship in _package_relationships(archive, "xl/workbook.xml")
+        if (
+            relationship.target is not None
+            and relationship.relationship_type.rsplit("/", maxsplit=1)[-1].casefold()
+            == "sharedstrings"
+        )
+    ]
+    if len(relationship_targets) == 1:
+        return (relationship_targets[0],)
+    if not relationship_targets and "xl/sharedStrings.xml" in archive.namelist():
+        return ("xl/sharedStrings.xml",)
+    return ()
+
+
 def _validate_ooxml_semantic_reader_resources(
     path: Path,
     members: tuple[_OoxmlArchiveMember, ...],
@@ -3130,12 +3217,14 @@ def _validate_ooxml_semantic_reader_resources(
     unique canonical names and coherent headers. This pass therefore only needs
     to inspect the workbook's sheet relationships, then stream each selected
     worksheet once while keeping no values, locations, or XML tree in memory.
-    It therefore covers relationship-selected worksheet locations rather than
-    assuming a writer used one conventional member path, without turning an
-    unrelated malformed extension part into a hard input failure. It protects
-    FormulaFence's complete ``openpyxl`` reader and every subsequent raw OOXML
-    scanner from a package that is valid ZIP but impractical to model safely in
-    a CI worker.
+    It therefore covers relationship-selected worksheet locations and
+    shared-string paths rather than assuming a writer used one conventional
+    member path, without turning an unrelated malformed extension part into a
+    hard input failure. Alongside cell counts, it bounds the reader-visible XML
+    shape, shared-string table, and Excel-compatible cell/formula scalar sizes.
+    It protects FormulaFence's complete ``openpyxl`` reader and every
+    subsequent raw OOXML scanner from a package that is valid ZIP but
+    impractical to model safely in a CI worker.
     """
     member_by_name = {member.name: member for member in members}
     xml_members = tuple(member for member in members if _is_ooxml_xml_member(member))
@@ -3151,49 +3240,204 @@ def _validate_ooxml_semantic_reader_resources(
                 "aggregate XML material exceeds the semantic-reader safety limit."
             )
 
-    spreadsheet_cell_tags = {
-        f"{{{_SPREADSHEETML_NS}}}c",
-        f"{{{_STRICT_SPREADSHEETML_NS}}}c",
-    }
+    non_xml_reader_members: set[str] = set()
+
+    def reader_member(member_name: str) -> _OoxmlArchiveMember:
+        nonlocal total_xml_bytes
+        member = member_by_name.get(member_name)
+        if member is None:
+            raise _reader_preflight_error(
+                "a reader-visible XML part could not be located safely."
+            )
+        if (
+            not _is_ooxml_xml_member(member)
+            and member.name not in non_xml_reader_members
+        ):
+            if member.uncompressed_size > _OOXML_READER_MAX_XML_PART_BYTES:
+                raise _reader_preflight_error(
+                    "an XML part exceeds the semantic-reader safety limit."
+                )
+            total_xml_bytes += member.uncompressed_size
+            if total_xml_bytes > _OOXML_READER_MAX_TOTAL_XML_BYTES:
+                raise _reader_preflight_error(
+                    "aggregate XML material exceeds the semantic-reader safety limit."
+                )
+            non_xml_reader_members.add(member.name)
+        return member
+
+    def validate_cell_text_length(length: int) -> None:
+        if length > _OOXML_READER_MAX_CELL_TEXT_CHARACTERS:
+            raise _reader_preflight_error(
+                "cell text exceeds the semantic-reader safety limit."
+            )
+
+    def validate_formula_text_length(length: int) -> None:
+        if length > _OOXML_READER_MAX_FORMULA_CHARACTERS:
+            raise _reader_preflight_error(
+                "formula text exceeds the semantic-reader safety limit."
+            )
+
+    inline_string_text_lengths: list[int] = []
+    shared_string_text_lengths: list[int] = []
+    manifest_shared_string_members: list[str] = []
     populated_cell_count = 0
+    shared_string_count = 0
+    cell_tags = _spreadsheetml_tags("c")
+    formula_tags = _spreadsheetml_tags("f")
+    inline_string_tags = _spreadsheetml_tags("is")
+    shared_string_tags = _spreadsheetml_tags("si")
+    text_tags = _spreadsheetml_tags("t")
+    value_tags = _spreadsheetml_tags("v")
+    defined_name_tags = _spreadsheetml_tags("definedName")
+    cell_xfs_tags = _spreadsheetml_tags("cellXfs")
+    xf_tags = _spreadsheetml_tags("xf")
+
+    def content_types_end(
+        element: ElementTree.Element,
+        _tags: list[str],
+    ) -> None:
+        if (
+            element.tag.rsplit("}", maxsplit=1)[-1] == "Override"
+            and element.get("ContentType", "").casefold()
+            == _OOXML_SHARED_STRINGS_CONTENT_TYPE.casefold()
+            and (part_name := element.get("PartName"))
+            and not manifest_shared_string_members
+        ):
+            manifest_shared_string_members.append(part_name.lstrip("/"))
+
+    def workbook_end(
+        element: ElementTree.Element,
+        _tags: list[str],
+    ) -> None:
+        if element.tag in defined_name_tags:
+            validate_formula_text_length(len(element.text or ""))
+
+    def worksheet_start(element: ElementTree.Element) -> None:
+        if element.tag in inline_string_tags:
+            inline_string_text_lengths.append(0)
+
+    def worksheet_end(
+        element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        nonlocal populated_cell_count
+        if element.tag in cell_tags:
+            populated_cell_count += 1
+            if populated_cell_count > _OOXML_READER_MAX_WORKSHEET_CELL_COUNT:
+                raise _reader_preflight_error(
+                    "populated worksheet cells exceed the semantic-reader safety limit."
+                )
+        elif element.tag in formula_tags:
+            validate_formula_text_length(len(element.text or ""))
+        elif (
+            element.tag in value_tags
+            and len(tags) > 1
+            and tags[-2] in cell_tags
+        ):
+            validate_cell_text_length(len(element.text or ""))
+
+        if element.tag in text_tags and inline_string_text_lengths:
+            inline_string_text_lengths[-1] += len(element.text or "")
+            validate_cell_text_length(inline_string_text_lengths[-1])
+        if element.tag in inline_string_tags:
+            inline_string_text_lengths.pop()
+
+    def shared_string_start(element: ElementTree.Element) -> None:
+        if element.tag in shared_string_tags:
+            shared_string_text_lengths.append(0)
+
+    def shared_string_end(
+        element: ElementTree.Element,
+        _tags: list[str],
+    ) -> None:
+        nonlocal shared_string_count
+        if element.tag in text_tags and shared_string_text_lengths:
+            shared_string_text_lengths[-1] += len(element.text or "")
+            validate_cell_text_length(shared_string_text_lengths[-1])
+        if element.tag in shared_string_tags:
+            shared_string_text_lengths.pop()
+            shared_string_count += 1
+            if shared_string_count > _OOXML_READER_MAX_SHARED_STRING_COUNT:
+                raise _reader_preflight_error(
+                    "shared-string table entries exceed the semantic-reader safety limit."
+                )
+
+    cell_style_count = 0
+
+    def stylesheet_end(
+        element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        nonlocal cell_style_count
+        if (
+            element.tag in xf_tags
+            and len(tags) > 1
+            and tags[-2] in cell_xfs_tags
+        ):
+            cell_style_count += 1
+            if cell_style_count > _OOXML_READER_MAX_CELL_STYLE_COUNT:
+                raise _reader_preflight_error(
+                    "cell styles exceed the semantic-reader safety limit."
+                )
+
     try:
         with ZipFile(path) as archive:
+            bootstrap_members = (
+                "[Content_Types].xml",
+                "xl/workbook.xml",
+                _relationship_part_path("xl/workbook.xml"),
+            )
+            for member_name in bootstrap_members:
+                if member_name not in member_by_name:
+                    continue
+                reader_member(member_name)
+                _stream_ooxml_reader_xml(
+                    archive,
+                    member_name,
+                    on_end=(
+                        content_types_end
+                        if member_name == "[Content_Types].xml"
+                        else workbook_end
+                        if member_name == "xl/workbook.xml"
+                        else None
+                    ),
+                )
+
             worksheet_members = tuple(
                 dict.fromkeys(_worksheet_display_xml_paths(archive))
             )
-            for worksheet_member in worksheet_members:
-                member = member_by_name.get(worksheet_member)
-                if member is None:
-                    raise _reader_preflight_error(
-                        "a worksheet part could not be located safely."
-                    )
-                if not _is_ooxml_xml_member(member):
-                    if member.uncompressed_size > _OOXML_READER_MAX_XML_PART_BYTES:
-                        raise _reader_preflight_error(
-                            "an XML part exceeds the semantic-reader safety limit."
-                        )
-                    total_xml_bytes += member.uncompressed_size
-                    if total_xml_bytes > _OOXML_READER_MAX_TOTAL_XML_BYTES:
-                        raise _reader_preflight_error(
-                            "aggregate XML material exceeds the semantic-reader safety "
-                            "limit."
-                        )
-                with archive.open(worksheet_member) as xml_stream:
-                    for _, element in ElementTree.iterparse(
-                        xml_stream,
-                        events=("end",),
-                    ):
-                        if element.tag in spreadsheet_cell_tags:
-                            populated_cell_count += 1
-                            if (
-                                populated_cell_count
-                                > _OOXML_READER_MAX_WORKSHEET_CELL_COUNT
-                            ):
-                                raise _reader_preflight_error(
-                                    "populated worksheet cells exceed the semantic-reader "
-                                    "safety limit."
-                                )
-                        element.clear()
+            reader_sheet_members = list(worksheet_members)
+            for member_name, _ in _sheet_xml_parts(archive).values():
+                if member_name not in reader_sheet_members:
+                    reader_sheet_members.append(member_name)
+            shared_string_members = _reader_shared_string_xml_paths(
+                archive,
+                manifest_targets=tuple(manifest_shared_string_members),
+            )
+
+            if "xl/styles.xml" in member_by_name:
+                reader_member("xl/styles.xml")
+                _stream_ooxml_reader_xml(
+                    archive,
+                    "xl/styles.xml",
+                    on_end=stylesheet_end,
+                )
+            for member_name in shared_string_members:
+                reader_member(member_name)
+                _stream_ooxml_reader_xml(
+                    archive,
+                    member_name,
+                    on_start=shared_string_start,
+                    on_end=shared_string_end,
+                )
+            for member_name in reader_sheet_members:
+                reader_member(member_name)
+                _stream_ooxml_reader_xml(
+                    archive,
+                    member_name,
+                    on_start=(worksheet_start if member_name in worksheet_members else None),
+                    on_end=(worksheet_end if member_name in worksheet_members else None),
+                )
     except WorkbookLoadError:
         raise
     except (

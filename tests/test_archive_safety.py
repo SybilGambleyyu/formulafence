@@ -206,6 +206,204 @@ def test_semantic_reader_preflight_rejects_excessive_cells_before_scanners(
     assert "populated worksheet cells" in message
 
 
+def test_semantic_reader_preflight_rejects_excessive_xml_nesting_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "deep-reader-xml.xlsx")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_XML_NESTING_DEPTH", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "XML nesting" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_xml_elements_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "many-reader-elements.xlsx")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_XML_ELEMENT_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "XML element count" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_cell_styles_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-styles.xlsx")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_CELL_STYLE_COUNT", 0)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "cell styles" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_cell_text_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-much-cell-text.xlsx")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_CELL_TEXT_CHARACTERS", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "cell text" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_formula_text_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-much-formula-text.xlsx")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_FORMULA_CHARACTERS", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "formula text" in message
+
+
+def test_semantic_reader_preflight_rejects_cell_text_beyond_excel_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "cell-text-limit.xlsx")
+    member_name = "xl/worksheets/sheet1.xml"
+    with ZipFile(workbook) as archive:
+        worksheet = archive.read(member_name)
+    _replace_member(
+        workbook,
+        member_name,
+        worksheet.replace(
+            b"<t>Revenue</t>",
+            b"<t>" + b"x" * 32_768 + b"</t>",
+        ),
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "cell text" in message
+
+
+def test_semantic_reader_preflight_rejects_formula_text_beyond_excel_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "formula-text-limit.xlsx")
+    member_name = "xl/worksheets/sheet2.xml"
+    with ZipFile(workbook) as archive:
+        worksheet = archive.read(member_name)
+    _replace_member(
+        workbook,
+        member_name,
+        worksheet.replace(
+            b"<f>Inputs!B2*2</f>",
+            b"<f>=" + b"1" * 8_192 + b"</f>",
+        ),
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "formula text" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_shared_strings_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-shared-strings.xlsx")
+    _append_member(
+        workbook,
+        "xl/sharedStrings.xml",
+        (
+            b'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            b"<si><t>one</t></si><si><t>two</t></si></sst>"
+        ),
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_SHARED_STRING_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "shared-string table entries" in message
+
+
+def test_semantic_reader_preflight_follows_relationship_selected_shared_strings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "relationship-selected-shared-strings.xlsx")
+    relationship_member = "xl/_rels/workbook.xml.rels"
+    shared_member = "xl/private/strings.xml"
+    with ZipFile(workbook) as archive:
+        relationships = archive.read(relationship_member)
+    _append_member(
+        workbook,
+        shared_member,
+        (
+            b'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            b"<si><t>one</t></si><si><t>two</t></si></sst>"
+        ),
+    )
+    _replace_member(
+        workbook,
+        relationship_member,
+        relationships.replace(
+            b"</Relationships>",
+            (
+                b'<Relationship Id="rIdSharedStrings" '
+                b'Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+                b'relationships/sharedStrings" Target="private/strings.xml" />'
+                b"</Relationships>"
+            ),
+        ),
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_SHARED_STRING_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "shared-string table entries" in message
+
+
+def test_semantic_reader_preflight_follows_manifest_selected_shared_strings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "manifest-selected-shared-strings.xlsx")
+    content_types_member = "[Content_Types].xml"
+    shared_member = "xl/private/strings.xml"
+    with ZipFile(workbook) as archive:
+        content_types = archive.read(content_types_member)
+    _append_member(
+        workbook,
+        shared_member,
+        (
+            b'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            b"<si><t>one</t></si><si><t>two</t></si></sst>"
+        ),
+    )
+    _replace_member(
+        workbook,
+        content_types_member,
+        content_types.replace(
+            b"</Types>",
+            (
+                b'<Override PartName="/xl/private/strings.xml" '
+                b'ContentType="application/vnd.openxmlformats-officedocument.'
+                b'spreadsheetml.sharedStrings+xml" />'
+                b"</Types>"
+            ),
+        ),
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_SHARED_STRING_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "shared-string table entries" in message
+
+
 def test_semantic_reader_preflight_counts_relationship_selected_worksheet_parts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Reader XML cardinality and scalar limits — 2026-07-26
+
+Version 0.113.0 extends the 0.112.0 semantic-reader preflight around the
+specific XML surfaces that ordinary workbook loading materializes: the package
+manifest, workbook metadata and relationship catalog, canonical styles,
+shared-string table, and workbook-selected sheets. This matters because
+`openpyxl`'s [shared-string reader](https://openpyxl.readthedocs.io/en/3.1/_modules/openpyxl/reader/strings.html)
+appends every `<si>` item to a Python list even when few worksheet cells refer
+to it; a worksheet-cell count alone cannot bound that allocation.
+
+The preflight streams those reader-visible parts under 4,000,000 elements per
+part and 256 nesting levels, without retaining their trees. It rejects more
+than 500,000 shared-string entries or populated worksheet cells, more than
+65,490 `cellXfs` entries, text values above 32,767 characters, and stored
+formula/defined-name text above 8,192 characters. The text, formula, and style
+ceilings align with [Excel's published specifications and limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits).
+For shared strings it follows the first matching manifest Override—the same
+selection path `openpyxl` uses—then a sole workbook relationship or canonical
+fallback. Malformed unrelated extension XML retains its existing coverage-
+warning route rather than becoming a broad input rejection.
+
+Focused fixtures prove every new bound fails before a downstream scanner,
+including relationship- and manifest-selected noncanonical shared-string
+parts. A direct boundary probe built a 27,245-byte source workbook containing
+500,001 shared-string items and confirmed the stable preflight rejection before
+the first raw workbook scanner could run. The completed source tree passed
+**737 tests in 115.64 seconds**, plus Ruff, bytecode compilation, and `git diff
+--check`. Both final distribution artifacts passed `twine check`; a fresh
+Python 3.12 environment installed the wheel, returned `FormulaFence 0.113.0`,
+confirmed `openpyxl.DEFUSEDXML`, profiled a normal workbook, and returned the
+normal input-error exit status (2) for the actual 500,001-item boundary fixture.
+
 ## Semantic-reader resource boundary and defused XML — 2026-07-26
 
 The archive-header inventory from 0.111.0 bounds ZIP expansion, but FormulaFence

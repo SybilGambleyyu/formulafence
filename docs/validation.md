@@ -34,7 +34,13 @@ in 0.579 seconds at 98,104 KiB and now stops in 0.135 seconds at 34,124 KiB.
 The nested equivalents likewise moved from 0.597/97,592 KiB and 0.573/97,704
 KiB to about 0.145 seconds and 34 MiB. The completed Office Web Add-in diff
 suite passed **496 tests in 79.87 seconds**, with Ruff and `git diff --check`
-clean.
+clean. The completed source suite passed **892 tests in 123.09 seconds**. A
+fresh Python 3.12 environment installed the exact candidate wheel, confirmed
+FormulaFence 0.127.0 with `openpyxl.DEFUSEDXML` enabled, and completed a normal
+CLI comparison. All four independently generated direct/nested task-pane and
+definition fixtures produced exactly one structural warning in the installed
+reader and the expected `FF010` coverage finding; with `--fail-on medium`, each
+installed CLI comparison returned status 1.
 
 ## RibbonX structural XML bounds — 2026-07-26
 

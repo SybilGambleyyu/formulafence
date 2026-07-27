@@ -22,6 +22,7 @@ redact_office_custom_functions=${INPUT_REDACT_OFFICE_CUSTOM_FUNCTIONS:-false}
 redact_unqualified_runtime_functions=${INPUT_REDACT_UNQUALIFIED_RUNTIME_FUNCTIONS:-false}
 redact_worksheet_code_resource_registrations=${INPUT_REDACT_WORKSHEET_CODE_RESOURCE_REGISTRATIONS:-false}
 redact_formula_defined_xlm_registrations=${INPUT_REDACT_FORMULA_DEFINED_XLM_REGISTRATIONS:-false}
+redact_formula_defined_xlm_evaluations=${INPUT_REDACT_FORMULA_DEFINED_XLM_EVALUATIONS:-false}
 fail_on=${INPUT_FAIL_ON:-none}
 max_workbooks=${INPUT_MAX_WORKBOOKS:-512}
 max_link_impact=${INPUT_MAX_LINK_IMPACT:-100000}
@@ -78,6 +79,11 @@ esac
 case "$redact_formula_defined_xlm_registrations" in
   true|false) ;;
   *) fail "Unsupported redact-formula-defined-xlm-registrations value: $redact_formula_defined_xlm_registrations (expected true or false)." ;;
+esac
+
+case "$redact_formula_defined_xlm_evaluations" in
+  true|false) ;;
+  *) fail "Unsupported redact-formula-defined-xlm-evaluations value: $redact_formula_defined_xlm_evaluations (expected true or false)." ;;
 esac
 
 if ! [[ "$max_workbooks" =~ ^[1-9][0-9]*$ ]]; then
@@ -197,6 +203,9 @@ if [[ "$redact_worksheet_code_resource_registrations" == true ]]; then
 fi
 if [[ "$redact_formula_defined_xlm_registrations" == true ]]; then
   command+=(--redact-formula-defined-xlm-registrations)
+fi
+if [[ "$redact_formula_defined_xlm_evaluations" == true ]]; then
+  command+=(--redact-formula-defined-xlm-evaluations)
 fi
 
 if "${command[@]}"; then

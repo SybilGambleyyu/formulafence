@@ -824,7 +824,12 @@ formula will produce.
   produce. It traces only the stored call's own visible static argument edge.
   Direct worksheet `EVALUATE` formulas and raw XLM macro-sheet parts are
   intentionally outside this narrow boundary; runtime-text dependencies remain
-  explicit static-coverage limits.
+  explicit static-coverage limits. The separate
+  `--redact-formula-defined-xlm-evaluations` shared-artifact mode hides direct
+  stored `EVALUATE` material, exact changed static inputs, and changed private
+  name-chain evidence after comparison and policy evaluation without evaluating
+  a formula or text argument, parsing a runtime-generated expression, or
+  changing any comparison fact.
 - Selected legacy XLM action and event-dispatch calls can also be stored in a
   formula-defined name or named `LAMBDA`, outside raw macro-sheet XML.
   FormulaFence inventories only `CALL`, `EXEC`, `EXECUTE`, `RUN`, `SEND.KEYS`,

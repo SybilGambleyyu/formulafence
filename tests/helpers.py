@@ -951,7 +951,9 @@ def make_formula_defined_xlm_evaluation_model(path: Path) -> Path:
     workbook.defined_names.add(
         DefinedName(
             "FENCE.XLM.EVALUATE.DIRECT",
-            attr_text="=EVALUATE(Inputs!$A$9)",
+            attr_text=(
+                '=EVALUATE(Inputs!$A$9&"PRIVATE-XLM-EVALUATE-LITERAL-BASELINE")'
+            ),
         )
     )
     workbook.save(path)
@@ -975,6 +977,20 @@ def change_formula_defined_xlm_evaluation_input(path: Path) -> Path:
     """Change a static text input used by a formula-defined XLM evaluation."""
     workbook = load_workbook(path)
     workbook["Inputs"]["A9"] = "PRIVATE-XLM-EVALUATE-EXPRESSION-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_evaluation_call(path: Path) -> Path:
+    """Change a direct stored XLM evaluation without evaluating its text."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.XLM.EVALUATE.DIRECT"]
+    expected = '=EVALUATE(Inputs!$A$9&"PRIVATE-XLM-EVALUATE-LITERAL-BASELINE")'
+    if definition.attr_text != expected:
+        raise ValueError("Fixture does not contain the expected direct XLM evaluation")
+    definition.attr_text = (
+        '=EVALUATE(Inputs!$A$9&"PRIVATE-XLM-EVALUATE-LITERAL-CANDIDATE")'
+    )
     workbook.save(path)
     return path
 

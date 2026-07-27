@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.104.0/formulafence-0.104.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.105.0/formulafence-0.105.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.104.0
+  uses: SybilGambleyyu/formulafence@v0.105.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -337,6 +337,48 @@ through `redact-formula-defined-xlm-registrations: 'true'`. The scope follows
 Microsoft's [`xlfRegister` Form 1 reference](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-1)
 and [`Form 2` reference](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-2),
 which document XLM registration for DLL functions/commands and XLL activation.
+
+### Sharing reports with formula-defined XLM evaluation
+
+Legacy XLM `EVALUATE` can be stored in a formula-defined name or named
+`LAMBDA`, where its expression text and static arguments can surface through
+ordinary changed-name or cell evidence even though the `FF069` ledger itself
+publishes only counts. For an artifact that crosses the local review boundary,
+add `--redact-formula-defined-xlm-evaluations` to `diff`, `check`, or
+`portfolio`:
+
+```bash
+formulafence check baseline.xlsx candidate.xlsx \
+  --policy formulafence.yml \
+  --format json \
+  --redact-formula-defined-xlm-evaluations \
+  --output shared-report.json
+```
+
+This output-only mode covers direct stored `EVALUATE` material FormulaFence
+inventories under `FF069`. It replaces a whole serialized value with
+`[formula-defined XLM evaluation material redacted]`, hides before/after
+evidence for a changed invoking formula or exact changed static input that the
+private dependency analysis recorded as reaching one, and conservatively hides
+changed formula-defined-name before/after values when a private resolved
+evaluation chain changed. That last rule protects an ordinary-looking dotted
+wrapper whose private expression eventually reaches `EVALUATE`. A shared
+renderer does not retain workbook-local name bindings, so it may conservatively
+replace a standalone `EVALUATE`-shaped string too; default local-review output
+is unchanged.
+
+The switch does not mutate snapshots, findings, policy evaluation, or an exit
+status; it does not calculate formulas, evaluate the expression text, parse a
+runtime-generated expression, execute a macro, or reconstruct dynamically
+assembled text. It is not a general secret scrubber and does not replace the
+external-workbook-link, formula-action, Python-in-Excel, Office
+custom-function, unqualified-runtime-function, or registration sharing
+boundaries. Runtime text remains a static-coverage limit: this mode protects
+only direct stored material and the existing proven argument graph. The GitHub
+Action exposes the same boundary through
+`redact-formula-defined-xlm-evaluations: 'true'`. The scope follows Microsoft's
+[Excel expression-evaluation reference](https://learn.microsoft.com/en-us/office/client-developer/excel/excel-worksheet-and-expression-evaluation),
+which documents `EVALUATE` reducing a valid character string to an Excel value.
 
 ### Portfolio gates
 
@@ -1002,6 +1044,11 @@ edge remain reviewable through private signatures. Formula text parsed by
 coverage limit. Direct worksheet `EVALUATE` calls and raw XLM macro-sheet parts
 are deliberately outside this narrow stored-definition boundary. Enable
 `no_formula_defined_xlm_evaluation_changes` to block this boundary in CI.
+For a shared artifact, the separate output-only
+`--redact-formula-defined-xlm-evaluations` mode hides direct stored `EVALUATE`
+material, exact changed static inputs, and changed private name-chain evidence
+without evaluating or parsing runtime-generated expression text, or changing
+comparison, policy, or exit status.
 
 FormulaFence also keeps a separate **formula-defined XLM action and
 event-dispatch ledger** for the selected legacy calls `CALL`, `EXEC`,

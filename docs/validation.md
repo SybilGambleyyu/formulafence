@@ -5,6 +5,53 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared formula-defined XLM evaluation report redaction — 2026-07-26
+
+FormulaFence 0.105.0 adds the separate, opt-in
+`--redact-formula-defined-xlm-evaluations` rendering boundary for generic
+reports. It is deliberately separate from the count-only `FF069` ledger and
+from the external-workbook-link, formula-action, Python-in-Excel, Office
+custom-function, unqualified-runtime-function, worksheet-code-resource
+registration, and formula-defined XLM registration redaction modes. Default
+local-review output remains unchanged. When enabled, JSON, Markdown, and SARIF
+hide direct stored `EVALUATE` material, changed invoking-formula evidence, and
+exact changed static input evidence the private dependency analysis recorded as
+reaching an inventoried evaluation. A formula-defined-name body can pass a
+private expression through a dotted workbook-defined wrapper to `EVALUATE`
+deeper in the chain, so FormulaFence privately compares the resolved definition
+chain and conservatively hides changed defined-name before/after evidence when
+that signature changes.
+
+Microsoft's [Excel expression-evaluation
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/excel-worksheet-and-expression-evaluation)
+identifies `EVALUATE` as an XLM function that reduces a valid character string
+to a worksheet value. That documented behavior explains why stored expression
+text can be sensitive without proving that the text is valid or will be
+evaluated. FormulaFence does not calculate a formula or text argument, parse a
+runtime-generated expression, execute a macro, or reconstruct dynamically
+assembled text.
+
+Focused fixtures cover a direct stored `EVALUATE` expression plus a changed
+static input, an input whose evaluation consumer falls beyond the report's
+bounded impact sample, and a dotted named wrapper whose private expression can
+only be associated with the evaluation through the private fixed-point
+definition analysis. A separate fixture proves that FormulaFence neither
+re-tokenizes nor redacts an ordinary change referenced only inside runtime
+expression text. The redacted JSON, Markdown, SARIF, policy, portfolio, and
+composite-Action contracts retain `FF069` / `FFP069` and their exit behavior
+while omitting controlled expression, literal, input, and nested-name markers.
+The final source tree passed **677 tests in 96.49 seconds** (deterministic
+command-limited chunks), plus a clean Ruff check, `git diff --check`, and shell
+syntax check for the composite Action. The exact release wheel was installed in
+a fresh environment; its CLI reported `FormulaFence 0.105.0`, retained
+controlled evaluation/input markers in default JSON, removed them from redacted
+JSON/Markdown/SARIF/policy/portfolio output, and still returned `1` with
+`FF069` and `FFP069` for the redacted policy check. The wheel
+`formulafence-0.105.0-py3-none-any.whl` passed `twine check` with SHA-256
+`65f7adc49f9165739c4763d313b5d874c72b3120f724eae9b2ffebbb8461d059`.
+The source distribution also passed `twine check`; its digest is intentionally
+omitted because this validation note is included in that archive.
+
 ## Shared formula-defined XLM registration report redaction — 2026-07-26
 
 FormulaFence 0.104.0 adds the separate, opt-in

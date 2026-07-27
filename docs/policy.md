@@ -616,6 +616,14 @@ argument edge. Direct worksheet `EVALUATE` formulas and raw XLM macro-sheet
 parts remain deliberately outside this narrow stored-definition boundary; the
 latter remain under `FF026`.
 
+The ordinary semantic diff retains local-review formula and defined-name
+evidence. For a shared artifact, the separate output-only
+`--redact-formula-defined-xlm-evaluations` mode hides direct stored `EVALUATE`
+material, exact changed static inputs, and changed private resolved name-chain
+evidence without changing comparison, policy evaluation, or exit status. It
+does not evaluate or parse runtime-generated expression text, so text-only
+dependencies remain an explicit coverage limit.
+
 ## Formula-defined XLM actions and event dispatch
 
 FormulaFence inventories the deliberately finite set of legacy XLM action and

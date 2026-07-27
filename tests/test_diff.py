@@ -17,11 +17,14 @@ from formulafence.diff import compare_snapshots
 from formulafence.output import (
     EXTERNAL_WORKBOOK_LINK_REDACTION,
     FORMULA_EXTERNAL_ACTION_REDACTION,
+    OFFICE_CUSTOM_FUNCTION_REDACTION,
     PYTHON_IN_EXCEL_REDACTION,
     profile_to_markdown,
     redact_external_workbook_link_material,
     redact_formula_external_action_material,
     redact_formula_external_action_report_payload,
+    redact_office_custom_function_material,
+    redact_office_custom_function_report_payload,
     redact_python_in_excel_material,
     redact_python_in_excel_report_payload,
     report_to_markdown,
@@ -98,6 +101,7 @@ from .helpers import (
     change_ignored_error_target,
     change_in_content_office_web_addin_anchor,
     change_in_content_office_web_addin_preview_payload,
+    change_indirect_named_office_custom_function_definition,
     change_inline_rich_text_run_color,
     change_legacy_comment_text,
     change_legacy_note_visibility,
@@ -289,6 +293,7 @@ from .helpers import (
     make_ignored_error_model,
     make_implicit_intersection_model,
     make_in_content_office_web_addin_model,
+    make_indirect_named_office_custom_function_model,
     make_legacy_array_model,
     make_legacy_comment_model,
     make_legacy_threaded_placeholder_model,
@@ -3333,6 +3338,7 @@ def test_office_custom_function_calls_are_profiled_diffed_and_private(tmp_path) 
         "namespaced_custom_function_formula_cell_count": 4,
         "namespaced_custom_function_call_count": 5,
         "namespaced_custom_function_namespace_count": 2,
+        "namespaced_custom_function_defined_name_count": 0,
     }
     assert baseline_snapshot.office_custom_functions.to_dict() == expected_functions
     assert (
@@ -3348,7 +3354,7 @@ def test_office_custom_function_calls_are_profiled_diffed_and_private(tmp_path) 
     assert profile["office_custom_functions"] == expected_functions
     assert profile["features"]["has_namespaced_custom_function_calls"] is True
     assert "## Namespaced custom-function calls" in markdown
-    assert "**Formula cells / calls / namespaces:** 4 / 5 / 2" in markdown
+    assert "**Formula cells / calls / namespaces / named definitions:** 4 / 5 / 2 / 0" in markdown
 
     report = compare_snapshots(baseline_snapshot, candidate_snapshot)
     function_change = next(
@@ -3405,6 +3411,9 @@ def test_office_custom_function_static_inputs_are_guarded(tmp_path) -> None:
     assert function_change.details["office_custom_function_static_input_changed"] is True
     assert function_change.details["office_custom_function_static_input_change_count"] == 1
     assert "office_custom_function_material_changed" not in function_change.details
+    assert report.office_custom_function_static_input_cells == frozenset(
+        {("Inputs", "A9")}
+    )
     assert "FF066" in {finding.rule_id for finding in report.findings}
 
     rendered_artifacts = (
@@ -3432,6 +3441,7 @@ def test_named_custom_function_calls_are_propagated_diffed_and_private(tmp_path)
         "namespaced_custom_function_formula_cell_count": 3,
         "namespaced_custom_function_call_count": 5,
         "namespaced_custom_function_namespace_count": 1,
+        "namespaced_custom_function_defined_name_count": 3,
     }
     assert baseline_snapshot.office_custom_functions.to_dict() == expected_functions
     assert baseline_snapshot.office_custom_functions.call_cells == frozenset(
@@ -3451,6 +3461,7 @@ def test_named_custom_function_calls_are_propagated_diffed_and_private(tmp_path)
     assert function_change.details["before"] == expected_functions
     assert function_change.details["after"] == expected_functions
     assert function_change.details["office_custom_function_material_changed"] is True
+    assert function_change.details["office_custom_function_definition_changed"] is True
     assert function_finding.details == function_change.details
 
     ff066_sarif_result = next(
@@ -3509,6 +3520,144 @@ def test_named_custom_function_static_inputs_are_guarded(tmp_path) -> None:
     assert function_change.details["office_custom_function_static_input_change_count"] == 1
     assert "office_custom_function_material_changed" not in function_change.details
     assert "FF066" in {finding.rule_id for finding in report.findings}
+
+
+def test_office_custom_function_report_redaction_hides_calls_and_static_inputs(
+    tmp_path,
+) -> None:
+    baseline = make_office_custom_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_custom_function_model(tmp_path / "candidate.xlsx")
+    change_office_custom_function_input(candidate)
+    change_office_custom_function_call(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    sensitive_values = (
+        "CONTOSO",
+        "GETMARKETDATA",
+        "GETRISKDATA",
+        "PRIVATE-CUSTOM-FUNCTION-QUERY-BASELINE",
+        "PRIVATE-CUSTOM-FUNCTION-INPUT-BASELINE",
+        "PRIVATE-CUSTOM-FUNCTION-INPUT-CANDIDATE",
+    )
+    raw_rendered = json.dumps(raw_payload)
+    assert all(value in raw_rendered for value in sensitive_values)
+
+    redacted_payload = redact_office_custom_function_report_payload(report, raw_payload)
+    redacted_rendered = json.dumps(redacted_payload)
+    assert all(value not in redacted_rendered for value in sensitive_values)
+    assert OFFICE_CUSTOM_FUNCTION_REDACTION in redacted_rendered
+    assert redacted_payload["summary"] == raw_payload["summary"]
+
+    redacted_markdown = report_to_markdown(
+        report, redact_office_custom_functions=True
+    )
+    redacted_sarif = report_to_sarif(report, redact_office_custom_functions=True)
+    assert "Office custom-function material:** redacted for sharing" in redacted_markdown
+    assert "FF066" in json.dumps(redacted_sarif)
+    for artifact in (redacted_markdown, json.dumps(redacted_sarif)):
+        assert all(value not in artifact for value in sensitive_values)
+
+    native_formula = "=ECMA.CEILING(4.1,1)"
+    assert redact_office_custom_function_material(native_formula) == native_formula
+
+
+def test_office_custom_function_report_redaction_hides_unsampled_static_inputs(
+    tmp_path,
+) -> None:
+    """Custom-function input redaction must use full private impact evidence."""
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    baseline_marker = "PRIVATE-UNSAMPLED-CUSTOM-FUNCTION-BASELINE"
+    candidate_marker = "PRIVATE-UNSAMPLED-CUSTOM-FUNCTION-CANDIDATE"
+
+    def add_custom_function_fanout(workbook, marker: str) -> None:
+        inputs = workbook["Inputs"]
+        inputs["A9"] = marker
+        # Z1 is a custom-function consumer after the report's B1:U1 sample.
+        for column in range(2, 22):
+            inputs.cell(row=1, column=column).value = "=A9"
+        inputs["Z1"] = '=CONTOSO.GETDATA(A9,"private-query")'
+
+    rewrite(
+        baseline,
+        lambda workbook: add_custom_function_fanout(workbook, baseline_marker),
+    )
+    rewrite(
+        candidate,
+        lambda workbook: add_custom_function_fanout(workbook, candidate_marker),
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    input_change = next(
+        change for change in raw_payload["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert "Inputs!Z1" not in input_change["impacted_cells"]
+    assert report.office_custom_function_static_input_cells == frozenset(
+        {("Inputs", "A9")}
+    )
+
+    redacted = redact_office_custom_function_report_payload(report, raw_payload)
+    redacted_change = next(
+        change for change in redacted["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert redacted_change["before"]["value"] == OFFICE_CUSTOM_FUNCTION_REDACTION
+    assert redacted_change["after"]["value"] == OFFICE_CUSTOM_FUNCTION_REDACTION
+    rendered = json.dumps(redacted)
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+
+
+def test_office_custom_function_report_redaction_hides_indirect_named_chain(
+    tmp_path,
+) -> None:
+    baseline = make_indirect_named_office_custom_function_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_indirect_named_office_custom_function_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_indirect_named_office_custom_function_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    function_change = next(
+        change
+        for change in report.changes
+        if change.kind == "office_custom_functions_changed"
+    )
+    assert function_change.details["office_custom_function_definition_changed"] is True
+    assert "office_custom_function_material_changed" not in function_change.details
+
+    baseline_marker = "PRIVATE-INDIRECT-NAMED-CUSTOM-FUNCTION-BASELINE"
+    candidate_marker = "PRIVATE-INDIRECT-NAMED-CUSTOM-FUNCTION-CANDIDATE"
+    ordinary_looking_definition = (
+        f'=LAMBDA(value,CUSTOMWRAPPER("{baseline_marker}"))'
+    )
+    # Without private name-chain resolution this direct text is not a
+    # namespaced call, which is why the report helper must use FF066's private
+    # definition signature rather than rely only on lexical redaction.
+    assert redact_office_custom_function_material(ordinary_looking_definition) == (
+        ordinary_looking_definition
+    )
+
+    raw_payload = report.to_dict()
+    raw_rendered = json.dumps(raw_payload)
+    assert baseline_marker in raw_rendered
+    assert candidate_marker in raw_rendered
+
+    redacted_payload = redact_office_custom_function_report_payload(report, raw_payload)
+    redacted_rendered = json.dumps(redacted_payload)
+    assert baseline_marker not in redacted_rendered
+    assert candidate_marker not in redacted_rendered
+    assert OFFICE_CUSTOM_FUNCTION_REDACTION in redacted_rendered
+
+    redacted_sarif = report_to_sarif(report, redact_office_custom_functions=True)
+    redacted_sarif_rendered = json.dumps(redacted_sarif)
+    assert baseline_marker not in redacted_sarif_rendered
+    assert candidate_marker not in redacted_sarif_rendered
+    assert "FF008" in redacted_sarif_rendered
+    assert "FF066" in redacted_sarif_rendered
 
 
 def test_unqualified_runtime_function_candidates_are_profiled_diffed_and_private(
@@ -5914,6 +6063,7 @@ def test_recursive_named_custom_function_candidates_are_cycle_safe(tmp_path) -> 
         "namespaced_custom_function_formula_cell_count": 1,
         "namespaced_custom_function_call_count": 1,
         "namespaced_custom_function_namespace_count": 1,
+        "namespaced_custom_function_defined_name_count": 1,
     }
     assert snapshot.office_custom_functions.call_cells == frozenset({("Model", "D2")})
     assert snapshot.unresolved_reference_tokens[("Model", "D2")] == ("FENCE.LOOP",)
@@ -5969,6 +6119,7 @@ def test_scoped_named_custom_function_candidates_follow_local_precedence(tmp_pat
         "namespaced_custom_function_formula_cell_count": 2,
         "namespaced_custom_function_call_count": 2,
         "namespaced_custom_function_namespace_count": 1,
+        "namespaced_custom_function_defined_name_count": 1,
     }
     assert snapshot.office_custom_functions.call_cells == frozenset(
         {("Model", "C2"), ("Report", "C2")}

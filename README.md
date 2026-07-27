@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.100.0/formulafence-0.100.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.101.0/formulafence-0.101.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.100.0
+  uses: SybilGambleyyu/formulafence@v0.101.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -177,6 +177,44 @@ the external-workbook-link or formula-action sharing boundaries. Use the
 relevant switches together when a report contains multiple sensitive surfaces.
 Without the option, ordinary local-review output remains unchanged. The GitHub
 Action exposes the same boundary through `redact-python-in-excel: 'true'`.
+
+### Sharing reports with Office custom functions
+
+Office Add-in custom functions use a namespace in a worksheet formula and can
+request data from a service, so a changed call can disclose an add-in namespace,
+callable, query argument, or static input in an ordinary report. For an artifact
+that crosses the local review boundary, add `--redact-office-custom-functions`
+to `diff`, `check`, or `portfolio`:
+
+```bash
+formulafence check baseline.xlsx candidate.xlsx \
+  --policy formulafence.yml \
+  --format json \
+  --redact-office-custom-functions \
+  --output shared-report.json
+```
+
+This output-only mode covers direct stored namespaced call material that
+FormulaFence inventories under `FF066`. It replaces a whole serialized value
+with `[Office custom-function material redacted]`, hides before/after evidence
+for a changed custom-function formula or an exact changed static input that the
+private dependency analysis recorded as reaching one, and conservatively hides
+changed formula-defined-name before/after values when a private
+custom-function-relevant definition chain changed. That last rule protects an
+ordinary-looking wrapper whose private argument reaches a namespaced call only
+through another named `LAMBDA`.
+
+The switch does not mutate snapshots, findings, policy evaluation, or an exit
+status; it does not calculate formulas, load a manifest or add-in, execute
+JavaScript, contact a custom-function runtime, or reconstruct a dynamically
+assembled argument. It is not a general secret scrubber and does not replace
+the external-workbook-link, formula-action, or Python-in-Excel sharing
+boundaries. Use the relevant switches together when a report contains multiple
+surfaces. Without the option, ordinary local-review output remains unchanged.
+The GitHub Action exposes the same boundary through
+`redact-office-custom-functions: 'true'`. The scope follows Microsoft's
+[custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview)
+and [web-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).
 
 ### Portfolio gates
 
@@ -713,7 +751,8 @@ UDF-shaped calls are intentionally handled by the separate `FF075` boundary.
 FormulaFence separately propagates a
 candidate stored inside a formula-defined name or named `LAMBDA` body to the
 worksheet formulas that invoke that definition. Profiles and `FF066`/`FFP066`
-details show only formula-cell, call, and namespace counts. Candidate names,
+details show only formula-cell, call, namespace, and relevant formula-defined
+name counts. Candidate names,
 namespaces, cells, formulas, and arguments remain private, so a same-count
 call or argument change stays reviewable without publishing the add-in surface.
 
@@ -722,9 +761,12 @@ call through its static dependency graph. That catches a stored source such as
 `=CONTOSO.GETDATA(A1)` without interpreting `A1`, evaluating the call, resolving
 the candidate to an add-in, loading a manifest, or contacting a runtime.
 Dynamic or unresolved inputs remain explicit coverage limits. The ordinary
-semantic diff, including changed formula-defined names, deliberately keeps
-reviewer context; it is not a redacted add-in ledger. Enable
-`no_office_custom_function_changes` to block this boundary in CI. This scope
+semantic diff deliberately keeps reviewer context unless the opt-in
+`--redact-office-custom-functions` sharing boundary is enabled; that output
+mode hides direct custom-function material, exact static input evidence, and
+conservatively changed relevant defined-name bodies without changing the
+comparison or policy result. Enable `no_office_custom_function_changes` to
+block this boundary in CI. This scope
 follows Microsoft's [custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview),
 [tutorial](https://learn.microsoft.com/en-us/office/dev/add-ins/tutorials/excel-tutorial-create-custom-functions),
 and [external-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).

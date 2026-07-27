@@ -2450,6 +2450,8 @@ def _office_custom_function_changes(
     }
     if old_functions.call_signature != new_functions.call_signature:
         details["office_custom_function_material_changed"] = True
+    if old_functions.definition_signature != new_functions.definition_signature:
+        details["office_custom_function_definition_changed"] = True
     if static_input_change_locations:
         details["office_custom_function_static_input_changed"] = True
         details["office_custom_function_static_input_change_count"] = len(
@@ -4148,6 +4150,9 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         ),
         python_in_excel_static_input_cells=frozenset(
             python_in_excel_static_input_changes
+        ),
+        office_custom_function_static_input_cells=frozenset(
+            office_custom_function_static_input_changes
         ),
     )
 

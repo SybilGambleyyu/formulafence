@@ -18,6 +18,8 @@ from formulafence.output import (
     redact_external_workbook_link_material,
     redact_formula_external_action_portfolio_payload,
     redact_formula_external_action_report_payload,
+    redact_office_custom_function_portfolio_payload,
+    redact_office_custom_function_report_payload,
     redact_python_in_excel_portfolio_payload,
     redact_python_in_excel_report_payload,
     report_to_markdown,
@@ -68,6 +70,20 @@ def _add_python_in_excel_redaction_argument(parser: argparse.ArgumentParser) -> 
     )
 
 
+def _add_office_custom_function_redaction_argument(
+    parser: argparse.ArgumentParser,
+) -> None:
+    parser.add_argument(
+        "--redact-office-custom-functions",
+        action="store_true",
+        help=(
+            "Replace visible Office custom-function material and known static "
+            "custom-function inputs in this shared report without changing comparison "
+            "or policy results"
+        ),
+    )
+
+
 def _positive_integer(value: str) -> int:
     try:
         parsed = int(value)
@@ -99,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_external_workbook_link_redaction_argument(diff)
     _add_formula_external_action_redaction_argument(diff)
     _add_python_in_excel_redaction_argument(diff)
+    _add_office_custom_function_redaction_argument(diff)
     diff.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -114,6 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_external_workbook_link_redaction_argument(check)
     _add_formula_external_action_redaction_argument(check)
     _add_python_in_excel_redaction_argument(check)
+    _add_office_custom_function_redaction_argument(check)
     check.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -150,6 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_external_workbook_link_redaction_argument(portfolio)
     _add_formula_external_action_redaction_argument(portfolio)
     _add_python_in_excel_redaction_argument(portfolio)
+    _add_office_custom_function_redaction_argument(portfolio)
     portfolio.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -227,6 +246,8 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
             payload = redact_formula_external_action_report_payload(report, payload)
         if arguments.redact_python_in_excel:
             payload = redact_python_in_excel_report_payload(report, payload)
+        if arguments.redact_office_custom_functions:
+            payload = redact_office_custom_function_report_payload(report, payload)
         content = as_json(payload)
     elif arguments.format == "sarif":
         content = as_json(
@@ -236,6 +257,7 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
                 redact_external_workbook_links=arguments.redact_external_workbook_links,
                 redact_formula_external_actions=arguments.redact_formula_external_actions,
                 redact_python_in_excel=arguments.redact_python_in_excel,
+                redact_office_custom_functions=arguments.redact_office_custom_functions,
             )
         )
     else:
@@ -245,6 +267,7 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
             redact_external_workbook_links=arguments.redact_external_workbook_links,
             redact_formula_external_actions=arguments.redact_formula_external_actions,
             redact_python_in_excel=arguments.redact_python_in_excel,
+            redact_office_custom_functions=arguments.redact_office_custom_functions,
         )
     _emit(content, arguments.output)
 
@@ -280,6 +303,8 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
             payload = redact_formula_external_action_portfolio_payload(report, payload)
         if arguments.redact_python_in_excel:
             payload = redact_python_in_excel_portfolio_payload(report, payload)
+        if arguments.redact_office_custom_functions:
+            payload = redact_office_custom_function_portfolio_payload(report, payload)
         content = as_json(payload)
     elif arguments.format == "sarif":
         content = as_json(
@@ -288,6 +313,7 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
                 redact_external_workbook_links=arguments.redact_external_workbook_links,
                 redact_formula_external_actions=arguments.redact_formula_external_actions,
                 redact_python_in_excel=arguments.redact_python_in_excel,
+                redact_office_custom_functions=arguments.redact_office_custom_functions,
             )
         )
     else:
@@ -296,6 +322,7 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
             redact_external_workbook_links=arguments.redact_external_workbook_links,
             redact_formula_external_actions=arguments.redact_formula_external_actions,
             redact_python_in_excel=arguments.redact_python_in_excel,
+            redact_office_custom_functions=arguments.redact_office_custom_functions,
         )
     _emit(content, arguments.output)
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.101.0 — 2026-07-26
+
+- Add opt-in `--redact-office-custom-functions` rendering for `diff`, `check`,
+  and `portfolio` JSON, Markdown, and SARIF artifacts. Default local-review
+  output remains unchanged; the output-only boundary replaces direct stored
+  namespaced `FF066` formula material with `[Office custom-function material
+  redacted]`.
+- Extend the boundary to before/after evidence for changed custom-function
+  formulas and exact changed static input cells recorded by the private full
+  dependency impact set, rather than the bounded impact sample shown in reports.
+- Track custom-function-relevant formula-defined-name bodies through private
+  signatures and publish only an aggregate count. When that private chain
+  changes, conservatively redact changed defined-name before/after evidence so
+  an ordinary-looking wrapper cannot disclose a service argument.
+- Keep comparison facts, findings, policy evaluation, and exit status unchanged.
+  The composite GitHub Action exposes the switch as
+  `redact-office-custom-functions: 'true'`; the mode does not calculate a
+  formula, load an add-in or manifest, execute JavaScript, contact a runtime,
+  reconstruct a dynamic argument, or claim to be a general secret scrubber.
+- Add direct-call, exact unsampled-static-input, resolved named-chain,
+  default-evidence, policy, portfolio, JSON/Markdown/SARIF, and composite-Action
+  regression coverage.
+
 ## 0.100.0 — 2026-07-26
 
 - Add opt-in `--redact-python-in-excel` rendering for `diff`, `check`, and

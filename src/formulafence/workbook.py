@@ -43452,6 +43452,24 @@ def _named_reference_maps(
         if candidates:
             local_function_custom_result[scope] = candidates
 
+    custom_function_definition_entries = tuple(
+        sorted(
+            (
+                repr((definition.scope, definition.key)),
+                repr(
+                    (
+                        custom_function_candidates_by_definition[
+                            identity_for(definition)
+                        ],
+                        definition.formula,
+                    )
+                ),
+            )
+            for definition in all_definitions
+            if custom_function_candidates_by_definition[identity_for(definition)]
+        )
+    )
+
     global_unqualified_runtime_function_result: dict[str, tuple[str, ...]] = {
         key: unqualified_runtime_function_candidates_by_definition[
             identity_for(definition)
@@ -44079,6 +44097,7 @@ def _named_reference_maps(
         local_custom_result,
         global_function_custom_result,
         local_function_custom_result,
+        custom_function_definition_entries,
         global_unqualified_runtime_function_result,
         local_unqualified_runtime_function_result,
         global_function_unqualified_runtime_function_result,
@@ -45677,6 +45696,7 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         local_named_custom_function_candidates,
         global_named_function_custom_function_candidates,
         local_named_function_custom_function_candidates,
+        custom_function_definition_entries,
         global_named_unqualified_runtime_function_candidates,
         local_named_unqualified_runtime_function_candidates,
         global_named_function_unqualified_runtime_function_candidates,
@@ -46473,8 +46493,14 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         namespaced_custom_function_formula_cell_count=len(office_custom_function_cells),
         namespaced_custom_function_call_count=office_custom_function_call_count,
         namespaced_custom_function_namespace_count=len(office_custom_function_namespaces),
+        namespaced_custom_function_defined_name_count=len(
+            custom_function_definition_entries
+        ),
         call_signature=_private_external_data_signature(
             tuple(sorted(office_custom_function_formula_entries))
+        ),
+        definition_signature=_private_external_data_signature(
+            custom_function_definition_entries
         ),
         call_cells=frozenset(office_custom_function_cells),
     )

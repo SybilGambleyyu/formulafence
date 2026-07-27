@@ -34,6 +34,7 @@ def _run_action_script(
     redact_external_workbook_links: str = "false",
     redact_formula_external_actions: str = "false",
     redact_python_in_excel: str = "false",
+    redact_office_custom_functions: str = "false",
     max_workbooks: str = "512",
     max_link_impact: str = "100000",
     upload_artifact: str = "true",
@@ -62,6 +63,7 @@ def _run_action_script(
             "INPUT_REDACT_EXTERNAL_WORKBOOK_LINKS": redact_external_workbook_links,
             "INPUT_REDACT_FORMULA_EXTERNAL_ACTIONS": redact_formula_external_actions,
             "INPUT_REDACT_PYTHON_IN_EXCEL": redact_python_in_excel,
+            "INPUT_REDACT_OFFICE_CUSTOM_FUNCTIONS": redact_office_custom_functions,
             "INPUT_FAIL_ON": "none",
             "INPUT_MAX_WORKBOOKS": max_workbooks,
             "INPUT_MAX_LINK_IMPACT": max_link_impact,
@@ -95,6 +97,7 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
         "redact-external-workbook-links",
         "redact-formula-external-actions",
         "redact-python-in-excel",
+        "redact-office-custom-functions",
         "max-workbooks",
         "max-link-impact",
     } <= set(action["inputs"])
@@ -324,6 +327,49 @@ def test_action_rejects_an_invalid_python_in_excel_redaction_switch(
 
     assert result.returncode == 2
     assert "Unsupported redact-python-in-excel value" in result.stderr
+
+
+def test_action_can_redact_office_custom_function_material(tmp_path: Path) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    baseline_marker = "PRIVATE-CUSTOM-FUNCTION-SOURCE-BASELINE"
+    candidate_marker = "PRIVATE-CUSTOM-FUNCTION-SOURCE-CANDIDATE"
+    _workbook(baseline, f'=CONTOSO.GETDATA("{baseline_marker}")')
+    _workbook(candidate, f'=CONTOSO.GETDATA("{candidate_marker}")')
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        report_format="json",
+        output="reports/formulafence.json",
+        redact_office_custom_functions="true",
+    )
+
+    assert result.returncode == 0
+    rendered = (tmp_path / "reports" / "formulafence.json").read_text(encoding="utf-8")
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+    assert "Office custom-function material redacted" in rendered
+
+
+def test_action_rejects_an_invalid_office_custom_function_redaction_switch(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    _workbook(baseline, "=1+1")
+    _workbook(candidate, "=1+1")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        redact_office_custom_functions="sometimes",
+    )
+
+    assert result.returncode == 2
+    assert "Unsupported redact-office-custom-functions value" in result.stderr
 
 
 def test_action_runs_a_directory_portfolio_and_preserves_membership_evidence(

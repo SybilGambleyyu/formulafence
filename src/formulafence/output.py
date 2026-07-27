@@ -15,6 +15,7 @@ from formulafence.portfolio import PortfolioReport
 EXTERNAL_WORKBOOK_LINK_REDACTION = "[external-workbook link material redacted]"
 FORMULA_EXTERNAL_ACTION_REDACTION = "[formula external-action material redacted]"
 PYTHON_IN_EXCEL_REDACTION = "[Python-in-Excel material redacted]"
+OFFICE_CUSTOM_FUNCTION_REDACTION = "[Office custom-function material redacted]"
 
 # This fallback deliberately supplements, rather than replaces, FormulaFence's
 # static formula inspection below.  A visible `INDIRECT("'[Book]Sheet'!A1")`
@@ -232,13 +233,27 @@ def _redact_formula_external_action_defined_name_evidence(
     return payload
 
 
-def _formula_external_action_safe_finding_details(
-    finding: Finding, report: DiffReport | None
+def _safe_finding_details(
+    finding: Finding,
+    report: DiffReport | None,
+    *,
+    redact_formula_external_actions: bool = False,
+    redact_office_custom_functions: bool = False,
 ) -> dict[str, Any]:
-    """Copy one SARIF finding's properties through the name-chain boundary."""
+    """Copy one SARIF finding's properties through active name-chain bounds."""
     details = dict(finding.details)
-    if report is not None and finding.rule_id == "FF008":
+    if (
+        redact_formula_external_actions
+        and report is not None
+        and finding.rule_id == "FF008"
+    ):
         _redact_formula_external_action_defined_name_details(details, report)
+    if (
+        redact_office_custom_functions
+        and report is not None
+        and finding.rule_id == "FF008"
+    ):
+        _redact_office_custom_function_defined_name_details(details, report)
     return details
 
 
@@ -262,6 +277,155 @@ def redact_formula_external_action_portfolio_payload(
         if workbook.report is not None and isinstance(entry, dict):
             _redact_formula_external_action_change_cells(entry, workbook.report)
             _redact_formula_external_action_defined_name_evidence(entry, workbook.report)
+    return redacted
+
+
+def _contains_office_custom_function_material(value: str) -> bool:
+    """Return whether one rendered string exposes a namespaced call candidate.
+
+    Office Add-in custom functions are stored as namespaced formulas. A direct
+    call can therefore expose an add-in namespace, callable, and arguments to
+    a shared report even though FormulaFence's FF066 ledger publishes only
+    aggregate counts. The parser retains its conservative exclusions for native
+    dotted functions and workbook-defined names wherever that context is
+    available; this output scan intentionally hides any standalone formula
+    shaped like an inventoried namespaced callable.
+    """
+    if "." not in value or "(" not in value:
+        return False
+    formula = value if value.lstrip().startswith("=") else f"={value}"
+    return bool(inspect_formula(formula).office_custom_function_candidates)
+
+
+def redact_office_custom_function_material(payload: Any) -> Any:
+    """Return an output-only copy with direct custom-function formulas hidden.
+
+    This only covers direct stored formula material. Report-level helpers below
+    also hide exact changed static inputs and changed formula-defined-name
+    bodies that the private FF066 comparison identifies as custom-function
+    relevant.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: redact_office_custom_function_material(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [redact_office_custom_function_material(value) for value in payload]
+    if isinstance(payload, tuple):
+        return tuple(redact_office_custom_function_material(value) for value in payload)
+    if isinstance(payload, str) and _contains_office_custom_function_material(payload):
+        return OFFICE_CUSTOM_FUNCTION_REDACTION
+    return payload
+
+
+def _office_custom_function_sensitive_change_locations(report: DiffReport) -> set[str]:
+    """Return changed cells whose evidence can carry a custom-function input."""
+    sensitive_cells = (
+        report.before.office_custom_functions.call_cells
+        | report.after.office_custom_functions.call_cells
+        | report.office_custom_function_static_input_cells
+    )
+    if not sensitive_cells:
+        return set()
+
+    locations: set[str] = set()
+    for change in report.changes:
+        if change.location is None or change.location not in sensitive_cells:
+            continue
+        location = display_location(change.location)
+        if location is not None:
+            locations.add(location)
+    return locations
+
+
+def _redact_office_custom_function_change_cells(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide raw before/after cells that are a custom call or exact input."""
+    sensitive_locations = _office_custom_function_sensitive_change_locations(report)
+    if not sensitive_locations:
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("location") not in sensitive_locations:
+            continue
+        for side in ("before", "after"):
+            snapshot = change.get(side)
+            if not isinstance(snapshot, dict):
+                continue
+            for field in ("value", "formula", "formula_fingerprint"):
+                if snapshot.get(field) is not None:
+                    snapshot[field] = OFFICE_CUSTOM_FUNCTION_REDACTION
+    return payload
+
+
+def _office_custom_function_definition_material_changed(report: DiffReport) -> bool:
+    """Return whether a custom-function-relevant defined-name body changed."""
+    return (
+        report.before.office_custom_functions.definition_signature
+        != report.after.office_custom_functions.definition_signature
+    )
+
+
+def _redact_office_custom_function_defined_name_details(
+    details: dict[str, Any], report: DiffReport
+) -> None:
+    """Hide FF008 evidence when a resolved custom-function name chain changed.
+
+    A named LAMBDA can pass a private argument through an ordinary-looking
+    unqualified named call whose eventual custom function lives deeper in the
+    chain. Its text cannot reliably be classified without the workbook's
+    private fixed-point resolution. When that private custom-function
+    definition signature changed, hiding every changed defined-name body is the
+    safe artifact boundary.
+    """
+    if not _office_custom_function_definition_material_changed(report):
+        return
+    for field in ("before", "after"):
+        if isinstance(details.get(field), str):
+            details[field] = OFFICE_CUSTOM_FUNCTION_REDACTION
+
+
+def _redact_office_custom_function_defined_name_evidence(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide custom-function-resolved name-chain text in report evidence."""
+    if not _office_custom_function_definition_material_changed(report):
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("kind") == "defined_name_changed":
+            details = change.get("details")
+            if isinstance(details, dict):
+                _redact_office_custom_function_defined_name_details(details, report)
+    for finding in payload.get("findings", []):
+        if finding.get("rule_id") != "FF008":
+            continue
+        details = finding.get("details")
+        if isinstance(details, dict):
+            _redact_office_custom_function_defined_name_details(details, report)
+    return payload
+
+
+def redact_office_custom_function_report_payload(
+    report: DiffReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Redact direct custom calls and private static/name-chain evidence."""
+    redacted = redact_office_custom_function_material(payload)
+    _redact_office_custom_function_change_cells(redacted, report)
+    return _redact_office_custom_function_defined_name_evidence(redacted, report)
+
+
+def redact_office_custom_function_portfolio_payload(
+    report: PortfolioReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply the custom-function sharing boundary to nested reports."""
+    redacted = redact_office_custom_function_material(payload)
+    for workbook, entry in zip(
+        report.workbooks, redacted.get("workbooks", []), strict=False
+    ):
+        if workbook.report is not None and isinstance(entry, dict):
+            _redact_office_custom_function_change_cells(entry, workbook.report)
+            _redact_office_custom_function_defined_name_evidence(entry, workbook.report)
     return redacted
 
 
@@ -474,10 +638,12 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
             f"{workbook['python_in_excel_script_count']}"
         ),
         (
-            "- **Namespaced custom-function formula cells / calls / namespaces:** "
+            "- **Namespaced custom-function formula cells / calls / namespaces / "
+            "named definitions:** "
             f"{workbook['namespaced_custom_function_formula_cell_count']} / "
             f"{workbook['namespaced_custom_function_call_count']} / "
-            f"{workbook['namespaced_custom_function_namespace_count']}"
+            f"{workbook['namespaced_custom_function_namespace_count']} / "
+            f"{workbook['namespaced_custom_function_defined_name_count']}"
         ),
         (
             "- **Unqualified runtime-function formula cells / calls / named definitions:** "
@@ -1435,10 +1601,11 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 "## Namespaced custom-function calls",
                 "",
                 (
-                    "- **Formula cells / calls / namespaces:** "
+                    "- **Formula cells / calls / namespaces / named definitions:** "
                     f"{office_custom_functions['namespaced_custom_function_formula_cell_count']} / "
                     f"{office_custom_functions['namespaced_custom_function_call_count']} / "
-                    f"{office_custom_functions['namespaced_custom_function_namespace_count']}"
+                    f"{office_custom_functions['namespaced_custom_function_namespace_count']} / "
+                    f"{office_custom_functions['namespaced_custom_function_defined_name_count']}"
                 ),
                 (
                     "FormulaFence inventories direct namespaced callable candidates that are "
@@ -3658,6 +3825,7 @@ def report_to_markdown(
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
+    redact_office_custom_functions: bool = False,
 ) -> str:
     policy_findings = list(extra_findings)
     payload = report.to_dict(policy_findings)
@@ -3667,6 +3835,8 @@ def report_to_markdown(
         payload = redact_formula_external_action_report_payload(report, payload)
     if redact_python_in_excel:
         payload = redact_python_in_excel_report_payload(report, payload)
+    if redact_office_custom_functions:
+        payload = redact_office_custom_function_report_payload(report, payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence change report",
@@ -3686,6 +3856,11 @@ def report_to_markdown(
         *(
             ["- **Python-in-Excel material:** redacted for sharing"]
             if redact_python_in_excel
+            else []
+        ),
+        *(
+            ["- **Office custom-function material:** redacted for sharing"]
+            if redact_office_custom_functions
             else []
         ),
         f"- **Changes:** {summary['change_count']}",
@@ -3713,6 +3888,7 @@ def report_to_sarif(
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
+    redact_office_custom_functions: bool = False,
 ) -> dict[str, Any]:
     findings = [*report.findings, *extra_findings]
     rule_ids = sorted({finding.rule_id for finding in findings})
@@ -3726,10 +3902,11 @@ def report_to_sarif(
     ]
     results: list[dict[str, Any]] = []
     for finding in findings:
-        finding_details = (
-            _formula_external_action_safe_finding_details(finding, report)
-            if redact_formula_external_actions
-            else finding.details
+        finding_details = _safe_finding_details(
+            finding,
+            report,
+            redact_formula_external_actions=redact_formula_external_actions,
+            redact_office_custom_functions=redact_office_custom_functions,
         )
         result: dict[str, Any] = {
             "ruleId": finding.rule_id,
@@ -3775,6 +3952,8 @@ def report_to_sarif(
         payload = redact_formula_external_action_material(payload)
     if redact_python_in_excel:
         payload = redact_python_in_excel_material(payload)
+    if redact_office_custom_functions:
+        payload = redact_office_custom_function_material(payload)
     return payload
 
 
@@ -3822,6 +4001,7 @@ def portfolio_to_markdown(
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
+    redact_office_custom_functions: bool = False,
 ) -> str:
     """Render a complete multi-workbook review without absolute filesystem paths."""
     payload = report.to_dict()
@@ -3831,6 +4011,8 @@ def portfolio_to_markdown(
         payload = redact_formula_external_action_portfolio_payload(report, payload)
     if redact_python_in_excel:
         payload = redact_python_in_excel_portfolio_payload(report, payload)
+    if redact_office_custom_functions:
+        payload = redact_office_custom_function_portfolio_payload(report, payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence portfolio report",
@@ -3870,6 +4052,11 @@ def portfolio_to_markdown(
         *(
             ["- **Python-in-Excel material:** redacted for sharing"]
             if redact_python_in_excel
+            else []
+        ),
+        *(
+            ["- **Office custom-function material:** redacted for sharing"]
+            if redact_office_custom_functions
             else []
         ),
         "",
@@ -3925,6 +4112,7 @@ def portfolio_to_sarif(
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
+    redact_office_custom_functions: bool = False,
 ) -> dict[str, Any]:
     """Render every portfolio finding in one SARIF run with relative artifacts."""
     rule_ids = sorted(
@@ -3945,12 +4133,11 @@ def portfolio_to_sarif(
     results: list[dict[str, Any]] = []
     for workbook in report.workbooks:
         for finding in workbook.findings:
-            finding_details = (
-                _formula_external_action_safe_finding_details(
-                    finding, workbook.report
-                )
-                if redact_formula_external_actions
-                else finding.details
+            finding_details = _safe_finding_details(
+                finding,
+                workbook.report,
+                redact_formula_external_actions=redact_formula_external_actions,
+                redact_office_custom_functions=redact_office_custom_functions,
             )
             location: dict[str, Any] = {
                 "physicalLocation": {"artifactLocation": {"uri": workbook.path}},
@@ -3998,4 +4185,6 @@ def portfolio_to_sarif(
         payload = redact_formula_external_action_material(payload)
     if redact_python_in_excel:
         payload = redact_python_in_excel_material(payload)
+    if redact_office_custom_functions:
+        payload = redact_office_custom_function_material(payload)
     return payload

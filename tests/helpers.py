@@ -483,6 +483,57 @@ def change_named_office_custom_function_input(path: Path) -> Path:
     return path
 
 
+def make_indirect_named_office_custom_function_model(path: Path) -> Path:
+    """Create an unqualified name chain that eventually calls an add-in.
+
+    The outer body intentionally contains no dotted call. Its private argument
+    can only be associated with the ``CONTOSO`` candidate through FormulaFence's
+    fixed-point formula-defined-name analysis, which exercises the sharing
+    redaction boundary for otherwise ordinary-looking names.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Indirect named custom-function controls"
+    inputs["A9"] = "PRIVATE-INDIRECT-NAMED-CUSTOM-FUNCTION-INPUT"
+    inputs["B2"] = "=CUSTOMCHAIN(A9)"
+    workbook.defined_names.add(
+        DefinedName(
+            "CUSTOMWRAPPER",
+            attr_text="=LAMBDA(value,CONTOSO.GETDATA(value))",
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "CUSTOMCHAIN",
+            attr_text=(
+                '=LAMBDA(value,CUSTOMWRAPPER("PRIVATE-INDIRECT-NAMED-'
+                'CUSTOM-FUNCTION-BASELINE"))'
+            ),
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_indirect_named_office_custom_function_definition(path: Path) -> Path:
+    """Rewrite a private argument in an ordinary-looking name-chain body."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["CUSTOMCHAIN"]
+    expected = (
+        '=LAMBDA(value,CUSTOMWRAPPER("PRIVATE-INDIRECT-NAMED-CUSTOM-FUNCTION-'
+        'BASELINE"))'
+    )
+    if definition.attr_text != expected:
+        raise ValueError("Fixture does not contain the expected indirect custom call")
+    definition.attr_text = (
+        '=LAMBDA(value,CUSTOMWRAPPER("PRIVATE-INDIRECT-NAMED-CUSTOM-FUNCTION-'
+        'CANDIDATE"))'
+    )
+    workbook.save(path)
+    return path
+
+
 def make_unqualified_runtime_function_model(path: Path) -> Path:
     """Create unknown bare calls without installing or invoking a provider.
 

@@ -1198,9 +1198,10 @@ class OfficeCustomFunctionSnapshot:
 
     An Office Add-in custom function is surfaced in Excel as a namespaced
     formula call, but its manifest, JavaScript, and remote runtime are not
-    stored in the normal workbook package.  FormulaFence keeps only a private
-    signature and cell identities for candidate calls, so the public model
-    never reveals function names, namespaces, cells, formulas, or arguments.
+    stored in the normal workbook package. FormulaFence keeps only private
+    signatures and call-cell identities for candidate calls and their
+    formula-defined-name chains, so the public model never reveals function
+    names, namespaces, cells, formulas, or arguments.
     A candidate is a review signal rather than proof that an Office Add-in is
     installed or runnable.
     """
@@ -1208,12 +1209,17 @@ class OfficeCustomFunctionSnapshot:
     namespaced_custom_function_formula_cell_count: int = 0
     namespaced_custom_function_call_count: int = 0
     namespaced_custom_function_namespace_count: int = 0
+    namespaced_custom_function_defined_name_count: int = 0
     call_signature: str | None = field(default=None, repr=False)
+    definition_signature: str | None = field(default=None, repr=False)
     call_cells: frozenset[CellKey] = field(default_factory=frozenset, repr=False)
 
     @property
     def present(self) -> bool:
-        return bool(self.namespaced_custom_function_formula_cell_count)
+        return bool(
+            self.namespaced_custom_function_formula_cell_count
+            or self.namespaced_custom_function_defined_name_count
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Return aggregate candidate counts without formula material."""
@@ -1227,6 +1233,9 @@ class OfficeCustomFunctionSnapshot:
             ),
             "namespaced_custom_function_namespace_count": (
                 self.namespaced_custom_function_namespace_count
+            ),
+            "namespaced_custom_function_defined_name_count": (
+                self.namespaced_custom_function_defined_name_count
             ),
         }
 
@@ -4907,6 +4916,9 @@ class WorkbookSnapshot:
             "namespaced_custom_function_namespace_count": (
                 self.office_custom_functions.namespaced_custom_function_namespace_count
             ),
+            "namespaced_custom_function_defined_name_count": (
+                self.office_custom_functions.namespaced_custom_function_defined_name_count
+            ),
             "has_namespaced_custom_function_calls": (
                 self.office_custom_functions.present
             ),
@@ -5163,6 +5175,9 @@ class DiffReport:
         default_factory=frozenset, repr=False
     )
     python_in_excel_static_input_cells: frozenset[CellKey] = field(
+        default_factory=frozenset, repr=False
+    )
+    office_custom_function_static_input_cells: frozenset[CellKey] = field(
         default_factory=frozenset, repr=False
     )
 

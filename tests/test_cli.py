@@ -11,9 +11,12 @@ from .helpers import (
     change_formula_dde_link_input,
     change_formula_external_action_input,
     change_formula_external_action_target,
+    change_office_custom_function_call,
+    change_office_custom_function_input,
     make_formula_dde_link_model,
     make_formula_external_action_model,
     make_model,
+    make_office_custom_function_model,
     make_python_in_excel_model,
     rewrite,
     set_python_in_excel_formula_source,
@@ -503,6 +506,123 @@ def test_cli_can_redact_python_in_excel_material_from_shared_reports(tmp_path) -
         input_candidate,
     ):
         assert sensitive_value not in portfolio_rendered
+
+
+def test_cli_can_redact_office_custom_function_material_from_shared_reports(
+    tmp_path,
+) -> None:
+    baseline = make_office_custom_function_model(tmp_path / "baseline.xlsx")
+    candidate = make_office_custom_function_model(tmp_path / "candidate.xlsx")
+    change_office_custom_function_input(candidate)
+    change_office_custom_function_call(candidate)
+    sensitive_values = (
+        "CONTOSO",
+        "GETMARKETDATA",
+        "GETRISKDATA",
+        "PRIVATE-CUSTOM-FUNCTION-QUERY-BASELINE",
+        "PRIVATE-CUSTOM-FUNCTION-INPUT-BASELINE",
+        "PRIVATE-CUSTOM-FUNCTION-INPUT-CANDIDATE",
+    )
+
+    default_json = tmp_path / "default.json"
+    assert (
+        main(
+            [
+                "diff",
+                str(baseline),
+                str(candidate),
+                "--format",
+                "json",
+                "--output",
+                str(default_json),
+            ]
+        )
+        == 0
+    )
+    default_rendered = default_json.read_text(encoding="utf-8")
+    assert all(value in default_rendered for value in sensitive_values)
+
+    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+        output = tmp_path / f"custom-function-redacted.{suffix}"
+        assert (
+            main(
+                [
+                    "diff",
+                    str(baseline),
+                    str(candidate),
+                    "--format",
+                    report_format,
+                    "--redact-office-custom-functions",
+                    "--output",
+                    str(output),
+                ]
+            )
+            == 0
+        )
+        rendered = output.read_text(encoding="utf-8")
+        assert all(value not in rendered for value in sensitive_values)
+        assert "FF066" in rendered
+        if report_format == "markdown":
+            assert "Office custom-function material:** redacted for sharing" in rendered
+        elif report_format == "json":
+            assert "Office custom-function material redacted" in rendered
+
+    policy = tmp_path / "formulafence.yml"
+    policy.write_text(
+        "version: 1\nrules:\n  no_office_custom_function_changes: true\n",
+        encoding="utf-8",
+    )
+    policy_output = tmp_path / "custom-function-policy-redacted.json"
+    assert (
+        main(
+            [
+                "check",
+                str(baseline),
+                str(candidate),
+                "--policy",
+                str(policy),
+                "--format",
+                "json",
+                "--redact-office-custom-functions",
+                "--output",
+                str(policy_output),
+            ]
+        )
+        == 1
+    )
+    policy_rendered = policy_output.read_text(encoding="utf-8")
+    assert "FF066" in policy_rendered
+    assert "FFP066" in policy_rendered
+    assert all(value not in policy_rendered for value in sensitive_values)
+
+    baseline_directory = tmp_path / "baseline-portfolio"
+    candidate_directory = tmp_path / "candidate-portfolio"
+    baseline_directory.mkdir()
+    candidate_directory.mkdir()
+    make_office_custom_function_model(baseline_directory / "model.xlsx")
+    portfolio_candidate = make_office_custom_function_model(
+        candidate_directory / "model.xlsx"
+    )
+    change_office_custom_function_input(portfolio_candidate)
+    portfolio_output = tmp_path / "custom-function-portfolio-redacted.json"
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline_directory),
+                str(candidate_directory),
+                "--format",
+                "json",
+                "--redact-office-custom-functions",
+                "--output",
+                str(portfolio_output),
+            ]
+        )
+        == 0
+    )
+    portfolio_rendered = portfolio_output.read_text(encoding="utf-8")
+    assert "Office custom-function material redacted" in portfolio_rendered
+    assert all(value not in portfolio_rendered for value in sensitive_values)
 
 
 def test_cli_refuses_to_overwrite_an_input_workbook(tmp_path) -> None:

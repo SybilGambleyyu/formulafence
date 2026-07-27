@@ -28,11 +28,14 @@ financial correctness or replace model review.
   `--redact-python-in-excel` rendering boundary covers direct PY source and
   exact changed static PY inputs when that artifact is shared.
 - The dedicated namespaced custom-function ledger compares candidate names,
-  namespaces, cells, formulas, and arguments through private signatures only.
-  Its public inventory retains aggregate formula-cell, call, and namespace
-  counts; ordinary defined-name and semantic-diff output retains its normal
-  reviewer context and is not a redacted ledger. A matching formula is not
-  evidence that an Office Add-in is installed, trusted, or runnable.
+  namespaces, cells, formulas, arguments, and relevant formula-defined-name
+  chains through private signatures only. Its public inventory retains aggregate
+  formula-cell, call, namespace, and relevant-definition counts. Generic
+  semantic cell reports retain local-review evidence by default; the separate
+  `--redact-office-custom-functions` rendering boundary covers direct call
+  material, exact changed static inputs, and changed private name-chain evidence
+  when that artifact is shared. A matching formula is not evidence that an
+  Office Add-in is installed, trusted, or runnable.
 - What-If Data Table output ranges, input-cell references, and raw formula
   metadata are compared through a private signature only. Cached scenario-output
   cells remain under the normal cell-diff boundary.
@@ -700,15 +703,18 @@ formula will produce.
   known native dotted Excel functions, workbook-defined names, and `_xlfn.` /
   `_xlws.` compatibility names. Unqualified VBA, COM, or XLL UDF-shaped calls
   are covered separately by `FF075`. Candidates inside formula-defined names
-  and named `LAMBDA` bodies are propagated to their invoking worksheet formulas. A candidate call or a
-  normal edit that statically reaches one emits `FF066`; enable
+  and named `LAMBDA` bodies are propagated to their invoking worksheet formulas.
+  A candidate call or a normal edit that statically reaches one emits `FF066`; enable
   `no_office_custom_function_changes` for `FFP066`. The public profile exposes
-  only formula-cell, call, and namespace counts; names, formulas, arguments,
-  and locations stay private. FormulaFence does not evaluate a call, resolve a
-  candidate to an add-in, load a manifest or add-in, execute JavaScript, or
-  request a service.
+  only formula-cell, call, namespace, and relevant formula-defined-name counts;
+  names, formulas, arguments, and locations stay private. FormulaFence does
+  not evaluate a call, resolve a candidate to an add-in, load a manifest or
+  add-in, execute JavaScript, or request a service.
   It makes no claim that a candidate maps to a particular add-in or can run.
-  Dynamic or unresolved inputs remain static-coverage limits. This boundary
+  Dynamic or unresolved inputs remain static-coverage limits. For a shared
+  artifact, `--redact-office-custom-functions` separately hides direct call
+  material, exact static input evidence, and changed resolved name-chain
+  evidence without changing comparison or policy facts. This boundary
   follows Microsoft's [custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview),
   [tutorial](https://learn.microsoft.com/en-us/office/dev/add-ins/tutorials/excel-tutorial-create-custom-functions),
   and [web-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs).
@@ -1201,6 +1207,18 @@ formula will produce.
   a runtime value, mutate a snapshot/policy fact/exit status, or claim to
   redact arbitrary workbook material. It does not replace the external-link or
   formula-action sharing boundaries.
+- The separate `--redact-office-custom-functions` rendering mode is for direct
+  stored namespaced `FF066` call material, exact changed static cells recorded
+  by the private dependency graph as reaching an inventoried call, and changed
+  formula-defined-name evidence when the private resolved custom-function chain
+  changed. It runs after comparison and policy evaluation, replaces whole direct
+  formula strings and before/after evidence for those changed cells or names,
+  and never exposes the private cell/name set used for that decision. It does
+  not evaluate a formula, load a manifest or add-in, execute JavaScript, contact
+  a custom-function runtime, reconstruct a runtime argument, mutate a
+  snapshot/policy fact/exit status, or claim to redact arbitrary workbook
+  material. It does not replace the external-link, formula-action, or Python
+  sharing boundaries.
 - Every canonical root or part-level OPC relationship part is also inspected
   independently for `TargetMode="External"`, including opaque relationships
   no feature-specific scanner can reach. FormulaFence retains source, type,

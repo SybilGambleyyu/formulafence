@@ -5,6 +5,48 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared Office custom-function report redaction — 2026-07-26
+
+FormulaFence 0.101.0 adds the separate, opt-in
+`--redact-office-custom-functions` rendering boundary for generic reports. It
+is deliberately separate from the count-only `FF066` ledger and from the
+external-workbook-link, formula-action, and Python-in-Excel redaction modes.
+Default local-review output remains unchanged. When enabled, JSON, Markdown,
+and SARIF hide direct stored namespaced custom-function material, changed
+custom-function-cell evidence, and exact changed static input evidence the
+private dependency analysis recorded as reaching an inventoried call. A changed
+formula-defined-name body can pass a private argument to a namespaced call
+through an ordinary-looking named `LAMBDA`, so FormulaFence privately compares
+the relevant resolved definition chain and conservatively hides changed
+defined-name before/after evidence when that signature changes.
+
+Microsoft's [custom-functions overview](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-overview)
+documents JavaScript/TypeScript functions exposed through a manifest namespace,
+and its [web-data guidance](https://learn.microsoft.com/en-us/office/dev/add-ins/excel/custom-functions-web-reqs)
+documents requests to APIs, WebSockets, and streaming calls. Those documents
+establish why a stored namespaced formula and its static arguments can be
+sensitive even though the normal workbook does not carry the manifest or
+runtime code. FormulaFence does not evaluate a formula, load an add-in,
+execute JavaScript, contact a runtime, or reconstruct a dynamic argument.
+
+Focused fixtures cover a direct `CONTOSO` formula plus a changed static input,
+an input whose custom-function consumer falls beyond the report's bounded
+impact sample, and an unqualified nested named-LAMBDA wrapper whose private
+argument can only be associated with a custom function through the private
+fixed-point definition analysis. The redacted JSON, Markdown, SARIF, policy,
+portfolio, and composite-Action contracts retain `FF066` / `FFP066` and their
+exit behavior while omitting the controlled call, query, input, and nested-name
+markers. The final source tree passed **653 tests in 90.63 seconds**, plus a
+clean Ruff check, `git diff --check`, and shell syntax check for the composite
+Action. The exact release wheel was installed in a fresh environment; its CLI
+reported `FormulaFence 0.101.0`, retained every controlled marker in default
+JSON, removed them from redacted JSON/Markdown/SARIF/policy/portfolio output,
+and still returned `1` with `FF066` and `FFP066` for the redacted policy check.
+The wheel `formulafence-0.101.0-py3-none-any.whl` passed `twine check` with
+SHA-256 `4916176df4ee0edab14a821d895427913282a65a92266c6475fa956f2a4b2d65`.
+The source distribution also passed `twine check`; its digest is intentionally
+omitted because this validation note is included in that archive.
+
 ## Shared Python-in-Excel report redaction — 2026-07-26
 
 FormulaFence 0.100.0 adds the separate, opt-in

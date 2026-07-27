@@ -29,7 +29,11 @@ with 100,000 opaque chart children (1,401,828 bytes of chart XML) completed in
 coverage. The candidate reports one structural chart coverage gap in 0.3739
 seconds at 46,756 KiB, before the chart XML tree is materialized. The complete
 905-test source suite passed in bounded runner batches (129.41 seconds
-aggregate), with Ruff, bytecode compilation, and `git diff --check` clean.
+aggregate), with Ruff, bytecode compilation, and `git diff --check` clean. A
+fresh Python 3.12 environment installed the exact 0.129.0 wheel, confirmed
+`openpyxl.DEFUSEDXML`, and completed a normal CLI diff. The hostile chart
+profile retained one structural coverage warning; its installed diff returned
+`FF030` and the expected status 1 with `--fail-on medium`.
 
 ## Package relationship-part structural bounds — 2026-07-26
 

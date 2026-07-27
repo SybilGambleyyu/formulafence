@@ -13,6 +13,8 @@ from .helpers import (
     change_formula_defined_xlm_action_input,
     change_formula_defined_xlm_evaluation_call,
     change_formula_defined_xlm_evaluation_input,
+    change_formula_defined_xlm_get_cell_call,
+    change_formula_defined_xlm_get_cell_input,
     change_formula_defined_xlm_registration_call,
     change_formula_defined_xlm_registration_input,
     change_formula_external_action_input,
@@ -26,6 +28,7 @@ from .helpers import (
     make_formula_dde_link_model,
     make_formula_defined_xlm_action_model,
     make_formula_defined_xlm_evaluation_model,
+    make_formula_defined_xlm_get_cell_model,
     make_formula_defined_xlm_registration_model,
     make_formula_external_action_model,
     make_model,
@@ -1239,6 +1242,123 @@ def test_cli_can_redact_formula_defined_xlm_action_material(tmp_path) -> None:
     )
     portfolio_rendered = portfolio_output.read_text(encoding="utf-8")
     assert "formula-defined XLM action material redacted" in portfolio_rendered
+    assert all(value not in portfolio_rendered for value in sensitive_values)
+
+
+def test_cli_can_redact_formula_defined_xlm_get_cell_material(tmp_path) -> None:
+    baseline = make_formula_defined_xlm_get_cell_model(tmp_path / "baseline.xlsx")
+    candidate = make_formula_defined_xlm_get_cell_model(tmp_path / "candidate.xlsx")
+    change_formula_defined_xlm_get_cell_input(candidate)
+    change_formula_defined_xlm_get_cell_call(candidate)
+    sensitive_values = (
+        "PRIVATE-XLM-GET-CELL-INPUT-BASELINE",
+        "PRIVATE-XLM-GET-CELL-INPUT-CANDIDATE",
+        "GET.CELL(53,Inputs!$A$9)",
+        "GET.CELL(54,Inputs!$A$9)",
+    )
+
+    default_json = tmp_path / "default.json"
+    assert (
+        main(
+            [
+                "diff",
+                str(baseline),
+                str(candidate),
+                "--format",
+                "json",
+                "--output",
+                str(default_json),
+            ]
+        )
+        == 0
+    )
+    default_rendered = default_json.read_text(encoding="utf-8")
+    assert all(value in default_rendered for value in sensitive_values)
+
+    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+        output = tmp_path / f"xlm-get-cell-redacted.{suffix}"
+        assert (
+            main(
+                [
+                    "diff",
+                    str(baseline),
+                    str(candidate),
+                    "--format",
+                    report_format,
+                    "--redact-formula-defined-xlm-get-cell-calls",
+                    "--output",
+                    str(output),
+                ]
+            )
+            == 0
+        )
+        rendered = output.read_text(encoding="utf-8")
+        assert all(value not in rendered for value in sensitive_values)
+        assert "FF070" in rendered
+        if report_format == "markdown":
+            assert (
+                "Formula-defined XLM GET.CELL material:** redacted for sharing"
+                in rendered
+            )
+        elif report_format == "json":
+            assert "formula-defined XLM GET.CELL material redacted" in rendered
+
+    policy = tmp_path / "formulafence.yml"
+    policy.write_text(
+        "version: 1\nrules:\n  no_formula_defined_xlm_get_cell_changes: true\n",
+        encoding="utf-8",
+    )
+    policy_output = tmp_path / "xlm-get-cell-policy-redacted.json"
+    assert (
+        main(
+            [
+                "check",
+                str(baseline),
+                str(candidate),
+                "--policy",
+                str(policy),
+                "--format",
+                "json",
+                "--redact-formula-defined-xlm-get-cell-calls",
+                "--output",
+                str(policy_output),
+            ]
+        )
+        == 1
+    )
+    policy_rendered = policy_output.read_text(encoding="utf-8")
+    assert "FF070" in policy_rendered
+    assert "FFP070" in policy_rendered
+    assert all(value not in policy_rendered for value in sensitive_values)
+
+    baseline_directory = tmp_path / "baseline-portfolio"
+    candidate_directory = tmp_path / "candidate-portfolio"
+    baseline_directory.mkdir()
+    candidate_directory.mkdir()
+    make_formula_defined_xlm_get_cell_model(baseline_directory / "model.xlsx")
+    portfolio_candidate = make_formula_defined_xlm_get_cell_model(
+        candidate_directory / "model.xlsx"
+    )
+    change_formula_defined_xlm_get_cell_input(portfolio_candidate)
+    change_formula_defined_xlm_get_cell_call(portfolio_candidate)
+    portfolio_output = tmp_path / "xlm-get-cell-portfolio-redacted.json"
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline_directory),
+                str(candidate_directory),
+                "--format",
+                "json",
+                "--redact-formula-defined-xlm-get-cell-calls",
+                "--output",
+                str(portfolio_output),
+            ]
+        )
+        == 0
+    )
+    portfolio_rendered = portfolio_output.read_text(encoding="utf-8")
+    assert "formula-defined XLM GET.CELL material redacted" in portfolio_rendered
     assert all(value not in portfolio_rendered for value in sensitive_values)
 
 

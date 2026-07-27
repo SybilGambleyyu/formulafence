@@ -5,6 +5,52 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared formula-defined XLM GET.CELL report redaction — 2026-07-26
+
+FormulaFence 0.107.0 adds the separate, opt-in
+`--redact-formula-defined-xlm-get-cell-calls` rendering boundary for generic
+reports. It is deliberately separate from the count-only `FF070` ledger and
+from the external-workbook-link, formula-action, Python-in-Excel, Office
+custom-function, unqualified-runtime-function, worksheet-code-resource
+registration, formula-defined XLM registration, formula-defined XLM
+evaluation, and formula-defined XLM action redaction modes. Default
+local-review output remains unchanged. When enabled, JSON, Markdown, and SARIF
+hide direct stored GET.CELL material, changed invoking-formula evidence, and
+exact changed static input evidence the private dependency analysis recorded as
+reaching an inventoried call. A formula-defined-name body can pass a private
+information code or reference through a dotted workbook-defined wrapper to
+GET.CELL deeper in the chain, so FormulaFence privately compares the resolved
+definition chain and conservatively hides changed defined-name before/after
+evidence when that signature changes.
+
+Microsoft's [Excel C API
+reference](https://learn.microsoft.com/en-us/office/client-developer/excel/programming-with-the-c-api-in-excel)
+identifies GET.CELL as `xlfGetCell`. That documented stored material explains
+why generic report evidence can disclose private call arguments without proving
+that a call will calculate or what information Excel would return. FormulaFence
+does not calculate a formula or information call, determine an information
+type, resolve a dynamic reference, simulate display/formatting or other Excel
+state, or reconstruct a runtime value.
+
+Focused fixtures cover a direct stored GET.CELL call plus a changed static
+input, an input whose GET.CELL consumer falls beyond the report's bounded
+impact sample, and a dotted named wrapper whose private reference can only be
+associated with GET.CELL through the private fixed-point definition analysis.
+The redacted JSON, Markdown, SARIF, policy, portfolio, and composite-Action
+contracts retain `FF070` / `FFP070` and their exit behavior while omitting
+controlled information-code, reference, input, and nested-name markers. The
+final source tree passed **689 tests in 100.15 seconds** (deterministic
+command-limited chunks), plus a clean Ruff check, `git diff --check`, and shell
+syntax check for the composite Action. The exact release wheel was installed in
+a fresh environment; its CLI reported `FormulaFence 0.107.0`, retained
+controlled GET.CELL/input markers in default JSON, removed them from redacted
+JSON/Markdown/SARIF/policy/portfolio output, and still returned `1` with
+`FF070` and `FFP070` for the redacted policy check. The wheel
+`formulafence-0.107.0-py3-none-any.whl` passed `twine check` with SHA-256
+`14c23132397029643ba78f305200cfe03702d8d5911ef6909edbe51cdcc77c74`.
+The source distribution also passed `twine check`; its digest is intentionally
+omitted because this validation note is included in that archive.
+
 ## Shared formula-defined XLM action report redaction — 2026-07-26
 
 FormulaFence 0.106.0 adds the separate, opt-in

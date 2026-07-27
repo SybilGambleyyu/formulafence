@@ -1184,6 +1184,18 @@ def change_formula_defined_xlm_get_cell_input(path: Path) -> Path:
     return path
 
 
+def change_formula_defined_xlm_get_cell_call(path: Path) -> Path:
+    """Change a direct stored XLM GET.CELL call without inspecting its value."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.XLM.GET.CELL.DIRECT"]
+    expected = "=GET.CELL(53,Inputs!$A$9)"
+    if definition.attr_text != expected:
+        raise ValueError("Fixture does not contain the expected direct XLM GET.CELL")
+    definition.attr_text = "=GET.CELL(54,Inputs!$A$9)"
+    workbook.save(path)
+    return path
+
+
 def make_formula_defined_xlm_environment_information_model(path: Path) -> Path:
     """Create inert legacy environment-information calls in defined formulas.
 

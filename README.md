@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.106.0/formulafence-0.106.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.107.0/formulafence-0.107.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.106.0
+  uses: SybilGambleyyu/formulafence@v0.107.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1145,6 +1145,17 @@ comments/protection, or simulate Excel state. Direct worksheet GET.CELL calls
 and raw XLM macro-sheet parts are deliberately outside this narrow
 stored-definition boundary. Enable no_formula_defined_xlm_get_cell_changes to
 block this boundary in CI.
+
+The ordinary semantic diff deliberately retains full local reviewer evidence.
+For an artifact that leaves that boundary, add
+`--redact-formula-defined-xlm-get-cell-calls` to `diff`, `check`, or
+`portfolio`. The output-only mode replaces direct stored GET.CELL material,
+changed invoking-formula evidence, exact changed static inputs, and changed
+resolved formula-defined-name-chain evidence with
+`[formula-defined XLM GET.CELL material redacted]`; it preserves comparison
+facts, policy results, and exit status. It does not evaluate GET.CELL,
+determine an information type, resolve a dynamic reference, or reconstruct a
+value from Excel state, and is not a general secret scrubber.
 
 FormulaFence also keeps a separate **formula-defined XLM environment-information
 ledger** for selected GET.WORKBOOK, GET.WORKSPACE, and GET.DOCUMENT calls

@@ -870,7 +870,12 @@ formula will produce.
   type, resolve a dynamic reference, render formatting or display text, inspect
   comments/protection, or simulate other Excel state. Direct worksheet GET.CELL
   formulas and raw XLM macro-sheet parts are intentionally outside this narrow
-  boundary; dynamic/unresolved inputs remain static-coverage limits.
+  boundary; dynamic/unresolved inputs remain static-coverage limits. The
+  separate `--redact-formula-defined-xlm-get-cell-calls` shared-artifact mode
+  hides direct stored GET.CELL material, exact changed static inputs, and
+  changed private name-chain evidence after comparison and policy evaluation
+  without evaluating a call, resolving a dynamic reference, or changing any
+  comparison fact.
 - Selected legacy XLM environment-information calls GET.WORKBOOK,
   GET.WORKSPACE, and GET.DOCUMENT are separately inventoried only when stored
   in formula-defined names and named LAMBDA bodies, then propagated through

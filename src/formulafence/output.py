@@ -31,6 +31,9 @@ FORMULA_DEFINED_XLM_EVALUATION_REDACTION = (
 FORMULA_DEFINED_XLM_ACTION_REDACTION = (
     "[formula-defined XLM action material redacted]"
 )
+FORMULA_DEFINED_XLM_GET_CELL_REDACTION = (
+    "[formula-defined XLM GET.CELL material redacted]"
+)
 
 # This fallback deliberately supplements, rather than replaces, FormulaFence's
 # static formula inspection below.  A visible `INDIRECT("'[Book]Sheet'!A1")`
@@ -259,6 +262,7 @@ def _safe_finding_details(
     redact_formula_defined_xlm_registrations: bool = False,
     redact_formula_defined_xlm_evaluations: bool = False,
     redact_formula_defined_xlm_actions: bool = False,
+    redact_formula_defined_xlm_get_cell_calls: bool = False,
 ) -> dict[str, Any]:
     """Copy one SARIF finding's properties through active name-chain bounds."""
     details = dict(finding.details)
@@ -306,6 +310,12 @@ def _safe_finding_details(
         and finding.rule_id == "FF008"
     ):
         _redact_formula_defined_xlm_action_defined_name_details(details, report)
+    if (
+        redact_formula_defined_xlm_get_cell_calls
+        and report is not None
+        and finding.rule_id == "FF008"
+    ):
+        _redact_formula_defined_xlm_get_cell_defined_name_details(details, report)
     return details
 
 
@@ -1317,6 +1327,169 @@ def redact_formula_defined_xlm_action_portfolio_payload(
         if workbook.report is not None and isinstance(entry, dict):
             _redact_formula_defined_xlm_action_change_cells(entry, workbook.report)
             _redact_formula_defined_xlm_action_defined_name_evidence(
+                entry, workbook.report
+            )
+    return redacted
+
+
+def _contains_formula_defined_xlm_get_cell_material(value: str) -> bool:
+    """Return whether one string exposes a stored XLM ``GET.CELL`` call.
+
+    FF070 only inventories this legacy information primitive while resolving
+    formula-defined names. A generic renderer does not retain workbook name
+    scope, so a standalone matching expression is conservatively redacted
+    rather than treated as proof that Excel will invoke the primitive.
+    """
+    if "get.cell" not in value.casefold() or "(" not in value:
+        return False
+    formula = value if value.lstrip().startswith("=") else f"={value}"
+    return bool(
+        inspect_formula(
+            formula, inspect_formula_defined_xlm_get_cell_calls=True
+        ).formula_defined_xlm_get_cell_functions
+    )
+
+
+def redact_formula_defined_xlm_get_cell_material(payload: Any) -> Any:
+    """Return an output-only copy with direct stored ``GET.CELL`` text hidden.
+
+    The report-level helpers below also hide exact changed static inputs and
+    changed formula-defined-name bodies which the private FF070 comparison
+    resolves as GET.CELL relevant. This neither evaluates a call nor derives
+    the information type, a dynamic reference, or display state.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: redact_formula_defined_xlm_get_cell_material(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [redact_formula_defined_xlm_get_cell_material(value) for value in payload]
+    if isinstance(payload, tuple):
+        return tuple(
+            redact_formula_defined_xlm_get_cell_material(value) for value in payload
+        )
+    if isinstance(payload, str) and _contains_formula_defined_xlm_get_cell_material(
+        payload
+    ):
+        return FORMULA_DEFINED_XLM_GET_CELL_REDACTION
+    return payload
+
+
+def _formula_defined_xlm_get_cell_sensitive_change_locations(
+    report: DiffReport,
+) -> set[str]:
+    """Return changed cells whose evidence can carry a static GET.CELL input."""
+    sensitive_cells = (
+        report.before.formula_defined_xlm_get_cell_calls.get_cell_cells
+        | report.after.formula_defined_xlm_get_cell_calls.get_cell_cells
+        | report.formula_defined_xlm_get_cell_static_input_cells
+    )
+    if not sensitive_cells:
+        return set()
+
+    locations: set[str] = set()
+    for change in report.changes:
+        if change.location is None or change.location not in sensitive_cells:
+            continue
+        location = display_location(change.location)
+        if location is not None:
+            locations.add(location)
+    return locations
+
+
+def _redact_formula_defined_xlm_get_cell_change_cells(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide before/after cells that invoke a stored GET.CELL call or feed it."""
+    sensitive_locations = _formula_defined_xlm_get_cell_sensitive_change_locations(
+        report
+    )
+    if not sensitive_locations:
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("location") not in sensitive_locations:
+            continue
+        for side in ("before", "after"):
+            snapshot = change.get(side)
+            if not isinstance(snapshot, dict):
+                continue
+            for field in ("value", "formula", "formula_fingerprint"):
+                if snapshot.get(field) is not None:
+                    snapshot[field] = FORMULA_DEFINED_XLM_GET_CELL_REDACTION
+    return payload
+
+
+def _formula_defined_xlm_get_cell_definition_material_changed(
+    report: DiffReport,
+) -> bool:
+    """Return whether a stored GET.CELL-relevant definition changed."""
+    return (
+        report.before.formula_defined_xlm_get_cell_calls.definition_signature
+        != report.after.formula_defined_xlm_get_cell_calls.definition_signature
+    )
+
+
+def _redact_formula_defined_xlm_get_cell_defined_name_details(
+    details: dict[str, Any], report: DiffReport
+) -> None:
+    """Hide FF008 evidence when a resolved GET.CELL name chain changed.
+
+    A named LAMBDA can pass a reference or information code through an
+    ordinary-looking dotted wrapper whose eventual body calls ``GET.CELL``.
+    Its own text cannot be classified without FormulaFence's private
+    fixed-point resolution. When that definition signature changes, replacing
+    every changed defined-name body is the safe sharing boundary.
+    """
+    if not _formula_defined_xlm_get_cell_definition_material_changed(report):
+        return
+    for field in ("before", "after"):
+        if isinstance(details.get(field), str):
+            details[field] = FORMULA_DEFINED_XLM_GET_CELL_REDACTION
+
+
+def _redact_formula_defined_xlm_get_cell_defined_name_evidence(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide resolved GET.CELL name-chain text in report evidence."""
+    if not _formula_defined_xlm_get_cell_definition_material_changed(report):
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("kind") == "defined_name_changed":
+            details = change.get("details")
+            if isinstance(details, dict):
+                _redact_formula_defined_xlm_get_cell_defined_name_details(
+                    details, report
+                )
+    for finding in payload.get("findings", []):
+        if finding.get("rule_id") != "FF008":
+            continue
+        details = finding.get("details")
+        if isinstance(details, dict):
+            _redact_formula_defined_xlm_get_cell_defined_name_details(details, report)
+    return payload
+
+
+def redact_formula_defined_xlm_get_cell_report_payload(
+    report: DiffReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Redact direct XLM GET.CELL and private static/name-chain evidence."""
+    redacted = redact_formula_defined_xlm_get_cell_material(payload)
+    _redact_formula_defined_xlm_get_cell_change_cells(redacted, report)
+    return _redact_formula_defined_xlm_get_cell_defined_name_evidence(redacted, report)
+
+
+def redact_formula_defined_xlm_get_cell_portfolio_payload(
+    report: PortfolioReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply the stored XLM GET.CELL sharing boundary to nested reports."""
+    redacted = redact_formula_defined_xlm_get_cell_material(payload)
+    for workbook, entry in zip(
+        report.workbooks, redacted.get("workbooks", []), strict=False
+    ):
+        if workbook.report is not None and isinstance(entry, dict):
+            _redact_formula_defined_xlm_get_cell_change_cells(entry, workbook.report)
+            _redact_formula_defined_xlm_get_cell_defined_name_evidence(
                 entry, workbook.report
             )
     return redacted
@@ -4724,6 +4897,7 @@ def report_to_markdown(
     redact_formula_defined_xlm_registrations: bool = False,
     redact_formula_defined_xlm_evaluations: bool = False,
     redact_formula_defined_xlm_actions: bool = False,
+    redact_formula_defined_xlm_get_cell_calls: bool = False,
 ) -> str:
     policy_findings = list(extra_findings)
     payload = report.to_dict(policy_findings)
@@ -4751,6 +4925,8 @@ def report_to_markdown(
         )
     if redact_formula_defined_xlm_actions:
         payload = redact_formula_defined_xlm_action_report_payload(report, payload)
+    if redact_formula_defined_xlm_get_cell_calls:
+        payload = redact_formula_defined_xlm_get_cell_report_payload(report, payload)
     summary = payload["summary"]
     lines = [
         "# FormulaFence change report",
@@ -4811,6 +4987,11 @@ def report_to_markdown(
             if redact_formula_defined_xlm_actions
             else []
         ),
+        *(
+            ["- **Formula-defined XLM GET.CELL material:** redacted for sharing"]
+            if redact_formula_defined_xlm_get_cell_calls
+            else []
+        ),
         f"- **Changes:** {summary['change_count']}",
         f"- **Findings:** {summary['finding_count']}",
         f"- **Highest severity:** `{summary['highest_severity']}`",
@@ -4842,6 +5023,7 @@ def report_to_sarif(
     redact_formula_defined_xlm_registrations: bool = False,
     redact_formula_defined_xlm_evaluations: bool = False,
     redact_formula_defined_xlm_actions: bool = False,
+    redact_formula_defined_xlm_get_cell_calls: bool = False,
 ) -> dict[str, Any]:
     findings = [*report.findings, *extra_findings]
     rule_ids = sorted({finding.rule_id for finding in findings})
@@ -4871,6 +5053,9 @@ def report_to_sarif(
                 redact_formula_defined_xlm_evaluations
             ),
             redact_formula_defined_xlm_actions=redact_formula_defined_xlm_actions,
+            redact_formula_defined_xlm_get_cell_calls=(
+                redact_formula_defined_xlm_get_cell_calls
+            ),
         )
         result: dict[str, Any] = {
             "ruleId": finding.rule_id,
@@ -4928,6 +5113,8 @@ def report_to_sarif(
         payload = redact_formula_defined_xlm_evaluation_material(payload)
     if redact_formula_defined_xlm_actions:
         payload = redact_formula_defined_xlm_action_material(payload)
+    if redact_formula_defined_xlm_get_cell_calls:
+        payload = redact_formula_defined_xlm_get_cell_material(payload)
     return payload
 
 
@@ -4981,6 +5168,7 @@ def portfolio_to_markdown(
     redact_formula_defined_xlm_registrations: bool = False,
     redact_formula_defined_xlm_evaluations: bool = False,
     redact_formula_defined_xlm_actions: bool = False,
+    redact_formula_defined_xlm_get_cell_calls: bool = False,
 ) -> str:
     """Render a complete multi-workbook review without absolute filesystem paths."""
     payload = report.to_dict()
@@ -5008,6 +5196,10 @@ def portfolio_to_markdown(
         )
     if redact_formula_defined_xlm_actions:
         payload = redact_formula_defined_xlm_action_portfolio_payload(report, payload)
+    if redact_formula_defined_xlm_get_cell_calls:
+        payload = redact_formula_defined_xlm_get_cell_portfolio_payload(
+            report, payload
+        )
     summary = payload["summary"]
     lines = [
         "# FormulaFence portfolio report",
@@ -5088,6 +5280,11 @@ def portfolio_to_markdown(
             if redact_formula_defined_xlm_actions
             else []
         ),
+        *(
+            ["- **Formula-defined XLM GET.CELL material:** redacted for sharing"]
+            if redact_formula_defined_xlm_get_cell_calls
+            else []
+        ),
         "",
         (
             "Relative workbook paths are the comparison identity. A move is deliberately "
@@ -5147,6 +5344,7 @@ def portfolio_to_sarif(
     redact_formula_defined_xlm_registrations: bool = False,
     redact_formula_defined_xlm_evaluations: bool = False,
     redact_formula_defined_xlm_actions: bool = False,
+    redact_formula_defined_xlm_get_cell_calls: bool = False,
 ) -> dict[str, Any]:
     """Render every portfolio finding in one SARIF run with relative artifacts."""
     rule_ids = sorted(
@@ -5183,6 +5381,9 @@ def portfolio_to_sarif(
                     redact_formula_defined_xlm_evaluations
                 ),
                 redact_formula_defined_xlm_actions=redact_formula_defined_xlm_actions,
+                redact_formula_defined_xlm_get_cell_calls=(
+                    redact_formula_defined_xlm_get_cell_calls
+                ),
             )
             location: dict[str, Any] = {
                 "physicalLocation": {"artifactLocation": {"uri": workbook.path}},
@@ -5242,4 +5443,6 @@ def portfolio_to_sarif(
         payload = redact_formula_defined_xlm_evaluation_material(payload)
     if redact_formula_defined_xlm_actions:
         payload = redact_formula_defined_xlm_action_material(payload)
+    if redact_formula_defined_xlm_get_cell_calls:
+        payload = redact_formula_defined_xlm_get_cell_material(payload)
     return payload

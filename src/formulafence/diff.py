@@ -4169,6 +4169,9 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         formula_defined_xlm_action_static_input_cells=frozenset(
             formula_defined_xlm_action_static_input_changes
         ),
+        formula_defined_xlm_get_cell_static_input_cells=frozenset(
+            formula_defined_xlm_get_cell_static_input_changes
+        ),
     )
 
 

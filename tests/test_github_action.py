@@ -41,6 +41,7 @@ def _run_action_script(
     redact_formula_defined_xlm_registrations: str = "false",
     redact_formula_defined_xlm_evaluations: str = "false",
     redact_formula_defined_xlm_actions: str = "false",
+    redact_formula_defined_xlm_get_cell_calls: str = "false",
     max_workbooks: str = "512",
     max_link_impact: str = "100000",
     upload_artifact: str = "true",
@@ -85,6 +86,9 @@ def _run_action_script(
             "INPUT_REDACT_FORMULA_DEFINED_XLM_ACTIONS": (
                 redact_formula_defined_xlm_actions
             ),
+            "INPUT_REDACT_FORMULA_DEFINED_XLM_GET_CELL_CALLS": (
+                redact_formula_defined_xlm_get_cell_calls
+            ),
             "INPUT_FAIL_ON": "none",
             "INPUT_MAX_WORKBOOKS": max_workbooks,
             "INPUT_MAX_LINK_IMPACT": max_link_impact,
@@ -124,6 +128,7 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
         "redact-formula-defined-xlm-registrations",
         "redact-formula-defined-xlm-evaluations",
         "redact-formula-defined-xlm-actions",
+        "redact-formula-defined-xlm-get-cell-calls",
         "max-workbooks",
         "max-link-impact",
     } <= set(action["inputs"])
@@ -687,6 +692,74 @@ def test_action_rejects_an_invalid_formula_defined_xlm_action_switch(
 
     assert result.returncode == 2
     assert "Unsupported redact-formula-defined-xlm-actions value" in result.stderr
+
+
+def test_action_can_redact_formula_defined_xlm_get_cell_material(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    baseline_marker = "PRIVATE-ACTION-XLM-GET-CELL-BASELINE"
+    candidate_marker = "PRIVATE-ACTION-XLM-GET-CELL-CANDIDATE"
+    baseline_reference = "PRIVATE-ACTION-XLM-GET-CELL-REFERENCE-BASELINE"
+    candidate_reference = "PRIVATE-ACTION-XLM-GET-CELL-REFERENCE-CANDIDATE"
+
+    def xlm_get_cell_workbook(path: Path, payload: str, reference: str) -> None:
+        workbook = Workbook()
+        workbook.active.title = "Inputs"
+        workbook.active["A9"] = payload
+        workbook.active["B2"] = "=FENCE.XLM.GET.CELL(A9)"
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.GET.CELL",
+                attr_text=(
+                    f'=LAMBDA(value,GET.CELL(53,value&"{reference}"))'
+                ),
+            )
+        )
+        workbook.save(path)
+
+    xlm_get_cell_workbook(baseline, baseline_marker, baseline_reference)
+    xlm_get_cell_workbook(candidate, candidate_marker, candidate_reference)
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        report_format="json",
+        output="reports/formulafence.json",
+        redact_formula_defined_xlm_get_cell_calls="true",
+    )
+
+    assert result.returncode == 0
+    rendered = (tmp_path / "reports" / "formulafence.json").read_text(encoding="utf-8")
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+    assert baseline_reference not in rendered
+    assert candidate_reference not in rendered
+    assert "formula-defined XLM GET.CELL material redacted" in rendered
+    assert "FF070" in rendered
+
+
+def test_action_rejects_an_invalid_formula_defined_xlm_get_cell_switch(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    _workbook(baseline, "=1+1")
+    _workbook(candidate, "=1+1")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        redact_formula_defined_xlm_get_cell_calls="sometimes",
+    )
+
+    assert result.returncode == 2
+    assert (
+        "Unsupported redact-formula-defined-xlm-get-cell-calls value" in result.stderr
+    )
 
 
 def test_action_runs_a_directory_portfolio_and_preserves_membership_evidence(

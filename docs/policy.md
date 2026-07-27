@@ -685,6 +685,14 @@ stored call's statically visible argument edge. Direct worksheet GET.CELL
 formulas and raw XLM macro-sheet parts remain deliberately outside this narrow
 stored-definition boundary; the latter remain under FF026.
 
+The ordinary semantic diff retains local-review formula and defined-name
+evidence. For a shared artifact, the separate output-only
+`--redact-formula-defined-xlm-get-cell-calls` mode hides direct stored
+`GET.CELL` material, exact changed static inputs, and changed private resolved
+name-chain evidence without changing comparison, policy evaluation, or exit
+status. It does not evaluate the call, determine its information type, resolve
+a dynamic reference, or simulate display/formatting or other Excel state.
+
 ## Formula-defined XLM environment information
 
 Microsoft's [C API

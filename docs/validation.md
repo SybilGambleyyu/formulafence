@@ -41,7 +41,13 @@ accepted for every catalog; the 4,097th declaration was rejected.
 
 Focused archive-safety and version coverage passed **67 tests in 2.02 seconds**;
 the completed source tree passed **769 tests in 130.23 seconds**, plus Ruff,
-bytecode compilation, and `git diff --check` before final package verification.
+bytecode compilation, and `git diff --check`. The final wheel and source
+distribution passed `twine check`; a clean Python 3.12 environment installed
+the wheel, confirmed `FormulaFence 0.117.0` and `openpyxl.DEFUSEDXML`, profiled
+an ordinary workbook, and returned the normal input-error exit status (2) for
+independently generated 4,097-entry book-view, custom-workbook-view,
+function-group, smart-tag-type, web-publish-object, and custom-sheet-view
+fixtures.
 
 ## Reader relationship-backed catalog bounds — 2026-07-26
 

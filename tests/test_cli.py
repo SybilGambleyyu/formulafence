@@ -15,12 +15,15 @@ from .helpers import (
     change_office_custom_function_input,
     change_unqualified_runtime_function_call,
     change_unqualified_runtime_function_input,
+    change_worksheet_code_resource_registration_call,
+    change_worksheet_code_resource_registration_input,
     make_formula_dde_link_model,
     make_formula_external_action_model,
     make_model,
     make_office_custom_function_model,
     make_python_in_excel_model,
     make_unqualified_runtime_function_model,
+    make_worksheet_code_resource_registration_model,
     rewrite,
     set_python_in_excel_formula_source,
 )
@@ -742,6 +745,133 @@ def test_cli_can_redact_unqualified_runtime_function_material_from_shared_report
     )
     portfolio_rendered = portfolio_output.read_text(encoding="utf-8")
     assert "unqualified runtime-function material redacted" in portfolio_rendered
+    assert all(value not in portfolio_rendered for value in sensitive_values)
+
+
+def test_cli_can_redact_worksheet_code_resource_registration_material(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_code_resource_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_worksheet_code_resource_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_worksheet_code_resource_registration_input(candidate)
+    change_worksheet_code_resource_registration_call(candidate)
+    sensitive_values = (
+        "PRIVATE-REGISTRATION-MODULE-BASELINE",
+        "PRIVATE-REGISTRATION-MODULE-CANDIDATE",
+        "PRIVATE-REGISTRATION-MODULE-LITERAL-BASELINE",
+        "PRIVATE-REGISTRATION-PROCEDURE-LITERAL-BASELINE",
+        "PRIVATE-REGISTRATION-MODULE-LITERAL-CANDIDATE",
+        "PRIVATE-REGISTRATION-PROCEDURE-LITERAL-CANDIDATE",
+    )
+
+    default_json = tmp_path / "default.json"
+    assert (
+        main(
+            [
+                "diff",
+                str(baseline),
+                str(candidate),
+                "--format",
+                "json",
+                "--output",
+                str(default_json),
+            ]
+        )
+        == 0
+    )
+    default_rendered = default_json.read_text(encoding="utf-8")
+    assert all(value in default_rendered for value in sensitive_values)
+
+    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+        output = tmp_path / f"registration-redacted.{suffix}"
+        assert (
+            main(
+                [
+                    "diff",
+                    str(baseline),
+                    str(candidate),
+                    "--format",
+                    report_format,
+                    "--redact-worksheet-code-resource-registrations",
+                    "--output",
+                    str(output),
+                ]
+            )
+            == 0
+        )
+        rendered = output.read_text(encoding="utf-8")
+        assert all(value not in rendered for value in sensitive_values)
+        assert "FF067" in rendered
+        if report_format == "markdown":
+            assert (
+                "Worksheet code-resource registration material:** redacted for sharing"
+                in rendered
+            )
+        elif report_format == "json":
+            assert "worksheet code-resource registration material redacted" in rendered
+
+    policy = tmp_path / "formulafence.yml"
+    policy.write_text(
+        "version: 1\nrules:\n  no_worksheet_code_resource_registration_changes: true\n",
+        encoding="utf-8",
+    )
+    policy_output = tmp_path / "registration-policy-redacted.json"
+    assert (
+        main(
+            [
+                "check",
+                str(baseline),
+                str(candidate),
+                "--policy",
+                str(policy),
+                "--format",
+                "json",
+                "--redact-worksheet-code-resource-registrations",
+                "--output",
+                str(policy_output),
+            ]
+        )
+        == 1
+    )
+    policy_rendered = policy_output.read_text(encoding="utf-8")
+    assert "FF067" in policy_rendered
+    assert "FFP067" in policy_rendered
+    assert all(value not in policy_rendered for value in sensitive_values)
+
+    baseline_directory = tmp_path / "baseline-portfolio"
+    candidate_directory = tmp_path / "candidate-portfolio"
+    baseline_directory.mkdir()
+    candidate_directory.mkdir()
+    make_worksheet_code_resource_registration_model(
+        baseline_directory / "model.xlsx"
+    )
+    portfolio_candidate = make_worksheet_code_resource_registration_model(
+        candidate_directory / "model.xlsx"
+    )
+    change_worksheet_code_resource_registration_input(portfolio_candidate)
+    change_worksheet_code_resource_registration_call(portfolio_candidate)
+    portfolio_output = tmp_path / "registration-portfolio-redacted.json"
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline_directory),
+                str(candidate_directory),
+                "--format",
+                "json",
+                "--redact-worksheet-code-resource-registrations",
+                "--output",
+                str(portfolio_output),
+            ]
+        )
+        == 0
+    )
+    portfolio_rendered = portfolio_output.read_text(encoding="utf-8")
+    assert "worksheet code-resource registration material redacted" in portfolio_rendered
     assert all(value not in portfolio_rendered for value in sensitive_values)
 
 

@@ -4157,6 +4157,9 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         unqualified_runtime_function_static_input_cells=frozenset(
             unqualified_runtime_function_static_input_changes
         ),
+        worksheet_code_resource_registration_static_input_cells=frozenset(
+            worksheet_code_resource_registration_static_input_changes
+        ),
     )
 
 

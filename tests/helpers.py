@@ -782,6 +782,62 @@ def change_named_worksheet_code_resource_registration_input(path: Path) -> Path:
     return path
 
 
+def make_indirect_named_worksheet_code_resource_registration_model(path: Path) -> Path:
+    """Create a dotted name chain that eventually calls ``REGISTER.ID``.
+
+    The outer body intentionally contains no registration function. Its private
+    literal can only be associated with code-resource registration through
+    FormulaFence's private formula-defined-name fixed point, which exercises
+    the shared-artifact redaction bound for an ordinary-looking definition.
+    """
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Indirect named worksheet code-resource registration controls"
+    inputs["A9"] = "PRIVATE-INDIRECT-NAMED-REGISTRATION-INPUT"
+    inputs["B2"] = "=FENCE.REGISTRATIONCHAIN(A9)"
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.REGISTRATIONWRAPPER",
+            attr_text=(
+                '=LAMBDA(module,REGISTER.ID(module,"PRIVATE-INDIRECT-NAMED-'
+                'REGISTRATION-PROCEDURE","J!"))'
+            ),
+        )
+    )
+    workbook.defined_names.add(
+        DefinedName(
+            "FENCE.REGISTRATIONCHAIN",
+            attr_text=(
+                '=LAMBDA(module,FENCE.REGISTRATIONWRAPPER("PRIVATE-INDIRECT-NAMED-'
+                'REGISTRATION-MODULE-BASELINE"))'
+            ),
+        )
+    )
+    workbook.save(path)
+    return path
+
+
+def change_indirect_named_worksheet_code_resource_registration_definition(
+    path: Path,
+) -> Path:
+    """Rewrite a private literal in an ordinary-looking registration wrapper."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.REGISTRATIONCHAIN"]
+    expected = (
+        '=LAMBDA(module,FENCE.REGISTRATIONWRAPPER("PRIVATE-INDIRECT-NAMED-'
+        'REGISTRATION-MODULE-BASELINE"))'
+    )
+    if definition.attr_text != expected:
+        raise ValueError("Fixture does not contain the expected indirect registration")
+    definition.attr_text = (
+        '=LAMBDA(module,FENCE.REGISTRATIONWRAPPER("PRIVATE-INDIRECT-NAMED-'
+        'REGISTRATION-MODULE-CANDIDATE"))'
+    )
+    workbook.save(path)
+    return path
+
+
 def make_formula_defined_xlm_registration_model(path: Path) -> Path:
     """Create inert XLM ``REGISTER`` calls stored only in defined formulas.
 

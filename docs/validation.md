@@ -5,6 +5,51 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared worksheet code-resource registration report redaction — 2026-07-26
+
+FormulaFence 0.103.0 adds the separate, opt-in
+`--redact-worksheet-code-resource-registrations` rendering boundary for generic
+reports. It is deliberately separate from the count-only `FF067` ledger and
+from the external-workbook-link, formula-action, Python-in-Excel, Office
+custom-function, and unqualified-runtime-function redaction modes. Default
+local-review output remains unchanged. When enabled, JSON, Markdown, and SARIF
+hide direct stored `REGISTER.ID` material, changed registration-cell evidence,
+and exact changed static input evidence the private dependency analysis recorded
+as reaching an inventoried registration. A formula-defined-name body can send a
+private module, procedure, or other argument through a dotted workbook-defined
+wrapper to `REGISTER.ID` deeper in the chain, so FormulaFence privately compares
+the resolved definition chain and conservatively hides changed defined-name
+before/after evidence when that signature changes.
+
+Microsoft's [`REGISTER.ID` reference](https://support.microsoft.com/en-us/office/register-id-function-f8f0af0f-fd66-4704-a0f2-87b27b175b50)
+documents `REGISTER.ID(module_text, procedure, [type_text])`, says it returns a
+DLL/code-resource registration ID, and says it registers an unregistered DLL or
+code resource. It also distinguishes the worksheet-capable function from
+`REGISTER`. Those documented stored arguments establish why a generic report
+can expose sensitive implementation material without proving that a module is
+available, trusted, or successfully registered. FormulaFence does not evaluate
+a formula, resolve a module path, load a DLL/XLL, inspect host trust settings,
+execute code, contact a provider, or reconstruct a dynamic argument.
+
+Focused fixtures cover a direct `REGISTER.ID` expression plus a changed static
+module input, an input whose registration consumer falls beyond the report's
+bounded impact sample, and a dotted named wrapper whose private module literal
+can only be associated with the registration through the private fixed-point
+definition analysis. The redacted JSON, Markdown, SARIF, policy, portfolio, and
+composite-Action contracts retain `FF067` / `FFP067` and their exit behavior
+while omitting controlled module, procedure, type, input, and nested-name
+markers. The final source tree passed **665 tests in 95.22 seconds**
+(deterministic command-limited chunks), plus a clean Ruff check,
+`git diff --check`, and shell syntax check for the composite Action. The exact
+release wheel was installed in a fresh environment; its CLI reported
+`FormulaFence 0.103.0`, retained controlled registration/input markers in
+default JSON, removed them from redacted JSON/Markdown/SARIF/policy/portfolio
+output, and still returned `1` with `FF067` and `FFP067` for the redacted policy
+check. The wheel `formulafence-0.103.0-py3-none-any.whl` passed `twine check`
+with SHA-256 `8b45bf02dd631ca142a849d95ec624311b886af02d8848b53ae75a93df37c5f5`.
+The source distribution also passed `twine check`; its digest is intentionally
+omitted because this validation note is included in that archive.
+
 ## Shared unqualified runtime-function report redaction — 2026-07-26
 
 FormulaFence 0.102.0 adds the separate, opt-in

@@ -36,6 +36,7 @@ def _run_action_script(
     redact_python_in_excel: str = "false",
     redact_office_custom_functions: str = "false",
     redact_unqualified_runtime_functions: str = "false",
+    redact_worksheet_code_resource_registrations: str = "false",
     max_workbooks: str = "512",
     max_link_impact: str = "100000",
     upload_artifact: str = "true",
@@ -67,6 +68,9 @@ def _run_action_script(
             "INPUT_REDACT_OFFICE_CUSTOM_FUNCTIONS": redact_office_custom_functions,
             "INPUT_REDACT_UNQUALIFIED_RUNTIME_FUNCTIONS": (
                 redact_unqualified_runtime_functions
+            ),
+            "INPUT_REDACT_WORKSHEET_CODE_RESOURCE_REGISTRATIONS": (
+                redact_worksheet_code_resource_registrations
             ),
             "INPUT_FAIL_ON": "none",
             "INPUT_MAX_WORKBOOKS": max_workbooks,
@@ -103,6 +107,7 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
         "redact-python-in-excel",
         "redact-office-custom-functions",
         "redact-unqualified-runtime-functions",
+        "redact-worksheet-code-resource-registrations",
         "max-workbooks",
         "max-link-impact",
     } <= set(action["inputs"])
@@ -418,6 +423,62 @@ def test_action_rejects_an_invalid_unqualified_runtime_function_redaction_switch
 
     assert result.returncode == 2
     assert "Unsupported redact-unqualified-runtime-functions value" in result.stderr
+
+
+def test_action_can_redact_worksheet_code_resource_registration_material(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    baseline_marker = "PRIVATE-REGISTRATION-SOURCE-BASELINE"
+    candidate_marker = "PRIVATE-REGISTRATION-SOURCE-CANDIDATE"
+    procedure_marker = "PRIVATE-REGISTRATION-PROCEDURE"
+    _workbook(
+        baseline,
+        f'=REGISTER.ID("{baseline_marker}","{procedure_marker}","J!")',
+    )
+    _workbook(
+        candidate,
+        f'=REGISTER.ID("{candidate_marker}","{procedure_marker}","J!")',
+    )
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        report_format="json",
+        output="reports/formulafence.json",
+        redact_worksheet_code_resource_registrations="true",
+    )
+
+    assert result.returncode == 0
+    rendered = (tmp_path / "reports" / "formulafence.json").read_text(encoding="utf-8")
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+    assert procedure_marker not in rendered
+    assert "worksheet code-resource registration material redacted" in rendered
+
+
+def test_action_rejects_an_invalid_worksheet_code_resource_registration_switch(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    _workbook(baseline, "=1+1")
+    _workbook(candidate, "=1+1")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        redact_worksheet_code_resource_registrations="sometimes",
+    )
+
+    assert result.returncode == 2
+    assert (
+        "Unsupported redact-worksheet-code-resource-registrations value"
+        in result.stderr
+    )
 
 
 def test_action_runs_a_directory_portfolio_and_preserves_membership_evidence(

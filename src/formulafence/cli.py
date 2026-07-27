@@ -24,6 +24,8 @@ from formulafence.output import (
     redact_python_in_excel_report_payload,
     redact_unqualified_runtime_function_portfolio_payload,
     redact_unqualified_runtime_function_report_payload,
+    redact_worksheet_code_resource_registration_portfolio_payload,
+    redact_worksheet_code_resource_registration_report_payload,
     report_to_markdown,
     report_to_sarif,
 )
@@ -100,6 +102,20 @@ def _add_unqualified_runtime_function_redaction_argument(
     )
 
 
+def _add_worksheet_code_resource_registration_redaction_argument(
+    parser: argparse.ArgumentParser,
+) -> None:
+    parser.add_argument(
+        "--redact-worksheet-code-resource-registrations",
+        action="store_true",
+        help=(
+            "Replace visible worksheet code-resource registration material and known "
+            "static registration inputs in this shared report without changing comparison "
+            "or policy results"
+        ),
+    )
+
+
 def _positive_integer(value: str) -> int:
     try:
         parsed = int(value)
@@ -133,6 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_python_in_excel_redaction_argument(diff)
     _add_office_custom_function_redaction_argument(diff)
     _add_unqualified_runtime_function_redaction_argument(diff)
+    _add_worksheet_code_resource_registration_redaction_argument(diff)
     diff.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -150,6 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_python_in_excel_redaction_argument(check)
     _add_office_custom_function_redaction_argument(check)
     _add_unqualified_runtime_function_redaction_argument(check)
+    _add_worksheet_code_resource_registration_redaction_argument(check)
     check.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -188,6 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_python_in_excel_redaction_argument(portfolio)
     _add_office_custom_function_redaction_argument(portfolio)
     _add_unqualified_runtime_function_redaction_argument(portfolio)
+    _add_worksheet_code_resource_registration_redaction_argument(portfolio)
     portfolio.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
@@ -269,6 +288,10 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
             payload = redact_office_custom_function_report_payload(report, payload)
         if arguments.redact_unqualified_runtime_functions:
             payload = redact_unqualified_runtime_function_report_payload(report, payload)
+        if arguments.redact_worksheet_code_resource_registrations:
+            payload = redact_worksheet_code_resource_registration_report_payload(
+                report, payload
+            )
         content = as_json(payload)
     elif arguments.format == "sarif":
         content = as_json(
@@ -282,6 +305,9 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
                 redact_unqualified_runtime_functions=(
                     arguments.redact_unqualified_runtime_functions
                 ),
+                redact_worksheet_code_resource_registrations=(
+                    arguments.redact_worksheet_code_resource_registrations
+                ),
             )
         )
     else:
@@ -294,6 +320,9 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
             redact_office_custom_functions=arguments.redact_office_custom_functions,
             redact_unqualified_runtime_functions=(
                 arguments.redact_unqualified_runtime_functions
+            ),
+            redact_worksheet_code_resource_registrations=(
+                arguments.redact_worksheet_code_resource_registrations
             ),
         )
     _emit(content, arguments.output)
@@ -336,6 +365,10 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
             payload = redact_unqualified_runtime_function_portfolio_payload(
                 report, payload
             )
+        if arguments.redact_worksheet_code_resource_registrations:
+            payload = redact_worksheet_code_resource_registration_portfolio_payload(
+                report, payload
+            )
         content = as_json(payload)
     elif arguments.format == "sarif":
         content = as_json(
@@ -348,6 +381,9 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
                 redact_unqualified_runtime_functions=(
                     arguments.redact_unqualified_runtime_functions
                 ),
+                redact_worksheet_code_resource_registrations=(
+                    arguments.redact_worksheet_code_resource_registrations
+                ),
             )
         )
     else:
@@ -359,6 +395,9 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
             redact_office_custom_functions=arguments.redact_office_custom_functions,
             redact_unqualified_runtime_functions=(
                 arguments.redact_unqualified_runtime_functions
+            ),
+            redact_worksheet_code_resource_registrations=(
+                arguments.redact_worksheet_code_resource_registrations
             ),
         )
     _emit(content, arguments.output)

@@ -45,6 +45,16 @@ financial correctness or replace model review.
   bare-call material, exact changed static inputs, and changed private
   name-chain evidence when that artifact is shared. A candidate is not proof a
   VBA, COM/Automation, XLL, or other provider is installed, trusted, or runnable.
+- The dedicated worksheet code-resource registration ledger compares stored
+  `REGISTER.ID` formulas, module/procedure/type arguments, cells, and relevant
+  formula-defined-name chains through private signatures only. Its public
+  inventory retains aggregate formula-cell, call, and relevant-definition
+  counts. Generic semantic reports retain local reviewer evidence by default;
+  the separate `--redact-worksheet-code-resource-registrations` rendering
+  boundary covers direct registration material, exact changed static inputs,
+  and changed private name-chain evidence when that artifact is shared. A
+  stored formula is not proof a DLL/code resource is available, trusted, or can
+  be registered.
 - What-If Data Table output ranges, input-cell references, and raw formula
   metadata are compared through a private signature only. Cached scenario-output
   cells remain under the normal cell-diff boundary.
@@ -768,8 +778,12 @@ formula will produce.
   formulas, arguments, cells, and name identities stay private. FormulaFence
   does not evaluate a formula, resolve a path, load a DLL/XLL, inspect trust
   settings, or determine whether registration succeeds. Dynamic or unresolved
-  inputs remain static-coverage limits. This is separate from raw XLM macro
-  sheet program scanning: Microsoft's [`CALL` reference](https://support.microsoft.com/en-us/office/call-function-32d58445-e646-4ffd-8d5e-b45077a5e995)
+  inputs remain static-coverage limits. The separate
+  `--redact-worksheet-code-resource-registrations` shared-artifact mode hides
+  direct `REGISTER.ID` material, exact changed static inputs, and changed
+  private name-chain evidence after comparison and policy evaluation without
+  resolving a module/provider or changing any comparison fact. This is separate
+  from raw XLM macro-sheet program scanning: Microsoft's [`CALL` reference](https://support.microsoft.com/en-us/office/call-function-32d58445-e646-4ffd-8d5e-b45077a5e995)
   states that `CALL` is macro-sheet only. The worksheet boundary follows
   Microsoft's [`REGISTER.ID` reference](https://support.microsoft.com/en-us/office/register-id-function-f8f0af0f-fd66-4704-a0f2-87b27b175b50).
 - Legacy XLM `REGISTER` can be stored in a formula-defined name or named
@@ -1244,6 +1258,19 @@ formula will produce.
   mutate a snapshot/policy fact/exit status, or claim to redact arbitrary
   workbook material. It does not replace the external-link, formula-action,
   Python, or Office custom-function sharing boundaries.
+- The separate `--redact-worksheet-code-resource-registrations` rendering mode
+  is for direct stored `FF067` `REGISTER.ID` material, exact changed static
+  cells recorded by the private dependency graph as reaching an inventoried
+  registration, and changed formula-defined-name evidence when the private
+  resolved registration chain changed. It runs after comparison and policy
+  evaluation, replaces whole direct formula strings and before/after evidence
+  for those changed cells or names, and never exposes the private cell/name set
+  used for that decision. It does not evaluate a formula, resolve a module path,
+  load a DLL/XLL, inspect host trust settings, execute code, contact a provider,
+  reconstruct an argument, mutate a snapshot/policy fact/exit status, or claim
+  to redact arbitrary workbook material. It does not replace the external-link,
+  formula-action, Python, Office custom-function, or unqualified runtime-
+  function sharing boundaries.
 - Every canonical root or part-level OPC relationship part is also inspected
   independently for `TargetMode="External"`, including opaque relationships
   no feature-specific scanner can reach. FormulaFence retains source, type,

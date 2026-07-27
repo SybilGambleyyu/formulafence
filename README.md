@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.102.0/formulafence-0.102.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.103.0/formulafence-0.103.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.102.0
+  uses: SybilGambleyyu/formulafence@v0.103.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -255,6 +255,47 @@ the same boundary through `redact-unqualified-runtime-functions: 'true'`. The
 scope follows Microsoft's [installed UDF guidance](https://support.microsoft.com/en-us/excel/user-defined-functions-that-are-installed-with-add-ins-reference),
 [VBA custom-function guidance](https://support.microsoft.com/en-us/excel/create-custom-functions-in-excel),
 and [XLL registration/call guidance](https://learn.microsoft.com/en-us/office/client-developer/excel/accessing-xll-code-in-excel).
+
+### Sharing reports with worksheet code-resource registrations
+
+`REGISTER.ID(module_text, procedure, [type_text])` can register a DLL or code
+resource from a worksheet, so its stored module, procedure, type string, or an
+ordinary static input can appear in a generic report. For an artifact that
+crosses the local review boundary, add
+`--redact-worksheet-code-resource-registrations` to `diff`, `check`, or
+`portfolio`:
+
+```bash
+formulafence check baseline.xlsx candidate.xlsx \
+  --policy formulafence.yml \
+  --format json \
+  --redact-worksheet-code-resource-registrations \
+  --output shared-report.json
+```
+
+This output-only mode covers direct stored `REGISTER.ID` material FormulaFence
+inventories under `FF067`. It replaces a whole serialized value with
+`[worksheet code-resource registration material redacted]`, hides before/after
+evidence for a changed registration formula or exact changed static input that
+the private dependency analysis recorded as reaching one, and conservatively
+hides changed formula-defined-name before/after values when a private resolved
+registration chain changed. That last rule protects an ordinary-looking dotted
+wrapper whose private argument eventually reaches `REGISTER.ID`. Because a
+shared renderer does not retain workbook-local name bindings, it may
+conservatively replace a standalone `REGISTER.ID`-shaped string too; default
+local-review output is unchanged.
+
+The switch does not mutate snapshots, findings, policy evaluation, or an exit
+status; it does not calculate formulas, resolve a module path, load a DLL/XLL,
+inspect host trust settings, execute code, contact a provider, or reconstruct a
+dynamically assembled argument. It is not a general secret scrubber and does
+not replace the external-workbook-link, formula-action, Python-in-Excel, Office
+custom-function, or unqualified-runtime-function sharing boundaries. Use the
+relevant switches together when a report contains multiple sensitive surfaces.
+The GitHub Action exposes the same boundary through
+`redact-worksheet-code-resource-registrations: 'true'`. The scope follows
+Microsoft's [`REGISTER.ID` reference](https://support.microsoft.com/en-us/office/register-id-function-f8f0af0f-fd66-4704-a0f2-87b27b175b50),
+which documents the worksheet-capable DLL/code-resource registration function.
 
 ### Portfolio gates
 

@@ -20,6 +20,7 @@ from formulafence.output import (
     OFFICE_CUSTOM_FUNCTION_REDACTION,
     PYTHON_IN_EXCEL_REDACTION,
     UNQUALIFIED_RUNTIME_FUNCTION_REDACTION,
+    WORKSHEET_CODE_RESOURCE_REGISTRATION_REDACTION,
     profile_to_markdown,
     redact_external_workbook_link_material,
     redact_formula_external_action_material,
@@ -30,6 +31,8 @@ from formulafence.output import (
     redact_python_in_excel_report_payload,
     redact_unqualified_runtime_function_material,
     redact_unqualified_runtime_function_report_payload,
+    redact_worksheet_code_resource_registration_material,
+    redact_worksheet_code_resource_registration_report_payload,
     report_to_markdown,
     report_to_sarif,
 )
@@ -106,6 +109,7 @@ from .helpers import (
     change_in_content_office_web_addin_preview_payload,
     change_indirect_named_office_custom_function_definition,
     change_indirect_named_unqualified_runtime_function_definition,
+    change_indirect_named_worksheet_code_resource_registration_definition,
     change_inline_rich_text_run_color,
     change_legacy_comment_text,
     change_legacy_note_visibility,
@@ -299,6 +303,7 @@ from .helpers import (
     make_in_content_office_web_addin_model,
     make_indirect_named_office_custom_function_model,
     make_indirect_named_unqualified_runtime_function_model,
+    make_indirect_named_worksheet_code_resource_registration_model,
     make_legacy_array_model,
     make_legacy_comment_model,
     make_legacy_threaded_placeholder_model,
@@ -4185,6 +4190,183 @@ def test_worksheet_code_resource_registration_static_inputs_are_guarded(tmp_path
         not in registration_change.details
     )
     assert "FF067" in {finding.rule_id for finding in report.findings}
+    assert report.worksheet_code_resource_registration_static_input_cells == (
+        frozenset({("Inputs", "A9")})
+    )
+
+
+def test_worksheet_code_resource_registration_report_redaction_hides_calls_and_inputs(
+    tmp_path,
+) -> None:
+    baseline = make_worksheet_code_resource_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_worksheet_code_resource_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_worksheet_code_resource_registration_input(candidate)
+    change_worksheet_code_resource_registration_call(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    sensitive_values = (
+        "PRIVATE-REGISTRATION-MODULE-BASELINE",
+        "PRIVATE-REGISTRATION-MODULE-CANDIDATE",
+        "PRIVATE-REGISTRATION-MODULE-LITERAL-BASELINE",
+        "PRIVATE-REGISTRATION-PROCEDURE-LITERAL-BASELINE",
+        "PRIVATE-REGISTRATION-MODULE-LITERAL-CANDIDATE",
+        "PRIVATE-REGISTRATION-PROCEDURE-LITERAL-CANDIDATE",
+    )
+    raw_rendered = json.dumps(raw_payload)
+    assert all(value in raw_rendered for value in sensitive_values)
+
+    redacted_payload = redact_worksheet_code_resource_registration_report_payload(
+        report, raw_payload
+    )
+    redacted_rendered = json.dumps(redacted_payload)
+    assert all(value not in redacted_rendered for value in sensitive_values)
+    assert WORKSHEET_CODE_RESOURCE_REGISTRATION_REDACTION in redacted_rendered
+    assert redacted_payload["summary"] == raw_payload["summary"]
+
+    redacted_markdown = report_to_markdown(
+        report, redact_worksheet_code_resource_registrations=True
+    )
+    redacted_sarif = report_to_sarif(
+        report, redact_worksheet_code_resource_registrations=True
+    )
+    assert (
+        "Worksheet code-resource registration material:** redacted for sharing"
+        in redacted_markdown
+    )
+    assert "FF067" in json.dumps(redacted_sarif)
+    for artifact in (redacted_markdown, json.dumps(redacted_sarif)):
+        assert all(value not in artifact for value in sensitive_values)
+
+    native_formula = "=SUM(A1:A2)"
+    assert (
+        redact_worksheet_code_resource_registration_material(native_formula)
+        == native_formula
+    )
+
+
+def test_worksheet_code_resource_registration_report_redaction_hides_unsampled_inputs(
+    tmp_path,
+) -> None:
+    """Registration input redaction must use full private impact evidence."""
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    baseline_marker = "PRIVATE-UNSAMPLED-REGISTRATION-BASELINE"
+    candidate_marker = "PRIVATE-UNSAMPLED-REGISTRATION-CANDIDATE"
+
+    def add_registration_fanout(workbook, marker: str) -> None:
+        inputs = workbook["Inputs"]
+        inputs["A9"] = marker
+        # Z1 is a registration consumer after the report's B1:U1 sample.
+        for column in range(2, 22):
+            inputs.cell(row=1, column=column).value = "=A9"
+        inputs["Z1"] = '=REGISTER.ID(A9,"PRIVATE-UNSAMPLED-PROCEDURE","J!")'
+
+    rewrite(
+        baseline,
+        lambda workbook: add_registration_fanout(workbook, baseline_marker),
+    )
+    rewrite(
+        candidate,
+        lambda workbook: add_registration_fanout(workbook, candidate_marker),
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    raw_payload = report.to_dict()
+    input_change = next(
+        change for change in raw_payload["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert "Inputs!Z1" not in input_change["impacted_cells"]
+    assert report.worksheet_code_resource_registration_static_input_cells == (
+        frozenset({("Inputs", "A9")})
+    )
+
+    redacted = redact_worksheet_code_resource_registration_report_payload(
+        report, raw_payload
+    )
+    redacted_change = next(
+        change for change in redacted["changes"] if change["location"] == "Inputs!A9"
+    )
+    assert (
+        redacted_change["before"]["value"]
+        == WORKSHEET_CODE_RESOURCE_REGISTRATION_REDACTION
+    )
+    assert (
+        redacted_change["after"]["value"]
+        == WORKSHEET_CODE_RESOURCE_REGISTRATION_REDACTION
+    )
+    rendered = json.dumps(redacted)
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+
+
+def test_worksheet_code_resource_registration_report_redaction_hides_indirect_names(
+    tmp_path,
+) -> None:
+    baseline = make_indirect_named_worksheet_code_resource_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_indirect_named_worksheet_code_resource_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_indirect_named_worksheet_code_resource_registration_definition(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    registration_change = next(
+        change
+        for change in report.changes
+        if change.kind == "worksheet_code_resource_registrations_changed"
+    )
+    assert (
+        registration_change.details[
+            "worksheet_code_resource_registration_definition_material_changed"
+        ]
+        is True
+    )
+    assert (
+        "worksheet_code_resource_registration_formula_material_changed"
+        not in registration_change.details
+    )
+
+    baseline_marker = "PRIVATE-INDIRECT-NAMED-REGISTRATION-MODULE-BASELINE"
+    candidate_marker = "PRIVATE-INDIRECT-NAMED-REGISTRATION-MODULE-CANDIDATE"
+    ordinary_looking_definition = (
+        f'=LAMBDA(module,FENCE.REGISTRATIONWRAPPER("{baseline_marker}"))'
+    )
+    # Without private name-chain resolution this text does not itself call
+    # REGISTER.ID, even though its dotted wrapper eventually does.
+    assert (
+        redact_worksheet_code_resource_registration_material(
+            ordinary_looking_definition
+        )
+        == ordinary_looking_definition
+    )
+
+    raw_payload = report.to_dict()
+    raw_rendered = json.dumps(raw_payload)
+    assert baseline_marker in raw_rendered
+    assert candidate_marker in raw_rendered
+
+    redacted_payload = redact_worksheet_code_resource_registration_report_payload(
+        report, raw_payload
+    )
+    redacted_rendered = json.dumps(redacted_payload)
+    assert baseline_marker not in redacted_rendered
+    assert candidate_marker not in redacted_rendered
+    assert WORKSHEET_CODE_RESOURCE_REGISTRATION_REDACTION in redacted_rendered
+
+    redacted_sarif = report_to_sarif(
+        report, redact_worksheet_code_resource_registrations=True
+    )
+    redacted_sarif_rendered = json.dumps(redacted_sarif)
+    assert baseline_marker not in redacted_sarif_rendered
+    assert candidate_marker not in redacted_sarif_rendered
+    assert "FF008" in redacted_sarif_rendered
+    assert "FF067" in redacted_sarif_rendered
 
 
 def test_uninvoked_formula_defined_code_resource_registration_is_profiled(tmp_path) -> None:

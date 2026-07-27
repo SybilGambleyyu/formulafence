@@ -551,7 +551,11 @@ signatures; a normal cell edit that statically reaches a registration emits
 FormulaFence does not evaluate a formula, resolve a module path, load a DLL or
 XLL, inspect host security settings, or determine whether a registration
 succeeds. The ordinary semantic diff still retains changed formulas and defined
-names for general review, so it is not a redacted registration ledger. XLM
+names for general review, so it is not a redacted registration ledger. For a
+shared artifact, the separate output-only
+`--redact-worksheet-code-resource-registrations` mode hides direct
+`REGISTER.ID` material, exact changed static inputs, and changed resolved
+name-chain evidence without changing comparison, policy, or exit status. XLM
 macro-sheet `CALL`/`REGISTER` program material remains within the separate raw
 XLM boundary; Microsoft's [`CALL` reference](https://support.microsoft.com/en-us/office/call-function-32d58445-e646-4ffd-8d5e-b45077a5e995)
 states that `CALL` is available only from an Excel macro sheet.

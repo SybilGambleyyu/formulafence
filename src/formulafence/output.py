@@ -19,6 +19,9 @@ OFFICE_CUSTOM_FUNCTION_REDACTION = "[Office custom-function material redacted]"
 UNQUALIFIED_RUNTIME_FUNCTION_REDACTION = (
     "[unqualified runtime-function material redacted]"
 )
+WORKSHEET_CODE_RESOURCE_REGISTRATION_REDACTION = (
+    "[worksheet code-resource registration material redacted]"
+)
 
 # This fallback deliberately supplements, rather than replaces, FormulaFence's
 # static formula inspection below.  A visible `INDIRECT("'[Book]Sheet'!A1")`
@@ -243,6 +246,7 @@ def _safe_finding_details(
     redact_formula_external_actions: bool = False,
     redact_office_custom_functions: bool = False,
     redact_unqualified_runtime_functions: bool = False,
+    redact_worksheet_code_resource_registrations: bool = False,
 ) -> dict[str, Any]:
     """Copy one SARIF finding's properties through active name-chain bounds."""
     details = dict(finding.details)
@@ -264,6 +268,14 @@ def _safe_finding_details(
         and finding.rule_id == "FF008"
     ):
         _redact_unqualified_runtime_function_defined_name_details(details, report)
+    if (
+        redact_worksheet_code_resource_registrations
+        and report is not None
+        and finding.rule_id == "FF008"
+    ):
+        _redact_worksheet_code_resource_registration_defined_name_details(
+            details, report
+        )
     return details
 
 
@@ -595,6 +607,176 @@ def redact_unqualified_runtime_function_portfolio_payload(
         if workbook.report is not None and isinstance(entry, dict):
             _redact_unqualified_runtime_function_change_cells(entry, workbook.report)
             _redact_unqualified_runtime_function_defined_name_evidence(
+                entry, workbook.report
+            )
+    return redacted
+
+
+def _contains_worksheet_code_resource_registration_material(value: str) -> bool:
+    """Return whether one rendered string exposes a ``REGISTER.ID`` call.
+
+    ``REGISTER.ID`` can register a DLL or code resource from a worksheet. Its
+    stored module, procedure, type string, and arguments can be sensitive even
+    though FormulaFence's FF067 ledger publishes only aggregate counts. A
+    renderer has no workbook-local name context, so this generic scan safely
+    hides any standalone formula shaped like the documented registration call.
+    """
+    if "register.id" not in value.casefold() or "(" not in value:
+        return False
+    formula = value if value.lstrip().startswith("=") else f"={value}"
+    return bool(inspect_formula(formula).worksheet_code_resource_registration_functions)
+
+
+def redact_worksheet_code_resource_registration_material(payload: Any) -> Any:
+    """Return an output-only copy with direct ``REGISTER.ID`` text hidden.
+
+    This handles direct stored formula material. The report-level helpers below
+    also hide exact changed static inputs and changed formula-defined-name
+    bodies that the private FF067 comparison identifies as registration
+    relevant.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: redact_worksheet_code_resource_registration_material(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [
+            redact_worksheet_code_resource_registration_material(value)
+            for value in payload
+        ]
+    if isinstance(payload, tuple):
+        return tuple(
+            redact_worksheet_code_resource_registration_material(value)
+            for value in payload
+        )
+    if isinstance(payload, str) and _contains_worksheet_code_resource_registration_material(
+        payload
+    ):
+        return WORKSHEET_CODE_RESOURCE_REGISTRATION_REDACTION
+    return payload
+
+
+def _worksheet_code_resource_registration_sensitive_change_locations(
+    report: DiffReport,
+) -> set[str]:
+    """Return changed cells whose evidence can carry a registration input."""
+    sensitive_cells = (
+        report.before.worksheet_code_resource_registrations.registration_cells
+        | report.after.worksheet_code_resource_registrations.registration_cells
+        | report.worksheet_code_resource_registration_static_input_cells
+    )
+    if not sensitive_cells:
+        return set()
+
+    locations: set[str] = set()
+    for change in report.changes:
+        if change.location is None or change.location not in sensitive_cells:
+            continue
+        location = display_location(change.location)
+        if location is not None:
+            locations.add(location)
+    return locations
+
+
+def _redact_worksheet_code_resource_registration_change_cells(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide before/after cells that register code or are exact static inputs."""
+    sensitive_locations = _worksheet_code_resource_registration_sensitive_change_locations(
+        report
+    )
+    if not sensitive_locations:
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("location") not in sensitive_locations:
+            continue
+        for side in ("before", "after"):
+            snapshot = change.get(side)
+            if not isinstance(snapshot, dict):
+                continue
+            for field in ("value", "formula", "formula_fingerprint"):
+                if snapshot.get(field) is not None:
+                    snapshot[field] = WORKSHEET_CODE_RESOURCE_REGISTRATION_REDACTION
+    return payload
+
+
+def _worksheet_code_resource_registration_definition_material_changed(
+    report: DiffReport,
+) -> bool:
+    """Return whether a registration-relevant defined-name body changed."""
+    return (
+        report.before.worksheet_code_resource_registrations.definition_signature
+        != report.after.worksheet_code_resource_registrations.definition_signature
+    )
+
+
+def _redact_worksheet_code_resource_registration_defined_name_details(
+    details: dict[str, Any], report: DiffReport
+) -> None:
+    """Hide FF008 evidence when a resolved registration chain changed.
+
+    A named LAMBDA can pass a private module or procedure through an
+    ordinary-looking dotted workbook-defined wrapper whose eventual body calls
+    ``REGISTER.ID``. Its own text cannot be classified without the private
+    fixed-point resolution. When that private definition signature changes,
+    hiding every changed defined-name body is the safe sharing boundary.
+    """
+    if not _worksheet_code_resource_registration_definition_material_changed(report):
+        return
+    for field in ("before", "after"):
+        if isinstance(details.get(field), str):
+            details[field] = WORKSHEET_CODE_RESOURCE_REGISTRATION_REDACTION
+
+
+def _redact_worksheet_code_resource_registration_defined_name_evidence(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide registration-resolved name-chain text in report evidence."""
+    if not _worksheet_code_resource_registration_definition_material_changed(report):
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("kind") == "defined_name_changed":
+            details = change.get("details")
+            if isinstance(details, dict):
+                _redact_worksheet_code_resource_registration_defined_name_details(
+                    details, report
+                )
+    for finding in payload.get("findings", []):
+        if finding.get("rule_id") != "FF008":
+            continue
+        details = finding.get("details")
+        if isinstance(details, dict):
+            _redact_worksheet_code_resource_registration_defined_name_details(
+                details, report
+            )
+    return payload
+
+
+def redact_worksheet_code_resource_registration_report_payload(
+    report: DiffReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Redact direct registrations and private static/name-chain evidence."""
+    redacted = redact_worksheet_code_resource_registration_material(payload)
+    _redact_worksheet_code_resource_registration_change_cells(redacted, report)
+    return _redact_worksheet_code_resource_registration_defined_name_evidence(
+        redacted, report
+    )
+
+
+def redact_worksheet_code_resource_registration_portfolio_payload(
+    report: PortfolioReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply the registration sharing boundary to nested reports."""
+    redacted = redact_worksheet_code_resource_registration_material(payload)
+    for workbook, entry in zip(
+        report.workbooks, redacted.get("workbooks", []), strict=False
+    ):
+        if workbook.report is not None and isinstance(entry, dict):
+            _redact_worksheet_code_resource_registration_change_cells(
+                entry, workbook.report
+            )
+            _redact_worksheet_code_resource_registration_defined_name_evidence(
                 entry, workbook.report
             )
     return redacted
@@ -3998,6 +4180,7 @@ def report_to_markdown(
     redact_python_in_excel: bool = False,
     redact_office_custom_functions: bool = False,
     redact_unqualified_runtime_functions: bool = False,
+    redact_worksheet_code_resource_registrations: bool = False,
 ) -> str:
     policy_findings = list(extra_findings)
     payload = report.to_dict(policy_findings)
@@ -4011,6 +4194,10 @@ def report_to_markdown(
         payload = redact_office_custom_function_report_payload(report, payload)
     if redact_unqualified_runtime_functions:
         payload = redact_unqualified_runtime_function_report_payload(report, payload)
+    if redact_worksheet_code_resource_registrations:
+        payload = redact_worksheet_code_resource_registration_report_payload(
+            report, payload
+        )
     summary = payload["summary"]
     lines = [
         "# FormulaFence change report",
@@ -4042,6 +4229,14 @@ def report_to_markdown(
             if redact_unqualified_runtime_functions
             else []
         ),
+        *(
+            [
+                "- **Worksheet code-resource registration material:** redacted for "
+                "sharing"
+            ]
+            if redact_worksheet_code_resource_registrations
+            else []
+        ),
         f"- **Changes:** {summary['change_count']}",
         f"- **Findings:** {summary['finding_count']}",
         f"- **Highest severity:** `{summary['highest_severity']}`",
@@ -4069,6 +4264,7 @@ def report_to_sarif(
     redact_python_in_excel: bool = False,
     redact_office_custom_functions: bool = False,
     redact_unqualified_runtime_functions: bool = False,
+    redact_worksheet_code_resource_registrations: bool = False,
 ) -> dict[str, Any]:
     findings = [*report.findings, *extra_findings]
     rule_ids = sorted({finding.rule_id for finding in findings})
@@ -4088,6 +4284,9 @@ def report_to_sarif(
             redact_formula_external_actions=redact_formula_external_actions,
             redact_office_custom_functions=redact_office_custom_functions,
             redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
+            redact_worksheet_code_resource_registrations=(
+                redact_worksheet_code_resource_registrations
+            ),
         )
         result: dict[str, Any] = {
             "ruleId": finding.rule_id,
@@ -4137,6 +4336,8 @@ def report_to_sarif(
         payload = redact_office_custom_function_material(payload)
     if redact_unqualified_runtime_functions:
         payload = redact_unqualified_runtime_function_material(payload)
+    if redact_worksheet_code_resource_registrations:
+        payload = redact_worksheet_code_resource_registration_material(payload)
     return payload
 
 
@@ -4186,6 +4387,7 @@ def portfolio_to_markdown(
     redact_python_in_excel: bool = False,
     redact_office_custom_functions: bool = False,
     redact_unqualified_runtime_functions: bool = False,
+    redact_worksheet_code_resource_registrations: bool = False,
 ) -> str:
     """Render a complete multi-workbook review without absolute filesystem paths."""
     payload = report.to_dict()
@@ -4199,6 +4401,10 @@ def portfolio_to_markdown(
         payload = redact_office_custom_function_portfolio_payload(report, payload)
     if redact_unqualified_runtime_functions:
         payload = redact_unqualified_runtime_function_portfolio_payload(report, payload)
+    if redact_worksheet_code_resource_registrations:
+        payload = redact_worksheet_code_resource_registration_portfolio_payload(
+            report, payload
+        )
     summary = payload["summary"]
     lines = [
         "# FormulaFence portfolio report",
@@ -4248,6 +4454,14 @@ def portfolio_to_markdown(
         *(
             ["- **Unqualified runtime-function material:** redacted for sharing"]
             if redact_unqualified_runtime_functions
+            else []
+        ),
+        *(
+            [
+                "- **Worksheet code-resource registration material:** redacted for "
+                "sharing"
+            ]
+            if redact_worksheet_code_resource_registrations
             else []
         ),
         "",
@@ -4305,6 +4519,7 @@ def portfolio_to_sarif(
     redact_python_in_excel: bool = False,
     redact_office_custom_functions: bool = False,
     redact_unqualified_runtime_functions: bool = False,
+    redact_worksheet_code_resource_registrations: bool = False,
 ) -> dict[str, Any]:
     """Render every portfolio finding in one SARIF run with relative artifacts."""
     rule_ids = sorted(
@@ -4331,6 +4546,9 @@ def portfolio_to_sarif(
                 redact_formula_external_actions=redact_formula_external_actions,
                 redact_office_custom_functions=redact_office_custom_functions,
                 redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
+                redact_worksheet_code_resource_registrations=(
+                    redact_worksheet_code_resource_registrations
+                ),
             )
             location: dict[str, Any] = {
                 "physicalLocation": {"artifactLocation": {"uri": workbook.path}},
@@ -4382,4 +4600,6 @@ def portfolio_to_sarif(
         payload = redact_office_custom_function_material(payload)
     if redact_unqualified_runtime_functions:
         payload = redact_unqualified_runtime_function_material(payload)
+    if redact_worksheet_code_resource_registrations:
+        payload = redact_worksheet_code_resource_registration_material(payload)
     return payload

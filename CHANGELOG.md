@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.103.0 — 2026-07-26
+
+- Add opt-in `--redact-worksheet-code-resource-registrations` rendering for
+  `diff`, `check`, and `portfolio` JSON, Markdown, and SARIF artifacts. Default
+  local-review output remains unchanged; the output-only boundary replaces
+  direct stored `FF067` `REGISTER.ID` material with `[worksheet code-resource
+  registration material redacted]`.
+- Extend the boundary to before/after evidence for changed `REGISTER.ID`
+  formulas and exact changed static input cells recorded by the private full
+  dependency impact set, rather than the bounded impact sample shown in reports.
+- Retain the private formula-defined-name chain signature for FF067 and, when
+  it changes, conservatively redact changed defined-name before/after evidence
+  so a dotted workbook-defined wrapper cannot disclose a module, procedure, or
+  other registration argument that reaches `REGISTER.ID` deeper in the chain.
+- Keep comparison facts, findings, policy evaluation, and exit status unchanged.
+  The composite GitHub Action exposes the switch as
+  `redact-worksheet-code-resource-registrations: 'true'`; the mode does not
+  calculate a formula, resolve a module path, load a DLL/XLL, inspect host
+  trust settings, execute code, contact a provider, or reconstruct a dynamic
+  argument, and it is not a general secret scrubber.
+- Add direct-call, exact unsampled-static-input, resolved named-chain,
+  default-evidence, policy, portfolio, JSON/Markdown/SARIF, and composite-Action
+  regression coverage.
+
 ## 0.102.0 — 2026-07-26
 
 - Add opt-in `--redact-unqualified-runtime-functions` rendering for `diff`,

@@ -1655,7 +1655,12 @@ formula will produce.
   telemetry and result-only refresh metadata are intentionally ignored. A
   material change emits `FF024` and can be blocked with
   `no_power_query_changes`. FormulaFence does **not** execute M, refresh a
-  query, establish source trust, or infer returned values.
+  query, establish source trust, or infer returned values. The outer Custom XML
+  boundary does not limit decoded Data Mashup metadata or permission XML, so
+  FormulaFence streams each document before private parsing: 32,768 elements
+  per document and 65,536 across the Power Query scan. A successfully parsed
+  overage is visible `FF010`/`FF024` coverage evidence; malformed input retains
+  its established diagnostic.
 - Explicit implicit intersection is inventoried for literal `@` display syntax,
   `@` applied to a function, and persisted `SINGLE()` OOXML. When `SINGLE()`
   has one direct static A1 cell or range argument with an unambiguous

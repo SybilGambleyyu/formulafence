@@ -1790,6 +1790,14 @@ change emits `FF024`; enable `no_power_query_changes` to make it `FFP024` in CI.
 FormulaFence does not execute M, refresh a connection, assess a source, or infer
 the data a query would return.
 
+The outer Custom XML scan does not define the decoded Data Mashup stream's XML
+shape. FormulaFence separately streams each metadata and formula-firewall
+permission document before private parsing: 32,768 elements per document and
+65,536 across the Power Query scan. These are FormulaFence CI allocation and
+coverage limits, not a Power Query file-validity rule. A successfully parsed
+overage becomes visible `FF010`/`FF024` coverage evidence; malformed input
+retains its established parser diagnostic.
+
 ## Portfolio policies
 
 `formulafence portfolio BASELINE_DIRECTORY CANDIDATE_DIRECTORY --policy

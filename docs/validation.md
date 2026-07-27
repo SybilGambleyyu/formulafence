@@ -5,6 +5,40 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Power Query nested XML structural bounds — 2026-07-26
+
+Version 0.138.0 closes an allocation path inside Power Query `DataMashup`
+Custom XML. FormulaFence already bounds the outer Custom XML item, but the
+documented length-prefixed stream can carry independent metadata and
+formula-firewall permission XML after Base64 decoding. Those payloads were
+previously tree parsed privately without an element ceiling.
+
+FormulaFence now streams each decoded metadata or permission document before
+private parsing, with a 32,768-element per-document limit and a 65,536-element
+aggregate across the Power Query scan. A successfully parsed overage becomes
+visible `FF010` plus `FF024` coverage evidence; malformed input keeps its
+existing parser diagnostic. The limits are CI allocation boundaries, not Power
+Query validity rules.
+
+Two controlled fixtures inserted 1,000,000 opaque direct children in the
+decoded `LocalPackageMetadataFile` and `PermissionList` documents. The nested
+XML payloads expanded to 5,000,641 and 5,000,272 bytes; each resulting
+`customXml/item1.xml` member was 6,669,121 bytes, compressed to 17,795 and
+17,852 bytes. In the same source environment, the unguarded 0.137.0 reader
+completed them in 13.966945 seconds / 415,808 KiB and 11.693012 seconds /
+402,960 KiB. The 0.138 source completed them in 0.260228 seconds / 63,524 KiB
+and 0.258095 seconds / 58,508 KiB without materializing the hostile tree.
+Normal baseline-to-baseline diffs had no findings or changes; each hostile
+report contained `FF010` and `FF024`. The source suite passed 995 tests in
+142.23 seconds with Ruff, bytecode compilation, and diff whitespace checks
+clean. The exact final wheel completed the metadata and permission cases in
+0.314384 seconds / 62,312 KiB and 0.310034 seconds / 57,084 KiB; its SHA-256
+is `2ecbaa81180dfb388f3268eef5c32375f1b95c13bf32d42362b37ce82015b036`.
+A fresh Python 3.12 environment installed that wheel, passed `pip check`,
+imported FormulaFence 0.138.0 from `site-packages`, confirmed
+`openpyxl.DEFUSEDXML`, and produced no normal findings plus `FF010`/`FF024`
+for each hostile fixture.
+
 ## XML Maps, signatures, Python, and Rich Data structural bounds — 2026-07-26
 
 Version 0.137.0 closes four compact-allocation paths in raw OOXML inventories:

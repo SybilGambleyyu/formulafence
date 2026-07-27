@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.138.0 — 2026-07-26
+
+- Bound the decoded metadata and formula-firewall permission XML embedded in
+  Power Query `DataMashup` custom XML. Each inner document allows 32,768 XML
+  elements and the complete Power Query scan allows 65,536 before FormulaFence
+  can materialize a private tree.
+- Convert a successfully parsed inner-XML structural overage into explicit
+  `FF010` plus `FF024` Power Query coverage evidence without exposing query
+  material. Malformed input retains its established parser diagnostic.
+- Add decoded metadata/permission fail-before-materialization, nested opaque,
+  configured/default/exact capacity, aggregate, and report-visibility
+  regressions.
+
 ## 0.137.0 — 2026-07-26
 
 - Bound raw SpreadsheetML XML Maps, OPC package-signature XML, Python-in-Excel,

@@ -820,6 +820,12 @@ _EXTERNAL_RELATIONSHIP_TOTAL_XML_MAX_COUNT = 512
 _EXTERNAL_RELATIONSHIP_KNOWN_ATTRIBUTES = frozenset(
     {"Id", "Type", "Target", "TargetMode"}
 )
+# A Data Mashup custom XML part can carry independent metadata and permissions
+# XML inside its base64 binary stream. The outer custom XML boundary cannot
+# limit those decoded trees, so stream both documents before their private
+# parsers materialize them.
+_POWER_QUERY_MAX_XML_ELEMENT_COUNT = 32_768
+_POWER_QUERY_TOTAL_XML_MAX_ELEMENT_COUNT = 2 * _POWER_QUERY_MAX_XML_ELEMENT_COUNT
 _WORKSHEET_SPARKLINE_MAX_WORKSHEET_XML_BYTES = 16 * 1024 * 1024
 _WORKSHEET_SPARKLINE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _WORKSHEET_SPARKLINE_TOTAL_XML_MAX_COUNT = 512
@@ -1908,6 +1914,13 @@ class _ExternalRelationshipBudget:
 
     remaining_bytes: int = _EXTERNAL_RELATIONSHIP_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _EXTERNAL_RELATIONSHIP_TOTAL_XML_MAX_COUNT
+
+
+@dataclass
+class _PowerQueryXmlBudget:
+    """Bound decoded Power Query metadata and permission XML per scan."""
+
+    remaining_xml_elements: int = _POWER_QUERY_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 @dataclass
@@ -3420,6 +3433,34 @@ def _ooxml_xml_structure_element_count_within_budget(
     depth = 0
     element_count = 0
     with archive.open(member) as xml_stream:
+        for event, element in ElementTree.iterparse(
+            xml_stream,
+            events=("start", "end"),
+        ):
+            if event == "start":
+                depth += 1
+                element_count += 1
+                if (
+                    depth > maximum_nesting_depth
+                    or element_count > maximum_element_count
+                ):
+                    return None
+                continue
+            element.clear()
+            depth -= 1
+    return element_count
+
+
+def _xml_payload_structure_element_count_within_budget(
+    payload: bytes,
+    *,
+    maximum_element_count: int,
+    maximum_nesting_depth: int = _OOXML_READER_MAX_XML_NESTING_DEPTH,
+) -> int | None:
+    """Return a bounded count for an in-memory XML payload without a full tree."""
+    depth = 0
+    element_count = 0
+    with io.BytesIO(payload) as xml_stream:
         for event, element in ElementTree.iterparse(
             xml_stream,
             events=("start", "end"),
@@ -6661,6 +6702,45 @@ def _power_query_opaque_metadata(
     )
 
 
+def _power_query_xml_structure_budget_fallback_signature(
+    payload: bytes,
+    member: str,
+    warnings: set[str],
+    budget: _PowerQueryXmlBudget,
+    *,
+    kind: str,
+) -> str | None:
+    """Stream decoded Power Query XML before private tree parsing."""
+    try:
+        element_count = _xml_payload_structure_element_count_within_budget(
+            payload,
+            maximum_element_count=min(
+                _POWER_QUERY_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed input.
+        # Only a successfully streamed overage can bypass its parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    warnings.add(
+        f"FormulaFence did not fully read a Power Query {kind} XML payload whose XML "
+        "structure exceeds the safety budget; affected query controls have a "
+        "coverage gap."
+    )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", kind),
+            ("member", member),
+            ("size", str(len(payload))),
+            ("payload", _private_payload_signature(payload)),
+        )
+    )
+
+
 def _power_query_boolean(
     value: str | None,
     default: bool,
@@ -6828,6 +6908,7 @@ def _power_query_metadata_inventory(
     member: str,
     warnings: set[str],
     opaque_entries: list[tuple[str, str]],
+    budget: _PowerQueryXmlBudget,
 ) -> tuple[int, int, int, str | None, str | None]:
     """Read stable query metadata while intentionally ignoring refresh-result noise."""
     if not payload:
@@ -6895,6 +6976,23 @@ def _power_query_metadata_inventory(
         warnings,
         opaque_entries,
     )
+    structure_fallback_signature = (
+        _power_query_xml_structure_budget_fallback_signature(
+            metadata_xml,
+            member,
+            warnings,
+            budget,
+            kind="metadata",
+        )
+    )
+    if structure_fallback_signature is not None:
+        opaque_entries.append(
+            (
+                f"{member}:metadata-xml-structure-budget-exhausted",
+                structure_fallback_signature,
+            )
+        )
+        return 0, 0, embedded_content_count, None, None
     try:
         root = _xml_root_from_payload(metadata_xml)
     except (ElementTree.ParseError, ValueError) as error:
@@ -7074,10 +7172,28 @@ def _power_query_permission_inventory(
     member: str,
     warnings: set[str],
     opaque_entries: list[tuple[str, str]],
+    budget: _PowerQueryXmlBudget,
 ) -> tuple[int, int, int, int, int, str | None]:
     """Read safe formula-firewall controls without retaining user-bound payloads."""
     if not payload:
         return 0, 0, 0, 0, 0, None
+    structure_fallback_signature = (
+        _power_query_xml_structure_budget_fallback_signature(
+            payload,
+            member,
+            warnings,
+            budget,
+            kind="permissions",
+        )
+    )
+    if structure_fallback_signature is not None:
+        opaque_entries.append(
+            (
+                f"{member}:permissions-xml-structure-budget-exhausted",
+                structure_fallback_signature,
+            )
+        )
+        return 1, 0, 0, 0, 0, None
     try:
         root = _xml_root_from_payload(payload)
     except (ElementTree.ParseError, ValueError) as error:
@@ -7158,6 +7274,7 @@ def _power_query_mashup_inspection(
     root: ElementTree.Element,
     member: str,
     warnings: set[str],
+    budget: _PowerQueryXmlBudget,
 ) -> _PowerQueryMashupInspection:
     """Inspect one Data Mashup part while keeping formulas and sources private."""
     opaque_entries: list[tuple[str, str]] = []
@@ -7224,7 +7341,13 @@ def _power_query_mashup_inspection(
         metadata_embedded_content_count,
         metadata_identity_signature,
         metadata_control_signature,
-    ) = _power_query_metadata_inventory(metadata, member, warnings, opaque_entries)
+    ) = _power_query_metadata_inventory(
+        metadata,
+        member,
+        warnings,
+        opaque_entries,
+        budget,
+    )
     (
         permission_payload_count,
         permission_parsed_count,
@@ -7237,6 +7360,7 @@ def _power_query_mashup_inspection(
         member,
         warnings,
         permission_opaque_entries,
+        budget,
     )
     package_signature_entries = [("stream-version", str(version))]
     if package_configuration_signature is not None:
@@ -7275,6 +7399,7 @@ def _power_query_snapshot(
 ) -> PowerQuerySnapshot:
     """Inventory Data Mashup parts identified by the custom-state structural pass."""
     inspections: list[tuple[str, _PowerQueryMashupInspection]] = []
+    budget = _PowerQueryXmlBudget()
     for member in sorted(set(power_query_item_members), key=str.casefold):
         try:
             root = _xml_root(archive, member)
@@ -7289,7 +7414,12 @@ def _power_query_snapshot(
             or _xml_namespace(root.tag) != _DATA_MASHUP_NS
         ):
             continue
-        inspections.append((member, _power_query_mashup_inspection(root, member, warnings)))
+        inspections.append(
+            (
+                member,
+                _power_query_mashup_inspection(root, member, warnings, budget),
+            )
+        )
     if not inspections:
         return PowerQuerySnapshot()
 

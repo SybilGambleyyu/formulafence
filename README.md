@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.137.0/formulafence-0.137.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.138.0/formulafence-0.138.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.137.0
+  uses: SybilGambleyyu/formulafence@v0.138.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2525,6 +2525,14 @@ semantic-control change emits `FF024`; enable `no_power_query_changes` for
 returned data. The implementation follows Microsoft's
 [Query Definition File Format](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-qdeff/27b1dd1e-7de8-45d9-9c84-dfcc7a802e37),
 which stores Power Query definitions in a Custom XML part.
+
+The outer Custom XML safety gate does not itself bound XML decoded from the
+Data Mashup stream. FormulaFence therefore streams each metadata and
+formula-firewall permission document before private parsing, allowing 32,768
+elements per document and 65,536 across the Power Query scan. This is a CI
+allocation and coverage boundary, not a Power Query file-validity rule: a
+successfully parsed overage becomes visible `FF010`/`FF024` evidence while
+malformed input keeps its established diagnostic.
 
 FormulaFence also follows a call to a workbook- or worksheet-local defined name
 when its complete definition is one statically resolvable `LAMBDA` expression.

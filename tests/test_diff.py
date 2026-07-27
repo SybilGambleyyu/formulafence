@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
 import shutil
+import struct
 import warnings
 from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -10193,6 +10195,102 @@ def _custom_data_store_xml_element_count(path, member: str) -> int:
     return sum(1 for _ in root.iter())
 
 
+def _power_query_mashup_fields(payload: bytes) -> tuple[int, list[bytes]]:
+    """Unpack the four fixture-only Data Mashup binary fields."""
+    version = struct.unpack_from("<I", payload, 0)[0]
+    cursor = 4
+    fields: list[bytes] = []
+    for _ in range(4):
+        length = struct.unpack_from("<I", payload, cursor)[0]
+        cursor += 4
+        fields.append(payload[cursor : cursor + length])
+        cursor += length
+    if cursor != len(payload):
+        raise AssertionError("unexpected Data Mashup fixture trailing bytes")
+    return version, fields
+
+
+def _power_query_nested_xml_payload(path, kind: str) -> bytes:
+    """Return one decoded XML payload from the synthetic Data Mashup fixture."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read("customXml/item1.xml"))
+    stream = base64.b64decode("".join((root.text or "").split()), validate=True)
+    _, fields = _power_query_mashup_fields(stream)
+    if kind == "permissions":
+        return fields[1]
+    if kind == "metadata":
+        metadata = fields[2]
+        xml_length = struct.unpack_from("<I", metadata, 4)[0]
+        return metadata[8 : 8 + xml_length]
+    raise ValueError(f"unknown Power Query nested XML kind: {kind}")
+
+
+def _append_power_query_nested_xml_elements(
+    path,
+    kind: str,
+    count: int,
+    *,
+    nested: bool = False,
+) -> None:
+    """Add opaque decoded Power Query XML entries without FormulaFence's reader."""
+    staging = path.with_suffix(".power-query-nested-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents["customXml/item1.xml"])
+    stream = base64.b64decode("".join((root.text or "").split()), validate=True)
+    version, fields = _power_query_mashup_fields(stream)
+    if kind == "permissions":
+        nested_xml = fields[1]
+    elif kind == "metadata":
+        metadata = fields[2]
+        metadata_version, xml_length = struct.unpack_from("<II", metadata, 0)
+        nested_xml = metadata[8 : 8 + xml_length]
+        metadata_suffix = metadata[8 + xml_length :]
+    else:
+        raise ValueError(f"unknown Power Query nested XML kind: {kind}")
+    nested_root = ElementTree.fromstring(nested_xml)
+    parent = nested_root
+    if nested:
+        parent = ElementTree.SubElement(nested_root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, "{urn:formulafence:audit}entry")
+    nested_xml = ElementTree.tostring(
+        nested_root,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    if kind == "permissions":
+        fields[1] = nested_xml
+    else:
+        fields[2] = (
+            struct.pack("<II", metadata_version, len(nested_xml))
+            + nested_xml
+            + metadata_suffix
+        )
+    rewritten_stream = struct.pack("<I", version)
+    for field in fields:
+        rewritten_stream += struct.pack("<I", len(field)) + field
+    root.text = base64.b64encode(rewritten_stream).decode("ascii")
+    contents["customXml/item1.xml"] = ElementTree.tostring(
+        root,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for member, payload in contents.items():
+            archive.writestr(member, payload)
+    staging.replace(path)
+
+
+def _power_query_nested_xml_element_count(path, kind: str) -> int:
+    """Count one decoded XML tree in the synthetic Data Mashup fixture."""
+    root = ElementTree.fromstring(_power_query_nested_xml_payload(path, kind))
+    return sum(1 for _ in root.iter())
+
+
 def _workbook_theme_xml_members(path) -> tuple[str, ...]:
     """Return each XML part materialized by the workbook-theme scanner."""
     with ZipFile(path) as archive:
@@ -16441,6 +16539,165 @@ def test_power_query_custom_xml_is_not_double_counted_as_generic_state(tmp_path)
     assert baseline_snapshot.custom_data_stores.present is False
     assert "custom_data_store_changed" not in {change.kind for change in report.changes}
     assert "FF052" not in {finding.rule_id for finding in report.findings}
+
+
+@pytest.mark.parametrize("kind", ("metadata", "permissions"))
+def test_power_query_nested_xml_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+    kind: str,
+) -> None:
+    workbook = make_power_query_model(tmp_path / "candidate.xlsx")
+    _append_power_query_nested_xml_elements(workbook, kind, 8, nested=True)
+    nested_xml = _power_query_nested_xml_payload(workbook, kind)
+    monkeypatch.setattr(
+        workbook_module,
+        "_POWER_QUERY_MAX_XML_ELEMENT_COUNT",
+        _power_query_nested_xml_element_count(workbook, kind) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == nested_xml:
+            raise AssertionError(
+                "the over-budget Power Query nested XML tree was materialized"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.power_query.present is True
+    assert any(
+        f"Power Query {kind} XML payload whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+@pytest.mark.parametrize("kind", ("metadata", "permissions"))
+def test_power_query_nested_xml_budget_remains_visible(tmp_path, monkeypatch, kind: str) -> None:
+    baseline = make_power_query_model(tmp_path / "baseline.xlsx")
+    candidate = make_power_query_model(tmp_path / "candidate.xlsx")
+    _append_power_query_nested_xml_elements(candidate, kind, 8)
+    monkeypatch.setattr(
+        workbook_module,
+        "_POWER_QUERY_MAX_XML_ELEMENT_COUNT",
+        _power_query_nested_xml_element_count(candidate, kind) - 1,
+    )
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    if kind == "metadata":
+        assert candidate_snapshot.power_query.opaque_metadata.present is True
+    else:
+        assert (
+            candidate_snapshot.power_query.permission_controls.opaque_metadata.present
+            is True
+        )
+    assert any(
+        f"Power Query {kind} XML payload whose XML structure" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF024"} <= {finding.rule_id for finding in report.findings}
+
+
+@pytest.mark.parametrize("kind", ("metadata", "permissions"))
+def test_power_query_nested_xml_budget_accepts_the_default_capacity(
+    tmp_path,
+    kind: str,
+) -> None:
+    workbook = make_power_query_model(tmp_path / "candidate.xlsx")
+    _append_power_query_nested_xml_elements(
+        workbook,
+        kind,
+        workbook_module._POWER_QUERY_MAX_XML_ELEMENT_COUNT
+        - _power_query_nested_xml_element_count(workbook, kind),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert not any(
+        f"Power Query {kind} XML payload whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+@pytest.mark.parametrize("kind", ("metadata", "permissions"))
+def test_power_query_nested_xml_budget_rejects_the_default_overage(
+    tmp_path,
+    kind: str,
+) -> None:
+    workbook = make_power_query_model(tmp_path / "candidate.xlsx")
+    _append_power_query_nested_xml_elements(
+        workbook,
+        kind,
+        workbook_module._POWER_QUERY_MAX_XML_ELEMENT_COUNT
+        - _power_query_nested_xml_element_count(workbook, kind)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert any(
+        f"Power Query {kind} XML payload whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_power_query_nested_xml_budget_aggregates_across_documents(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_power_query_model(tmp_path / "candidate.xlsx")
+    remaining_xml_elements = (
+        _power_query_nested_xml_element_count(workbook, "metadata")
+        + _power_query_nested_xml_element_count(workbook, "permissions")
+        - 1
+    )
+    budget_type = workbook_module._PowerQueryXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_PowerQueryXmlBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert any(
+        "Power Query permissions XML payload whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_power_query_nested_xml_budget_fingerprints_same_size_overages() -> None:
+    warnings: set[str] = set()
+    first_signature = (
+        workbook_module._power_query_xml_structure_budget_fallback_signature(
+            b"<root><a/></root>",
+            "customXml/item1.xml",
+            warnings,
+            workbook_module._PowerQueryXmlBudget(remaining_xml_elements=1),
+            kind="metadata",
+        )
+    )
+    second_signature = (
+        workbook_module._power_query_xml_structure_budget_fallback_signature(
+            b"<root><b/></root>",
+            "customXml/item1.xml",
+            warnings,
+            workbook_module._PowerQueryXmlBudget(remaining_xml_elements=1),
+            kind="metadata",
+        )
+    )
+
+    assert first_signature is not None
+    assert first_signature != second_signature
+    assert any(
+        "Power Query metadata XML payload whose XML structure" in warning
+        for warning in warnings
+    )
 
 
 def test_legacy_excel_notes_are_profiled_diffed_and_redacted(tmp_path) -> None:

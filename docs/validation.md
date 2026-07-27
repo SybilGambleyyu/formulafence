@@ -5,6 +5,35 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Reader merged-cell geometry bound — 2026-07-26
+
+Version 0.118.0 closes a compact allocation path in ordinary worksheet loading.
+The SpreadsheetML [mergeCells interoperability notes](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/8a2a99c9-bfc5-4d44-8d00-3046b75af83c)
+permit an unbounded number of `mergeCell` elements (with Excel allowing up to
+4,294,967,294 occurrences). When `openpyxl` binds a worksheet, it does not just
+retain a merge reference: it creates an in-memory `MergedCell` for every
+coordinate in the range. A tiny sheet part can therefore request an enormous
+allocation even when it contains almost no populated cells.
+
+The semantic-reader preflight now streams direct `mergeCell` declarations in
+reader-selected ordinary worksheet parts before raw OOXML scanners or the
+complete reader begin. It limits the declaration count to 4,096, every range
+and their aggregate expanded coordinate area to 100,000 cells, and every
+reference attribute to 256 characters. The geometry check accepts the same
+sheet-qualified range grammar as the reader and counts matching direct local
+children, including an alternate-namespace child, so neither range spelling nor
+namespace decoration bypasses the limit.
+
+Independent generated fixtures establish the boundary. A 4,889-byte package
+with `A1:ALL100` (100,000 coordinates) remained accepted, taking 0.862 seconds
+and 72,524 KiB. A 4,890-byte `A1:ALL101` package (101,000 coordinates) failed
+in 0.002 seconds at 34,672 KiB with the range-specific safety error; a
+4,895-byte full-worksheet `A1:XFD1048576` package failed in 0.002 seconds at
+34,804 KiB before `openpyxl` could expand the grid. The completed source tree
+passed **779 tests in 127.54 seconds**. Focused archive-safety and version
+coverage also passed **77 tests in 2.32 seconds**, along with Ruff, bytecode
+compilation, and `git diff --check`.
+
 ## Reader view and auxiliary catalog bounds — 2026-07-26
 
 Version 0.117.0 closes the remaining repeated-child paths in `openpyxl`'s

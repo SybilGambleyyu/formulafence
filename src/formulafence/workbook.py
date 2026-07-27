@@ -24,7 +24,12 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
 from defusedxml import ElementTree
 from openpyxl import load_workbook
-from openpyxl.utils.cell import column_index_from_string, get_column_letter, range_boundaries
+from openpyxl.utils.cell import (
+    column_index_from_string,
+    get_column_letter,
+    range_boundaries,
+    range_to_tuple,
+)
 from openpyxl.utils.exceptions import InvalidFileException
 
 from formulafence.formulas import (
@@ -199,6 +204,16 @@ _OOXML_READER_MAX_WORKBOOK_FUNCTION_GROUP_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_SMART_TAG_TYPE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_WORKBOOK_WEB_PUBLISH_OBJECT_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_CUSTOM_SHEET_VIEW_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+# ``openpyxl`` expands every coordinate in a merged range into a ``MergedCell``
+# object while binding a worksheet. A compact merge declaration can therefore
+# allocate an entire worksheet even when the XML contains almost no cells.
+# Bound both the number of direct merge declarations and their total expanded
+# coordinate area before the reader starts. The short reference bound also
+# prevents an untrusted attribute from reaching coordinate parsing at an
+# impractical size.
+_OOXML_READER_MAX_MERGED_CELL_RANGE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
+_OOXML_READER_MAX_MERGED_CELL_COUNT = 100_000
+_OOXML_READER_MAX_MERGED_CELL_REFERENCE_CHARACTERS = 256
 # Reader-facing XML can still be hostile within its byte limit: the ordinary
 # workbook model materializes shared-string entries and style objects, while
 # deep XML can impose disproportionate parser work.  Keep the streaming gate
@@ -3325,6 +3340,8 @@ def _validate_ooxml_semantic_reader_resources(
     workbook_pivot_cache_count = 0
     workbook_auxiliary_catalog_counts: dict[str, int] = {}
     custom_sheet_view_count = 0
+    merged_cell_range_count = 0
+    merged_cell_count = 0
     populated_cell_count = 0
     shared_string_count = 0
     cell_tags = _spreadsheetml_tags("c")
@@ -3515,12 +3532,75 @@ def _validate_ooxml_semantic_reader_resources(
                 "custom sheet-view declarations exceed the semantic-reader safety limit."
             )
 
+    def merged_cell_end(
+        element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        nonlocal merged_cell_count
+        nonlocal merged_cell_range_count
+        # ``MergeCells`` is a sequence parsed by local child name. The worksheet
+        # reader then expands every coordinate in each parsed range into a
+        # ``MergedCell`` object, so count the same direct declaration shape and
+        # its geometric area before that allocation can start.
+        if (
+            len(tags) != 3
+            or _xml_local_name(tags[-2]) != "mergeCells"
+            or _xml_local_name(element.tag) != "mergeCell"
+        ):
+            return
+        merged_cell_range_count += 1
+        if merged_cell_range_count > _OOXML_READER_MAX_MERGED_CELL_RANGE_COUNT:
+            raise _reader_preflight_error(
+                "merged-cell declarations exceed the semantic-reader safety limit."
+            )
+        reference = element.get("ref")
+        if (
+            reference is None
+            or len(reference) > _OOXML_READER_MAX_MERGED_CELL_REFERENCE_CHARACTERS
+        ):
+            raise _reader_preflight_error(
+                "a merged-cell reference exceeds the semantic-reader safety limit."
+            )
+        try:
+            if "!" in reference:
+                _title, (min_column, min_row, max_column, max_row) = range_to_tuple(
+                    reference
+                )
+            else:
+                min_column, min_row, max_column, max_row = range_boundaries(reference)
+        except ValueError as error:
+            raise _reader_preflight_error(
+                "a merged-cell reference could not be measured safely."
+            ) from error
+        if (
+            not all(
+                isinstance(value, int) and value >= 1
+                for value in (min_column, min_row, max_column, max_row)
+            )
+            or min_column > max_column
+            or min_row > max_row
+        ):
+            raise _reader_preflight_error(
+                "a merged-cell reference could not be measured safely."
+            )
+        range_cell_count = (max_column - min_column + 1) * (max_row - min_row + 1)
+        if range_cell_count > _OOXML_READER_MAX_MERGED_CELL_COUNT:
+            raise _reader_preflight_error(
+                "a merged-cell range exceeds the semantic-reader safety limit."
+            )
+        merged_cell_count += range_cell_count
+        if merged_cell_count > _OOXML_READER_MAX_MERGED_CELL_COUNT:
+            raise _reader_preflight_error(
+                "merged-cell area exceeds the semantic-reader safety limit."
+            )
+
     def worksheet_end(
         element: ElementTree.Element,
         tags: list[str],
     ) -> None:
         nonlocal populated_cell_count
         sheet_catalog_end(element, tags)
+        merged_cell_end(element, tags)
         if element.tag in cell_tags:
             populated_cell_count += 1
             if populated_cell_count > _OOXML_READER_MAX_WORKSHEET_CELL_COUNT:

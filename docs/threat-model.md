@@ -264,6 +264,12 @@ formula will produce.
   conventional namespace-qualified tags or unique target parts. Direct
   relationship-backed external-reference and pivot-cache declarations are each
   capped at 4,096 so repetitions cannot reuse a target unboundedly. FormulaFence
+  caps direct merged-cell declarations across reader-selected ordinary worksheet
+  parts at 4,096 before `openpyxl` expands them. Each declared merge range and
+  their aggregate expanded coordinate area are limited to 100,000 cells, and a
+  merge reference is limited to 256 characters. This prevents a tiny worksheet
+  XML part from allocating a `MergedCell` object for every coordinate of an
+  impractically large range. FormulaFence
   follows the bounded sheet relationships plus the ordinary reader's shared-string
   manifest selection, and streams them with `defusedxml` before it creates the
   complete workbook model. A valid workbook above those limits is intentionally

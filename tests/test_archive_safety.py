@@ -243,6 +243,45 @@ def _append_custom_sheet_view_declarations(
     )
 
 
+def _append_merged_cell_declarations(
+    path: Path,
+    references: tuple[str, ...],
+    *,
+    alternate_namespace: str | None = None,
+) -> None:
+    """Add direct worksheet merge declarations without invoking a workbook reader."""
+    member_name = "xl/worksheets/sheet1.xml"
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    root = ElementTree.fromstring(worksheet)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    qualified_container_name = (
+        f"{{{namespace}}}mergeCells" if namespace else "mergeCells"
+    )
+    qualified_child_name = f"{{{namespace}}}mergeCell" if namespace else "mergeCell"
+    container = next(
+        (
+            child
+            for child in root
+            if child.tag.rsplit("}", maxsplit=1)[-1] == "mergeCells"
+        ),
+        None,
+    )
+    if container is None:
+        container = ElementTree.Element(qualified_container_name)
+        root.insert(0, container)
+    for reference in references:
+        declaration = ElementTree.Element(qualified_child_name, {"ref": reference})
+        if alternate_namespace is not None:
+            declaration.tag = f"{{{alternate_namespace}}}mergeCell"
+        container.append(declaration)
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
 def _last_central_directory_offset(contents: bytes | bytearray) -> int:
     offset = contents.rfind(b"PK\x01\x02")
     assert offset >= 0
@@ -846,6 +885,134 @@ def test_semantic_reader_preflight_rejects_default_custom_sheet_view_limit_befor
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "custom sheet-view declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_merged_cell_declarations_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-merged-cell-declarations.xlsx")
+    _append_merged_cell_declarations(workbook, ("A1:B1",))
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_MERGED_CELL_RANGE_COUNT", 0)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "merged-cell declarations" in message
+
+
+def test_semantic_reader_preflight_counts_alternate_namespace_merged_cell_declarations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "alternate-namespace-merged-cell-declarations.xlsx")
+    _append_merged_cell_declarations(workbook, ("A1:B1",))
+    _append_merged_cell_declarations(
+        workbook,
+        ("C1:D1",),
+        alternate_namespace="urn:formulafence:archive-safety",
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_MERGED_CELL_RANGE_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "merged-cell declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_default_merged_cell_declaration_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-merged-cell-declarations.xlsx")
+    _append_merged_cell_declarations(
+        workbook,
+        ("A1",) * (workbook_module._OOXML_READER_MAX_MERGED_CELL_RANGE_COUNT + 1),
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "merged-cell declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_an_oversized_merged_cell_range_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "oversized-merged-cell-range.xlsx")
+    _append_merged_cell_declarations(workbook, ("A1:K10",))
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_MERGED_CELL_COUNT", 100)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "a merged-cell range" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_merged_cell_area_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "excessive-merged-cell-area.xlsx")
+    _append_merged_cell_declarations(workbook, ("A1:J10", "K1:T10"))
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_MERGED_CELL_COUNT", 150)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "merged-cell area" in message
+
+
+def test_semantic_reader_preflight_rejects_a_full_worksheet_merge_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "full-worksheet-merge.xlsx")
+    _append_merged_cell_declarations(workbook, ("A1:XFD1048576",))
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "a merged-cell range" in message
+
+
+def test_semantic_reader_preflight_rejects_an_oversized_merged_cell_reference_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "oversized-merged-cell-reference.xlsx")
+    _append_merged_cell_declarations(workbook, ("A1:B1",))
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_MERGED_CELL_REFERENCE_CHARACTERS",
+        4,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "a merged-cell reference" in message
+
+
+@pytest.mark.parametrize("reference", ("!", "A1:A0"))
+def test_semantic_reader_preflight_rejects_an_unmeasurable_merged_cell_reference_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reference: str,
+) -> None:
+    workbook = make_model(tmp_path / "unmeasurable-merged-cell-reference.xlsx")
+    _append_merged_cell_declarations(workbook, (reference,))
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "could not be measured safely" in message
+
+
+def test_semantic_reader_preflight_accepts_merged_cell_area_at_the_configured_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "merged-cell-area-at-limit.xlsx")
+    _append_merged_cell_declarations(workbook, ("Inputs!A1:J10",))
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_MERGED_CELL_COUNT", 100)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.sheets
 
 
 def test_semantic_reader_preflight_rejects_excessive_xml_nesting_before_scanners(

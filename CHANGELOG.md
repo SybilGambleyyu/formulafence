@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.118.0 — 2026-07-26
+
+- Bound merged-cell geometry before `openpyxl` expands a compact SpreadsheetML
+  range into one in-memory `MergedCell` per coordinate. The semantic-reader
+  preflight permits at most 4,096 direct `mergeCell` declarations across its
+  selected ordinary worksheet parts, 100,000 coordinates in any one range and
+  in aggregate, and 256 characters in a range reference.
+- Measure the same direct child shape that the worksheet reader accepts,
+  including alternate-namespace children and sheet-qualified references, so a
+  repeated declaration or enormous declared geometry cannot bypass the bound.
+- Add fail-before-reader regression coverage for declaration counts, alternate
+  namespaces, individual and aggregate area, reference length, full-grid
+  geometry, and an exact-limit sheet-qualified range.
+
 ## 0.117.0 — 2026-07-26
 
 - Bound the remaining repeated workbook-package catalogs: direct workbook

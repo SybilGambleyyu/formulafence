@@ -791,6 +791,12 @@ _PIVOT_CACHE_RECORDS_PART_PATTERN = re.compile(
 _PIVOT_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _PIVOT_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _PIVOT_TOTAL_XML_MAX_COUNT = 512
+# PivotTable cache definitions can carry substantial shared-item catalogs, but
+# FormulaFence recursively canonicalizes both view and cache-definition XML.
+# Keep the complete private tree bounded before a compact cache can amplify a
+# CI worker's memory use.
+_PIVOT_MAX_XML_ELEMENT_COUNT = 32_768
+_PIVOT_TOTAL_XML_MAX_ELEMENT_COUNT = 2 * _PIVOT_MAX_XML_ELEMENT_COUNT
 _PIVOT_CACHE_RECORD_MAX_BYTES = 32 * 1024 * 1024
 _PIVOT_CACHE_RECORD_TOTAL_MAX_BYTES = 64 * 1024 * 1024
 _PIVOT_CACHE_RECORD_TOTAL_MAX_COUNT = 512
@@ -1874,10 +1880,11 @@ class _ChartRelatedPartBudget:
 
 @dataclass
 class _PivotXmlBudget:
-    """Bound PivotTable and cache-definition XML bytes in one package scan."""
+    """Bound PivotTable and cache-definition XML resources in one package scan."""
 
     remaining_bytes: int = _PIVOT_TOTAL_XML_MAX_BYTES
     remaining_parts: int = _PIVOT_TOTAL_XML_MAX_COUNT
+    remaining_xml_elements: int = _PIVOT_TOTAL_XML_MAX_ELEMENT_COUNT
 
 
 @dataclass
@@ -8964,6 +8971,7 @@ def _pivot_cache_refresh_snapshots(
     cache_tag = f"{{{_SPREADSHEETML_NS}}}pivotCache"
     relationship_id_attribute = f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
     snapshots: list[PivotCacheRefreshSnapshot] = []
+    xml_budget = _PivotXmlBudget()
     for cache in cache_container.findall(cache_tag):
         if cache.get("cacheId") is None:
             warnings.add(
@@ -8991,13 +8999,21 @@ def _pivot_cache_refresh_snapshots(
                 "the affected controls were not compared."
             )
             continue
-        root = _external_data_part_root(
+        payload, _fallback_signature = _pivot_xml_payload(
             archive,
             target,
             warnings,
-            context="pivot-cache definition",
+            xml_budget,
         )
-        if root is None:
+        if payload is None:
+            continue
+        try:
+            root = _xml_root_from_payload(payload)
+        except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+            warnings.add(
+                "FormulaFence could not inspect pivot-cache definition OOXML "
+                f"({type(error).__name__}); the affected controls were not compared."
+            )
             continue
         if (
             _xml_local_name(root.tag) != "pivotCacheDefinition"
@@ -13847,6 +13863,45 @@ def _pivot_xml_fragment(
     )
 
 
+def _pivot_xml_structure_budget_fallback_signature(
+    archive: ZipFile,
+    member: str,
+    info,
+    warnings: set[str],
+    budget: _PivotXmlBudget,
+) -> str | None:
+    """Stream PivotTable XML before recursively canonicalizing its private tree."""
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            member,
+            maximum_element_count=min(
+                _PIVOT_MAX_XML_ELEMENT_COUNT,
+                budget.remaining_xml_elements,
+            ),
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        # Preserve the established full-parser diagnostic for malformed or
+        # unreadable input. Only a successfully streamed over-budget part can
+        # safely bypass the materializing XML root parser below.
+        return None
+    if element_count is not None:
+        budget.remaining_xml_elements -= element_count
+        return None
+    warnings.add(
+        "FormulaFence did not fully read a PivotTable XML part whose XML structure "
+        "exceeds the safety budget; affected PivotTables have a coverage gap."
+    )
+    return _private_external_data_signature(
+        (
+            ("xml-structure-budget-exhausted", member),
+            ("size", str(info.file_size)),
+            ("compressed-size", str(info.compress_size)),
+            ("crc", str(info.CRC)),
+        )
+    )
+
+
 def _pivot_xml_payload(
     archive: ZipFile,
     member: str,
@@ -13886,6 +13941,15 @@ def _pivot_xml_payload(
         return None, _private_external_data_signature(
             (("read-budget-exhausted", metadata),)
         )
+    structure_fallback_signature = _pivot_xml_structure_budget_fallback_signature(
+        archive,
+        member,
+        info,
+        warnings,
+        budget,
+    )
+    if structure_fallback_signature is not None:
+        return None, structure_fallback_signature
     budget.remaining_bytes -= info.file_size
     try:
         return archive.read(member), None
@@ -15945,105 +16009,99 @@ def _power_pivot_data_model_metadata(path: Path) -> _PowerPivotDataModelMetadata
 def _pivot_reader_cache_record_replacements(
     path: Path,
 ) -> tuple[dict[str, bytes], tuple[str, ...]]:
-    """Build safe cache-definition overlays for the ordinary workbook reader.
+    """Keep raw PivotTable packages out of the ordinary workbook reader.
 
-    openpyxl eagerly parses complete PivotTable cache-record streams even though
-    FormulaFence never needs those values to index cells. Replace only the
-    temporary reader copy's cache-record bindings after the package scanner has
-    fingerprinted the original payload under its explicit limits.
+    FormulaFence captures PivotTable view, cache-definition, and cache-record
+    evidence through its bounded raw scanner before loading cells. The ordinary
+    reader has no cell-audit need for those package graphs, but eagerly parses
+    every bound cache and view. Remove only their workbook and worksheet
+    bindings in its temporary copy so raw coverage remains authoritative.
     """
     replacements: dict[str, bytes] = {}
     reader_warnings: set[str] = set()
     try:
         with ZipFile(path) as archive:
-            xml_budget = _PivotXmlBudget()
-            cache_definition_members = {
-                entry.filename
-                for entry in archive.infolist()
-                if _PIVOT_CACHE_DEFINITION_PART_PATTERN.fullmatch(entry.filename)
-            }
-            workbook_relationships = _pivot_raw_relationships(
-                archive,
-                "xl/workbook.xml",
-                set(),
-                context="workbook",
-            )
-            cache_definition_members.update(
-                relationship.safe_target
-                for relationship in workbook_relationships
+            workbook = _xml_root(archive, "xl/workbook.xml")
+            pivot_cache_containers = [
+                child
+                for child in workbook
                 if (
-                    relationship.relationship_type == _PIVOT_CACHE_DEFINITION_RELATIONSHIP
-                    and relationship.safe_target is not None
+                    _xml_local_name(child.tag) == "pivotCaches"
+                    and _xml_namespace(child.tag)
+                    in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
                 )
-            )
-            for member in sorted(cache_definition_members, key=str.casefold):
-                payload, _fallback_signature = _pivot_xml_payload(
-                    archive,
-                    member,
-                    set(),
-                    xml_budget,
+            ]
+            if pivot_cache_containers:
+                for container in pivot_cache_containers:
+                    workbook.remove(container)
+                replacements["xl/workbook.xml"] = ElementTree.tostring(
+                    workbook,
+                    encoding="utf-8",
+                    xml_declaration=True,
                 )
-                if payload is None:
-                    reader_warnings.add(
-                        "FormulaFence could not isolate a bounded PivotTable cache "
-                        "definition from the underlying workbook reader."
-                    )
-                    continue
-                try:
-                    cache_definition = _xml_root_from_payload(payload)
-                except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
-                    continue
-                if (
-                    _xml_local_name(cache_definition.tag) != "pivotCacheDefinition"
-                    or _xml_namespace(cache_definition.tag) != _SPREADSHEETML_NS
-                ):
-                    continue
 
-                relationship_member = _relationship_part_path(member)
-                relationship_payload, _fallback_signature = _pivot_xml_payload(
-                    archive,
-                    relationship_member,
-                    set(),
-                    xml_budget,
-                )
-                if relationship_payload is None:
+            relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
+            workbook_relationship_member = _relationship_part_path("xl/workbook.xml")
+            try:
+                workbook_relationships = _xml_root(archive, workbook_relationship_member)
+            except KeyError:
+                workbook_relationships = None
+            if (
+                workbook_relationships is not None
+                and _xml_local_name(workbook_relationships.tag) == "Relationships"
+                and _xml_namespace(workbook_relationships.tag) == _PACKAGE_RELATIONSHIP_NS
+            ):
+                cache_relationships = [
+                    relationship
+                    for relationship in workbook_relationships.findall(relationship_tag)
+                    if relationship.get("Type") == _PIVOT_CACHE_DEFINITION_RELATIONSHIP
+                ]
+                if cache_relationships:
+                    for relationship in cache_relationships:
+                        workbook_relationships.remove(relationship)
+                    replacements[workbook_relationship_member] = ElementTree.tostring(
+                        workbook_relationships,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+
+            for _sheet, (member, sheet_kind) in _sheet_xml_parts(archive).items():
+                if sheet_kind != "worksheet":
                     continue
+                relationship_member = _relationship_part_path(member)
                 try:
-                    relationships = _xml_root_from_payload(relationship_payload)
-                except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+                    relationships = _xml_root(archive, relationship_member)
+                except KeyError:
                     continue
                 if (
                     _xml_local_name(relationships.tag) != "Relationships"
                     or _xml_namespace(relationships.tag) != _PACKAGE_RELATIONSHIP_NS
                 ):
                     continue
-                relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
-                record_relationships = [
+                pivot_relationships = [
                     relationship
                     for relationship in relationships.findall(relationship_tag)
-                    if relationship.get("Type") == _PIVOT_CACHE_RECORDS_RELATIONSHIP
+                    if relationship.get("Type") == _PIVOT_TABLE_RELATIONSHIP
                 ]
-                if not record_relationships:
+                if not pivot_relationships:
                     continue
-                record_relationship_id_attribute = (
-                    f"{{{_DOCUMENT_RELATIONSHIP_NS}}}id"
-                )
-                cache_definition.attrib.pop(record_relationship_id_attribute, None)
-                for relationship in record_relationships:
+                for relationship in pivot_relationships:
                     relationships.remove(relationship)
-                replacements[member] = ElementTree.tostring(
-                    cache_definition,
-                    encoding="utf-8",
-                    xml_declaration=True,
-                )
                 replacements[relationship_member] = ElementTree.tostring(
                     relationships,
                     encoding="utf-8",
                     xml_declaration=True,
                 )
-    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
         reader_warnings.add(
-            "FormulaFence could not prepare a PivotTable-safe workbook-reader copy "
+            "FormulaFence could not prepare a PivotTable-safe workbook reader copy "
             f"({type(error).__name__})."
         )
     return replacements, tuple(sorted(reader_warnings))

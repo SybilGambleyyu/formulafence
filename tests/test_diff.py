@@ -9857,6 +9857,54 @@ def _chart_xml_element_count(path, member: str) -> int:
     return sum(1 for _ in root.iter())
 
 
+def _pivot_xml_members(path) -> tuple[str, str]:
+    """Return the PivotTable fixture's view and cache-definition XML members."""
+    with ZipFile(path) as archive:
+        members = tuple(entry.filename for entry in archive.infolist())
+    pivot_table_member = next(
+        member
+        for member in members
+        if member.startswith("xl/pivotTables/") and member.endswith(".xml")
+    )
+    cache_definition_member = next(
+        member
+        for member in members
+        if (
+            member.startswith("xl/pivotCache/pivotCacheDefinition")
+            and member.endswith(".xml")
+        )
+    )
+    return pivot_table_member, cache_definition_member
+
+
+def _append_pivot_xml_elements(path, member: str, count: int, *, nested: bool = False) -> None:
+    """Add opaque PivotTable XML entries without invoking FormulaFence's reader."""
+    staging = path.with_suffix(".pivot-xml-elements.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents[member])
+    parent = root
+    if nested:
+        parent = ElementTree.SubElement(root, "{urn:formulafence:audit}opaque")
+    for _ in range(count):
+        ElementTree.SubElement(parent, "{urn:formulafence:audit}entry")
+    contents[member] = ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, payload in contents.items():
+            archive.writestr(name, payload)
+    staging.replace(path)
+
+
+def _pivot_xml_element_count(path, member: str) -> int:
+    """Count one fixture's complete PivotTable XML tree for exact budget tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member))
+    return sum(1 for _ in root.iter())
+
+
 def test_chart_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
     baseline = make_chart_definition_model(tmp_path / "baseline.xlsx")
     candidate = make_chart_definition_model(tmp_path / "candidate.xlsx")
@@ -10365,6 +10413,200 @@ def test_chart_xml_and_related_part_budgets_fail_closed(tmp_path, monkeypatch) -
     )
 
 
+def test_pivot_xml_element_budget_stops_before_materializing_the_tree(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    pivot_table_member, _cache_definition_member = _pivot_xml_members(workbook)
+    _append_pivot_xml_elements(workbook, pivot_table_member, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_PIVOT_MAX_XML_ELEMENT_COUNT",
+        _pivot_xml_element_count(workbook, pivot_table_member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        pivot_payload = archive.read(pivot_table_member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == pivot_payload:
+            raise AssertionError(
+                "the PivotTable XML tree was materialized after its budget failed"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+    warnings: set[str] = set()
+    with ZipFile(workbook) as archive:
+        inspection = workbook_module._pivot_table_part_inspection(
+            archive,
+            pivot_table_member,
+            warnings,
+            workbook_module._PivotXmlBudget(),
+            {},
+        )
+
+    assert inspection.inspected is False
+    assert any("PivotTable XML part whose XML structure" in warning for warning in warnings)
+
+
+def test_pivot_cache_xml_element_budget_stops_all_materializing_readers(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    _pivot_table_member, cache_definition_member = _pivot_xml_members(workbook)
+    _append_pivot_xml_elements(workbook, cache_definition_member, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_PIVOT_MAX_XML_ELEMENT_COUNT",
+        _pivot_xml_element_count(workbook, cache_definition_member) - 1,
+    )
+    with ZipFile(workbook) as archive:
+        cache_definition_payload = archive.read(cache_definition_member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == cache_definition_payload:
+            raise AssertionError(
+                "the PivotTable cache XML tree was materialized after its budget failed"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.pivot_table_definitions.unrecognized_part_count >= 1
+    assert any(
+        "PivotTable XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_pivot_xml_element_budget_remains_covered(tmp_path, monkeypatch) -> None:
+    baseline = make_pivot_table_definition_model(tmp_path / "baseline.xlsx")
+    workbook = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    pivot_table_member, _cache_definition_member = _pivot_xml_members(workbook)
+    _append_pivot_xml_elements(workbook, pivot_table_member, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_PIVOT_MAX_XML_ELEMENT_COUNT",
+        _pivot_xml_element_count(workbook, pivot_table_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+    report = compare_snapshots(load_snapshot(baseline), snapshot)
+
+    assert snapshot.pivot_table_definitions.unrecognized_part_count >= 1
+    assert any(
+        "PivotTable XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+    assert "FF031" in {finding.rule_id for finding in report.findings}
+
+
+def test_pivot_xml_element_budget_accepts_the_configured_capacity(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    pivot_table_member, _cache_definition_member = _pivot_xml_members(workbook)
+    _append_pivot_xml_elements(workbook, pivot_table_member, 2)
+    monkeypatch.setattr(
+        workbook_module,
+        "_PIVOT_MAX_XML_ELEMENT_COUNT",
+        _pivot_xml_element_count(workbook, pivot_table_member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.pivot_table_definitions.unrecognized_part_count == 0
+
+
+def test_pivot_xml_element_budget_aggregates_across_package_parts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    xml_members = _pivot_xml_members(workbook)
+    remaining_xml_elements = (
+        sum(_pivot_xml_element_count(workbook, member) for member in xml_members) - 1
+    )
+    budget_type = workbook_module._PivotXmlBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_PivotXmlBudget",
+        lambda: budget_type(remaining_xml_elements=remaining_xml_elements),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.pivot_table_definitions.unrecognized_part_count >= 1
+    assert any(
+        "PivotTable XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_pivot_xml_element_budget_accepts_the_default_capacity(tmp_path) -> None:
+    workbook = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    pivot_table_member, _cache_definition_member = _pivot_xml_members(workbook)
+    _append_pivot_xml_elements(
+        workbook,
+        pivot_table_member,
+        workbook_module._PIVOT_MAX_XML_ELEMENT_COUNT
+        - _pivot_xml_element_count(workbook, pivot_table_member),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.pivot_table_definitions.unrecognized_part_count == 0
+
+
+def test_pivot_xml_element_budget_rejects_the_default_overage(tmp_path) -> None:
+    workbook = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    _pivot_table_member, cache_definition_member = _pivot_xml_members(workbook)
+    _append_pivot_xml_elements(
+        workbook,
+        cache_definition_member,
+        workbook_module._PIVOT_MAX_XML_ELEMENT_COUNT
+        - _pivot_xml_element_count(workbook, cache_definition_member)
+        + 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.pivot_table_definitions.unrecognized_part_count >= 1
+    assert any(
+        "PivotTable XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_pivot_xml_element_budget_counts_nested_opaque_subtrees(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
+    pivot_table_member, _cache_definition_member = _pivot_xml_members(workbook)
+    _append_pivot_xml_elements(workbook, pivot_table_member, 1, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_PIVOT_MAX_XML_ELEMENT_COUNT",
+        _pivot_xml_element_count(workbook, pivot_table_member) - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.pivot_table_definitions.unrecognized_part_count >= 1
+    assert any(
+        "PivotTable XML part whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
 def test_pivot_table_definitions_are_profiled_and_diffed_privately(tmp_path) -> None:
     baseline = make_pivot_table_definition_model(tmp_path / "baseline.xlsx")
     candidate = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
@@ -10504,26 +10746,30 @@ def test_pivot_cache_record_rebinding_is_guarded(tmp_path) -> None:
     assert {finding.rule_id for finding in report.findings} >= {"FF031"}
 
 
-def test_pivot_cache_records_are_not_parsed_by_the_underlying_reader(
+def test_pivot_packages_are_not_parsed_by_the_underlying_reader(
     tmp_path,
     monkeypatch,
 ) -> None:
+    from openpyxl.pivot.cache import CacheDefinition
     from openpyxl.pivot.record import RecordList
+    from openpyxl.pivot.table import TableDefinition
 
     workbook = make_pivot_table_definition_model(tmp_path / "candidate.xlsx")
     original_payload = workbook.read_bytes()
 
-    def reject_record_parse(*args, **kwargs):
-        raise AssertionError("the workbook reader must not parse PivotTable records")
+    def reject_pivot_parse(*args, **kwargs):
+        raise AssertionError("the workbook reader must not parse PivotTable packages")
 
-    monkeypatch.setattr(RecordList, "from_tree", reject_record_parse)
+    monkeypatch.setattr(CacheDefinition, "from_tree", reject_pivot_parse)
+    monkeypatch.setattr(RecordList, "from_tree", reject_pivot_parse)
+    monkeypatch.setattr(TableDefinition, "from_tree", reject_pivot_parse)
 
     snapshot = load_snapshot(workbook)
 
     assert snapshot.pivot_table_definitions.fingerprinted_cache_record_part_count == 1
     assert workbook.read_bytes() == original_payload
     assert not any(
-        "could not isolate PivotTable cache records" in warning
+        "could not prepare a PivotTable-safe workbook reader copy" in warning
         for warning in snapshot.parser_warnings
     )
 

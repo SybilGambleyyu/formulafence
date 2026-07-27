@@ -9,6 +9,8 @@ from formulafence.cli import main
 
 from .helpers import (
     change_formula_dde_link_input,
+    change_formula_defined_xlm_registration_call,
+    change_formula_defined_xlm_registration_input,
     change_formula_external_action_input,
     change_formula_external_action_target,
     change_office_custom_function_call,
@@ -18,6 +20,7 @@ from .helpers import (
     change_worksheet_code_resource_registration_call,
     change_worksheet_code_resource_registration_input,
     make_formula_dde_link_model,
+    make_formula_defined_xlm_registration_model,
     make_formula_external_action_model,
     make_model,
     make_office_custom_function_model,
@@ -872,6 +875,129 @@ def test_cli_can_redact_worksheet_code_resource_registration_material(
     )
     portfolio_rendered = portfolio_output.read_text(encoding="utf-8")
     assert "worksheet code-resource registration material redacted" in portfolio_rendered
+    assert all(value not in portfolio_rendered for value in sensitive_values)
+
+
+def test_cli_can_redact_formula_defined_xlm_registration_material(tmp_path) -> None:
+    baseline = make_formula_defined_xlm_registration_model(
+        tmp_path / "baseline.xlsx"
+    )
+    candidate = make_formula_defined_xlm_registration_model(
+        tmp_path / "candidate.xlsx"
+    )
+    change_formula_defined_xlm_registration_input(candidate)
+    change_formula_defined_xlm_registration_call(candidate)
+    sensitive_values = (
+        "PRIVATE-XLM-REGISTRATION-MODULE-BASELINE",
+        "PRIVATE-XLM-REGISTRATION-MODULE-CANDIDATE",
+        "PRIVATE-XLM-REGISTRATION-LITERAL-PROCEDURE-BASELINE",
+        "PRIVATE-XLM-REGISTRATION-LITERAL-PROCEDURE-CANDIDATE",
+        "PRIVATE-XLM-REGISTRATION-LITERAL-TYPE-BASELINE",
+        "PRIVATE-XLM-REGISTRATION-LITERAL-TYPE-CANDIDATE",
+    )
+
+    default_json = tmp_path / "default.json"
+    assert (
+        main(
+            [
+                "diff",
+                str(baseline),
+                str(candidate),
+                "--format",
+                "json",
+                "--output",
+                str(default_json),
+            ]
+        )
+        == 0
+    )
+    default_rendered = default_json.read_text(encoding="utf-8")
+    assert all(value in default_rendered for value in sensitive_values)
+
+    for report_format, suffix in (("json", "json"), ("markdown", "md"), ("sarif", "sarif")):
+        output = tmp_path / f"xlm-registration-redacted.{suffix}"
+        assert (
+            main(
+                [
+                    "diff",
+                    str(baseline),
+                    str(candidate),
+                    "--format",
+                    report_format,
+                    "--redact-formula-defined-xlm-registrations",
+                    "--output",
+                    str(output),
+                ]
+            )
+            == 0
+        )
+        rendered = output.read_text(encoding="utf-8")
+        assert all(value not in rendered for value in sensitive_values)
+        assert "FF068" in rendered
+        if report_format == "markdown":
+            assert (
+                "Formula-defined XLM registration material:** redacted for sharing"
+                in rendered
+            )
+        elif report_format == "json":
+            assert "formula-defined XLM registration material redacted" in rendered
+
+    policy = tmp_path / "formulafence.yml"
+    policy.write_text(
+        "version: 1\nrules:\n  no_formula_defined_xlm_registration_changes: true\n",
+        encoding="utf-8",
+    )
+    policy_output = tmp_path / "xlm-registration-policy-redacted.json"
+    assert (
+        main(
+            [
+                "check",
+                str(baseline),
+                str(candidate),
+                "--policy",
+                str(policy),
+                "--format",
+                "json",
+                "--redact-formula-defined-xlm-registrations",
+                "--output",
+                str(policy_output),
+            ]
+        )
+        == 1
+    )
+    policy_rendered = policy_output.read_text(encoding="utf-8")
+    assert "FF068" in policy_rendered
+    assert "FFP068" in policy_rendered
+    assert all(value not in policy_rendered for value in sensitive_values)
+
+    baseline_directory = tmp_path / "baseline-portfolio"
+    candidate_directory = tmp_path / "candidate-portfolio"
+    baseline_directory.mkdir()
+    candidate_directory.mkdir()
+    make_formula_defined_xlm_registration_model(baseline_directory / "model.xlsx")
+    portfolio_candidate = make_formula_defined_xlm_registration_model(
+        candidate_directory / "model.xlsx"
+    )
+    change_formula_defined_xlm_registration_input(portfolio_candidate)
+    change_formula_defined_xlm_registration_call(portfolio_candidate)
+    portfolio_output = tmp_path / "xlm-registration-portfolio-redacted.json"
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline_directory),
+                str(candidate_directory),
+                "--format",
+                "json",
+                "--redact-formula-defined-xlm-registrations",
+                "--output",
+                str(portfolio_output),
+            ]
+        )
+        == 0
+    )
+    portfolio_rendered = portfolio_output.read_text(encoding="utf-8")
+    assert "formula-defined XLM registration material redacted" in portfolio_rendered
     assert all(value not in portfolio_rendered for value in sensitive_values)
 
 

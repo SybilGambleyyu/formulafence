@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.103.0
+        uses: SybilGambleyyu/formulafence@v0.104.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -63,7 +63,7 @@ with the repository's chosen SARIF uploader. FormulaFence uses logical
 locations such as `Dashboard!B12`; consumers that do not understand Excel
 coordinates can still show the workbook path, rule, and message.
 
-## Shared external-workbook-link, formula-action, Python-in-Excel, Office custom-function, unqualified runtime-function, and worksheet code-resource registration artifacts
+## Shared external-workbook-link, formula-action, Python-in-Excel, Office custom-function, runtime-function, and registration artifacts
 
 The default report preserves full local reviewer evidence. If an artifact or
 Markdown job summary will be shared outside that review boundary, set the
@@ -77,6 +77,7 @@ Action input below (or pass the same CLI flag to `diff`, `check`, or
           redact-office-custom-functions: 'true'
           redact-unqualified-runtime-functions: 'true'
           redact-worksheet-code-resource-registrations: 'true'
+          redact-formula-defined-xlm-registrations: 'true'
 ```
 
 This maps directly to `--redact-external-workbook-links`. It replaces a whole
@@ -152,12 +153,27 @@ in-memory report unchanged; it never evaluates a formula, resolves a module
 path, loads a DLL/XLL, inspects host trust settings, executes code, or
 reconstructs a dynamically assembled argument.
 
+`redact-formula-defined-xlm-registrations: 'true'` maps directly to
+`--redact-formula-defined-xlm-registrations`. It replaces direct stored
+`FF068` `REGISTER` material with `[formula-defined XLM registration material
+redacted]`. It also hides before/after cell evidence for a changed invoking
+formula and for an exact changed static input the private dependency analysis
+recorded as reaching one. When a relevant formula-defined-name chain changed,
+it conservatively replaces changed defined-name before/after values too,
+because a dotted workbook-defined wrapper can carry a private module,
+procedure, type, or other argument without spelling `REGISTER`. The mode
+leaves comparison facts, policy, exit-code, and the in-memory report unchanged;
+it never evaluates a formula, executes a macro, resolves a module path, loads
+a DLL/XLL, inspects host trust settings, or reconstructs a dynamically
+assembled argument.
+
 This is not a general sensitive-data redaction guarantee. No sharing switch
 replaces the other external-workbook-link, formula-action, Python-in-Excel,
 Office custom-function, unqualified runtime-function, or worksheet
-code-resource-registration boundaries, so set the relevant inputs when a shared
-artifact may contain multiple kinds of material. Leave them off for the
-established complete local-review report.
+code-resource-registration boundaries, including the separate formula-defined
+XLM registration boundary, so set the relevant inputs when a shared artifact
+may contain multiple kinds of material. Leave them off for the established
+complete local-review report.
 
 ## Directory portfolios
 
@@ -168,7 +184,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.103.0
+  uses: SybilGambleyyu/formulafence@v0.104.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -272,7 +288,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.103.0/formulafence-0.103.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.104.0/formulafence-0.104.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

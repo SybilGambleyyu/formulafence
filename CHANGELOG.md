@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.104.0 — 2026-07-26
+
+- Add opt-in `--redact-formula-defined-xlm-registrations` rendering for
+  `diff`, `check`, and `portfolio` JSON, Markdown, and SARIF artifacts. Default
+  local-review output remains unchanged; the output-only boundary replaces
+  direct stored `FF068` `REGISTER` material with `[formula-defined XLM
+  registration material redacted]`.
+- Extend the boundary to before/after evidence for changed invoking formulas
+  and exact changed static input cells recorded by the private full dependency
+  impact set, rather than the bounded impact sample shown in reports.
+- Retain the private formula-defined-name chain signature for FF068 and, when
+  it changes, conservatively redact changed defined-name before/after evidence
+  so a dotted workbook-defined wrapper cannot disclose a module, procedure,
+  type string, or another registration argument that reaches `REGISTER` deeper
+  in the chain.
+- Keep comparison facts, findings, policy evaluation, and exit status unchanged.
+  The composite GitHub Action exposes the switch as
+  `redact-formula-defined-xlm-registrations: 'true'`; the mode does not
+  calculate a formula, execute a macro, resolve a module path, load a DLL/XLL,
+  inspect host trust settings, contact a provider, or reconstruct a dynamic
+  argument, and it is not a general secret scrubber.
+- Add direct-call, exact unsampled-static-input, resolved named-chain,
+  default-evidence, policy, portfolio, JSON/Markdown/SARIF, and composite-Action
+  regression coverage.
+
 ## 0.103.0 — 2026-07-26
 
 - Add opt-in `--redact-worksheet-code-resource-registrations` rendering for

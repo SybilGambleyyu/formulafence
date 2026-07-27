@@ -869,7 +869,11 @@ def make_formula_defined_xlm_registration_model(path: Path) -> Path:
     workbook.defined_names.add(
         DefinedName(
             "FENCE.XLM.DIRECT",
-            attr_text='=REGISTER(Inputs!$A$9,Inputs!$A$10,"J!")',
+            attr_text=(
+                '=REGISTER(Inputs!$A$9,'
+                '"PRIVATE-XLM-REGISTRATION-LITERAL-PROCEDURE-BASELINE",'
+                '"PRIVATE-XLM-REGISTRATION-LITERAL-TYPE-BASELINE")'
+            ),
         )
     )
     workbook.save(path)
@@ -893,6 +897,26 @@ def change_formula_defined_xlm_registration_input(path: Path) -> Path:
     """Change a static input used by a formula-defined XLM registration."""
     workbook = load_workbook(path)
     workbook["Inputs"]["A9"] = "PRIVATE-XLM-REGISTRATION-MODULE-CANDIDATE"
+    workbook.save(path)
+    return path
+
+
+def change_formula_defined_xlm_registration_call(path: Path) -> Path:
+    """Change a direct stored XLM registration without evaluating it."""
+    workbook = load_workbook(path)
+    definition = workbook.defined_names["FENCE.XLM.DIRECT"]
+    expected = (
+        '=REGISTER(Inputs!$A$9,'
+        '"PRIVATE-XLM-REGISTRATION-LITERAL-PROCEDURE-BASELINE",'
+        '"PRIVATE-XLM-REGISTRATION-LITERAL-TYPE-BASELINE")'
+    )
+    if definition.attr_text != expected:
+        raise ValueError("Fixture does not contain the expected direct XLM registration")
+    definition.attr_text = (
+        '=REGISTER(Inputs!$A$9,'
+        '"PRIVATE-XLM-REGISTRATION-LITERAL-PROCEDURE-CANDIDATE",'
+        '"PRIVATE-XLM-REGISTRATION-LITERAL-TYPE-CANDIDATE")'
+    )
     workbook.save(path)
     return path
 

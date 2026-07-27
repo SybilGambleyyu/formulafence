@@ -5,6 +5,53 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared formula-defined XLM registration report redaction — 2026-07-26
+
+FormulaFence 0.104.0 adds the separate, opt-in
+`--redact-formula-defined-xlm-registrations` rendering boundary for generic
+reports. It is deliberately separate from the count-only `FF068` ledger and
+from the external-workbook-link, formula-action, Python-in-Excel, Office
+custom-function, unqualified-runtime-function, and worksheet-code-resource
+registration redaction modes. Default local-review output remains unchanged.
+When enabled, JSON, Markdown, and SARIF hide direct stored `REGISTER` material,
+changed invoking-formula evidence, and exact changed static input evidence the
+private dependency analysis recorded as reaching an inventoried registration. A
+formula-defined-name body can send a private module, procedure, type string, or
+other argument through a dotted workbook-defined wrapper to `REGISTER` deeper
+in the chain, so FormulaFence privately compares the resolved definition chain
+and conservatively hides changed defined-name before/after evidence when that
+signature changes.
+
+Microsoft's [`xlfRegister` Form 1 reference](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-1)
+documents the XLM `REGISTER` equivalent for DLL-function or command
+registration and identifies macro types callable from a defined-name
+definition. Its [`Form 2` reference](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-2)
+documents XLL loading and activation. Those documented stored arguments explain
+why a generic report can expose sensitive implementation material without
+proving that a DLL/XLL is available, trusted, loaded, or successfully
+registered. FormulaFence does not evaluate a formula, execute a macro, resolve
+a module path, load a DLL/XLL, inspect host trust settings, contact a provider,
+or reconstruct a dynamic argument.
+
+Focused fixtures cover a direct stored `REGISTER` definition plus a changed
+static module input, an input whose invoking registration falls beyond the
+report's bounded impact sample, and a dotted named wrapper whose private module
+literal can only be associated with the registration through the private
+fixed-point definition analysis. The redacted JSON, Markdown, SARIF, policy,
+portfolio, and composite-Action contracts retain `FF068` / `FFP068` and their
+exit behavior while omitting controlled module, procedure, type, input, and
+nested-name markers. The final source tree passed **671 tests in 95.24 seconds**
+(deterministic command-limited chunks), plus a clean Ruff check,
+`git diff --check`, and shell syntax check for the composite Action. The exact
+release wheel was installed in a fresh environment; its CLI retained controlled
+registration/input markers in default JSON, removed them from redacted
+JSON/Markdown/SARIF/policy/portfolio output, and still returned `1` with
+`FF068` and `FFP068` for the redacted policy check. The wheel
+`formulafence-0.104.0-py3-none-any.whl` passed `twine check` with SHA-256
+`31b41bacfe2a5299b4c07926cd815b32c2a2990c9616747f2696aaf40f3a505f`.
+The source distribution also passed `twine check`; its digest is intentionally
+omitted because this validation note is included in that archive.
+
 ## Shared worksheet code-resource registration report redaction — 2026-07-26
 
 FormulaFence 0.103.0 adds the separate, opt-in

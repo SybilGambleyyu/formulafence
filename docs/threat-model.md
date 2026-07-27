@@ -802,7 +802,11 @@ formula will produce.
   execute an XLM macro, resolve a path, load a DLL/XLL, or inspect trust
   settings. Direct worksheet `REGISTER` formulas and raw XLM macro-sheet parts
   are intentionally outside this narrow boundary; dynamic/unresolved inputs
-  remain static-coverage limits.
+  remain static-coverage limits. The separate
+  `--redact-formula-defined-xlm-registrations` shared-artifact mode hides direct
+  stored `REGISTER` material, exact changed static inputs, and changed private
+  name-chain evidence after comparison and policy evaluation without executing
+  or resolving a registration target, and without changing any comparison fact.
 - Legacy XLM `EVALUATE` can be stored in a formula-defined name or named
   `LAMBDA`, where it parses a supplied text expression at calculation time.
   FormulaFence separately inventories only that stored-definition form and

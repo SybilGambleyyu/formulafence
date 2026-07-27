@@ -584,7 +584,12 @@ FormulaFence does not evaluate a formula, execute a macro, resolve a module
 path, load a DLL/XLL, inspect host security settings, or determine whether a
 registration succeeds. Direct worksheet `REGISTER` formulas and raw XLM
 macro-sheet parts are deliberately outside this narrow stored-definition
-boundary; the latter remain under `FF026`.
+boundary; the latter remain under `FF026`. The ordinary semantic diff still
+retains changed formulas and definitions for local review, so it is not a
+redacted registration ledger. For a shared artifact, the separate output-only
+`--redact-formula-defined-xlm-registrations` mode hides direct stored
+`REGISTER` material, exact changed static inputs, and changed resolved
+name-chain evidence without changing comparison, policy, or exit status.
 
 ## Formula-defined XLM expression evaluation
 

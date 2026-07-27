@@ -22,6 +22,9 @@ UNQUALIFIED_RUNTIME_FUNCTION_REDACTION = (
 WORKSHEET_CODE_RESOURCE_REGISTRATION_REDACTION = (
     "[worksheet code-resource registration material redacted]"
 )
+FORMULA_DEFINED_XLM_REGISTRATION_REDACTION = (
+    "[formula-defined XLM registration material redacted]"
+)
 
 # This fallback deliberately supplements, rather than replaces, FormulaFence's
 # static formula inspection below.  A visible `INDIRECT("'[Book]Sheet'!A1")`
@@ -247,6 +250,7 @@ def _safe_finding_details(
     redact_office_custom_functions: bool = False,
     redact_unqualified_runtime_functions: bool = False,
     redact_worksheet_code_resource_registrations: bool = False,
+    redact_formula_defined_xlm_registrations: bool = False,
 ) -> dict[str, Any]:
     """Copy one SARIF finding's properties through active name-chain bounds."""
     details = dict(finding.details)
@@ -276,6 +280,12 @@ def _safe_finding_details(
         _redact_worksheet_code_resource_registration_defined_name_details(
             details, report
         )
+    if (
+        redact_formula_defined_xlm_registrations
+        and report is not None
+        and finding.rule_id == "FF008"
+    ):
+        _redact_formula_defined_xlm_registration_defined_name_details(details, report)
     return details
 
 
@@ -777,6 +787,180 @@ def redact_worksheet_code_resource_registration_portfolio_payload(
                 entry, workbook.report
             )
             _redact_worksheet_code_resource_registration_defined_name_evidence(
+                entry, workbook.report
+            )
+    return redacted
+
+
+def _contains_formula_defined_xlm_registration_material(value: str) -> bool:
+    """Return whether one rendered string exposes a stored XLM ``REGISTER`` call.
+
+    ``REGISTER`` is an XLM primitive whose formula-defined-name forms can
+    register a DLL function, command, or XLL. The ordinary worksheet scanner
+    deliberately excludes it, so this renderer explicitly enables the same
+    defined-name-only classifier used by FF068. A renderer lacks name-scope
+    resolution, making a standalone matching call a conservative redaction
+    candidate rather than proof that it is the Excel primitive.
+    """
+    if "register" not in value.casefold() or "(" not in value:
+        return False
+    formula = value if value.lstrip().startswith("=") else f"={value}"
+    return bool(
+        inspect_formula(
+            formula, inspect_formula_defined_xlm_registrations=True
+        ).formula_defined_xlm_registration_functions
+    )
+
+
+def redact_formula_defined_xlm_registration_material(payload: Any) -> Any:
+    """Return an output-only copy with direct stored ``REGISTER`` text hidden.
+
+    This covers direct definition material. The report-level helpers below also
+    hide exact changed static inputs and changed formula-defined-name bodies
+    that the private FF068 comparison identifies as registration relevant.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: redact_formula_defined_xlm_registration_material(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [
+            redact_formula_defined_xlm_registration_material(value)
+            for value in payload
+        ]
+    if isinstance(payload, tuple):
+        return tuple(
+            redact_formula_defined_xlm_registration_material(value)
+            for value in payload
+        )
+    if isinstance(payload, str) and _contains_formula_defined_xlm_registration_material(
+        payload
+    ):
+        return FORMULA_DEFINED_XLM_REGISTRATION_REDACTION
+    return payload
+
+
+def _formula_defined_xlm_registration_sensitive_change_locations(
+    report: DiffReport,
+) -> set[str]:
+    """Return changed cells whose evidence can carry a registration input."""
+    sensitive_cells = (
+        report.before.formula_defined_xlm_registrations.registration_cells
+        | report.after.formula_defined_xlm_registrations.registration_cells
+        | report.formula_defined_xlm_registration_static_input_cells
+    )
+    if not sensitive_cells:
+        return set()
+
+    locations: set[str] = set()
+    for change in report.changes:
+        if change.location is None or change.location not in sensitive_cells:
+            continue
+        location = display_location(change.location)
+        if location is not None:
+            locations.add(location)
+    return locations
+
+
+def _redact_formula_defined_xlm_registration_change_cells(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide before/after cells that invoke a stored registration or feed it."""
+    sensitive_locations = _formula_defined_xlm_registration_sensitive_change_locations(
+        report
+    )
+    if not sensitive_locations:
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("location") not in sensitive_locations:
+            continue
+        for side in ("before", "after"):
+            snapshot = change.get(side)
+            if not isinstance(snapshot, dict):
+                continue
+            for field in ("value", "formula", "formula_fingerprint"):
+                if snapshot.get(field) is not None:
+                    snapshot[field] = FORMULA_DEFINED_XLM_REGISTRATION_REDACTION
+    return payload
+
+
+def _formula_defined_xlm_registration_definition_material_changed(
+    report: DiffReport,
+) -> bool:
+    """Return whether a stored registration-relevant definition changed."""
+    return (
+        report.before.formula_defined_xlm_registrations.definition_signature
+        != report.after.formula_defined_xlm_registrations.definition_signature
+    )
+
+
+def _redact_formula_defined_xlm_registration_defined_name_details(
+    details: dict[str, Any], report: DiffReport
+) -> None:
+    """Hide FF008 evidence when a resolved XLM registration chain changed.
+
+    A named LAMBDA can pass module or procedure text through an ordinary-looking
+    dotted workbook-defined wrapper whose eventual body calls ``REGISTER``.
+    Its own text cannot be classified without the private fixed-point
+    resolution. When that definition signature changes, hiding every changed
+    defined-name body is the safe sharing boundary.
+    """
+    if not _formula_defined_xlm_registration_definition_material_changed(report):
+        return
+    for field in ("before", "after"):
+        if isinstance(details.get(field), str):
+            details[field] = FORMULA_DEFINED_XLM_REGISTRATION_REDACTION
+
+
+def _redact_formula_defined_xlm_registration_defined_name_evidence(
+    payload: dict[str, Any], report: DiffReport
+) -> dict[str, Any]:
+    """Hide registration-resolved name-chain text in report evidence."""
+    if not _formula_defined_xlm_registration_definition_material_changed(report):
+        return payload
+    for change in payload.get("changes", []):
+        if change.get("kind") == "defined_name_changed":
+            details = change.get("details")
+            if isinstance(details, dict):
+                _redact_formula_defined_xlm_registration_defined_name_details(
+                    details, report
+                )
+    for finding in payload.get("findings", []):
+        if finding.get("rule_id") != "FF008":
+            continue
+        details = finding.get("details")
+        if isinstance(details, dict):
+            _redact_formula_defined_xlm_registration_defined_name_details(
+                details, report
+            )
+    return payload
+
+
+def redact_formula_defined_xlm_registration_report_payload(
+    report: DiffReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Redact direct XLM registrations and private static/name-chain evidence."""
+    redacted = redact_formula_defined_xlm_registration_material(payload)
+    _redact_formula_defined_xlm_registration_change_cells(redacted, report)
+    return _redact_formula_defined_xlm_registration_defined_name_evidence(
+        redacted, report
+    )
+
+
+def redact_formula_defined_xlm_registration_portfolio_payload(
+    report: PortfolioReport, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply the stored XLM registration sharing boundary to nested reports."""
+    redacted = redact_formula_defined_xlm_registration_material(payload)
+    for workbook, entry in zip(
+        report.workbooks, redacted.get("workbooks", []), strict=False
+    ):
+        if workbook.report is not None and isinstance(entry, dict):
+            _redact_formula_defined_xlm_registration_change_cells(
+                entry, workbook.report
+            )
+            _redact_formula_defined_xlm_registration_defined_name_evidence(
                 entry, workbook.report
             )
     return redacted
@@ -4181,6 +4365,7 @@ def report_to_markdown(
     redact_office_custom_functions: bool = False,
     redact_unqualified_runtime_functions: bool = False,
     redact_worksheet_code_resource_registrations: bool = False,
+    redact_formula_defined_xlm_registrations: bool = False,
 ) -> str:
     policy_findings = list(extra_findings)
     payload = report.to_dict(policy_findings)
@@ -4196,6 +4381,10 @@ def report_to_markdown(
         payload = redact_unqualified_runtime_function_report_payload(report, payload)
     if redact_worksheet_code_resource_registrations:
         payload = redact_worksheet_code_resource_registration_report_payload(
+            report, payload
+        )
+    if redact_formula_defined_xlm_registrations:
+        payload = redact_formula_defined_xlm_registration_report_payload(
             report, payload
         )
     summary = payload["summary"]
@@ -4237,6 +4426,14 @@ def report_to_markdown(
             if redact_worksheet_code_resource_registrations
             else []
         ),
+        *(
+            [
+                "- **Formula-defined XLM registration material:** redacted for "
+                "sharing"
+            ]
+            if redact_formula_defined_xlm_registrations
+            else []
+        ),
         f"- **Changes:** {summary['change_count']}",
         f"- **Findings:** {summary['finding_count']}",
         f"- **Highest severity:** `{summary['highest_severity']}`",
@@ -4265,6 +4462,7 @@ def report_to_sarif(
     redact_office_custom_functions: bool = False,
     redact_unqualified_runtime_functions: bool = False,
     redact_worksheet_code_resource_registrations: bool = False,
+    redact_formula_defined_xlm_registrations: bool = False,
 ) -> dict[str, Any]:
     findings = [*report.findings, *extra_findings]
     rule_ids = sorted({finding.rule_id for finding in findings})
@@ -4286,6 +4484,9 @@ def report_to_sarif(
             redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
             redact_worksheet_code_resource_registrations=(
                 redact_worksheet_code_resource_registrations
+            ),
+            redact_formula_defined_xlm_registrations=(
+                redact_formula_defined_xlm_registrations
             ),
         )
         result: dict[str, Any] = {
@@ -4338,6 +4539,8 @@ def report_to_sarif(
         payload = redact_unqualified_runtime_function_material(payload)
     if redact_worksheet_code_resource_registrations:
         payload = redact_worksheet_code_resource_registration_material(payload)
+    if redact_formula_defined_xlm_registrations:
+        payload = redact_formula_defined_xlm_registration_material(payload)
     return payload
 
 
@@ -4388,6 +4591,7 @@ def portfolio_to_markdown(
     redact_office_custom_functions: bool = False,
     redact_unqualified_runtime_functions: bool = False,
     redact_worksheet_code_resource_registrations: bool = False,
+    redact_formula_defined_xlm_registrations: bool = False,
 ) -> str:
     """Render a complete multi-workbook review without absolute filesystem paths."""
     payload = report.to_dict()
@@ -4403,6 +4607,10 @@ def portfolio_to_markdown(
         payload = redact_unqualified_runtime_function_portfolio_payload(report, payload)
     if redact_worksheet_code_resource_registrations:
         payload = redact_worksheet_code_resource_registration_portfolio_payload(
+            report, payload
+        )
+    if redact_formula_defined_xlm_registrations:
+        payload = redact_formula_defined_xlm_registration_portfolio_payload(
             report, payload
         )
     summary = payload["summary"]
@@ -4464,6 +4672,14 @@ def portfolio_to_markdown(
             if redact_worksheet_code_resource_registrations
             else []
         ),
+        *(
+            [
+                "- **Formula-defined XLM registration material:** redacted for "
+                "sharing"
+            ]
+            if redact_formula_defined_xlm_registrations
+            else []
+        ),
         "",
         (
             "Relative workbook paths are the comparison identity. A move is deliberately "
@@ -4520,6 +4736,7 @@ def portfolio_to_sarif(
     redact_office_custom_functions: bool = False,
     redact_unqualified_runtime_functions: bool = False,
     redact_worksheet_code_resource_registrations: bool = False,
+    redact_formula_defined_xlm_registrations: bool = False,
 ) -> dict[str, Any]:
     """Render every portfolio finding in one SARIF run with relative artifacts."""
     rule_ids = sorted(
@@ -4548,6 +4765,9 @@ def portfolio_to_sarif(
                 redact_unqualified_runtime_functions=redact_unqualified_runtime_functions,
                 redact_worksheet_code_resource_registrations=(
                     redact_worksheet_code_resource_registrations
+                ),
+                redact_formula_defined_xlm_registrations=(
+                    redact_formula_defined_xlm_registrations
                 ),
             )
             location: dict[str, Any] = {
@@ -4602,4 +4822,6 @@ def portfolio_to_sarif(
         payload = redact_unqualified_runtime_function_material(payload)
     if redact_worksheet_code_resource_registrations:
         payload = redact_worksheet_code_resource_registration_material(payload)
+    if redact_formula_defined_xlm_registrations:
+        payload = redact_formula_defined_xlm_registration_material(payload)
     return payload

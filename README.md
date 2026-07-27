@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.103.0/formulafence-0.103.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.104.0/formulafence-0.104.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -71,7 +71,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.103.0
+  uses: SybilGambleyyu/formulafence@v0.104.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -296,6 +296,47 @@ The GitHub Action exposes the same boundary through
 `redact-worksheet-code-resource-registrations: 'true'`. The scope follows
 Microsoft's [`REGISTER.ID` reference](https://support.microsoft.com/en-us/office/register-id-function-f8f0af0f-fd66-4704-a0f2-87b27b175b50),
 which documents the worksheet-capable DLL/code-resource registration function.
+
+### Sharing reports with formula-defined XLM registrations
+
+Legacy XLM `REGISTER` can be stored in a formula-defined name or named
+`LAMBDA`, where its module, procedure, type string, and static arguments can
+surface through ordinary changed-name or cell evidence even though the `FF068`
+ledger itself publishes only counts. For an artifact that crosses the local
+review boundary, add `--redact-formula-defined-xlm-registrations` to `diff`,
+`check`, or `portfolio`:
+
+```bash
+formulafence check baseline.xlsx candidate.xlsx \
+  --policy formulafence.yml \
+  --format json \
+  --redact-formula-defined-xlm-registrations \
+  --output shared-report.json
+```
+
+This output-only mode covers direct stored `REGISTER` material FormulaFence
+inventories under `FF068`. It replaces a whole serialized value with
+`[formula-defined XLM registration material redacted]`, hides before/after
+evidence for a changed invoking formula or exact changed static input that the
+private dependency analysis recorded as reaching one, and conservatively hides
+changed formula-defined-name before/after values when a private resolved
+registration chain changed. That last rule protects an ordinary-looking dotted
+wrapper whose private argument eventually reaches `REGISTER`. A shared renderer
+does not retain workbook-local name bindings, so it may conservatively replace a
+standalone `REGISTER`-shaped string too; default local-review output is
+unchanged.
+
+The switch does not mutate snapshots, findings, policy evaluation, or an exit
+status; it does not calculate formulas, execute a macro, resolve a module path,
+load a DLL/XLL, inspect host trust settings, contact a provider, or reconstruct
+a dynamically assembled argument. It is not a general secret scrubber and does
+not replace the external-workbook-link, formula-action, Python-in-Excel, Office
+custom-function, unqualified-runtime-function, or worksheet-code-resource
+registration sharing boundaries. The GitHub Action exposes the same boundary
+through `redact-formula-defined-xlm-registrations: 'true'`. The scope follows
+Microsoft's [`xlfRegister` Form 1 reference](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-1)
+and [`Form 2` reference](https://learn.microsoft.com/en-au/office/client-developer/excel/xlfregister-form-2),
+which document XLM registration for DLL functions/commands and XLL activation.
 
 ### Portfolio gates
 
@@ -935,6 +976,10 @@ private signatures. FormulaFence does not evaluate a formula, execute an XLM
 macro, resolve a path, load a DLL/XLL, or inspect host trust settings. Dynamic
 or unresolved inputs remain explicit coverage limits. Enable
 `no_formula_defined_xlm_registration_changes` to block this boundary in CI.
+For a shared artifact, the separate output-only
+`--redact-formula-defined-xlm-registrations` mode hides direct stored
+`REGISTER` material, exact changed static inputs, and changed private
+name-chain evidence without changing comparison, policy, or exit status.
 
 FormulaFence also keeps a separate **formula-defined XLM expression-evaluation
 ledger** for `EVALUATE` calls stored in formula-defined names and named

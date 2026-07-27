@@ -10,6 +10,7 @@ from pathlib import Path
 
 import yaml
 from openpyxl import Workbook
+from openpyxl.workbook.defined_name import DefinedName
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ACTION_PATH = REPOSITORY_ROOT / "action.yml"
@@ -37,6 +38,7 @@ def _run_action_script(
     redact_office_custom_functions: str = "false",
     redact_unqualified_runtime_functions: str = "false",
     redact_worksheet_code_resource_registrations: str = "false",
+    redact_formula_defined_xlm_registrations: str = "false",
     max_workbooks: str = "512",
     max_link_impact: str = "100000",
     upload_artifact: str = "true",
@@ -71,6 +73,9 @@ def _run_action_script(
             ),
             "INPUT_REDACT_WORKSHEET_CODE_RESOURCE_REGISTRATIONS": (
                 redact_worksheet_code_resource_registrations
+            ),
+            "INPUT_REDACT_FORMULA_DEFINED_XLM_REGISTRATIONS": (
+                redact_formula_defined_xlm_registrations
             ),
             "INPUT_FAIL_ON": "none",
             "INPUT_MAX_WORKBOOKS": max_workbooks,
@@ -108,6 +113,7 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
         "redact-office-custom-functions",
         "redact-unqualified-runtime-functions",
         "redact-worksheet-code-resource-registrations",
+        "redact-formula-defined-xlm-registrations",
         "max-workbooks",
         "max-link-impact",
     } <= set(action["inputs"])
@@ -479,6 +485,70 @@ def test_action_rejects_an_invalid_worksheet_code_resource_registration_switch(
         "Unsupported redact-worksheet-code-resource-registrations value"
         in result.stderr
     )
+
+
+def test_action_can_redact_formula_defined_xlm_registration_material(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    baseline_marker = "PRIVATE-ACTION-XLM-MODULE-BASELINE"
+    candidate_marker = "PRIVATE-ACTION-XLM-MODULE-CANDIDATE"
+    baseline_procedure = "PRIVATE-ACTION-XLM-PROCEDURE-BASELINE"
+    candidate_procedure = "PRIVATE-ACTION-XLM-PROCEDURE-CANDIDATE"
+
+    def xlm_registration_workbook(path: Path, module: str, procedure: str) -> None:
+        workbook = Workbook()
+        workbook.active.title = "Inputs"
+        workbook.active["A9"] = module
+        workbook.active["B2"] = "=FENCE.XLM.REGISTER(A9)"
+        workbook.defined_names.add(
+            DefinedName(
+                "FENCE.XLM.REGISTER",
+                attr_text=f'=LAMBDA(module,REGISTER(module,"{procedure}","J!"))',
+            )
+        )
+        workbook.save(path)
+
+    xlm_registration_workbook(baseline, baseline_marker, baseline_procedure)
+    xlm_registration_workbook(candidate, candidate_marker, candidate_procedure)
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        report_format="json",
+        output="reports/formulafence.json",
+        redact_formula_defined_xlm_registrations="true",
+    )
+
+    assert result.returncode == 0
+    rendered = (tmp_path / "reports" / "formulafence.json").read_text(encoding="utf-8")
+    assert baseline_marker not in rendered
+    assert candidate_marker not in rendered
+    assert baseline_procedure not in rendered
+    assert candidate_procedure not in rendered
+    assert "formula-defined XLM registration material redacted" in rendered
+    assert "FF068" in rendered
+
+
+def test_action_rejects_an_invalid_formula_defined_xlm_registration_switch(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "approved.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    _workbook(baseline, "=1+1")
+    _workbook(candidate, "=1+1")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        redact_formula_defined_xlm_registrations="sometimes",
+    )
+
+    assert result.returncode == 2
+    assert "Unsupported redact-formula-defined-xlm-registrations value" in result.stderr
 
 
 def test_action_runs_a_directory_portfolio_and_preserves_membership_evidence(

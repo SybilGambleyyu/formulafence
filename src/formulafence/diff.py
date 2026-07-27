@@ -4160,6 +4160,9 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         worksheet_code_resource_registration_static_input_cells=frozenset(
             worksheet_code_resource_registration_static_input_changes
         ),
+        formula_defined_xlm_registration_static_input_cells=frozenset(
+            formula_defined_xlm_registration_static_input_changes
+        ),
     )
 
 

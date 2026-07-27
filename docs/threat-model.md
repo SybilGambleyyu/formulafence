@@ -131,8 +131,12 @@ financial correctness or replace model review.
   MiB and aggregate XML material at 256 MiB. Each streamed reader part is also
   capped at 4,000,000 elements and 256 nesting levels. The gate limits
   populated SpreadsheetML cell records and shared-string entries to 500,000
-  each, effective `cellXfs` styles to 65,490, cell text to 32,767 characters,
-  and stored formula/defined-name text to 8,192 characters. It separately caps
+  each, row-dimension declarations to 16,384 across selected ordinary
+  worksheet parts, effective `cellXfs` styles to 65,490, cell text to 32,767
+  characters, and stored formula/defined-name text to 8,192 characters. A row
+  counts only when it has an unqualified attribute other than `r` or `spans`,
+  the condition that makes `openpyxl` retain a `RowDimension`; namespaced
+  extension attributes do not count. It separately caps
   repeated known stylesheet containers and every reader-materialized number-
   format, font, fill, fill-child, gradient-stop, border, base-XF, named-style,
   differential-style, palette, table-style, table-style-element, and extension
@@ -259,8 +263,13 @@ formula will produce.
 - After that ZIP-only pass, the semantic-reader limit is 64 MiB for each
   XML/relationship part, 256 MiB for aggregate XML material, 4,000,000 XML
   elements and 256 nesting levels for every reader-visible part it streams,
-  500,000 populated SpreadsheetML cell records, 500,000 shared-string entries,
-  and 65,490 effective `cellXfs` styles. It also caps repeated known stylesheet
+  500,000 populated SpreadsheetML cell records, 16,384 reader-materialized
+  row-dimension declarations across reader-selected ordinary worksheet parts,
+  500,000 shared-string entries, and 65,490 effective `cellXfs` styles. A row
+  declaration counts only when it has an unqualified attribute other than `r`
+  or `spans`, which is the `openpyxl` `RowDimension` allocation trigger; a
+  namespace-qualified extension attribute does not count. It also caps repeated
+  known stylesheet
   containers plus number-format, font, fill, fill-child, gradient-stop, border,
   base-XF, named-style, differential-style, palette, table-style,
   table-style-element, and extension records at 4,096 each. It follows

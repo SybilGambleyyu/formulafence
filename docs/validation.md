@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Empty formatted-row dimension bound — 2026-07-26
+
+Version 0.121.0 closes a compact allocation path in ordinary worksheet loading.
+Excel permits a worksheet grid of up to
+[1,048,576 rows](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits),
+but populated-cell cardinality does not bound empty row formatting. In
+`openpyxl`, parsing a transitional SpreadsheetML `<row>` stores a declaration
+for later `RowDimension` construction whenever it has an unqualified attribute
+other than `r` or `spans`. A compact run of empty rows with `ht` and
+`customHeight` therefore materializes one Python dimension object per row;
+FormulaFence's raw worksheet display scanners can revisit the same XML later.
+
+The semantic-reader preflight now allows at most 16,384 such declarations in
+aggregate across selected ordinary worksheet parts before either downstream
+scanner or the complete reader starts. It streams both supported SpreadsheetML
+variants for the raw display boundary, but uses the reader's exact attribute
+rule: coordinate-only rows and namespace-qualified extension attributes do not
+consume the budget, while an unknown unqualified attribute does. This is a
+separate CI-oriented cardinality boundary, not a claim that Excel's grid limit
+is unsafe.
+
+Independent raw-ZIP fixtures established the impact. A normal workbook loaded
+in 0.041 seconds at 35,152 KiB. A 259,597-byte workbook containing 100,000
+empty rows with only height metadata (4,089,411 bytes of worksheet XML) loaded
+before the gate in 8.580 seconds at 142,092 KiB. With the gate it rejects before
+the workbook reader in 0.074 seconds at 36,076 KiB. A 10,000-row formatted
+fixture remains accepted in 0.809 seconds at 45,624 KiB. Regression coverage
+exercises configured/default limits, exact-limit acceptance, cross-sheet
+aggregation, unknown attributes, and ignored coordinate, namespaced-attribute,
+and foreign-namespace cases. The completed source tree passed **836 tests in
+122.58 seconds**; focused archive-safety and version coverage passed **134
+tests in 4.06 seconds**, with Ruff, bytecode compilation, and `git diff --check`
+clean. A fresh Python 3.12 environment installed the exact release-candidate
+wheel, confirmed `FormulaFence 0.121.0` and `openpyxl.DEFUSEDXML`, completed a
+normal CLI comparison, and returned the normal input-error exit status (2) for
+the independently generated 100,000-row fixture.
+
 ## Stylesheet catalog bounds — 2026-07-26
 
 Version 0.120.0 closes compact allocation paths in `styles.xml`. Excel's

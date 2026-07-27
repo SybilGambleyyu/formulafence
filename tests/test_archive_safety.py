@@ -282,6 +282,47 @@ def _append_merged_cell_declarations(
     )
 
 
+def _append_row_dimension_declarations(
+    path: Path,
+    count: int,
+    *,
+    member_name: str = "xl/worksheets/sheet1.xml",
+    attributes: dict[str, str] | None = None,
+    alternate_namespace: str | None = None,
+) -> None:
+    """Append empty rows that can make the workbook reader retain dimensions."""
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    root = ElementTree.fromstring(worksheet)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    qualified_row_name = f"{{{namespace}}}row" if namespace else "row"
+    if alternate_namespace is not None:
+        qualified_row_name = f"{{{alternate_namespace}}}row"
+    sheet_data = next(
+        (
+            child
+            for child in root
+            if child.tag.rsplit("}", maxsplit=1)[-1] == "sheetData"
+        ),
+        None,
+    )
+    if sheet_data is None:
+        raise ValueError("worksheet fixture has no sheetData element")
+    row_attributes = (
+        {"ht": "15", "customHeight": "1"}
+        if attributes is None
+        else attributes
+    )
+    for index in range(count):
+        declaration_attributes = {"r": str(10_000 + index), **row_attributes}
+        ElementTree.SubElement(sheet_data, qualified_row_name, declaration_attributes)
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
 def _insert_worksheet_child_after_sheet_data(
     root: ElementTree.Element,
     child: ElementTree.Element,
@@ -806,6 +847,116 @@ def test_semantic_reader_preflight_rejects_excessive_cells_before_scanners(
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "populated worksheet cells" in message
+
+
+def test_semantic_reader_preflight_rejects_excessive_row_dimensions_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "too-many-row-dimensions.xlsx")
+    _append_row_dimension_declarations(workbook, 2)
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_ROW_DIMENSION_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "row-dimension declarations" in message
+
+
+def test_semantic_reader_preflight_rejects_default_row_dimension_limit_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "default-row-dimension-limit.xlsx")
+    _append_row_dimension_declarations(
+        workbook,
+        workbook_module._OOXML_READER_MAX_ROW_DIMENSION_COUNT + 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "row-dimension declarations" in message
+
+
+def test_semantic_reader_preflight_counts_row_dimensions_across_worksheets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "aggregate-row-dimensions.xlsx")
+    _append_row_dimension_declarations(workbook, 1)
+    _append_row_dimension_declarations(workbook, 1, member_name="xl/worksheets/sheet2.xml")
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_ROW_DIMENSION_COUNT", 1)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "row-dimension declarations" in message
+
+
+def test_semantic_reader_preflight_accepts_row_dimensions_at_the_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "row-dimensions-at-limit.xlsx")
+    _append_row_dimension_declarations(workbook, 2)
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_ROW_DIMENSION_COUNT", 2)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    (
+        {"spans": "1:1"},
+        {"{urn:formulafence:archive-safety}audit": "1"},
+    ),
+)
+def test_semantic_reader_preflight_ignores_row_attributes_that_do_not_create_dimensions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    attributes: dict[str, str],
+) -> None:
+    workbook = make_model(tmp_path / "non-dimension-row-attributes.xlsx")
+    _append_row_dimension_declarations(workbook, 1, attributes=attributes)
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_ROW_DIMENSION_COUNT", 0)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_counts_unknown_unqualified_row_attributes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "unknown-row-dimension-attribute.xlsx")
+    _append_row_dimension_declarations(
+        workbook,
+        1,
+        attributes={"formulafenceAudit": "1"},
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_ROW_DIMENSION_COUNT", 0)
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "row-dimension declarations" in message
+
+
+def test_semantic_reader_preflight_ignores_foreign_namespace_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "foreign-row-dimensions.xlsx")
+    _append_row_dimension_declarations(
+        workbook,
+        1,
+        alternate_namespace="urn:formulafence:archive-safety",
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_MAX_ROW_DIMENSION_COUNT", 0)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
 
 
 def test_semantic_reader_preflight_rejects_excessive_content_type_declarations_before_scanners(

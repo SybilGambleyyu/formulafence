@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.120.0/formulafence-0.120.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.121.0/formulafence-0.121.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.120.0
+  uses: SybilGambleyyu/formulafence@v0.121.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2547,7 +2547,8 @@ the reader-visible manifest, workbook, styles, shared strings, and bounded
 workbook-selected sheets before FormulaFence starts a complete in-memory reader
 or downstream raw OOXML scanning. It allows at most 4,000,000 XML elements per
 streamed part and 256 nesting levels, 500,000 populated SpreadsheetML cells,
-500,000 shared-string entries, 65,490 effective `cellXfs` styles, 32,767
+16,384 reader-materialized row-dimension declarations, 500,000 shared-string
+entries, 65,490 effective `cellXfs` styles, 32,767
 characters of cell text, and 8,192 characters of stored formula/defined-name
 text. It also
 caps the bootstrap catalog at 4,096 content-type declarations, 4,096 workbook
@@ -2559,7 +2560,10 @@ select; direct workbook book-view, custom-workbook-view, function-group,
 smart-tag-type, and web-publish-object catalogs are likewise capped at 4,096.
 Direct legacy custom sheet-view declarations are capped at 4,096 across the
 workbook-selected sheet parts before FormulaFence builds raw Custom View
-records. Direct merged-cell declarations across the reader-selected ordinary
+records. A row declaration counts toward the row-dimension budget only when it
+has an unqualified attribute other than `r` or `spans`, matching the condition
+that makes `openpyxl` retain a `RowDimension`; namespace-qualified extension
+attributes do not consume that budget. Direct merged-cell declarations across the reader-selected ordinary
 worksheet parts are capped at 4,096; each merge range and their aggregate
 expanded coordinate area are capped at 100,000 cells, and a merge reference at
 256 characters, before `openpyxl` expands every coordinate into a `MergedCell`.

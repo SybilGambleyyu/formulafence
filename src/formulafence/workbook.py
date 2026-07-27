@@ -168,6 +168,15 @@ _OOXML_ARCHIVE_ALLOWED_COMPRESSION_METHODS = frozenset({ZIP_STORED, ZIP_DEFLATED
 _OOXML_READER_MAX_XML_PART_BYTES = 64 * 1024 * 1024
 _OOXML_READER_MAX_TOTAL_XML_BYTES = 256 * 1024 * 1024
 _OOXML_READER_MAX_WORKSHEET_CELL_COUNT = 500_000
+# A transitional SpreadsheetML empty formatted row is not a populated cell,
+# but ``openpyxl`` retains a ``RowDimension`` for every ``row`` with an
+# unqualified attribute other than ``r`` or ``spans``. FormulaFence also
+# revisits raw worksheet display metadata, including equivalent Strict parts,
+# so apply one aggregate catalog budget before either reader can turn a compact
+# run of row declarations into many Python objects. The allowance remains
+# generous for report layout while making this otherwise cell-free allocation
+# path finite.
+_OOXML_READER_MAX_ROW_DIMENSION_COUNT = 16_384
 # The manifest and workbook relationship catalog are materialized before any
 # worksheet is considered. Their declarations are not ZIP members, so a
 # bounded archive inventory alone cannot stop a small package from making the
@@ -3397,8 +3406,10 @@ def _validate_ooxml_semantic_reader_resources(
     scenario_input_cell_count = 0
     scenario_target_range_count = 0
     populated_cell_count = 0
+    row_dimension_count = 0
     shared_string_count = 0
     cell_tags = _spreadsheetml_tags("c")
+    row_tags = _spreadsheetml_tags("row")
     formula_tags = _spreadsheetml_tags("f")
     inline_string_tags = _spreadsheetml_tags("is")
     shared_string_tags = _spreadsheetml_tags("si")
@@ -3826,10 +3837,20 @@ def _validate_ooxml_semantic_reader_resources(
         tags: list[str],
     ) -> None:
         nonlocal populated_cell_count
+        nonlocal row_dimension_count
         sheet_catalog_end(element, tags)
         merged_cell_end(element, tags)
         worksheet_reader_catalog_end(element, tags)
-        if element.tag in cell_tags:
+        if element.tag in row_tags and any(
+            not attribute.startswith("{") and attribute not in {"r", "spans"}
+            for attribute in element.attrib
+        ):
+            row_dimension_count += 1
+            if row_dimension_count > _OOXML_READER_MAX_ROW_DIMENSION_COUNT:
+                raise _reader_preflight_error(
+                    "row-dimension declarations exceed the semantic-reader safety limit."
+                )
+        elif element.tag in cell_tags:
             populated_cell_count += 1
             if populated_cell_count > _OOXML_READER_MAX_WORKSHEET_CELL_COUNT:
                 raise _reader_preflight_error(

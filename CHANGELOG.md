@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.121.0 — 2026-07-26
+
+- Bound the reader-materialized formatted-row catalog before raw OOXML scanners
+  or the complete workbook reader run. The semantic-reader preflight now allows
+  at most 16,384 row-dimension declarations in aggregate across its selected
+  ordinary worksheet parts.
+- Follow `openpyxl`'s allocation trigger: a SpreadsheetML `row` counts only
+  when it has an unqualified attribute other than `r` or `spans`, so coordinate-
+  only rows and namespace-qualified extension attributes remain compatible.
+- Add fail-before-reader regression coverage for configured/default limits,
+  aggregate cross-worksheet counts, exact limits, unknown attributes, and
+  ignored coordinate, namespaced-attribute, and foreign-namespace cases.
+
 ## 0.120.0 — 2026-07-26
 
 - Bound every `openpyxl` reader-materialized stylesheet catalog before raw

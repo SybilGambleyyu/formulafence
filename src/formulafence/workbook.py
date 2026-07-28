@@ -48342,6 +48342,144 @@ class _OverlayNameMapping(Mapping[str, _NameMapValue]):
         return sum(1 for _ in self)
 
 
+class _FilteredNameMapping(Mapping[str, _NameMapValue]):
+    """Expose one live name map through its formula/LAMBDA kind boundary.
+
+    The external-name resolver must keep ordinary formula names out of the
+    named-LAMBDA path and vice versa.  Copying the growing resolved map for
+    each definition turns that otherwise constant-time distinction into
+    quadratic work, so this filter keeps the existing map live instead.
+    """
+
+    def __init__(
+        self,
+        mapping: Mapping[str, _NameMapValue],
+        named_lambda_keys: frozenset[str],
+        *,
+        include_named_lambdas: bool,
+    ) -> None:
+        self._mapping = mapping
+        self._named_lambda_keys = named_lambda_keys
+        self._include_named_lambdas = include_named_lambdas
+
+    def __bool__(self) -> bool:
+        return bool(self._mapping)
+
+    def _visible(self, key: object) -> bool:
+        return isinstance(key, str) and (
+            (key in self._named_lambda_keys) == self._include_named_lambdas
+        )
+
+    def __contains__(self, key: object) -> bool:
+        return self._visible(key) and key in self._mapping
+
+    def __getitem__(self, key: str) -> _NameMapValue:
+        if key not in self:
+            raise KeyError(key)
+        return self._mapping[key]
+
+    def get(self, key: str, default=None):
+        if key not in self:
+            return default
+        return self._mapping[key]
+
+    def __iter__(self):
+        return (
+            key
+            for key in self._mapping
+            if self._visible(key)
+        )
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
+class _ExternalAliasNameMapping(Mapping[str, _NameMapValue]):
+    """Resolve mutable external endpoint aliases without rebuilding a map.
+
+    Formula-defined external endpoints become available one definition at a
+    time.  ``inspect_formula`` only needs membership and ``get``; resolving a
+    requested alias through the existing direct and newly resolved maps avoids
+    copying all currently known endpoints for every definition.  An optional
+    formula/LAMBDA filter preserves the separate invocation semantics used by
+    the prior materialized maps.
+    """
+
+    _missing = object()
+
+    def __init__(
+        self,
+        direct: Mapping[str, _NameMapValue],
+        resolved: Mapping[str, _NameMapValue],
+        aliases: Mapping[str, str],
+        *,
+        named_lambda_keys: frozenset[str] = frozenset(),
+        include_named_lambdas: bool | None = None,
+    ) -> None:
+        self._direct = direct
+        self._resolved = resolved
+        self._aliases = aliases
+        self._named_lambda_keys = named_lambda_keys
+        self._include_named_lambdas = include_named_lambdas
+
+    def __bool__(self) -> bool:
+        return bool(self._direct) or bool(self._resolved)
+
+    def _visible(self, key: object) -> bool:
+        if not isinstance(key, str):
+            return False
+        if self._include_named_lambdas is None:
+            return True
+        return (
+            (key in self._named_lambda_keys) == self._include_named_lambdas
+        )
+
+    def _value_for(self, key: str, default):
+        if not self._visible(key):
+            return default
+        current = key
+        visited: set[str] = set()
+        while current not in visited:
+            if current in self._resolved:
+                return self._resolved[current]
+            if current in self._direct:
+                return self._direct[current]
+            visited.add(current)
+            target = self._aliases.get(current)
+            if target is None:
+                break
+            current = target
+        return default
+
+    def __contains__(self, key: object) -> bool:
+        return (
+            isinstance(key, str)
+            and self._value_for(key, self._missing) is not self._missing
+        )
+
+    def __getitem__(self, key: str) -> _NameMapValue:
+        value = self._value_for(key, self._missing)
+        if value is self._missing:
+            raise KeyError(key)
+        return value
+
+    def get(self, key: str, default=None):
+        return self._value_for(key, default)
+
+    def __iter__(self):
+        seen: set[str] = set()
+        for mapping in (self._resolved, self._direct, self._aliases):
+            for key in mapping:
+                if key in seen:
+                    continue
+                seen.add(key)
+                if self._value_for(key, self._missing) is not self._missing:
+                    yield key
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
 class _NameMarkerMapping(Mapping[str, tuple[str, ...]]):
     """Generate one marker ledger through reusable name-to-identity overlays."""
 
@@ -49875,6 +50013,22 @@ def _formula_defined_name_external_references(
             ),
         )
 
+    alias_dependents: defaultdict[str, set[str]] = defaultdict(set)
+    for alias_key, target_key in aliases.items():
+        alias_dependents[target_key].add(alias_key)
+
+    def changed_name_keys(name_key: str) -> set[str]:
+        """Return one changed endpoint name plus aliases that now resolve it."""
+        changed = {name_key}
+        pending_aliases = [name_key]
+        while pending_aliases:
+            target_key = pending_aliases.pop()
+            for alias_key in alias_dependents.get(target_key, ()):
+                if alias_key not in changed:
+                    changed.add(alias_key)
+                    pending_aliases.append(alias_key)
+        return changed
+
     def is_validated_external_token(
         token: str,
         endpoint_maps: tuple[
@@ -49944,103 +50098,94 @@ def _formula_defined_name_external_references(
             in indexed_external_workbook_paths
         )
 
-    def named_lambda_endpoint_maps(
-        endpoint_maps: tuple[
-            Mapping[str, tuple[ExternalWorkbookReference, ...]],
-            Mapping[str, tuple[ExternalWorkbookThreeDReference, ...]],
-            Mapping[str, tuple[ExternalWorkbookStructuredReference, ...]],
-            Mapping[str, tuple[ExternalWorkbookDefinedNameReference, ...]],
-        ],
+    def endpoint_lookup_views(
+        direct: Mapping[str, _NameMapValue],
+        resolved: Mapping[str, _NameMapValue],
     ) -> tuple[
-        dict[str, tuple[ExternalWorkbookReference, ...]],
-        dict[str, tuple[ExternalWorkbookThreeDReference, ...]],
-        dict[str, tuple[ExternalWorkbookStructuredReference, ...]],
-        dict[str, tuple[ExternalWorkbookDefinedNameReference, ...]],
+        _ExternalAliasNameMapping,
+        _ExternalAliasNameMapping,
+        _ExternalAliasNameMapping,
     ]:
-        """Expose endpoint maps only for callable global named LAMBDAs."""
-        workbook_references, three_d_references, structured_references, defined_names = (
-            endpoint_maps
-        )
+        """Return all, ordinary-name, and named-LAMBDA views for one kind."""
         return (
-            {
-                name_key: references
-                for name_key, references in workbook_references.items()
-                if name_key in named_lambda_keys
-            },
-            {
-                name_key: references
-                for name_key, references in three_d_references.items()
-                if name_key in named_lambda_keys
-            },
-            {
-                name_key: references
-                for name_key, references in structured_references.items()
-                if name_key in named_lambda_keys
-            },
-            {
-                name_key: references
-                for name_key, references in defined_names.items()
-                if name_key in named_lambda_keys
-            },
+            _ExternalAliasNameMapping(
+                direct=direct,
+                resolved=resolved,
+                aliases=aliases,
+            ),
+            _ExternalAliasNameMapping(
+                direct=direct,
+                resolved=resolved,
+                aliases=aliases,
+                named_lambda_keys=named_lambda_keys,
+                include_named_lambdas=False,
+            ),
+            _ExternalAliasNameMapping(
+                direct=direct,
+                resolved=resolved,
+                aliases=aliases,
+                named_lambda_keys=named_lambda_keys,
+                include_named_lambdas=True,
+            ),
         )
 
-    def non_lambda_endpoint_maps(
-        endpoint_maps: tuple[
-            Mapping[str, tuple[ExternalWorkbookReference, ...]],
-            Mapping[str, tuple[ExternalWorkbookThreeDReference, ...]],
-            Mapping[str, tuple[ExternalWorkbookStructuredReference, ...]],
-            Mapping[str, tuple[ExternalWorkbookDefinedNameReference, ...]],
-        ],
-    ) -> tuple[
-        dict[str, tuple[ExternalWorkbookReference, ...]],
-        dict[str, tuple[ExternalWorkbookThreeDReference, ...]],
-        dict[str, tuple[ExternalWorkbookStructuredReference, ...]],
-        dict[str, tuple[ExternalWorkbookDefinedNameReference, ...]],
-    ]:
-        """Keep callable LAMBDA endpoints out of ordinary name references."""
-        workbook_references, three_d_references, structured_references, defined_names = (
-            endpoint_maps
-        )
-        return (
-            {
-                name_key: references
-                for name_key, references in workbook_references.items()
-                if name_key not in named_lambda_keys
-            },
-            {
-                name_key: references
-                for name_key, references in three_d_references.items()
-                if name_key not in named_lambda_keys
-            },
-            {
-                name_key: references
-                for name_key, references in structured_references.items()
-                if name_key not in named_lambda_keys
-            },
-            {
-                name_key: references
-                for name_key, references in defined_names.items()
-                if name_key not in named_lambda_keys
-            },
-        )
+    (
+        all_workbook_endpoint_view,
+        named_workbook_endpoint_view,
+        named_lambda_workbook_endpoint_view,
+    ) = endpoint_lookup_views(
+        direct_workbook_references,
+        formula_workbook_references,
+    )
+    (
+        all_three_d_endpoint_view,
+        named_three_d_endpoint_view,
+        named_lambda_three_d_endpoint_view,
+    ) = endpoint_lookup_views(
+        direct_three_d_references,
+        formula_three_d_references,
+    )
+    (
+        all_structured_endpoint_view,
+        named_structured_endpoint_view,
+        named_lambda_structured_endpoint_view,
+    ) = endpoint_lookup_views(
+        direct_structured_references,
+        formula_structured_references,
+    )
+    (
+        all_defined_name_endpoint_view,
+        named_defined_name_endpoint_view,
+        named_lambda_defined_name_endpoint_view,
+    ) = endpoint_lookup_views(
+        direct_defined_name_references,
+        formula_defined_name_references,
+    )
+    all_endpoint_views = (
+        all_workbook_endpoint_view,
+        all_three_d_endpoint_view,
+        all_structured_endpoint_view,
+        all_defined_name_endpoint_view,
+    )
 
-    def static_name_reference_maps() -> tuple[
-        dict[str, tuple[ParsedReference, ...]],
-        dict[str, tuple[ParsedReference, ...]],
-    ]:
-        """Split proven static formula-name inputs by invocation syntax."""
-        return (
-            {
-                name_key: references
-                for name_key, references in formula_static_references.items()
-                if name_key not in named_lambda_keys
-            },
-            {
-                name_key: references
-                for name_key, references in formula_static_references.items()
-                if name_key in named_lambda_keys
-            },
-        )
+    named_static_reference_view = _FilteredNameMapping(
+        formula_static_references,
+        named_lambda_keys,
+        include_named_lambdas=False,
+    )
+    named_lambda_static_reference_view = _FilteredNameMapping(
+        formula_static_references,
+        named_lambda_keys,
+        include_named_lambdas=True,
+    )
+    visible_named_references = _OverlayNameMapping(
+        named_static_reference_view,
+        named_references,
+    )
+    visible_named_functions = _OverlayNameMapping(
+        named_lambda_static_reference_view,
+        named_functions,
+    )
 
     waiting_formula_names: defaultdict[str, set[str]] = defaultdict(set)
     for name_key, formula in formulas.items():
@@ -50054,58 +50199,38 @@ def _formula_defined_name_external_references(
         for token in unresolved:
             waiting_formula_names[reference_lookup_key(token)].add(name_key)
 
-    endpoint_maps = expanded_endpoint_maps()
     pending = list(sorted(formulas, reverse=True))
     pending_keys = set(formulas)
     while pending:
         name_key = pending.pop()
         pending_keys.discard(name_key)
         formula = formulas[name_key]
-        (
-            named_workbook_references,
-            named_three_d_references,
-            named_structured_references,
-            named_defined_name_references,
-        ) = non_lambda_endpoint_maps(endpoint_maps)
-        (
-            named_lambda_workbook_references,
-            named_lambda_three_d_references,
-            named_lambda_structured_references,
-            named_lambda_defined_name_references,
-        ) = named_lambda_endpoint_maps(endpoint_maps)
-        (
-            named_static_references,
-            named_lambda_static_references,
-        ) = static_name_reference_maps()
         inspection = inspect_formula(
             formula,
-            named_references={**named_references, **named_static_references},
+            named_references=visible_named_references,
             named_external_workbook_defined_name_references=(
-                named_defined_name_references
+                named_defined_name_endpoint_view
             ),
             indexed_external_workbook_paths=indexed_external_workbook_paths,
-            named_external_workbook_references=named_workbook_references,
-            named_external_workbook_three_d_references=named_three_d_references,
+            named_external_workbook_references=named_workbook_endpoint_view,
+            named_external_workbook_three_d_references=named_three_d_endpoint_view,
             named_external_workbook_structured_references=(
-                named_structured_references
+                named_structured_endpoint_view
             ),
             structured_tables=structured_tables,
             sheet_order=sheet_order,
-            named_function_references={
-                **named_functions,
-                **named_lambda_static_references,
-            },
+            named_function_references=visible_named_functions,
             named_function_external_workbook_defined_name_references=(
-                named_lambda_defined_name_references
+                named_lambda_defined_name_endpoint_view
             ),
             named_function_external_workbook_references=(
-                named_lambda_workbook_references
+                named_lambda_workbook_endpoint_view
             ),
             named_function_external_workbook_three_d_references=(
-                named_lambda_three_d_references
+                named_lambda_three_d_endpoint_view
             ),
             named_function_external_workbook_structured_references=(
-                named_lambda_structured_references
+                named_lambda_structured_endpoint_view
             ),
         )
         workbook_references = tuple(
@@ -50147,7 +50272,7 @@ def _formula_defined_name_external_references(
             not endpoint_count
             or not external_references
             or any(
-                not is_validated_external_token(reference.raw, endpoint_maps)
+                not is_validated_external_token(reference.raw, all_endpoint_views)
                 for reference in external_references
             )
             or has_broken_reference(formula)
@@ -50161,7 +50286,6 @@ def _formula_defined_name_external_references(
         ):
             continue
 
-        previous_static_references = dict(formula_static_references)
         changed = False
         for resolved, destination in (
             (workbook_references, formula_workbook_references),
@@ -50178,25 +50302,7 @@ def _formula_defined_name_external_references(
         if not changed:
             continue
 
-        previous_endpoint_maps = endpoint_maps
-        endpoint_maps = expanded_endpoint_maps()
-        changed_name_keys = {
-            candidate
-            for previous, current in zip(
-                previous_endpoint_maps, endpoint_maps, strict=True
-            )
-            for candidate in set(previous) | set(current)
-            if previous.get(candidate) != current.get(candidate)
-        }
-        changed_name_keys.update(
-            candidate
-            for candidate in (
-                set(previous_static_references) | set(formula_static_references)
-            )
-            if previous_static_references.get(candidate)
-            != formula_static_references.get(candidate)
-        )
-        for changed_name_key in sorted(changed_name_keys, reverse=True):
+        for changed_name_key in sorted(changed_name_keys(name_key), reverse=True):
             for dependent_key in sorted(
                 waiting_formula_names.get(changed_name_key, ()), reverse=True
             ):
@@ -50204,6 +50310,7 @@ def _formula_defined_name_external_references(
                     pending.append(dependent_key)
                     pending_keys.add(dependent_key)
 
+    endpoint_maps = expanded_endpoint_maps()
     return (*endpoint_maps, formula_static_references)
 
 

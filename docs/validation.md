@@ -5,6 +5,31 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Live external formula-defined-name endpoint views — 2026-07-28
+
+Version 0.176.0 removes a remaining quadratic fixed-point cost in external
+formula-defined-name resolution. A static external formula name was already
+safe to inspect, but each newly resolved endpoint rebuilt four complete
+endpoint maps, two filtered named-`LAMBDA` maps, and two static-reference maps
+before comparing all of their entries against the prior iteration. FormulaFence
+now exposes live filtered lookup views over direct and newly resolved endpoint
+state, follows aliases only for the requested name, and wakes only reverse
+aliases whose visibility can actually change. The final public maps are still
+materialized once for the snapshot boundary.
+
+For a controlled valid 16,365-byte `.xlsx` with 4,000 formula-defined names
+whose bodies are all `='C:\Private\[Source.xlsx]Inputs'!$B$2`, the public
+0.175.0 wheel emitted a 139,844-byte JSON profile (SHA-256
+`dd658073511cbe299b32709ced866741d5e9090fe008b603439a844bbbeb1da1`) in
+12.959426 seconds at 47,200 KiB peak resident set. The 0.176.0 candidate
+emitted the byte-identical profile in 4.638464 seconds at 47,452 KiB: 8.320962
+seconds, or about 64.2%, less elapsed time. Structural coverage proves that
+one live endpoint view is reused across the catalog and that a workbook-scoped
+alias still resolves into the final worksheet external-link evidence. Existing
+direct/package alias-chain and named-`LAMBDA` portfolio regressions passed too.
+The full source suite passed 1,291 tests in 212.56 seconds with no failures,
+errors, or skips; bytecode compilation, Ruff, and whitespace checks were clean.
+
 ## Sparse formula-defined-name sensitive ledgers — 2026-07-28
 
 Version 0.175.0 removes the next retained-state layer after 0.174.0 made

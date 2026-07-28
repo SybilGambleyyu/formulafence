@@ -93,6 +93,28 @@ def _formula_defined_name_catalog_workbook(path: Path, *, count: int = 8) -> Pat
     return path
 
 
+def _formula_defined_name_external_catalog_workbook(
+    path: Path, *, count: int = 8
+) -> Path:
+    """Create static external formula names plus one workbook-scoped alias."""
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["B1"] = "=ExternalAlias"
+    for index in range(count):
+        workbook.defined_names.add(
+            DefinedName(
+                f"ExternalName{index:05d}",
+                attr_text="='C:\\Private\\[Source.xlsx]Inputs'!$B$2",
+            )
+        )
+    workbook.defined_names.add(
+        DefinedName("ExternalAlias", attr_text="=ExternalName00000")
+    )
+    workbook.save(path)
+    return path
+
+
 def _formula_defined_name_action_chain_workbook(
     path: Path,
     *,
@@ -2360,6 +2382,48 @@ def test_formula_defined_name_resolution_reuses_visibility_maps(
     assert not ledger_view
     assert len(ledger_view) == 0
     assert ledger_view.get("formulaname00000") is None
+
+
+def test_formula_defined_name_external_resolution_reuses_live_endpoint_views(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Static external names should not rebuild endpoint maps per definition."""
+    workbook = _formula_defined_name_external_catalog_workbook(
+        tmp_path / "external-name-catalog.xlsx"
+    )
+    original_inspect_formula = workbook_module.inspect_formula
+    reference_views: list[object] = []
+    endpoint_views: list[object] = []
+
+    def observe_inspection(formula: str, **kwargs: object):
+        if (
+            formula == "='C:\\Private\\[Source.xlsx]Inputs'!$B$2"
+            and kwargs.get("named_external_workbook_references") is not None
+        ):
+            reference_views.append(kwargs["named_references"])
+            endpoint_views.append(kwargs["named_external_workbook_references"])
+        return original_inspect_formula(formula, **kwargs)
+
+    monkeypatch.setattr(workbook_module, "inspect_formula", observe_inspection)
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.defined_names) == 9
+    assert len(reference_views) == 8
+    assert len(endpoint_views) == 8
+    assert len({id(view) for view in reference_views}) == 1
+    assert len({id(view) for view in endpoint_views}) == 1
+    reference_view = reference_views[0]
+    assert isinstance(reference_view, workbook_module._OverlayNameMapping)
+    assert isinstance(
+        reference_view._mappings[0], workbook_module._FilteredNameMapping
+    )
+    endpoint_view = endpoint_views[0]
+    assert isinstance(endpoint_view, workbook_module._ExternalAliasNameMapping)
+    assert endpoint_view["externalname00000"][0].sheet == "Inputs"
+    assert snapshot.external_references == {("Model", "B1")}
+    assert snapshot.external_workbook_references[("Model", "B1")][0].sheet == "Inputs"
+    assert snapshot.unresolved_reference_tokens == {}
 
 
 def test_formula_defined_name_state_budget_bounds_action_propagation(

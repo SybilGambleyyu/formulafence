@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.176.0 — 2026-07-28
+
+- Replace repeated materialized endpoint and static-reference maps while
+  resolving external formula-defined names with live filtered lookup views.
+  Direct and formula-derived external A1, 3-D, structured-table, and
+  defined-name endpoints now share lazy alias traversal instead of copying and
+  comparing growing maps for every definition.
+- Preserve named-`LAMBDA` invocation boundaries, direct endpoint precedence,
+  alias-chain fixed points, unresolved-name coverage, and deterministic
+  external-link evidence. Incremental reverse-alias wake-ups rescan only names
+  whose endpoint visibility can have changed; structural and portfolio
+  regressions hold the representation and public output stable.
+
 ## 0.175.0 — 2026-07-28
 
 - Compact propagated sensitive-call evidence for formula-defined names into one

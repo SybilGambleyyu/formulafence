@@ -81,6 +81,7 @@ def _formula_defined_name_catalog_workbook(path: Path, *, count: int = 8) -> Pat
     worksheet = workbook.active
     worksheet.title = "Model"
     worksheet["A1"] = 1
+    worksheet["B1"] = "=FormulaName00000"
     for index in range(count):
         workbook.defined_names.add(
             DefinedName(
@@ -108,6 +109,30 @@ def _formula_defined_name_action_chain_workbook(
                 f"ActionName{index:05d}",
                 attr_text=(
                     '=HYPERLINK("https://example.invalid","x")' + previous
+                ),
+            )
+        )
+    workbook.save(path)
+    return path
+
+
+def _formula_defined_name_benign_chain_workbook(
+    path: Path,
+    *,
+    count: int = 4,
+) -> Path:
+    """Create name dependencies that have no sensitive-ledger entries."""
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["A1"] = 1
+    worksheet["B1"] = f"=SafeName{count - 1:05d}"
+    for index in range(count):
+        workbook.defined_names.add(
+            DefinedName(
+                f"SafeName{index:05d}",
+                attr_text=(
+                    f"=SafeName{index - 1:05d}" if index else "=Model!$A$1"
                 ),
             )
         )
@@ -2305,11 +2330,14 @@ def test_formula_defined_name_resolution_reuses_visibility_maps(
     original_inspect_formula = workbook_module.inspect_formula
     reference_views: list[object] = []
     marker_views: list[object] = []
+    ledger_views: list[object] = []
 
     def observe_inspection(formula: str, **kwargs: object):
         if kwargs.get("inspect_formula_defined_xlm_registrations"):
             reference_views.append(kwargs["named_references"])
             marker_views.append(kwargs["named_formula_external_action_functions"])
+        elif formula == "=FormulaName00000":
+            ledger_views.append(kwargs["named_formula_external_action_functions"])
         return original_inspect_formula(formula, **kwargs)
 
     monkeypatch.setattr(workbook_module, "inspect_formula", observe_inspection)
@@ -2318,6 +2346,7 @@ def test_formula_defined_name_resolution_reuses_visibility_maps(
     assert len(snapshot.defined_names) == 8
     assert len(reference_views) == 8
     assert len(marker_views) == 8
+    assert len(ledger_views) == 1
     assert len({id(view) for view in reference_views}) == 1
     assert len({id(view) for view in marker_views}) == 1
     marker_view = marker_views[0]
@@ -2326,6 +2355,11 @@ def test_formula_defined_name_resolution_reuses_visibility_maps(
     assert marker_view["formulaname00000"] == (
         "FORMULAFENCE_EXTERNAL_ACTION_MARKER_0",
     )
+    ledger_view = ledger_views[0]
+    assert isinstance(ledger_view, workbook_module._NameLedgerMapping)
+    assert not ledger_view
+    assert len(ledger_view) == 0
+    assert ledger_view.get("formulaname00000") is None
 
 
 def test_formula_defined_name_state_budget_bounds_action_propagation(
@@ -2351,6 +2385,27 @@ def test_formula_defined_name_state_budget_bounds_action_propagation(
         match="max_formula_defined_name_states must be at least 1",
     ):
         load_snapshot(workbook, max_formula_defined_name_states=0)
+
+
+def test_formula_defined_name_state_budget_keeps_benign_dependencies(
+    tmp_path: Path,
+) -> None:
+    workbook = _formula_defined_name_benign_chain_workbook(
+        tmp_path / "benign-chain.xlsx"
+    )
+
+    snapshot = load_snapshot(workbook, max_formula_defined_name_states=3)
+    assert len(snapshot.defined_names) == 4
+    assert snapshot.formula_external_actions.present is False
+
+    with pytest.raises(
+        WorkbookLoadError,
+        match=(
+            r"formula-defined-name propagation exceeds "
+            r"max_formula_defined_name_states=2"
+        ),
+    ):
+        load_snapshot(workbook, max_formula_defined_name_states=2)
 
 
 def test_semantic_reader_preflight_rejects_excessive_row_dimensions_before_scanners(

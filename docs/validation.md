@@ -5,6 +5,34 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Sparse formula-defined-name sensitive ledgers — 2026-07-28
+
+Version 0.175.0 removes the next retained-state layer after 0.174.0 made
+formula-defined-name marker strings lazy. A benign catalog still built eleven
+empty direct and propagated ledgers per definition, then rebuilt empty visible
+ledger maps for every worksheet. FormulaFence now stores one eleven-kind tuple
+only for a strongly connected component with actual sensitive evidence and
+exposes it through a lazy scope-aware lookup view. When no definition has such
+evidence, it skips the otherwise empty propagation graph entirely. Marker-name
+dependencies still consume their existing state budget, and local-name
+shadowing, qualified visibility, propagation order, and public output remain
+unchanged.
+
+For an independent valid 56,392-byte `.xlsx` with 20,000 formula-defined names
+whose bodies are all the static reference `=Model!$A$1`, the public 0.174.0
+wheel emitted a 4,985-byte JSON profile (SHA-256
+`bd83aa046fe1c25957f2eb0e8e99f4dcf3a5c71de2e45007292b68a85c5bb36c`) in
+18.560781 seconds with a 114,588 KiB peak resident set. The 0.175.0 candidate
+emitted the byte-identical profile in 18.273709 seconds at 68,284 KiB: 46,304
+KiB (about 40.4%) less resident memory. The public 100-name action-bearing
+chain remains byte-identical at its exact 5,249-state boundary (SHA-256
+`210929b0a97dca2d255777be6e02ba09a62cf96279df577656f1fca264b8bab1`). A
+100-name benign dependency chain keeps its exact 99-state marker-dependency
+boundary and fails at 98 before a profile is emitted. Structural, scoped-name,
+budget, diff, policy, CLI, Action, and portfolio coverage passed in the final
+1,290-test source suite (211.76 seconds); bytecode compilation, Ruff, and
+whitespace checks were clean.
+
 ## Formula-defined-name marker-ledger compaction — 2026-07-28
 
 Version 0.174.0 removes a residual large-catalog allocation left after the

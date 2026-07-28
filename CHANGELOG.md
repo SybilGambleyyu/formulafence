@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.175.0 — 2026-07-28
+
+- Compact propagated sensitive-call evidence for formula-defined names into one
+  sparse, eleven-kind ledger per affected strongly connected component. Benign
+  formula-name catalogs no longer retain direct, component, per-definition, or
+  per-worksheet empty ledgers for action, DDE, custom-function, registration,
+  XLM, and environment-information inspection.
+- Skip the recursive-component propagation pass entirely when no
+  formula-defined name has sensitive evidence, while retaining exact marker
+  dependency budget accounting. Lazy ledger views preserve worksheet-local
+  shadowing, qualified-name visibility, deterministic propagation order, and
+  byte-identical public profiles for both benign and action-bearing catalogs.
+
 ## 0.174.0 — 2026-07-28
 
 - Compact the private safety-marker catalog used while formula-defined names

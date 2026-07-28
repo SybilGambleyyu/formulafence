@@ -48292,6 +48292,10 @@ _FORMULA_DEFINED_NAME_MARKER_PREFIXES = (
     "FORMULAFENCE_FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_MARKER_",
     "FORMULAFENCE_FORMULA_ENVIRONMENT_INFORMATION_MARKER_",
 )
+_FormulaDefinedNameLedger = tuple[tuple[str, ...], ...]
+_EMPTY_FORMULA_DEFINED_NAME_LEDGER: _FormulaDefinedNameLedger = (
+    (),
+) * len(_FORMULA_DEFINED_NAME_MARKER_PREFIXES)
 
 
 class _OverlayNameMapping(Mapping[str, _NameMapValue]):
@@ -48373,6 +48377,64 @@ class _NameMarkerMapping(Mapping[str, tuple[str, ...]]):
 
     def __len__(self) -> int:
         return len(self._identities)
+
+
+class _NameLedgerMapping(Mapping[str, tuple[str, ...]]):
+    """Expose one nonempty propagated ledger through name-identity overlays.
+
+    A formula inspector needs lookup only. Keeping a mapping entry for every
+    formula-defined name whose ledger is empty both retains needless state and
+    makes each worksheet's visible ledger map expensive to assemble. This view
+    maps known names back to their component lazily and behaves as absent for
+    an empty ledger, matching the caller's existing ``.get(..., ())`` contract.
+    """
+
+    def __init__(
+        self,
+        identities: Mapping[str, _NameDefinitionIdentity],
+        component_by_definition: Mapping[_NameDefinitionIdentity, int],
+        component_ledgers: Mapping[int, _FormulaDefinedNameLedger],
+        ledger_index: int,
+    ) -> None:
+        self._identities = identities
+        self._component_by_definition = component_by_definition
+        self._component_ledgers = component_ledgers
+        self._ledger_index = ledger_index
+
+    def __bool__(self) -> bool:
+        return bool(self._component_ledgers)
+
+    def _values_for(self, key: str) -> tuple[str, ...]:
+        identity = self._identities.get(key)
+        if identity is None:
+            return ()
+        component = self._component_by_definition.get(identity)
+        if component is None:
+            return ()
+        return self._component_ledgers.get(
+            component, _EMPTY_FORMULA_DEFINED_NAME_LEDGER
+        )[self._ledger_index]
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and bool(self._values_for(key))
+
+    def __getitem__(self, key: str) -> tuple[str, ...]:
+        values = self._values_for(key)
+        if not values:
+            raise KeyError(key)
+        return values
+
+    def get(self, key: str, default=None):
+        values = self._values_for(key)
+        return values or default
+
+    def __iter__(self):
+        return (
+            key for key in self._identities if self._values_for(key)
+        )
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
 
 
 def _formula_defined_name(
@@ -48901,35 +48963,7 @@ def _named_reference_maps(
             return definition_identities[index]
         return None
 
-    direct_external_action_functions: dict[
-        tuple[str | None, str], tuple[str, ...]
-    ] = {}
-    direct_formula_dde_links: dict[tuple[str | None, str], tuple[str, ...]] = {}
-    direct_custom_function_candidates: dict[tuple[str | None, str], tuple[str, ...]] = {}
-    direct_unqualified_runtime_function_candidates: dict[
-        tuple[str | None, str], tuple[str, ...]
-    ] = {}
-    direct_code_resource_registration_functions: dict[
-        tuple[str | None, str], tuple[str, ...]
-    ] = {}
-    direct_formula_defined_xlm_registration_functions: dict[
-        tuple[str | None, str], tuple[str, ...]
-    ] = {}
-    direct_formula_defined_xlm_evaluation_functions: dict[
-        tuple[str | None, str], tuple[str, ...]
-    ] = {}
-    direct_formula_defined_xlm_action_functions: dict[
-        tuple[str | None, str], tuple[str, ...]
-    ] = {}
-    direct_formula_defined_xlm_get_cell_functions: dict[
-        tuple[str | None, str], tuple[str, ...]
-    ] = {}
-    direct_formula_defined_xlm_environment_information_functions: dict[
-        tuple[str | None, str], tuple[str, ...]
-    ] = {}
-    direct_formula_environment_information_functions: dict[
-        tuple[str | None, str], tuple[str, ...]
-    ] = {}
+    direct_ledgers: dict[_NameDefinitionIdentity, _FormulaDefinedNameLedger] = {}
     definition_dependencies: dict[
         tuple[str | None, str], tuple[tuple[str | None, str], ...]
     ] = {}
@@ -49118,52 +49152,51 @@ def _named_reference_maps(
                 )
             )
         )
-        direct_external_action_functions[identity] = direct_external_actions
-        direct_formula_dde_links[identity] = direct_dde_links
-        direct_custom_function_candidates[identity] = direct_custom_candidates
-        direct_unqualified_runtime_function_candidates[identity] = (
-            direct_unqualified_runtime_candidates
+        direct_ledger: _FormulaDefinedNameLedger = (
+            direct_external_actions,
+            direct_dde_links,
+            direct_custom_candidates,
+            direct_unqualified_runtime_candidates,
+            direct_code_resource_registrations,
+            direct_xlm_registrations,
+            direct_xlm_evaluations,
+            direct_xlm_actions,
+            direct_xlm_get_cell_calls,
+            direct_xlm_environment_information_calls,
+            direct_environment_information_calls,
         )
-        direct_code_resource_registration_functions[identity] = (
-            direct_code_resource_registrations
-        )
-        direct_formula_defined_xlm_registration_functions[identity] = (
-            direct_xlm_registrations
-        )
-        direct_formula_defined_xlm_evaluation_functions[identity] = (
-            direct_xlm_evaluations
-        )
-        direct_formula_defined_xlm_action_functions[identity] = direct_xlm_actions
-        direct_formula_defined_xlm_get_cell_functions[identity] = direct_xlm_get_cell_calls
-        direct_formula_defined_xlm_environment_information_functions[identity] = (
-            direct_xlm_environment_information_calls
-        )
-        direct_formula_environment_information_functions[identity] = (
-            direct_environment_information_calls
-        )
-        definition_dependencies[identity] = dependencies
+        if any(direct_ledger):
+            direct_ledgers[identity] = direct_ledger
+        if dependencies:
+            definition_dependencies[identity] = dependencies
 
     # Collapse recursive definition groups before expanding their candidates.
     # That preserves repeated calls in ordinary acyclic definitions while a
     # recursive named LAMBDA contributes each stored callable once instead of
     # growing an unbounded synthetic inventory.
+    has_direct_ledger = bool(direct_ledgers)
     reverse_dependencies: dict[
         tuple[str | None, str], list[tuple[str | None, str]]
-    ] = {identity: [] for identity in definition_identities}
-    for identity, dependencies in definition_dependencies.items():
-        for dependency in dependencies:
-            reverse_dependencies[dependency].append(identity)
+    ] = (
+        {identity: [] for identity in definition_identities}
+        if has_direct_ledger
+        else {}
+    )
+    if has_direct_ledger:
+        for identity, dependencies in definition_dependencies.items():
+            for dependency in dependencies:
+                reverse_dependencies[dependency].append(identity)
 
     visited: set[tuple[str | None, str]] = set()
     finish_order: list[tuple[str | None, str]] = []
-    for root in definition_identities:
+    for root in (definition_identities if has_direct_ledger else ()):
         if root in visited:
             continue
         visited.add(root)
         traversal: list[tuple[tuple[str | None, str], int]] = [(root, 0)]
         while traversal:
             identity, next_dependency = traversal[-1]
-            dependencies = definition_dependencies[identity]
+            dependencies = definition_dependencies.get(identity, ())
             if next_dependency < len(dependencies):
                 dependency = dependencies[next_dependency]
                 traversal[-1] = (identity, next_dependency + 1)
@@ -49192,97 +49225,26 @@ def _named_reference_maps(
         components.append(tuple(sorted(members, key=definition_indexes.__getitem__)))
 
     component_dependencies: dict[int, tuple[int, ...]] = {}
-    component_direct_external_action_functions: dict[int, tuple[str, ...]] = {}
-    component_direct_formula_dde_links: dict[int, tuple[str, ...]] = {}
-    component_direct_candidates: dict[int, tuple[str, ...]] = {}
-    component_direct_unqualified_runtime_function_candidates: dict[
-        int, tuple[str, ...]
-    ] = {}
-    component_direct_code_resource_registration_functions: dict[
-        int, tuple[str, ...]
-    ] = {}
-    component_direct_formula_defined_xlm_registration_functions: dict[
-        int, tuple[str, ...]
-    ] = {}
-    component_direct_formula_defined_xlm_evaluation_functions: dict[
-        int, tuple[str, ...]
-    ] = {}
-    component_direct_formula_defined_xlm_action_functions: dict[
-        int, tuple[str, ...]
-    ] = {}
-    component_direct_formula_defined_xlm_get_cell_functions: dict[
-        int, tuple[str, ...]
-    ] = {}
-    component_direct_formula_defined_xlm_environment_information_functions: dict[
-        int, tuple[str, ...]
-    ] = {}
-    component_direct_formula_environment_information_functions: dict[
-        int, tuple[str, ...]
-    ] = {}
+    component_direct_ledgers: dict[int, _FormulaDefinedNameLedger] = {}
     for component, members in enumerate(components):
-        component_direct_external_action_functions[component] = tuple(
-            function
-            for identity in members
-            for function in direct_external_action_functions[identity]
-        )
-        component_direct_formula_dde_links[component] = tuple(
-            marker
-            for identity in members
-            for marker in direct_formula_dde_links[identity]
-        )
-        component_direct_candidates[component] = tuple(
-            candidate
-            for identity in members
-            for candidate in direct_custom_function_candidates[identity]
-        )
-        component_direct_unqualified_runtime_function_candidates[component] = tuple(
-            candidate
-            for identity in members
-            for candidate in direct_unqualified_runtime_function_candidates[identity]
-        )
-        component_direct_code_resource_registration_functions[component] = tuple(
-            function
-            for identity in members
-            for function in direct_code_resource_registration_functions[identity]
-        )
-        component_direct_formula_defined_xlm_registration_functions[component] = tuple(
-            function
-            for identity in members
-            for function in direct_formula_defined_xlm_registration_functions[identity]
-        )
-        component_direct_formula_defined_xlm_evaluation_functions[component] = tuple(
-            function
-            for identity in members
-            for function in direct_formula_defined_xlm_evaluation_functions[identity]
-        )
-        component_direct_formula_defined_xlm_action_functions[component] = tuple(
-            function
-            for identity in members
-            for function in direct_formula_defined_xlm_action_functions[identity]
-        )
-        component_direct_formula_defined_xlm_get_cell_functions[component] = tuple(
-            function
-            for identity in members
-            for function in direct_formula_defined_xlm_get_cell_functions[identity]
-        )
-        component_direct_formula_defined_xlm_environment_information_functions[
-            component
-        ] = tuple(
-            function
-            for identity in members
-            for function in direct_formula_defined_xlm_environment_information_functions[
-                identity
-            ]
-        )
-        component_direct_formula_environment_information_functions[component] = tuple(
-            function
-            for identity in members
-            for function in direct_formula_environment_information_functions[identity]
-        )
+        if has_direct_ledger and any(
+            identity in direct_ledgers for identity in members
+        ):
+            direct_ledger: _FormulaDefinedNameLedger = tuple(
+                tuple(
+                    entry
+                    for identity in members
+                    for entry in direct_ledgers.get(
+                        identity, _EMPTY_FORMULA_DEFINED_NAME_LEDGER
+                    )[ledger_index]
+                )
+                for ledger_index in range(len(_FORMULA_DEFINED_NAME_MARKER_PREFIXES))
+            )
+            component_direct_ledgers[component] = direct_ledger
         component_dependencies[component] = tuple(
             dependency_component
             for identity in members
-            for dependency in definition_dependencies[identity]
+            for dependency in definition_dependencies.get(identity, ())
             if (dependency_component := component_by_definition[dependency]) != component
         )
 
@@ -49302,30 +49264,12 @@ def _named_reference_maps(
         if not dependencies
     ]
     heapq.heapify(ready_components)
-    component_external_action_functions: dict[int, tuple[str, ...]] = {}
-    component_formula_dde_links: dict[int, tuple[str, ...]] = {}
-    component_custom_function_candidates: dict[int, tuple[str, ...]] = {}
-    component_unqualified_runtime_function_candidates: dict[int, tuple[str, ...]] = {}
-    component_code_resource_registration_functions: dict[int, tuple[str, ...]] = {}
-    component_formula_defined_xlm_registration_functions: dict[
-        int, tuple[str, ...]
-    ] = {}
-    component_formula_defined_xlm_evaluation_functions: dict[
-        int, tuple[str, ...]
-    ] = {}
-    component_formula_defined_xlm_action_functions: dict[int, tuple[str, ...]] = {}
-    component_formula_defined_xlm_get_cell_functions: dict[int, tuple[str, ...]] = {}
-    component_formula_defined_xlm_environment_information_functions: dict[
-        int, tuple[str, ...]
-    ] = {}
-    component_formula_environment_information_functions: dict[
-        int, tuple[str, ...]
-    ] = {}
+    component_ledgers: dict[int, _FormulaDefinedNameLedger] = {}
 
     def propagated_component_entries(
         direct_entries: tuple[str, ...],
         dependencies: tuple[int, ...],
-        entries_by_component: Mapping[int, tuple[str, ...]],
+        ledger_index: int,
     ) -> tuple[str, ...]:
         """Retain one component's inherited sensitive-call ledger safely.
 
@@ -49335,142 +49279,57 @@ def _named_reference_maps(
         than transiently materializing an unbounded sequence of prefixes.
         """
         entry_count = len(direct_entries) + sum(
-            len(entries_by_component[dependency]) for dependency in dependencies
+            len(
+                component_ledgers.get(
+                    dependency, _EMPTY_FORMULA_DEFINED_NAME_LEDGER
+                )[ledger_index]
+            )
+            for dependency in dependencies
         )
         formula_defined_name_state_budget.consume(entry_count)
         return direct_entries + tuple(
             entry
             for dependency in dependencies
-            for entry in entries_by_component[dependency]
+            for entry in component_ledgers.get(
+                dependency, _EMPTY_FORMULA_DEFINED_NAME_LEDGER
+            )[ledger_index]
         )
 
     while ready_components:
         component = heapq.heappop(ready_components)
         dependencies = component_dependencies[component]
-        component_external_action_functions[component] = propagated_component_entries(
-            component_direct_external_action_functions[component],
-            dependencies,
-            component_external_action_functions,
-        )
-        component_formula_dde_links[component] = propagated_component_entries(
-            component_direct_formula_dde_links[component],
-            dependencies,
-            component_formula_dde_links,
-        )
-        component_custom_function_candidates[component] = propagated_component_entries(
-            component_direct_candidates[component],
-            dependencies,
-            component_custom_function_candidates,
-        )
-        component_unqualified_runtime_function_candidates[component] = (
-            propagated_component_entries(
-                component_direct_unqualified_runtime_function_candidates[component],
-                dependencies,
-                component_unqualified_runtime_function_candidates,
+        direct_ledger = component_direct_ledgers.get(component)
+        if direct_ledger is not None or any(
+            dependency in component_ledgers for dependency in dependencies
+        ):
+            ledger: _FormulaDefinedNameLedger = tuple(
+                propagated_component_entries(
+                    (
+                        direct_ledger[ledger_index]
+                        if direct_ledger is not None
+                        else ()
+                    ),
+                    dependencies,
+                    ledger_index,
+                )
+                for ledger_index in range(len(_FORMULA_DEFINED_NAME_MARKER_PREFIXES))
             )
-        )
-        component_code_resource_registration_functions[component] = (
-            propagated_component_entries(
-                component_direct_code_resource_registration_functions[component],
-                dependencies,
-                component_code_resource_registration_functions,
-            )
-        )
-        component_formula_defined_xlm_registration_functions[component] = (
-            propagated_component_entries(
-                component_direct_formula_defined_xlm_registration_functions[component],
-                dependencies,
-                component_formula_defined_xlm_registration_functions,
-            )
-        )
-        component_formula_defined_xlm_evaluation_functions[component] = (
-            propagated_component_entries(
-                component_direct_formula_defined_xlm_evaluation_functions[component],
-                dependencies,
-                component_formula_defined_xlm_evaluation_functions,
-            )
-        )
-        component_formula_defined_xlm_action_functions[component] = (
-            propagated_component_entries(
-                component_direct_formula_defined_xlm_action_functions[component],
-                dependencies,
-                component_formula_defined_xlm_action_functions,
-            )
-        )
-        component_formula_defined_xlm_get_cell_functions[component] = (
-            propagated_component_entries(
-                component_direct_formula_defined_xlm_get_cell_functions[component],
-                dependencies,
-                component_formula_defined_xlm_get_cell_functions,
-            )
-        )
-        component_formula_defined_xlm_environment_information_functions[component] = (
-            propagated_component_entries(
-                component_direct_formula_defined_xlm_environment_information_functions[
-                    component
-                ],
-                dependencies,
-                component_formula_defined_xlm_environment_information_functions,
-            )
-        )
-        component_formula_environment_information_functions[component] = (
-            propagated_component_entries(
-                component_direct_formula_environment_information_functions[component],
-                dependencies,
-                component_formula_environment_information_functions,
-            )
-        )
+            if any(ledger):
+                component_ledgers[component] = ledger
         for dependent in sorted(component_dependents[component]):
             remaining_component_dependencies[dependent].remove(component)
             if not remaining_component_dependencies[dependent]:
                 heapq.heappush(ready_components, dependent)
 
-    custom_function_candidates_by_definition = {
-        identity: component_custom_function_candidates[component]
-        for identity, component in component_by_definition.items()
-    }
-    unqualified_runtime_function_candidates_by_definition = {
-        identity: component_unqualified_runtime_function_candidates[component]
-        for identity, component in component_by_definition.items()
-    }
-    external_action_functions_by_definition = {
-        identity: component_external_action_functions[component]
-        for identity, component in component_by_definition.items()
-    }
-    formula_dde_links_by_definition = {
-        identity: component_formula_dde_links[component]
-        for identity, component in component_by_definition.items()
-    }
-    code_resource_registration_functions_by_definition = {
-        identity: component_code_resource_registration_functions[component]
-        for identity, component in component_by_definition.items()
-    }
-    formula_defined_xlm_registration_functions_by_definition = {
-        identity: component_formula_defined_xlm_registration_functions[component]
-        for identity, component in component_by_definition.items()
-    }
-    formula_defined_xlm_evaluation_functions_by_definition = {
-        identity: component_formula_defined_xlm_evaluation_functions[component]
-        for identity, component in component_by_definition.items()
-    }
-    formula_defined_xlm_action_functions_by_definition = {
-        identity: component_formula_defined_xlm_action_functions[component]
-        for identity, component in component_by_definition.items()
-    }
-    formula_defined_xlm_get_cell_functions_by_definition = {
-        identity: component_formula_defined_xlm_get_cell_functions[component]
-        for identity, component in component_by_definition.items()
-    }
-    formula_defined_xlm_environment_information_functions_by_definition = {
-        identity: component_formula_defined_xlm_environment_information_functions[
-            component
-        ]
-        for identity, component in component_by_definition.items()
-    }
-    formula_environment_information_functions_by_definition = {
-        identity: component_formula_environment_information_functions[component]
-        for identity, component in component_by_definition.items()
-    }
+    def ledger_entries(
+        identity: _NameDefinitionIdentity, ledger_index: int
+    ) -> tuple[str, ...]:
+        component = component_by_definition.get(identity)
+        if component is None:
+            return ()
+        return component_ledgers.get(
+            component, _EMPTY_FORMULA_DEFINED_NAME_LEDGER
+        )[ledger_index]
 
     global_result = dict(global_references)
     for key, definition in global_formulas.items():
@@ -49519,781 +49378,152 @@ def _named_reference_maps(
         if functions:
             local_function_result[scope] = functions
 
-    global_external_action_result: dict[str, tuple[str, ...]] = {
-        key: external_action_functions_by_definition[identity_for(definition)]
-        for key, definition in global_formulas.items()
-    }
-    for scope, definitions in local_formulas.items():
-        for key, definition in definitions.items():
-            global_external_action_result[_qualified_name_key(sheet_titles[scope], key)] = (
-                external_action_functions_by_definition[identity_for(definition)]
-            )
-
-    local_external_action_result: dict[str, dict[str, tuple[str, ...]]] = {}
-    for scope, definitions in local_formulas.items():
-        functions = {
-            key: external_action_functions_by_definition[identity_for(definition)]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_external_action_result[scope] = functions
-
-    global_function_external_action_result: dict[str, tuple[str, ...]] = {
-        key: external_action_functions_by_definition[identity_for(definition)]
-        for key, definition in global_lambdas.items()
-    }
-    for scope, definitions in local_lambdas.items():
-        for key, definition in definitions.items():
-            global_function_external_action_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = external_action_functions_by_definition[identity_for(definition)]
-
-    local_function_external_action_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_lambdas.items():
-        functions = {
-            key: external_action_functions_by_definition[identity_for(definition)]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_function_external_action_result[scope] = functions
-
-    external_action_definition_entries = tuple(
-        sorted(
-            (
-                repr((definition.scope, definition.key)),
-                repr(
-                    (
-                        external_action_functions_by_definition[identity_for(definition)],
-                        definition.formula,
-                    )
-                ),
-            )
-            for definition in all_definitions
-            if external_action_functions_by_definition[identity_for(definition)]
+    def ledger_visibility_maps(ledger_index: int):
+        """Expose one sparse ledger kind through reusable name overlays."""
+        global_formula_view = _NameLedgerMapping(
+            global_formula_identity_view,
+            component_by_definition,
+            component_ledgers,
+            ledger_index,
         )
+        scoped_formula_views = {
+            scope: _NameLedgerMapping(
+                scoped_formula_identity_views[scope],
+                component_by_definition,
+                component_ledgers,
+                ledger_index,
+            )
+            for scope in local_scopes
+        }
+        global_function_view = _NameLedgerMapping(
+            global_function_identity_view,
+            component_by_definition,
+            component_ledgers,
+            ledger_index,
+        )
+        scoped_function_views = {
+            scope: _NameLedgerMapping(
+                scoped_function_identity_views[scope],
+                component_by_definition,
+                component_ledgers,
+                ledger_index,
+            )
+            for scope in local_scopes
+        }
+        return (
+            global_formula_view,
+            scoped_formula_views,
+            global_function_view,
+            scoped_function_views,
+        )
+
+    def ledger_definition_entries(ledger_index: int) -> tuple[tuple[str, str], ...]:
+        if not component_ledgers:
+            return ()
+        return tuple(
+            sorted(
+                (
+                    repr((definition.scope, definition.key)),
+                    repr((entries, definition.formula)),
+                )
+                for definition in all_definitions
+                if (
+                    entries := ledger_entries(
+                        identity_for(definition), ledger_index
+                    )
+                )
+            )
+        )
+
+    (
+        global_external_action_result,
+        local_external_action_result,
+        global_function_external_action_result,
+        local_function_external_action_result,
+    ) = ledger_visibility_maps(0)
+    external_action_definition_entries = ledger_definition_entries(0)
+
+    (
+        global_formula_dde_link_result,
+        local_formula_dde_link_result,
+        global_function_formula_dde_link_result,
+        local_function_formula_dde_link_result,
+    ) = ledger_visibility_maps(1)
+    formula_dde_link_definition_entries = ledger_definition_entries(1)
+
+    (
+        global_custom_result,
+        local_custom_result,
+        global_function_custom_result,
+        local_function_custom_result,
+    ) = ledger_visibility_maps(2)
+    custom_function_definition_entries = ledger_definition_entries(2)
+
+    (
+        global_unqualified_runtime_function_result,
+        local_unqualified_runtime_function_result,
+        global_function_unqualified_runtime_function_result,
+        local_function_unqualified_runtime_function_result,
+    ) = ledger_visibility_maps(3)
+    unqualified_runtime_function_definition_entries = ledger_definition_entries(3)
+
+    (
+        global_code_resource_registration_result,
+        local_code_resource_registration_result,
+        global_function_code_resource_registration_result,
+        local_function_code_resource_registration_result,
+    ) = ledger_visibility_maps(4)
+    code_resource_registration_definition_entries = ledger_definition_entries(4)
+
+    (
+        global_formula_defined_xlm_registration_result,
+        local_formula_defined_xlm_registration_result,
+        global_function_formula_defined_xlm_registration_result,
+        local_function_formula_defined_xlm_registration_result,
+    ) = ledger_visibility_maps(5)
+    formula_defined_xlm_registration_definition_entries = ledger_definition_entries(5)
+
+    (
+        global_formula_defined_xlm_evaluation_result,
+        local_formula_defined_xlm_evaluation_result,
+        global_function_formula_defined_xlm_evaluation_result,
+        local_function_formula_defined_xlm_evaluation_result,
+    ) = ledger_visibility_maps(6)
+    formula_defined_xlm_evaluation_definition_entries = ledger_definition_entries(6)
+
+    (
+        global_formula_defined_xlm_action_result,
+        local_formula_defined_xlm_action_result,
+        global_function_formula_defined_xlm_action_result,
+        local_function_formula_defined_xlm_action_result,
+    ) = ledger_visibility_maps(7)
+    formula_defined_xlm_action_definition_entries = ledger_definition_entries(7)
+
+    (
+        global_formula_defined_xlm_get_cell_result,
+        local_formula_defined_xlm_get_cell_result,
+        global_function_formula_defined_xlm_get_cell_result,
+        local_function_formula_defined_xlm_get_cell_result,
+    ) = ledger_visibility_maps(8)
+    formula_defined_xlm_get_cell_definition_entries = ledger_definition_entries(8)
+
+    (
+        global_formula_defined_xlm_environment_information_result,
+        local_formula_defined_xlm_environment_information_result,
+        global_function_formula_defined_xlm_environment_information_result,
+        local_function_formula_defined_xlm_environment_information_result,
+    ) = ledger_visibility_maps(9)
+    formula_defined_xlm_environment_information_definition_entries = (
+        ledger_definition_entries(9)
     )
 
-    global_formula_dde_link_result: dict[str, tuple[str, ...]] = {
-        key: formula_dde_links_by_definition[identity_for(definition)]
-        for key, definition in global_formulas.items()
-    }
-    for scope, definitions in local_formulas.items():
-        for key, definition in definitions.items():
-            global_formula_dde_link_result[_qualified_name_key(sheet_titles[scope], key)] = (
-                formula_dde_links_by_definition[identity_for(definition)]
-            )
-
-    local_formula_dde_link_result: dict[str, dict[str, tuple[str, ...]]] = {}
-    for scope, definitions in local_formulas.items():
-        links = {
-            key: formula_dde_links_by_definition[identity_for(definition)]
-            for key, definition in definitions.items()
-        }
-        if links:
-            local_formula_dde_link_result[scope] = links
-
-    global_function_formula_dde_link_result: dict[str, tuple[str, ...]] = {
-        key: formula_dde_links_by_definition[identity_for(definition)]
-        for key, definition in global_lambdas.items()
-    }
-    for scope, definitions in local_lambdas.items():
-        for key, definition in definitions.items():
-            global_function_formula_dde_link_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_dde_links_by_definition[identity_for(definition)]
-
-    local_function_formula_dde_link_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_lambdas.items():
-        links = {
-            key: formula_dde_links_by_definition[identity_for(definition)]
-            for key, definition in definitions.items()
-        }
-        if links:
-            local_function_formula_dde_link_result[scope] = links
-
-    formula_dde_link_definition_entries = tuple(
-        sorted(
-            (
-                repr((definition.scope, definition.key)),
-                repr(
-                    (
-                        formula_dde_links_by_definition[identity_for(definition)],
-                        definition.formula,
-                    )
-                ),
-            )
-            for definition in all_definitions
-            if formula_dde_links_by_definition[identity_for(definition)]
-        )
-    )
-
-    global_custom_result: dict[str, tuple[str, ...]] = {
-        key: custom_function_candidates_by_definition[identity_for(definition)]
-        for key, definition in global_formulas.items()
-    }
-    for scope, definitions in local_formulas.items():
-        for key, definition in definitions.items():
-            global_custom_result[_qualified_name_key(sheet_titles[scope], key)] = (
-                custom_function_candidates_by_definition[identity_for(definition)]
-            )
-
-    local_custom_result: dict[str, dict[str, tuple[str, ...]]] = {}
-    for scope, definitions in local_formulas.items():
-        candidates = {
-            key: custom_function_candidates_by_definition[identity_for(definition)]
-            for key, definition in definitions.items()
-        }
-        if candidates:
-            local_custom_result[scope] = candidates
-
-    global_function_custom_result: dict[str, tuple[str, ...]] = {
-        key: custom_function_candidates_by_definition[identity_for(definition)]
-        for key, definition in global_lambdas.items()
-    }
-    for scope, definitions in local_lambdas.items():
-        for key, definition in definitions.items():
-            global_function_custom_result[_qualified_name_key(sheet_titles[scope], key)] = (
-                custom_function_candidates_by_definition[identity_for(definition)]
-            )
-
-    local_function_custom_result: dict[str, dict[str, tuple[str, ...]]] = {}
-    for scope, definitions in local_lambdas.items():
-        candidates = {
-            key: custom_function_candidates_by_definition[identity_for(definition)]
-            for key, definition in definitions.items()
-        }
-        if candidates:
-            local_function_custom_result[scope] = candidates
-
-    custom_function_definition_entries = tuple(
-        sorted(
-            (
-                repr((definition.scope, definition.key)),
-                repr(
-                    (
-                        custom_function_candidates_by_definition[
-                            identity_for(definition)
-                        ],
-                        definition.formula,
-                    )
-                ),
-            )
-            for definition in all_definitions
-            if custom_function_candidates_by_definition[identity_for(definition)]
-        )
-    )
-
-    global_unqualified_runtime_function_result: dict[str, tuple[str, ...]] = {
-        key: unqualified_runtime_function_candidates_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_formulas.items()
-    }
-    for scope, definitions in local_formulas.items():
-        for key, definition in definitions.items():
-            global_unqualified_runtime_function_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = unqualified_runtime_function_candidates_by_definition[
-                identity_for(definition)
-            ]
-
-    local_unqualified_runtime_function_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_formulas.items():
-        candidates = {
-            key: unqualified_runtime_function_candidates_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if candidates:
-            local_unqualified_runtime_function_result[scope] = candidates
-
-    global_function_unqualified_runtime_function_result: dict[
-        str, tuple[str, ...]
-    ] = {
-        key: unqualified_runtime_function_candidates_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_lambdas.items()
-    }
-    for scope, definitions in local_lambdas.items():
-        for key, definition in definitions.items():
-            global_function_unqualified_runtime_function_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = unqualified_runtime_function_candidates_by_definition[
-                identity_for(definition)
-            ]
-
-    local_function_unqualified_runtime_function_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_lambdas.items():
-        candidates = {
-            key: unqualified_runtime_function_candidates_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if candidates:
-            local_function_unqualified_runtime_function_result[scope] = candidates
-
-    unqualified_runtime_function_definition_entries = tuple(
-        sorted(
-            (
-                repr((definition.scope, definition.key)),
-                repr(
-                    (
-                        unqualified_runtime_function_candidates_by_definition[
-                            identity_for(definition)
-                        ],
-                        definition.formula,
-                    )
-                ),
-            )
-            for definition in all_definitions
-            if unqualified_runtime_function_candidates_by_definition[
-                identity_for(definition)
-            ]
-        )
-    )
-
-    global_code_resource_registration_result: dict[str, tuple[str, ...]] = {
-        key: code_resource_registration_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_formulas.items()
-    }
-    for scope, definitions in local_formulas.items():
-        for key, definition in definitions.items():
-            global_code_resource_registration_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = code_resource_registration_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_code_resource_registration_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_formulas.items():
-        functions = {
-            key: code_resource_registration_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_code_resource_registration_result[scope] = functions
-
-    global_function_code_resource_registration_result: dict[str, tuple[str, ...]] = {
-        key: code_resource_registration_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_lambdas.items()
-    }
-    for scope, definitions in local_lambdas.items():
-        for key, definition in definitions.items():
-            global_function_code_resource_registration_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = code_resource_registration_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_function_code_resource_registration_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_lambdas.items():
-        functions = {
-            key: code_resource_registration_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_function_code_resource_registration_result[scope] = functions
-
-    code_resource_registration_definition_entries = tuple(
-        sorted(
-            (
-                repr((definition.scope, definition.key)),
-                repr(
-                    (
-                        code_resource_registration_functions_by_definition[
-                            identity_for(definition)
-                        ],
-                        definition.formula,
-                    )
-                ),
-            )
-            for definition in all_definitions
-            if code_resource_registration_functions_by_definition[identity_for(definition)]
-        )
-    )
-
-    global_formula_defined_xlm_registration_result: dict[str, tuple[str, ...]] = {
-        key: formula_defined_xlm_registration_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_formulas.items()
-    }
-    for scope, definitions in local_formulas.items():
-        for key, definition in definitions.items():
-            global_formula_defined_xlm_registration_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_defined_xlm_registration_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_formula_defined_xlm_registration_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_formulas.items():
-        functions = {
-            key: formula_defined_xlm_registration_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_formula_defined_xlm_registration_result[scope] = functions
-
-    global_function_formula_defined_xlm_registration_result: dict[
-        str, tuple[str, ...]
-    ] = {
-        key: formula_defined_xlm_registration_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_lambdas.items()
-    }
-    for scope, definitions in local_lambdas.items():
-        for key, definition in definitions.items():
-            global_function_formula_defined_xlm_registration_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_defined_xlm_registration_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_function_formula_defined_xlm_registration_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_lambdas.items():
-        functions = {
-            key: formula_defined_xlm_registration_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_function_formula_defined_xlm_registration_result[scope] = functions
-
-    formula_defined_xlm_registration_definition_entries = tuple(
-        sorted(
-            (
-                repr((definition.scope, definition.key)),
-                repr(
-                    (
-                        formula_defined_xlm_registration_functions_by_definition[
-                            identity_for(definition)
-                        ],
-                        definition.formula,
-                    )
-                ),
-            )
-            for definition in all_definitions
-            if formula_defined_xlm_registration_functions_by_definition[
-                identity_for(definition)
-            ]
-        )
-    )
-
-    global_formula_defined_xlm_evaluation_result: dict[str, tuple[str, ...]] = {
-        key: formula_defined_xlm_evaluation_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_formulas.items()
-    }
-    for scope, definitions in local_formulas.items():
-        for key, definition in definitions.items():
-            global_formula_defined_xlm_evaluation_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_defined_xlm_evaluation_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_formula_defined_xlm_evaluation_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_formulas.items():
-        functions = {
-            key: formula_defined_xlm_evaluation_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_formula_defined_xlm_evaluation_result[scope] = functions
-
-    global_function_formula_defined_xlm_evaluation_result: dict[
-        str, tuple[str, ...]
-    ] = {
-        key: formula_defined_xlm_evaluation_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_lambdas.items()
-    }
-    for scope, definitions in local_lambdas.items():
-        for key, definition in definitions.items():
-            global_function_formula_defined_xlm_evaluation_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_defined_xlm_evaluation_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_function_formula_defined_xlm_evaluation_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_lambdas.items():
-        functions = {
-            key: formula_defined_xlm_evaluation_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_function_formula_defined_xlm_evaluation_result[scope] = functions
-
-    formula_defined_xlm_evaluation_definition_entries = tuple(
-        sorted(
-            (
-                repr((definition.scope, definition.key)),
-                repr(
-                    (
-                        formula_defined_xlm_evaluation_functions_by_definition[
-                            identity_for(definition)
-                        ],
-                        definition.formula,
-                    )
-                ),
-            )
-            for definition in all_definitions
-            if formula_defined_xlm_evaluation_functions_by_definition[
-                identity_for(definition)
-            ]
-        )
-    )
-
-    global_formula_defined_xlm_action_result: dict[str, tuple[str, ...]] = {
-        key: formula_defined_xlm_action_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_formulas.items()
-    }
-    for scope, definitions in local_formulas.items():
-        for key, definition in definitions.items():
-            global_formula_defined_xlm_action_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_defined_xlm_action_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_formula_defined_xlm_action_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_formulas.items():
-        functions = {
-            key: formula_defined_xlm_action_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_formula_defined_xlm_action_result[scope] = functions
-
-    global_function_formula_defined_xlm_action_result: dict[
-        str, tuple[str, ...]
-    ] = {
-        key: formula_defined_xlm_action_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_lambdas.items()
-    }
-    for scope, definitions in local_lambdas.items():
-        for key, definition in definitions.items():
-            global_function_formula_defined_xlm_action_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_defined_xlm_action_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_function_formula_defined_xlm_action_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_lambdas.items():
-        functions = {
-            key: formula_defined_xlm_action_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_function_formula_defined_xlm_action_result[scope] = functions
-
-    formula_defined_xlm_action_definition_entries = tuple(
-        sorted(
-            (
-                repr((definition.scope, definition.key)),
-                repr(
-                    (
-                        formula_defined_xlm_action_functions_by_definition[
-                            identity_for(definition)
-                        ],
-                        definition.formula,
-                    )
-                ),
-            )
-            for definition in all_definitions
-            if formula_defined_xlm_action_functions_by_definition[
-                identity_for(definition)
-            ]
-        )
-    )
-
-    global_formula_defined_xlm_get_cell_result: dict[str, tuple[str, ...]] = {
-        key: formula_defined_xlm_get_cell_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_formulas.items()
-    }
-    for scope, definitions in local_formulas.items():
-        for key, definition in definitions.items():
-            global_formula_defined_xlm_get_cell_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_defined_xlm_get_cell_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_formula_defined_xlm_get_cell_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_formulas.items():
-        functions = {
-            key: formula_defined_xlm_get_cell_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_formula_defined_xlm_get_cell_result[scope] = functions
-
-    global_function_formula_defined_xlm_get_cell_result: dict[
-        str, tuple[str, ...]
-    ] = {
-        key: formula_defined_xlm_get_cell_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_lambdas.items()
-    }
-    for scope, definitions in local_lambdas.items():
-        for key, definition in definitions.items():
-            global_function_formula_defined_xlm_get_cell_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_defined_xlm_get_cell_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_function_formula_defined_xlm_get_cell_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_lambdas.items():
-        functions = {
-            key: formula_defined_xlm_get_cell_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_function_formula_defined_xlm_get_cell_result[scope] = functions
-
-    formula_defined_xlm_get_cell_definition_entries = tuple(
-        sorted(
-            (
-                repr((definition.scope, definition.key)),
-                repr(
-                    (
-                        formula_defined_xlm_get_cell_functions_by_definition[
-                            identity_for(definition)
-                        ],
-                        definition.formula,
-                    )
-                ),
-            )
-            for definition in all_definitions
-            if formula_defined_xlm_get_cell_functions_by_definition[
-                identity_for(definition)
-            ]
-        )
-    )
-
-    global_formula_defined_xlm_environment_information_result: dict[
-        str, tuple[str, ...]
-    ] = {
-        key: formula_defined_xlm_environment_information_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_formulas.items()
-    }
-    for scope, definitions in local_formulas.items():
-        for key, definition in definitions.items():
-            global_formula_defined_xlm_environment_information_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_defined_xlm_environment_information_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_formula_defined_xlm_environment_information_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_formulas.items():
-        functions = {
-            key: formula_defined_xlm_environment_information_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_formula_defined_xlm_environment_information_result[scope] = functions
-
-    global_function_formula_defined_xlm_environment_information_result: dict[
-        str, tuple[str, ...]
-    ] = {
-        key: formula_defined_xlm_environment_information_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_lambdas.items()
-    }
-    for scope, definitions in local_lambdas.items():
-        for key, definition in definitions.items():
-            global_function_formula_defined_xlm_environment_information_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_defined_xlm_environment_information_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_function_formula_defined_xlm_environment_information_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_lambdas.items():
-        functions = {
-            key: formula_defined_xlm_environment_information_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_function_formula_defined_xlm_environment_information_result[
-                scope
-            ] = functions
-
-    formula_defined_xlm_environment_information_definition_entries = tuple(
-        sorted(
-            (
-                repr((definition.scope, definition.key)),
-                repr(
-                    (
-                        formula_defined_xlm_environment_information_functions_by_definition[
-                            identity_for(definition)
-                        ],
-                        definition.formula,
-                    )
-                ),
-            )
-            for definition in all_definitions
-            if formula_defined_xlm_environment_information_functions_by_definition[
-                identity_for(definition)
-            ]
-        )
-    )
-
-    global_formula_environment_information_result: dict[str, tuple[str, ...]] = {
-        key: formula_environment_information_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_formulas.items()
-    }
-    for scope, definitions in local_formulas.items():
-        for key, definition in definitions.items():
-            global_formula_environment_information_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_environment_information_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_formula_environment_information_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_formulas.items():
-        functions = {
-            key: formula_environment_information_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_formula_environment_information_result[scope] = functions
-
-    global_function_formula_environment_information_result: dict[
-        str, tuple[str, ...]
-    ] = {
-        key: formula_environment_information_functions_by_definition[
-            identity_for(definition)
-        ]
-        for key, definition in global_lambdas.items()
-    }
-    for scope, definitions in local_lambdas.items():
-        for key, definition in definitions.items():
-            global_function_formula_environment_information_result[
-                _qualified_name_key(sheet_titles[scope], key)
-            ] = formula_environment_information_functions_by_definition[
-                identity_for(definition)
-            ]
-
-    local_function_formula_environment_information_result: dict[
-        str, dict[str, tuple[str, ...]]
-    ] = {}
-    for scope, definitions in local_lambdas.items():
-        functions = {
-            key: formula_environment_information_functions_by_definition[
-                identity_for(definition)
-            ]
-            for key, definition in definitions.items()
-        }
-        if functions:
-            local_function_formula_environment_information_result[scope] = functions
-
-    formula_environment_information_definition_entries = tuple(
-        sorted(
-            (
-                repr((definition.scope, definition.key)),
-                repr(
-                    (
-                        formula_environment_information_functions_by_definition[
-                            identity_for(definition)
-                        ],
-                        definition.formula,
-                    )
-                ),
-            )
-            for definition in all_definitions
-            if formula_environment_information_functions_by_definition[
-                identity_for(definition)
-            ]
-        )
-    )
+    (
+        global_formula_environment_information_result,
+        local_formula_environment_information_result,
+        global_function_formula_environment_information_result,
+        local_function_formula_environment_information_result,
+    ) = ledger_visibility_maps(10)
+    formula_environment_information_definition_entries = ledger_definition_entries(10)
 
     return (
         global_result,
@@ -52301,138 +51531,126 @@ def _load_snapshot_from_stable_source(
             **visible_named_function_external_static_references,
             **local_named_functions.get(worksheet.title.casefold(), {}),
         }
-        named_formula_external_action_functions = {
-            **global_named_formula_external_action_functions,
-            **local_named_formula_external_action_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_function_formula_external_action_functions = {
-            **global_named_function_formula_external_action_functions,
-            **local_named_function_formula_external_action_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_formula_dde_link_markers = {
-            **global_named_formula_dde_link_markers,
-            **local_named_formula_dde_link_markers.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_function_formula_dde_link_markers = {
-            **global_named_function_formula_dde_link_markers,
-            **local_named_function_formula_dde_link_markers.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_custom_function_candidates = {
-            **global_named_custom_function_candidates,
-            **local_named_custom_function_candidates.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_function_custom_function_candidates = {
-            **global_named_function_custom_function_candidates,
-            **local_named_function_custom_function_candidates.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_unqualified_runtime_function_candidates = {
-            **global_named_unqualified_runtime_function_candidates,
-            **local_named_unqualified_runtime_function_candidates.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_function_unqualified_runtime_function_candidates = {
-            **global_named_function_unqualified_runtime_function_candidates,
-            **local_named_function_unqualified_runtime_function_candidates.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_worksheet_code_resource_registration_functions = {
-            **global_named_worksheet_code_resource_registration_functions,
-            **local_named_worksheet_code_resource_registration_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_function_worksheet_code_resource_registration_functions = {
-            **global_named_function_worksheet_code_resource_registration_functions,
-            **local_named_function_worksheet_code_resource_registration_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_formula_defined_xlm_registration_functions = {
-            **global_named_formula_defined_xlm_registration_functions,
-            **local_named_formula_defined_xlm_registration_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_function_formula_defined_xlm_registration_functions = {
-            **global_named_function_formula_defined_xlm_registration_functions,
-            **local_named_function_formula_defined_xlm_registration_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_formula_defined_xlm_evaluation_functions = {
-            **global_named_formula_defined_xlm_evaluation_functions,
-            **local_named_formula_defined_xlm_evaluation_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_function_formula_defined_xlm_evaluation_functions = {
-            **global_named_function_formula_defined_xlm_evaluation_functions,
-            **local_named_function_formula_defined_xlm_evaluation_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_formula_defined_xlm_action_functions = {
-            **global_named_formula_defined_xlm_action_functions,
-            **local_named_formula_defined_xlm_action_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_function_formula_defined_xlm_action_functions = {
-            **global_named_function_formula_defined_xlm_action_functions,
-            **local_named_function_formula_defined_xlm_action_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_formula_defined_xlm_get_cell_functions = {
-            **global_named_formula_defined_xlm_get_cell_functions,
-            **local_named_formula_defined_xlm_get_cell_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_function_formula_defined_xlm_get_cell_functions = {
-            **global_named_function_formula_defined_xlm_get_cell_functions,
-            **local_named_function_formula_defined_xlm_get_cell_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_formula_defined_xlm_environment_information_functions = {
-            **global_named_formula_defined_xlm_environment_information_functions,
-            **local_named_formula_defined_xlm_environment_information_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_function_formula_defined_xlm_environment_information_functions = {
-            **global_named_function_formula_defined_xlm_environment_information_functions,
-            **local_named_function_formula_defined_xlm_environment_information_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_formula_environment_information_functions = {
-            **global_named_formula_environment_information_functions,
-            **local_named_formula_environment_information_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
-        named_function_formula_environment_information_functions = {
-            **global_named_function_formula_environment_information_functions,
-            **local_named_function_formula_environment_information_functions.get(
-                worksheet.title.casefold(), {}
-            ),
-        }
+        named_formula_external_action_functions = (
+            local_named_formula_external_action_functions.get(
+                worksheet.title.casefold(), global_named_formula_external_action_functions
+            )
+        )
+        named_function_formula_external_action_functions = (
+            local_named_function_formula_external_action_functions.get(
+                worksheet.title.casefold(),
+                global_named_function_formula_external_action_functions,
+            )
+        )
+        named_formula_dde_link_markers = local_named_formula_dde_link_markers.get(
+            worksheet.title.casefold(), global_named_formula_dde_link_markers
+        )
+        named_function_formula_dde_link_markers = (
+            local_named_function_formula_dde_link_markers.get(
+                worksheet.title.casefold(), global_named_function_formula_dde_link_markers
+            )
+        )
+        named_custom_function_candidates = local_named_custom_function_candidates.get(
+            worksheet.title.casefold(), global_named_custom_function_candidates
+        )
+        named_function_custom_function_candidates = (
+            local_named_function_custom_function_candidates.get(
+                worksheet.title.casefold(), global_named_function_custom_function_candidates
+            )
+        )
+        named_unqualified_runtime_function_candidates = (
+            local_named_unqualified_runtime_function_candidates.get(
+                worksheet.title.casefold(),
+                global_named_unqualified_runtime_function_candidates,
+            )
+        )
+        named_function_unqualified_runtime_function_candidates = (
+            local_named_function_unqualified_runtime_function_candidates.get(
+                worksheet.title.casefold(),
+                global_named_function_unqualified_runtime_function_candidates,
+            )
+        )
+        named_worksheet_code_resource_registration_functions = (
+            local_named_worksheet_code_resource_registration_functions.get(
+                worksheet.title.casefold(),
+                global_named_worksheet_code_resource_registration_functions,
+            )
+        )
+        named_function_worksheet_code_resource_registration_functions = (
+            local_named_function_worksheet_code_resource_registration_functions.get(
+                worksheet.title.casefold(),
+                global_named_function_worksheet_code_resource_registration_functions,
+            )
+        )
+        named_formula_defined_xlm_registration_functions = (
+            local_named_formula_defined_xlm_registration_functions.get(
+                worksheet.title.casefold(),
+                global_named_formula_defined_xlm_registration_functions,
+            )
+        )
+        named_function_formula_defined_xlm_registration_functions = (
+            local_named_function_formula_defined_xlm_registration_functions.get(
+                worksheet.title.casefold(),
+                global_named_function_formula_defined_xlm_registration_functions,
+            )
+        )
+        named_formula_defined_xlm_evaluation_functions = (
+            local_named_formula_defined_xlm_evaluation_functions.get(
+                worksheet.title.casefold(),
+                global_named_formula_defined_xlm_evaluation_functions,
+            )
+        )
+        named_function_formula_defined_xlm_evaluation_functions = (
+            local_named_function_formula_defined_xlm_evaluation_functions.get(
+                worksheet.title.casefold(),
+                global_named_function_formula_defined_xlm_evaluation_functions,
+            )
+        )
+        named_formula_defined_xlm_action_functions = (
+            local_named_formula_defined_xlm_action_functions.get(
+                worksheet.title.casefold(), global_named_formula_defined_xlm_action_functions
+            )
+        )
+        named_function_formula_defined_xlm_action_functions = (
+            local_named_function_formula_defined_xlm_action_functions.get(
+                worksheet.title.casefold(),
+                global_named_function_formula_defined_xlm_action_functions,
+            )
+        )
+        named_formula_defined_xlm_get_cell_functions = (
+            local_named_formula_defined_xlm_get_cell_functions.get(
+                worksheet.title.casefold(), global_named_formula_defined_xlm_get_cell_functions
+            )
+        )
+        named_function_formula_defined_xlm_get_cell_functions = (
+            local_named_function_formula_defined_xlm_get_cell_functions.get(
+                worksheet.title.casefold(),
+                global_named_function_formula_defined_xlm_get_cell_functions,
+            )
+        )
+        named_formula_defined_xlm_environment_information_functions = (
+            local_named_formula_defined_xlm_environment_information_functions.get(
+                worksheet.title.casefold(),
+                global_named_formula_defined_xlm_environment_information_functions,
+            )
+        )
+        named_function_formula_defined_xlm_environment_information_functions = (
+            local_named_function_formula_defined_xlm_environment_information_functions.get(
+                worksheet.title.casefold(),
+                global_named_function_formula_defined_xlm_environment_information_functions,
+            )
+        )
+        named_formula_environment_information_functions = (
+            local_named_formula_environment_information_functions.get(
+                worksheet.title.casefold(), global_named_formula_environment_information_functions
+            )
+        )
+        named_function_formula_environment_information_functions = (
+            local_named_function_formula_environment_information_functions.get(
+                worksheet.title.casefold(),
+                global_named_function_formula_environment_information_functions,
+            )
+        )
         nonempty_cells = 0
         formula_cells = 0
         # _cells lets us avoid traversing a sheet's whole used rectangle when a

@@ -5,6 +5,40 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Atomic no-clobber starter-policy publication — 2026-07-28
+
+Version 0.161.0 closes the remaining `init` no-overwrite time-of-check/time-of-use
+gap. Version 0.160.0 checked whether the requested starter-policy pathname
+existed and then atomically replaced that pathname. That kept a symlink target
+safe, but a normal file, symlink, or hard link created after the initial check
+could still have its final directory entry replaced even though the caller had
+not supplied `--force`.
+
+The new default path writes the complete starter policy privately beside its
+destination, then uses the filesystem's no-replace link creation to claim the
+final name. The operation fails rather than overwriting when an entry has
+appeared. Deterministic controls substitute a normal policy, a symlink to a
+protected file, and a hard link to a protected file immediately before that
+publication step: each must return status 2, preserve the competing entry and
+protected bytes, and remove the unpublished private file. The explicit
+`init --force` path still atomically replaces a final symlink entry without
+modifying its target. The boundary remains scoped to final entry publication;
+a hostile parent directory is still outside the caller's workspace-permission
+trust boundary.
+
+Against the public 0.160.0 wheel, a normal policy created in the gap produced
+exit 0 and `concurrent_preserved=False`; the 0.161.0 source returned exit 2
+with `concurrent_preserved=True`. In fresh processes, 1,000 normal `init`
+publications took 1.423195 seconds at 38,764 KiB RSS with 0.160.0 and 1.439989
+seconds at 38,292 KiB RSS with 0.161.0. The small no-clobber operation therefore
+preserves the existing startup-scale behavior while making the default contract
+filesystem-enforced. The final source suite passed 1,229 tests in 200.92
+seconds, with Ruff, bytecode compilation, and whitespace checks clean. The
+locally built wheel and source distribution passed `twine check`; fresh installs
+of both passed `pip check`, normal and hostile policy controls, the retained
+report-path swap control, the new no-clobber race, and forced-final-symlink
+publication.
+
 ## Atomic report and policy publication — 2026-07-28
 
 Version 0.160.0 closes the final output-path race after FormulaFence has

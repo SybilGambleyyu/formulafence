@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.160.0/formulafence-0.160.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.161.0/formulafence-0.161.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.160.0
+  uses: SybilGambleyyu/formulafence@v0.161.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2674,11 +2674,15 @@ hosts that provide nonblocking descriptor opens rather than stalling CI. See
 the [policy reference](docs/policy.md#policy-file-safety-and-syntax) for the supported
 syntax and the [threat model](docs/threat-model.md) for the CI boundary.
 
-When a CLI command writes a report or `init` writes a starter policy, it first
-creates a private temporary file alongside the requested destination and then
-atomically replaces the final directory entry. This keeps a post-check symlink
-or hard-link swap from redirecting the write into an inspected input: the link
-itself is replaced. Parent-directory access remains part of the caller's CI
+When a CLI command writes a report, or `init --force` writes a starter policy,
+FormulaFence first creates a private temporary file alongside the requested
+destination and then atomically replaces the final directory entry. This keeps
+a post-check symlink or hard-link swap from redirecting the write into an
+inspected input: the link itself is replaced. Ordinary `init` instead uses an
+atomic no-replace link publication: if any final directory entry appears after
+its initial absence check, the command fails and leaves that entry untouched.
+That keeps the default “use `--force` to replace it” promise true across the
+publication race. Parent-directory access remains part of the caller's CI
 workspace integrity boundary.
 
 For each snapshot, FormulaFence first materializes one bounded private copy of

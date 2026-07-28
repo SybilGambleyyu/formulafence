@@ -153,24 +153,76 @@ def test_profile_output_swap_cannot_overwrite_the_workbook(tmp_path, monkeypatch
     assert output.read_text(encoding="utf-8").startswith("# FormulaFence workbook profile")
 
 
-def test_init_path_swap_cannot_overwrite_a_target_file(tmp_path, monkeypatch) -> None:
+def test_init_path_swap_refuses_to_replace_a_target_file(tmp_path, monkeypatch, capsys) -> None:
     target = tmp_path / "protected.txt"
     target.write_text("preserve this file", encoding="utf-8")
     policy = tmp_path / "formulafence.yml"
-    original_replace_text_atomically = cli_module._replace_text_atomically
+    original_create_text_atomically = cli_module._create_text_atomically
 
-    def swap_then_replace(path, content):
+    def swap_then_create(path, content):
         assert path == policy
         policy.symlink_to(target)
-        original_replace_text_atomically(path, content)
+        original_create_text_atomically(path, content)
 
-    monkeypatch.setattr(cli_module, "_replace_text_atomically", swap_then_replace)
+    monkeypatch.setattr(cli_module, "_create_text_atomically", swap_then_create)
 
-    assert main(["init", str(policy)]) == 0
+    assert main(["init", str(policy)]) == 2
 
     assert target.read_text(encoding="utf-8") == "preserve this file"
-    assert not policy.is_symlink()
-    assert policy.read_text(encoding="utf-8") == cli_module.DEFAULT_POLICY
+    assert policy.is_symlink()
+    assert not list(tmp_path.glob("formulafence-output-*"))
+    assert "Refusing to replace existing policy" in capsys.readouterr().err
+
+
+def test_init_path_created_after_preflight_is_not_replaced(tmp_path, monkeypatch, capsys) -> None:
+    policy = tmp_path / "formulafence.yml"
+    original_create_text_atomically = cli_module._create_text_atomically
+
+    def create_then_publish(path, content):
+        assert path == policy
+        policy.write_text("concurrent policy", encoding="utf-8")
+        original_create_text_atomically(path, content)
+
+    monkeypatch.setattr(cli_module, "_create_text_atomically", create_then_publish)
+
+    assert main(["init", str(policy)]) == 2
+
+    assert policy.read_text(encoding="utf-8") == "concurrent policy"
+    assert not list(tmp_path.glob("formulafence-output-*"))
+    assert "Refusing to replace existing policy" in capsys.readouterr().err
+
+
+def test_init_hard_link_created_after_preflight_is_not_replaced(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    target = tmp_path / "protected.txt"
+    target.write_text("preserve this file", encoding="utf-8")
+    policy = tmp_path / "formulafence.yml"
+    original_create_text_atomically = cli_module._create_text_atomically
+
+    def hard_link_then_publish(path, content):
+        assert path == policy
+        policy.hardlink_to(target)
+        original_create_text_atomically(path, content)
+
+    monkeypatch.setattr(cli_module, "_create_text_atomically", hard_link_then_publish)
+
+    assert main(["init", str(policy)]) == 2
+
+    assert target.read_text(encoding="utf-8") == "preserve this file"
+    assert policy.read_text(encoding="utf-8") == "preserve this file"
+    assert not list(tmp_path.glob("formulafence-output-*"))
+    assert "Refusing to replace existing policy" in capsys.readouterr().err
+
+
+def test_init_refuses_an_existing_policy_without_force(tmp_path, capsys) -> None:
+    policy = tmp_path / "formulafence.yml"
+    policy.write_text("existing policy", encoding="utf-8")
+
+    assert main(["init", str(policy)]) == 2
+
+    assert policy.read_text(encoding="utf-8") == "existing policy"
+    assert "Refusing to replace existing policy" in capsys.readouterr().err
 
 
 def test_init_force_replaces_an_existing_policy(tmp_path) -> None:
@@ -179,6 +231,19 @@ def test_init_force_replaces_an_existing_policy(tmp_path) -> None:
 
     assert main(["init", str(policy), "--force"]) == 0
 
+    assert policy.read_text(encoding="utf-8") == cli_module.DEFAULT_POLICY
+
+
+def test_init_force_replaces_a_final_symlink_without_touching_its_target(tmp_path) -> None:
+    target = tmp_path / "protected.txt"
+    target.write_text("preserve this file", encoding="utf-8")
+    policy = tmp_path / "formulafence.yml"
+    policy.symlink_to(target)
+
+    assert main(["init", str(policy), "--force"]) == 0
+
+    assert target.read_text(encoding="utf-8") == "preserve this file"
+    assert not policy.is_symlink()
     assert policy.read_text(encoding="utf-8") == cli_module.DEFAULT_POLICY
 
 

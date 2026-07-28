@@ -338,8 +338,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _replace_text_atomically(path: Path, content: str) -> None:
-    """Publish text by replacing the final pathname instead of following it."""
+def _write_private_text_file(path: Path, content: str) -> Path:
+    """Write complete text to a private sibling file and return its pathname."""
     descriptor: int | None = None
     temporary_path: Path | None = None
     try:
@@ -357,19 +357,56 @@ def _replace_text_atomically(path: Path, content: str) -> None:
             payload = payload[written:]
         os.close(descriptor)
         descriptor = None
-        os.replace(temporary_path, path)
-        temporary_path = None
+        assert temporary_path is not None
+        return temporary_path
+    except BaseException:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
     finally:
         if descriptor is not None:
             try:
                 os.close(descriptor)
             except OSError:
                 pass
+
+
+def _publish_text_atomically(path: Path, content: str, *, replace: bool) -> None:
+    """Publish complete text by replacing, or atomically claiming, a final name."""
+    temporary_path = _write_private_text_file(path, content)
+    try:
+        if replace:
+            os.replace(temporary_path, path)
+        else:
+            try:
+                # ``link`` creates the final directory entry only when it is
+                # absent.  Unlike a preflight ``exists`` check, that condition
+                # is tested by the filesystem at publication time.
+                os.link(temporary_path, path)
+            except FileExistsError as error:
+                raise FormulaFenceError(
+                    f"Refusing to replace existing policy: {path} "
+                    "(use --force to replace it)"
+                ) from error
+    finally:
         if temporary_path is not None:
             try:
                 temporary_path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def _replace_text_atomically(path: Path, content: str) -> None:
+    """Publish text by replacing the final pathname instead of following it."""
+    _publish_text_atomically(path, content, replace=True)
+
+
+def _create_text_atomically(path: Path, content: str) -> None:
+    """Publish text only when the final pathname remains absent."""
+    _publish_text_atomically(path, content, replace=False)
 
 
 def _emit(content: str, output: Path | None) -> None:
@@ -748,7 +785,10 @@ def _run_init(arguments: argparse.Namespace) -> int:
         raise FormulaFenceError(
             f"Refusing to replace existing policy: {arguments.path} (use --force to replace it)"
         )
-    _replace_text_atomically(arguments.path, DEFAULT_POLICY)
+    if arguments.force:
+        _replace_text_atomically(arguments.path, DEFAULT_POLICY)
+    else:
+        _create_text_atomically(arguments.path, DEFAULT_POLICY)
     sys.stdout.write(f"Wrote starter FormulaFence policy to {arguments.path}\n")
     return 0
 

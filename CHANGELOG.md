@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.161.0 — 2026-07-28
+
+- Make ordinary `init` an atomic no-clobber publication: after writing its
+  private same-directory file, it uses a new filesystem link to claim the final
+  pathname. Any file, symlink, or hard link created after the initial absence
+  check now remains untouched and produces the same `--force` guidance as an
+  already-existing policy.
+- Keep `init --force` on the existing atomic replacement path, so an explicit
+  replacement still replaces a final symlink entry instead of writing through
+  its target.
+- Add direct ordinary-existing-file, post-check regular-file, symlink, and hard
+  link regressions, including private temporary-file cleanup assertions.
+
 ## 0.160.0 — 2026-07-28
 
 - Publish CLI reports and `init` starter policies through a private temporary

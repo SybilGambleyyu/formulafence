@@ -1910,7 +1910,13 @@ regular files are inventoried, each side has a separate 4 GiB aggregate observed
 source-byte ceiling by default (`--max-portfolio-source-bytes`). FormulaFence
 checks the total before opening any snapshot, using the same regular-file sizes
 and identities later guarded reads require; it is separate from both the raw
-entry and supported-workbook limits.
+entry and supported-workbook limits. During comparison, each side also has a
+separate 2,000,000-populated-cell retained-snapshot ceiling by default
+(`--max-portfolio-snapshot-cells`). FormulaFence counts actual snapshot cells
+as each source is loaded for nested report evidence and candidate graph analysis,
+then fails closed before it opens a later workbook if the newly retained state
+exceeds that side's budget. This is separate from the pre-read source-byte,
+raw-entry, and supported-workbook limits.
 
 Candidate-only portfolio analysis also builds a separate static dependency graph
 across a deliberately narrow subset of external A1 formulas and 3-D A1 spans,

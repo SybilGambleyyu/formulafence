@@ -19,6 +19,7 @@ from formulafence.output import as_json, portfolio_to_markdown, portfolio_to_sar
 from formulafence.policy import parse_policy
 from formulafence.portfolio import (
     DEFAULT_MAX_INVENTORY_ENTRIES,
+    DEFAULT_MAX_PORTFOLIO_SNAPSHOT_CELLS,
     DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES,
     PortfolioError,
     _canonical_external_table_references,
@@ -2060,6 +2061,10 @@ def test_portfolio_source_byte_budget_rejects_a_nonpositive_limit(tmp_path: Path
         PortfolioError, match="max_portfolio_source_bytes must be at least 1"
     ):
         compare_portfolios(baseline, candidate, max_portfolio_source_bytes=0)
+    with pytest.raises(
+        PortfolioError, match="max_portfolio_snapshot_cells must be at least 1"
+    ):
+        compare_portfolios(baseline, candidate, max_portfolio_snapshot_cells=0)
 
 
 def test_portfolio_source_byte_budget_checks_the_candidate_before_reads(
@@ -2089,6 +2094,86 @@ def test_portfolio_source_byte_budget_checks_the_candidate_before_reads(
             max_portfolio_source_bytes=baseline_source.stat().st_size,
         )
     assert snapshot_reads == []
+
+
+def test_portfolio_snapshot_cell_budget_is_exact_and_stops_later_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline, candidate = _portfolio_pair(tmp_path)
+    baseline_first = baseline / "models" / "shared.xlsx"
+    candidate_first = candidate / "models" / "shared.xlsx"
+    baseline_second = baseline / "second.xlsx"
+    candidate_second = candidate / "second.xlsx"
+    _copy_workbook(baseline_first, baseline_second)
+    _copy_workbook(candidate_first, candidate_second)
+    baseline_snapshot_cells = sum(
+        len(load_snapshot(workbook).cells) for workbook in (baseline_first, baseline_second)
+    )
+    candidate_snapshot_cells = sum(
+        len(load_snapshot(workbook).cells) for workbook in (candidate_first, candidate_second)
+    )
+    exact_limit = max(baseline_snapshot_cells, candidate_snapshot_cells)
+
+    exact_report = compare_portfolios(
+        baseline,
+        candidate,
+        max_portfolio_snapshot_cells=exact_limit,
+    )
+    assert exact_report.incomplete is False
+
+    original_load_snapshot = portfolio_module.load_snapshot
+    snapshot_reads: list[Path] = []
+
+    def record_load(path: Path, **kwargs: object):
+        snapshot_reads.append(Path(path))
+        return original_load_snapshot(path, **kwargs)
+
+    monkeypatch.setattr(portfolio_module, "load_snapshot", record_load)
+    with pytest.raises(
+        PortfolioError,
+        match=f"max_portfolio_snapshot_cells={baseline_snapshot_cells - 1}",
+    ):
+        compare_portfolios(
+            baseline,
+            candidate,
+            max_portfolio_snapshot_cells=baseline_snapshot_cells - 1,
+        )
+    assert snapshot_reads == [baseline_first, candidate_first, baseline_second]
+
+
+def test_portfolio_snapshot_cell_budget_checks_the_candidate_before_later_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline, candidate = _portfolio_pair(tmp_path)
+    baseline_source = baseline / "models" / "shared.xlsx"
+    candidate_source = candidate / "models" / "shared.xlsx"
+
+    def grow_candidate_snapshot(workbook) -> None:
+        for row in range(1, 33):
+            workbook["Model"].cell(row=row, column=8, value=f"=Inputs!A{row}")
+
+    rewrite(candidate_source, grow_candidate_snapshot)
+    _copy_workbook(baseline_source, baseline / "second.xlsx")
+    _copy_workbook(candidate_source, candidate / "second.xlsx")
+    baseline_snapshot_cells = len(load_snapshot(baseline_source).cells)
+    assert len(load_snapshot(candidate_source).cells) > baseline_snapshot_cells
+    original_load_snapshot = portfolio_module.load_snapshot
+    snapshot_reads: list[Path] = []
+
+    def record_load(path: Path, **kwargs: object):
+        snapshot_reads.append(Path(path))
+        return original_load_snapshot(path, **kwargs)
+
+    monkeypatch.setattr(portfolio_module, "load_snapshot", record_load)
+    with pytest.raises(PortfolioError, match="Candidate portfolio retains"):
+        compare_portfolios(
+            baseline,
+            candidate,
+            max_portfolio_snapshot_cells=baseline_snapshot_cells,
+        )
+    assert snapshot_reads == [baseline_source, candidate_source]
 
 
 def test_portfolio_cli_passes_the_inventory_entry_limit(tmp_path: Path) -> None:
@@ -2127,6 +2212,23 @@ def test_portfolio_cli_passes_the_source_byte_limit(tmp_path: Path) -> None:
     )
 
 
+def test_portfolio_cli_passes_the_snapshot_cell_limit(tmp_path: Path) -> None:
+    baseline, candidate = _portfolio_pair(tmp_path)
+
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline),
+                str(candidate),
+                "--max-portfolio-snapshot-cells",
+                "1",
+            ]
+        )
+        == 2
+    )
+
+
 def test_portfolio_cli_defaults_the_inventory_entry_limit() -> None:
     arguments = build_parser().parse_args(["portfolio", "before", "after"])
 
@@ -2137,6 +2239,12 @@ def test_portfolio_cli_defaults_the_source_byte_limit() -> None:
     arguments = build_parser().parse_args(["portfolio", "before", "after"])
 
     assert arguments.max_portfolio_source_bytes == DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES
+
+
+def test_portfolio_cli_defaults_the_snapshot_cell_limit() -> None:
+    arguments = build_parser().parse_args(["portfolio", "before", "after"])
+
+    assert arguments.max_portfolio_snapshot_cells == DEFAULT_MAX_PORTFOLIO_SNAPSHOT_CELLS
 
 
 def test_portfolio_inventory_ignores_office_lock_files(tmp_path: Path) -> None:

@@ -31,6 +31,7 @@ fail_on=${INPUT_FAIL_ON:-none}
 max_workbooks=${INPUT_MAX_WORKBOOKS:-512}
 max_inventory_entries=${INPUT_MAX_INVENTORY_ENTRIES:-32768}
 max_portfolio_source_bytes=${INPUT_MAX_PORTFOLIO_SOURCE_BYTES:-4294967296}
+max_portfolio_snapshot_cells=${INPUT_MAX_PORTFOLIO_SNAPSHOT_CELLS:-2000000}
 max_link_impact=${INPUT_MAX_LINK_IMPACT:-100000}
 install=${INPUT_INSTALL:-true}
 upload_artifact=${INPUT_UPLOAD_ARTIFACT:-true}
@@ -121,6 +122,9 @@ fi
 if ! [[ "$max_portfolio_source_bytes" =~ ^[1-9][0-9]*$ ]]; then
   fail 'max-portfolio-source-bytes must be a positive integer.'
 fi
+if ! [[ "$max_portfolio_snapshot_cells" =~ ^[1-9][0-9]*$ ]]; then
+  fail 'max-portfolio-snapshot-cells must be a positive integer.'
+fi
 if ! [[ "$max_link_impact" =~ ^[1-9][0-9]*$ ]]; then
   fail 'max-link-impact must be a positive integer.'
 fi
@@ -206,6 +210,7 @@ if [[ "$comparison_mode" == portfolio ]]; then
     --max-workbooks "$max_workbooks"
     --max-inventory-entries "$max_inventory_entries"
     --max-portfolio-source-bytes "$max_portfolio_source_bytes"
+    --max-portfolio-snapshot-cells "$max_portfolio_snapshot_cells"
     --max-link-impact "$max_link_impact"
   )
   if [[ -n "$policy" ]]; then

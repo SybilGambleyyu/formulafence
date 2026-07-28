@@ -52,6 +52,7 @@ _UNSUPPORTED_EXCEL_SUFFIXES = frozenset(
 _DEFAULT_MAX_WORKBOOKS = 512
 DEFAULT_MAX_INVENTORY_ENTRIES = 32_768
 DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES = 4 * 1024 * 1024 * 1024
+DEFAULT_MAX_PORTFOLIO_SNAPSHOT_CELLS = 2_000_000
 DEFAULT_MAX_LINK_IMPACT = 100_000
 _LINK_IMPACT_SAMPLE_LIMIT = 10
 
@@ -332,6 +333,33 @@ def _validate_portfolio_source_bytes(
             "workbook source bytes, exceeding "
             f"max_portfolio_source_bytes={max_portfolio_source_bytes}."
         )
+
+
+def _record_portfolio_snapshot_cells(
+    snapshot: WorkbookSnapshot | None,
+    *,
+    label: str,
+    snapshot_cell_count: int,
+    max_portfolio_snapshot_cells: int,
+) -> int:
+    """Record one retained snapshot's cells and enforce a per-side total.
+
+    Portfolio reports retain snapshots for their nested workbook evidence, and
+    candidate snapshots remain available for the cross-workbook graph.  The
+    individual reader bound limits one source, while this counter stops a
+    directory full of otherwise-valid workbooks from accumulating unbounded
+    semantic state across those retained snapshots.
+    """
+    if snapshot is None:
+        return snapshot_cell_count
+    snapshot_cell_count += len(snapshot.cells)
+    if snapshot_cell_count > max_portfolio_snapshot_cells:
+        raise PortfolioError(
+            f"{label.capitalize()} portfolio retains {snapshot_cell_count} workbook "
+            "snapshot cells, exceeding "
+            f"max_portfolio_snapshot_cells={max_portfolio_snapshot_cells}."
+        )
+    return snapshot_cell_count
 
 
 def _resolve_relative_external_workbook(
@@ -1186,6 +1214,7 @@ def compare_portfolios(
     max_workbooks: int = _DEFAULT_MAX_WORKBOOKS,
     max_inventory_entries: int = DEFAULT_MAX_INVENTORY_ENTRIES,
     max_portfolio_source_bytes: int = DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES,
+    max_portfolio_snapshot_cells: int = DEFAULT_MAX_PORTFOLIO_SNAPSHOT_CELLS,
     max_link_impact: int = DEFAULT_MAX_LINK_IMPACT,
 ) -> PortfolioReport:
     """Compare every workbook at the same relative path in two directories.
@@ -1197,6 +1226,8 @@ def compare_portfolios(
     """
     if max_portfolio_source_bytes < 1:
         raise PortfolioError("max_portfolio_source_bytes must be at least 1.")
+    if max_portfolio_snapshot_cells < 1:
+        raise PortfolioError("max_portfolio_snapshot_cells must be at least 1.")
     if max_link_impact < 1:
         raise PortfolioError("max_link_impact must be at least 1.")
     baseline = _discover_portfolio_workbook_sources(
@@ -1227,11 +1258,25 @@ def compare_portfolios(
         )
 
     entries: list[PortfolioWorkbookReport] = []
+    baseline_snapshot_cell_count = 0
+    candidate_snapshot_cell_count = 0
     for path in sorted(set(baseline) | set(candidate), key=_path_sort_key):
         baseline_path = baseline.get(path)
         candidate_path = candidate.get(path)
         before, before_unreadable = _load_portfolio_workbook(baseline_path)
+        baseline_snapshot_cell_count = _record_portfolio_snapshot_cells(
+            before,
+            label="baseline",
+            snapshot_cell_count=baseline_snapshot_cell_count,
+            max_portfolio_snapshot_cells=max_portfolio_snapshot_cells,
+        )
         after, after_unreadable = _load_portfolio_workbook(candidate_path)
+        candidate_snapshot_cell_count = _record_portfolio_snapshot_cells(
+            after,
+            label="candidate",
+            snapshot_cell_count=candidate_snapshot_cell_count,
+            max_portfolio_snapshot_cells=max_portfolio_snapshot_cells,
+        )
         if before_unreadable or after_unreadable:
             unreadable_sides = tuple(
                 side

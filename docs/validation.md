@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Aggregate portfolio snapshot-cell budget — 2026-07-28
+
+Version 0.166.0 closes the retained-semantic-state gap left after the source-byte
+preflight. A portfolio report retains immutable workbook snapshots for its
+nested diff evidence, and candidate snapshots also remain available for the
+cross-workbook dependency graph. The individual 500,000-cell reader ceiling
+therefore still allowed a 512-workbook directory to accumulate an impractical
+number of populated cell records even when every source package was valid and
+the aggregate compressed input stayed within its own limit.
+
+Each baseline and candidate side now has an independent 2,000,000-populated-cell
+budget, configurable with `--max-portfolio-snapshot-cells` and the matching
+Action input. Actual populated cells are knowable only after one source is read,
+so FormulaFence records the new immutable snapshot immediately and fails closed
+before it opens a later workbook if that side has crossed its total. This keeps
+the per-source reader boundary intact while bounding the state retained across
+the portfolio; it is deliberately separate from raw-entry, source-byte,
+supported-workbook, and cross-workbook graph limits.
+
+Direct regressions prove an exact two-workbook total succeeds, a baseline
+overflow stops before the corresponding later candidate source is opened, and a
+larger candidate snapshot also fails before a later source can be read. The CLI
+and public Action reject nonpositive inputs, default to the documented limit,
+and propagate an aggregate overage as status 2.
+
+For a controlled six-workbook portfolio of compact 20,000-populated-cell files
+(945,826 total source bytes), the public 0.165.0 wheel completed every snapshot
+in 89.803903 seconds at 105,888 KiB maximum RSS. The 0.166.0 candidate with a
+20,000-cell per-side limit stopped on the second baseline snapshot at 40,000
+cells, returned status 2 in 47.647901 seconds at 82,872 KiB, and did not open a
+later source. The final source suite passed 1,252 tests in 369.50 seconds, with
+Ruff, bytecode compilation, Action-shell syntax, and whitespace checks clean.
+
 ## Aggregate portfolio source budget — 2026-07-28
 
 Version 0.165.0 closes the next portfolio-scale resource gap. FormulaFence

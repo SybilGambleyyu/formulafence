@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.165.0
+        uses: SybilGambleyyu/formulafence@v0.166.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -278,7 +278,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.165.0
+  uses: SybilGambleyyu/formulafence@v0.166.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -286,6 +286,7 @@ per workbook in the consolidated artifact.
     max-workbooks: '200'
     max-inventory-entries: '16384'
     max-portfolio-source-bytes: '2147483648'
+    max-portfolio-snapshot-cells: '1000000'
     max-link-impact: '100000'
     format: sarif
     output: reports/formulafence-portfolio.sarif
@@ -304,9 +305,12 @@ supported-workbook source bytes per directory. The entry count is enforced
 before paths are retained or sorted, including ordinary non-workbook entries;
 the source-byte total is checked after supported-file inventory and before any
 snapshot read. Configure the latter with `max-portfolio-source-bytes`. The
-Action also passes `max-link-impact` to the candidate-only static
-cross-workbook graph; its default is 100,000 source-to-node states across the
-portfolio.
+Action also retains at most 2,000,000 populated snapshot cells per side by
+default, counting actual snapshots during comparison and stopping before a
+later workbook is opened when a new snapshot exceeds the budget; configure this
+with `max-portfolio-snapshot-cells`. The Action also passes `max-link-impact`
+to the candidate-only static cross-workbook graph; its default is 100,000
+source-to-node states across the portfolio.
 
 The recursive directory walk fails closed if any supplied subtree cannot be
 enumerated. It does not treat an operating-system scan error as an empty branch,
@@ -400,7 +404,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.165.0/formulafence-0.165.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.166.0/formulafence-0.166.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

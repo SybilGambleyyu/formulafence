@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.166.0 — 2026-07-28
+
+- Bound the aggregate semantic state retained by a directory portfolio. Each
+  baseline and candidate side now has a separate 2,000,000-populated-cell
+  snapshot budget by default. FormulaFence counts the actual immutable
+  snapshots it retains for nested diff evidence and candidate cross-workbook
+  analysis, failing closed as soon as a new snapshot pushes that side over the
+  configured total instead of continuing through later workbooks.
+- Expose the control as `--max-portfolio-snapshot-cells` and the matching
+  public GitHub Action input. Exact-limit, baseline/candidate overflow,
+  stop-before-later-read, CLI default, and Action validation/propagation
+  regressions cover the aggregate guard.
+
 ## 0.165.0 — 2026-07-28
 
 - Add a fail-closed aggregate compressed-source-byte budget to each directory

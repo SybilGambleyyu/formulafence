@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.165.0/formulafence-0.165.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.166.0/formulafence-0.166.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.165.0
+  uses: SybilGambleyyu/formulafence@v0.166.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -526,14 +526,18 @@ keeps paths relative in portfolio output, skips transient Office `~$` lock
 files, and fails closed for unsupported Excel formats, case-colliding paths,
 symlinked paths, over-limit inventories, or an unreadable workbook.
 The default bounds are 512 supported workbooks, 32,768 total filesystem entries,
-and 4 GiB of supported-workbook source bytes per directory. The entry budget is
-enforced before FormulaFence retains or sorts paths, so non-workbook files,
-directories, lock files, and symlinks cannot make a broad CI directory consume
-an unbounded inventory. After supported regular files are inventoried,
-FormulaFence sums their observed source sizes before opening any snapshot; the
-source-byte budget bounds the aggregate private-copy and reader workload for
-each side independently. Tune the separate limits with `--max-workbooks`,
-`--max-inventory-entries`, and `--max-portfolio-source-bytes`.
+4 GiB of supported-workbook source bytes, and 2,000,000 populated retained
+snapshot cells per directory. The entry budget is enforced before FormulaFence
+retains or sorts paths, so non-workbook files, directories, lock files, and
+symlinks cannot make a broad CI directory consume an unbounded inventory. After
+supported regular files are inventoried, FormulaFence sums their observed source
+sizes before opening any snapshot; the source-byte budget bounds the aggregate
+private-copy and reader workload for each side independently. During comparison,
+FormulaFence then counts the actual cells in retained immutable snapshots and
+stops as soon as that side exceeds its snapshot-cell budget, before opening a
+later workbook. Tune the separate limits with `--max-workbooks`,
+`--max-inventory-entries`, `--max-portfolio-source-bytes`, and
+`--max-portfolio-snapshot-cells`.
 The recursive walk uses direct directory enumeration and treats any unreadable
 subdirectory as a fail-closed portfolio error; it never silently omits a branch
 from the reviewed directory coverage.

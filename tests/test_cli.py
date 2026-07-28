@@ -8,6 +8,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 import formulafence.cli as cli_module
 import formulafence.policy as policy_module
 from formulafence.cli import main
+from formulafence.output import DEFAULT_MAX_REPORT_BYTES
 
 from .helpers import (
     change_formula_dde_link_input,
@@ -151,6 +152,38 @@ def test_diff_passes_the_change_analysis_state_limit(tmp_path, capsys) -> None:
         == 2
     )
     assert "max_change_analysis_states=1" in capsys.readouterr().err
+
+
+def test_diff_fails_before_writing_an_oversized_report(tmp_path, capsys) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Model"]["B2"], "value", 200))
+    output = tmp_path / "report.json"
+
+    assert (
+        main(
+            [
+                "diff",
+                str(baseline),
+                str(candidate),
+                "--format",
+                "json",
+                "--output",
+                str(output),
+                "--max-report-bytes",
+                "1",
+            ]
+        )
+        == 2
+    )
+    assert not output.exists()
+    assert "max_report_bytes=1" in capsys.readouterr().err
+
+
+def test_diff_defaults_the_report_byte_limit() -> None:
+    arguments = cli_module.build_parser().parse_args(["diff", "before.xlsx", "after.xlsx"])
+
+    assert arguments.max_report_bytes == DEFAULT_MAX_REPORT_BYTES
 
 
 def test_profile_output_swap_cannot_overwrite_the_workbook(tmp_path, monkeypatch) -> None:

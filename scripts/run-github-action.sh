@@ -33,6 +33,7 @@ max_inventory_entries=${INPUT_MAX_INVENTORY_ENTRIES:-32768}
 max_portfolio_source_bytes=${INPUT_MAX_PORTFOLIO_SOURCE_BYTES:-4294967296}
 max_portfolio_snapshot_cells=${INPUT_MAX_PORTFOLIO_SNAPSHOT_CELLS:-2000000}
 max_change_analysis_states=${INPUT_MAX_CHANGE_ANALYSIS_STATES:-100000}
+max_report_bytes=${INPUT_MAX_REPORT_BYTES:-33554432}
 max_link_impact=${INPUT_MAX_LINK_IMPACT:-100000}
 install=${INPUT_INSTALL:-true}
 upload_artifact=${INPUT_UPLOAD_ARTIFACT:-true}
@@ -128,6 +129,9 @@ if ! [[ "$max_portfolio_snapshot_cells" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if ! [[ "$max_change_analysis_states" =~ ^[1-9][0-9]*$ ]]; then
   fail 'max-change-analysis-states must be a positive integer.'
+fi
+if ! [[ "$max_report_bytes" =~ ^[1-9][0-9]*$ ]]; then
+  fail 'max-report-bytes must be a positive integer.'
 fi
 if ! [[ "$max_link_impact" =~ ^[1-9][0-9]*$ ]]; then
   fail 'max-link-impact must be a positive integer.'
@@ -226,6 +230,7 @@ else
   command+=(diff "$baseline" "$candidate")
 fi
 command+=(--max-change-analysis-states "$max_change_analysis_states")
+command+=(--max-report-bytes "$max_report_bytes")
 command+=(--format "$format" --output "$report_path" --fail-on "$fail_on")
 if [[ "$redact_external_workbook_links" == true ]]; then
   command+=(--redact-external-workbook-links)

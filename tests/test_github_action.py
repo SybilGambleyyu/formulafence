@@ -49,6 +49,7 @@ def _run_action_script(
     max_portfolio_source_bytes: str = "4294967296",
     max_portfolio_snapshot_cells: str = "2000000",
     max_change_analysis_states: str = "100000",
+    max_report_bytes: str = "33554432",
     max_link_impact: str = "100000",
     upload_artifact: str = "true",
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
@@ -107,6 +108,7 @@ def _run_action_script(
             "INPUT_MAX_PORTFOLIO_SOURCE_BYTES": max_portfolio_source_bytes,
             "INPUT_MAX_PORTFOLIO_SNAPSHOT_CELLS": max_portfolio_snapshot_cells,
             "INPUT_MAX_CHANGE_ANALYSIS_STATES": max_change_analysis_states,
+            "INPUT_MAX_REPORT_BYTES": max_report_bytes,
             "INPUT_MAX_LINK_IMPACT": max_link_impact,
             "INPUT_INSTALL": "false",
             "INPUT_UPLOAD_ARTIFACT": upload_artifact,
@@ -152,12 +154,14 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
         "max-portfolio-source-bytes",
         "max-portfolio-snapshot-cells",
         "max-change-analysis-states",
+        "max-report-bytes",
         "max-link-impact",
     } <= set(action["inputs"])
     assert action["inputs"]["max-inventory-entries"]["default"] == "32768"
     assert action["inputs"]["max-portfolio-source-bytes"]["default"] == "4294967296"
     assert action["inputs"]["max-portfolio-snapshot-cells"]["default"] == "2000000"
     assert action["inputs"]["max-change-analysis-states"]["default"] == "100000"
+    assert action["inputs"]["max-report-bytes"]["default"] == "33554432"
     assert {"report-path", "exit-code"} <= set(action["outputs"])
     steps = action["runs"]["steps"]
     upload_index = next(
@@ -1228,6 +1232,44 @@ def test_action_applies_the_change_analysis_state_limit_to_a_workbook_pair(
     assert result.returncode == 0
     assert "exit-code=2" in outputs.read_text(encoding="utf-8")
     assert "max_change_analysis_states=1" in result.stderr
+
+
+def test_action_rejects_an_invalid_report_byte_limit(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    _workbook(baseline, 1)
+    _workbook(candidate, 2)
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        max_report_bytes="0",
+    )
+
+    assert result.returncode == 2
+    assert "max-report-bytes must be a positive integer" in result.stderr
+
+
+def test_action_applies_the_report_byte_limit(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    _workbook(baseline, 1)
+    _workbook(candidate, 2)
+
+    result, outputs, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        output="reports/formulafence.json",
+        report_format="json",
+        max_report_bytes="1",
+    )
+
+    assert result.returncode == 0
+    assert "exit-code=2" in outputs.read_text(encoding="utf-8")
+    assert "max_report_bytes=1" in result.stderr
+    assert not (tmp_path / "reports" / "formulafence.json").exists()
 
 
 def test_action_rejects_an_invalid_cross_workbook_impact_limit(tmp_path: Path) -> None:

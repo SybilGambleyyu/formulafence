@@ -17,6 +17,7 @@ from formulafence.diff import (
 )
 from formulafence.models import SEVERITY_ORDER, FormulaFenceError
 from formulafence.output import (
+    DEFAULT_MAX_REPORT_BYTES,
     as_json,
     portfolio_to_html,
     portfolio_to_markdown,
@@ -248,6 +249,17 @@ def _add_change_analysis_state_limit_argument(parser: argparse.ArgumentParser) -
     )
 
 
+def _add_report_byte_limit_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--max-report-bytes",
+        type=_positive_integer,
+        default=DEFAULT_MAX_REPORT_BYTES,
+        help=(
+            "Fail closed before a rendered comparison report exceeds this many UTF-8 bytes"
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="formulafence",
@@ -266,6 +278,7 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("before", type=Path, help="Approved or baseline workbook")
     diff.add_argument("after", type=Path, help="Candidate workbook")
     _add_change_analysis_state_limit_argument(diff)
+    _add_report_byte_limit_argument(diff)
     _add_output_arguments(diff, ("json", "markdown", "html", "sarif"))
     _add_external_workbook_link_redaction_argument(diff)
     _add_formula_external_action_redaction_argument(diff)
@@ -291,6 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("after", type=Path, help="Candidate workbook")
     check.add_argument("--policy", required=True, type=Path, help="Path to formulafence.yml")
     _add_change_analysis_state_limit_argument(check)
+    _add_report_byte_limit_argument(check)
     _add_output_arguments(check, ("json", "markdown", "html", "sarif"))
     _add_external_workbook_link_redaction_argument(check)
     _add_formula_external_action_redaction_argument(check)
@@ -356,6 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_change_analysis_state_limit_argument(portfolio)
+    _add_report_byte_limit_argument(portfolio)
     portfolio.add_argument(
         "--max-link-impact",
         type=_positive_integer,
@@ -558,11 +573,12 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
             payload = redact_formula_environment_information_report_payload(
                 report, payload
             )
-        content = as_json(payload)
+        content = as_json(payload, max_bytes=arguments.max_report_bytes)
     elif arguments.format == "html":
         content = report_to_html(
             report,
             policy_findings,
+            max_bytes=arguments.max_report_bytes,
             redact_external_workbook_links=arguments.redact_external_workbook_links,
             redact_formula_external_actions=arguments.redact_formula_external_actions,
             redact_python_in_excel=arguments.redact_python_in_excel,
@@ -625,12 +641,14 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
                 redact_formula_environment_information=(
                     arguments.redact_formula_environment_information
                 ),
-            )
+            ),
+            max_bytes=arguments.max_report_bytes,
         )
     else:
         content = report_to_markdown(
             report,
             policy_findings,
+            max_bytes=arguments.max_report_bytes,
             redact_external_workbook_links=arguments.redact_external_workbook_links,
             redact_formula_external_actions=arguments.redact_formula_external_actions,
             redact_python_in_excel=arguments.redact_python_in_excel,
@@ -732,10 +750,11 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
             payload = redact_formula_environment_information_portfolio_payload(
                 report, payload
             )
-        content = as_json(payload)
+        content = as_json(payload, max_bytes=arguments.max_report_bytes)
     elif arguments.format == "html":
         content = portfolio_to_html(
             report,
+            max_bytes=arguments.max_report_bytes,
             redact_external_workbook_links=arguments.redact_external_workbook_links,
             redact_formula_external_actions=arguments.redact_formula_external_actions,
             redact_python_in_excel=arguments.redact_python_in_excel,
@@ -797,11 +816,13 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
                 redact_formula_environment_information=(
                     arguments.redact_formula_environment_information
                 ),
-            )
+            ),
+            max_bytes=arguments.max_report_bytes,
         )
     else:
         content = portfolio_to_markdown(
             report,
+            max_bytes=arguments.max_report_bytes,
             redact_external_workbook_links=arguments.redact_external_workbook_links,
             redact_formula_external_actions=arguments.redact_formula_external_actions,
             redact_python_in_excel=arguments.redact_python_in_excel,

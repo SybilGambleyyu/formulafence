@@ -5,6 +5,40 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Rendered report byte budget — 2026-07-28
+
+Version 0.168.0 closes the remaining artifact-amplification gap after workbook
+reading and semantic comparison have been bounded. A small compressed OOXML
+source can legitimately contain many repeated long values; a complete JSON
+report records before/after evidence and can be vastly larger than the package
+that caused it. Building one enormous JSON, Markdown, HTML, or SARIF string
+also risks converting a bounded review into an impractical CI-memory and
+artifact-upload task.
+
+`diff`, `check`, and `portfolio` now cap the final UTF-8 review artifact at
+33,554,432 bytes (32 MiB) by default with `--max-report-bytes` / Action
+`max-report-bytes`. JSON and SARIF count incremental encoder chunks; Markdown
+streams each line; HTML writes each escaped review entry through one
+shared budget. An overage returns status 2 before FormulaFence writes or
+replaces the requested output path. The control is intentionally independent
+from workbook input, local impact, portfolio snapshot, and cross-workbook graph
+budgets; a reviewer can opt up with a deliberate positive byte value.
+
+Direct regressions prove exact UTF-8 JSON accounting and fail-closed rendering
+for JSON, Markdown, HTML, and SARIF. CLI and portfolio commands prove no output
+file appears after an overage, and the public Action metadata/default,
+invalid-input, and propagation contracts are covered.
+
+For a compact control of two 78,679-byte / 78,683-byte `.xlsx` files containing
+1,000 changed 32,767-character text cells, the public 0.167.0 wheel completed
+in 32.719226 seconds and wrote a 66,287,419-byte JSON report. The 0.168.0
+candidate default failed closed in 32.398541 seconds with no report at its
+33,554,432-byte ceiling. Giving it exactly 66,287,419 bytes completed in
+32.726499 seconds and wrote exactly 66,287,419 bytes. The focused output,
+CLI, portfolio, and Action contract set passed 10 tests in 2.65 seconds. The
+final source suite passed 1,269 tests in 369.61 seconds, with Ruff, bytecode
+compilation, Action-shell syntax, and whitespace checks clean.
+
 ## Aggregate local impact-analysis budget — 2026-07-28
 
 Version 0.167.0 closes an algorithmic multiplication gap in semantic diffing.

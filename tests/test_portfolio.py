@@ -15,8 +15,14 @@ from openpyxl.worksheet.table import Table
 import formulafence.portfolio as portfolio_module
 from formulafence.cli import build_parser, main
 from formulafence.diff import DEFAULT_MAX_CHANGE_ANALYSIS_STATES
-from formulafence.models import ExternalWorkbookStructuredReference
-from formulafence.output import as_json, portfolio_to_markdown, portfolio_to_sarif
+from formulafence.models import ExternalWorkbookStructuredReference, FormulaFenceError
+from formulafence.output import (
+    DEFAULT_MAX_REPORT_BYTES,
+    as_json,
+    portfolio_to_html,
+    portfolio_to_markdown,
+    portfolio_to_sarif,
+)
 from formulafence.policy import parse_policy
 from formulafence.portfolio import (
     DEFAULT_MAX_INVENTORY_ENTRIES,
@@ -2289,6 +2295,56 @@ def test_portfolio_cli_passes_the_change_analysis_state_limit(tmp_path: Path) ->
     )
 
 
+def test_portfolio_cli_fails_before_writing_an_oversized_report(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    _write_workbook(baseline / "model.xlsx", "Model", {"A1": 1})
+    _write_workbook(candidate / "model.xlsx", "Model", {"A1": 2})
+    output = tmp_path / "portfolio.json"
+
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline),
+                str(candidate),
+                "--format",
+                "json",
+                "--output",
+                str(output),
+                "--max-report-bytes",
+                "1",
+            ]
+        )
+        == 2
+    )
+    assert not output.exists()
+
+
+def test_portfolio_renderers_respect_the_report_byte_limit(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    _write_workbook(baseline / "model.xlsx", "Model", {"A1": 1})
+    _write_workbook(candidate / "model.xlsx", "Model", {"A1": 2})
+    report = compare_portfolios(baseline, candidate)
+
+    assert portfolio_to_markdown(report, max_bytes=1_000_000).startswith(
+        "# FormulaFence portfolio report"
+    )
+    assert portfolio_to_html(report, max_bytes=1_000_000).startswith("<!doctype html>")
+    assert as_json(report.to_dict(), max_bytes=1_000_000).startswith("{")
+    assert as_json(portfolio_to_sarif(report), max_bytes=1_000_000).startswith("{")
+
+    with pytest.raises(FormulaFenceError, match="max_report_bytes=1"):
+        portfolio_to_markdown(report, max_bytes=1)
+    with pytest.raises(FormulaFenceError, match="max_report_bytes=1"):
+        portfolio_to_html(report, max_bytes=1)
+    with pytest.raises(FormulaFenceError, match="max_report_bytes=1"):
+        as_json(report.to_dict(), max_bytes=1)
+    with pytest.raises(FormulaFenceError, match="max_report_bytes=1"):
+        as_json(portfolio_to_sarif(report), max_bytes=1)
+
+
 def test_portfolio_cli_defaults_the_inventory_entry_limit() -> None:
     arguments = build_parser().parse_args(["portfolio", "before", "after"])
 
@@ -2311,6 +2367,12 @@ def test_portfolio_cli_defaults_the_change_analysis_state_limit() -> None:
     arguments = build_parser().parse_args(["portfolio", "before", "after"])
 
     assert arguments.max_change_analysis_states == DEFAULT_MAX_CHANGE_ANALYSIS_STATES
+
+
+def test_portfolio_cli_defaults_the_report_byte_limit() -> None:
+    arguments = build_parser().parse_args(["portfolio", "before", "after"])
+
+    assert arguments.max_report_bytes == DEFAULT_MAX_REPORT_BYTES
 
 
 def test_portfolio_inventory_ignores_office_lock_files(tmp_path: Path) -> None:

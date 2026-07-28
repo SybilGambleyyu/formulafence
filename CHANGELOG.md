@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.168.0 — 2026-07-28
+
+- Bound the rendered artifact produced by `diff`, `check`, and `portfolio` to
+  32 MiB of UTF-8 text by default. This closes the gap between a safely bounded
+  workbook reader and an impractically large report: a compact, repetitive
+  spreadsheet can otherwise inflate into a large JSON or escaped HTML artifact.
+- Expose `--max-report-bytes` and the matching public GitHub Action input.
+  JSON/SARIF use incremental encoding, Markdown streams each line, and HTML
+  writes each escaped review entry into one shared budget. An
+  overage returns status 2 before any output path is written or replaced;
+  callers can deliberately opt up for a known larger artifact.
+
 ## 0.167.0 — 2026-07-28
 
 - Bound local semantic-change impact analysis across a complete comparison.

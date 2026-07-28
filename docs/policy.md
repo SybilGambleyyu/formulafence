@@ -1930,6 +1930,18 @@ cross-workbook `--max-link-impact` graph budget. Shortest paths are reconstructe
 only for the fixed serialized sample rather than eagerly for every reachable
 node.
 
+Separately, comparison artifacts have a 32 MiB UTF-8 rendering boundary by
+default (`--max-report-bytes` and the matching Action input). It applies to
+JSON, Markdown, HTML, and SARIF from `diff`, `check`, and `portfolio`, after
+comparison and policy evaluation but before FormulaFence writes or replaces an
+output path. An overage returns status `2` rather than leaving a partial report.
+JSON/SARIF account for incremental encoder chunks, Markdown streams each line,
+and HTML accounts for each escaped review entry. This report
+boundary is operational rather than a policy rule: it is separate from content
+inspection, `max_downstream_impact`, local analysis, retained snapshots, and
+cross-workbook graph budgets. Raise it only when a reviewer intends to retain
+the corresponding complete artifact.
+
 Candidate-only portfolio analysis also builds a separate static dependency graph
 across a deliberately narrow subset of external A1 formulas and 3-D A1 spans,
 book-only external structured-table selectors, direct workbook-scoped or

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from html import escape as _html_escape
+from io import StringIO
 from typing import Any
 
 from formulafence import __version__
 from formulafence.formulas import inspect_formula
-from formulafence.models import DiffReport, Finding, display_location
+from formulafence.models import DiffReport, Finding, FormulaFenceError, display_location
 from formulafence.portfolio import PortfolioReport
+
+DEFAULT_MAX_REPORT_BYTES = 32 * 1024 * 1024
 
 EXTERNAL_WORKBOOK_LINK_REDACTION = "[external-workbook link material redacted]"
 FORMULA_EXTERNAL_ACTION_REDACTION = "[formula external-action material redacted]"
@@ -66,8 +69,68 @@ _FORMULA_EXTERNAL_ACTION_HINTS = (
 )
 
 
-def as_json(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+def _report_output_limit_error(max_bytes: int) -> FormulaFenceError:
+    return FormulaFenceError(f"Rendered report exceeds max_report_bytes={max_bytes}.")
+
+
+class _BoundedText:
+    """Accumulate UTF-8 text without exceeding one rendered-artifact budget."""
+
+    def __init__(self, max_bytes: int | None) -> None:
+        if max_bytes is not None and max_bytes < 1:
+            raise FormulaFenceError("max_report_bytes must be at least 1.")
+        self._max_bytes = max_bytes
+        self._byte_count = 0
+        self._buffer = StringIO()
+
+    def append(self, value: str) -> None:
+        byte_count = len(value.encode("utf-8"))
+        if self._max_bytes is not None and self._byte_count + byte_count > self._max_bytes:
+            raise _report_output_limit_error(self._max_bytes)
+        self._buffer.write(value)
+        self._byte_count += byte_count
+
+    def render(self) -> str:
+        return self._buffer.getvalue()
+
+
+class _BoundedLines:
+    """Stream line-oriented renderers into one bounded UTF-8 artifact."""
+
+    def __init__(self, values: Iterable[str], *, max_bytes: int | None) -> None:
+        if max_bytes is not None and max_bytes < 1:
+            raise FormulaFenceError("max_report_bytes must be at least 1.")
+        self._max_bytes = max_bytes
+        self._byte_count = 0
+        self._buffer = StringIO()
+        self.extend(values)
+
+    def append(self, value: str) -> None:
+        byte_count = len(value.encode("utf-8")) + 1
+        if self._max_bytes is not None and self._byte_count + byte_count > self._max_bytes:
+            raise _report_output_limit_error(self._max_bytes)
+        self._buffer.write(value)
+        self._buffer.write("\n")
+        self._byte_count += byte_count
+
+    def extend(self, values: Iterable[str]) -> None:
+        for value in values:
+            self.append(value)
+
+    def render(self) -> str:
+        return self._buffer.getvalue()
+
+
+def as_json(payload: dict[str, Any], *, max_bytes: int | None = None) -> str:
+    """Serialize a report payload, stopping before a bounded artifact overage."""
+    if max_bytes is None:
+        return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    rendered = _BoundedText(max_bytes)
+    encoder = json.JSONEncoder(indent=2, sort_keys=True, ensure_ascii=False)
+    for chunk in encoder.iterencode(payload):
+        rendered.append(chunk)
+    rendered.append("\n")
+    return rendered.render()
 
 
 def _contains_external_workbook_link_material(value: str) -> bool:
@@ -5538,6 +5601,145 @@ def _html_review_section(
     )
 
 
+def _append_html_line(rendered: _BoundedText, value: str) -> None:
+    """Append one HTML line while accounting for its final UTF-8 bytes."""
+    rendered.append(value)
+    rendered.append("\n")
+
+
+def _append_html_json(rendered: _BoundedText, value: object) -> None:
+    """Write escaped JSON evidence incrementally instead of one giant string."""
+    encoder = json.JSONEncoder(indent=2, sort_keys=True, ensure_ascii=False)
+    for chunk in encoder.iterencode(value):
+        rendered.append(_html_escape(chunk, quote=True))
+
+
+def _append_html_review_entry(
+    rendered: _BoundedText, entry: dict[str, Any], category: str
+) -> None:
+    """Write one bounded HTML review entry with complete escaped evidence."""
+    severity = str(entry.get("severity", "note"))
+    identifier = str(entry.get("rule_id") if category == "finding" else entry.get("kind"))
+    location = entry.get("location") or "workbook"
+    title = entry.get("message") if category == "finding" else identifier
+    metadata = [f"<span><strong>Location:</strong> {_html_text(location)}</span>"]
+    if category == "change":
+        metadata.append(
+            "<span><strong>Downstream formulas:</strong> "
+            f"{_html_text(entry.get('impact_count', 0))}</span>"
+        )
+    _append_html_line(
+        rendered,
+        (
+            f'<article class="review-entry severity-{_html_text(severity)}" '
+            f'data-severity="{_html_text(severity)}">'
+        ),
+    )
+    _append_html_line(
+        rendered,
+        "<h3>"
+        f"<code>{_html_text(identifier)}</code> "
+        f'<span class="severity">{_html_text(severity)}</span>'
+        "</h3>",
+    )
+    _append_html_line(rendered, f"<p>{_html_text(title)}</p>")
+    _append_html_line(rendered, f'<div class="metadata">{"".join(metadata)}</div>')
+    _append_html_line(rendered, "<details>")
+    _append_html_line(rendered, "<summary>Review evidence</summary>")
+    rendered.append("<pre>")
+    _append_html_json(rendered, entry)
+    _append_html_line(rendered, "</pre>")
+    _append_html_line(rendered, "</details>")
+    _append_html_line(rendered, "</article>")
+
+
+def _append_html_review_section(
+    rendered: _BoundedText,
+    heading: str,
+    entries: list[dict[str, Any]],
+    category: str,
+) -> None:
+    """Write one review section without retaining all rendered entries."""
+    _append_html_line(rendered, '<section class="review-section">')
+    _append_html_line(rendered, f"<h2>{_html_text(heading)}</h2>")
+    if entries:
+        for entry in entries:
+            _append_html_review_entry(rendered, entry, category)
+    else:
+        _append_html_line(rendered, '<p class="empty">No entries.</p>')
+    _append_html_line(rendered, "</section>")
+
+
+def _append_bounded_html_document_prefix(
+    rendered: _BoundedText,
+    title: str,
+    lede: str,
+    cards: Iterable[tuple[str, object]],
+    context: Iterable[str],
+    redactions: Iterable[str],
+) -> None:
+    """Write the static and small summary part of a portable HTML report."""
+    _append_html_line(rendered, "<!doctype html>")
+    _append_html_line(rendered, '<html lang="en">')
+    _append_html_line(rendered, "<head>")
+    _append_html_line(rendered, '<meta charset="utf-8">')
+    _append_html_line(
+        rendered,
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    )
+    _append_html_line(rendered, f"<title>{_html_text(title)}</title>")
+    _append_html_line(rendered, f"<style>\n{_HTML_STYLE}\n</style>")
+    _append_html_line(rendered, "</head>")
+    _append_html_line(rendered, "<body>")
+    _append_html_line(rendered, "<main>")
+    _append_html_line(rendered, "<header>")
+    _append_html_line(rendered, f"<h1>{_html_text(title)}</h1>")
+    _append_html_line(rendered, f'<p class="lede">{_html_text(lede)}</p>')
+    for item in context:
+        _append_html_line(rendered, f"<p>{_html_text(item)}</p>")
+    _append_html_line(rendered, '<dl class="cards">')
+    for label, value in cards:
+        _append_html_line(rendered, '<div class="card">')
+        _append_html_line(rendered, f"<dt>{_html_text(label)}</dt>")
+        _append_html_line(rendered, f"<dd>{_html_text(value)}</dd>")
+        _append_html_line(rendered, "</div>")
+    _append_html_line(rendered, "</dl>")
+    redaction_labels = tuple(redactions)
+    if redaction_labels:
+        _append_html_line(rendered, '<aside class="redactions">')
+        _append_html_line(rendered, "<strong>Sharing redactions enabled</strong>")
+        _append_html_line(rendered, "<ul>")
+        for label in redaction_labels:
+            _append_html_line(rendered, f"<li>{_html_text(label)}</li>")
+        _append_html_line(rendered, "</ul>")
+        _append_html_line(rendered, "</aside>")
+    _append_html_line(rendered, "</header>")
+    _append_html_line(rendered, '<section class="filters" aria-label="Review filters">')
+    _append_html_line(
+        rendered,
+        '<label>Search <input id="review-filter" type="search" '
+        'placeholder="Rule, location, formula, or text"></label>',
+    )
+    _append_html_line(rendered, '<label>Severity <select id="severity-filter">')
+    _append_html_line(rendered, '<option value="all">All severities</option>')
+    _append_html_line(rendered, '<option value="critical">Critical</option>')
+    _append_html_line(rendered, '<option value="high">High</option>')
+    _append_html_line(rendered, '<option value="medium">Medium</option>')
+    _append_html_line(rendered, '<option value="low">Low</option>')
+    _append_html_line(rendered, '<option value="note">Note</option>')
+    _append_html_line(rendered, "</select></label>")
+    _append_html_line(rendered, '<output id="filter-status" aria-live="polite"></output>')
+    _append_html_line(rendered, "</section>")
+
+
+def _append_bounded_html_document_suffix(rendered: _BoundedText) -> None:
+    """Complete a bounded portable HTML report."""
+    _append_html_line(rendered, "</main>")
+    _append_html_line(rendered, f"<script>\n{_HTML_FILTER_SCRIPT}\n</script>")
+    _append_html_line(rendered, "</body>")
+    _append_html_line(rendered, "</html>")
+
+
 def _html_document(
     title: str,
     lede: str,
@@ -5616,8 +5818,33 @@ def _html_document(
     )
 
 
+def _render_bounded_html_document(
+    title: str,
+    lede: str,
+    cards: Iterable[tuple[str, object]],
+    context: Iterable[str],
+    redactions: Iterable[str],
+    *,
+    max_bytes: int,
+    append_content: Callable[[_BoundedText], None],
+) -> str:
+    """Render a self-contained HTML review without retaining an over-limit page."""
+    rendered = _BoundedText(max_bytes)
+    _append_bounded_html_document_prefix(
+        rendered,
+        title,
+        lede,
+        cards,
+        context,
+        redactions,
+    )
+    append_content(rendered)
+    _append_bounded_html_document_suffix(rendered)
+    return rendered.render()
+
+
 def _append_report_markdown_sections(
-    lines: list[str], payload: dict[str, Any], heading: str
+    lines: _BoundedLines, payload: dict[str, Any], heading: str
 ) -> None:
     """Append reusable finding/change tables at the requested heading level."""
     if payload["findings"]:
@@ -5681,6 +5908,7 @@ def report_to_markdown(
     report: DiffReport,
     extra_findings: Iterable[Finding] = (),
     *,
+    max_bytes: int | None = None,
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
@@ -5719,7 +5947,8 @@ def report_to_markdown(
         redact_formula_environment_information=redact_formula_environment_information,
     )
     summary = payload["summary"]
-    lines = [
+    lines = _BoundedLines(
+        [
         "# FormulaFence change report",
         "",
         f"- **Baseline:** `{payload['before']['path']}`",
@@ -5800,15 +6029,18 @@ def report_to_markdown(
         f"- **Findings:** {summary['finding_count']}",
         f"- **Highest severity:** `{summary['highest_severity']}`",
         "",
-    ]
+        ],
+        max_bytes=max_bytes,
+    )
     _append_report_markdown_sections(lines, payload, "##")
-    return "\n".join(lines) + "\n"
+    return lines.render()
 
 
 def report_to_html(
     report: DiffReport,
     extra_findings: Iterable[Finding] = (),
     *,
+    max_bytes: int | None = None,
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
@@ -5870,29 +6102,46 @@ def report_to_html(
         ),
         redact_formula_environment_information=redact_formula_environment_information,
     )
-    content = "\n".join(
-        [
-            _html_review_section("Findings", payload["findings"], "finding"),
-            _html_review_section("Semantic changes", payload["changes"], "change"),
-        ]
+    title = "FormulaFence change report"
+    lede = (
+        "A portable local review artifact. Use the filters to narrow findings and "
+        "changes; expand an entry for its complete escaped review evidence."
     )
-    return _html_document(
-        "FormulaFence change report",
-        (
-            "A portable local review artifact. Use the filters to narrow findings and "
-            "changes; expand an entry for its complete escaped review evidence."
-        ),
-        (
-            ("Changes", summary["change_count"]),
-            ("Findings", summary["finding_count"]),
-            ("Highest severity", summary["highest_severity"]),
-        ),
-        (
-            f"Baseline: {payload['before']['path']}",
-            f"Candidate: {payload['after']['path']}",
-        ),
+    cards = (
+        ("Changes", summary["change_count"]),
+        ("Findings", summary["finding_count"]),
+        ("Highest severity", summary["highest_severity"]),
+    )
+    context = (
+        f"Baseline: {payload['before']['path']}",
+        f"Candidate: {payload['after']['path']}",
+    )
+    if max_bytes is None:
+        content = "\n".join(
+            [
+                _html_review_section("Findings", payload["findings"], "finding"),
+                _html_review_section("Semantic changes", payload["changes"], "change"),
+            ]
+        )
+        return _html_document(title, lede, cards, context, redactions, content)
+
+    def append_content(rendered: _BoundedText) -> None:
+        _append_html_review_section(rendered, "Findings", payload["findings"], "finding")
+        _append_html_review_section(
+            rendered,
+            "Semantic changes",
+            payload["changes"],
+            "change",
+        )
+
+    return _render_bounded_html_document(
+        title,
+        lede,
+        cards,
+        context,
         redactions,
-        content,
+        max_bytes=max_bytes,
+        append_content=append_content,
     )
 
 
@@ -6030,7 +6279,7 @@ def _markdown_code(value: object) -> str:
 
 
 def _append_cross_workbook_impact_samples(
-    lines: list[str], entry: dict[str, Any], heading: str
+    lines: _BoundedLines, entry: dict[str, Any], heading: str
 ) -> None:
     """Render safe portfolio impact paths without exposing external link spellings."""
     findings = [
@@ -6064,6 +6313,7 @@ def _append_cross_workbook_impact_samples(
 def portfolio_to_markdown(
     report: PortfolioReport,
     *,
+    max_bytes: int | None = None,
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
@@ -6102,7 +6352,8 @@ def portfolio_to_markdown(
         redact_formula_environment_information=redact_formula_environment_information,
     )
     summary = payload["summary"]
-    lines = [
+    lines = _BoundedLines(
+        [
         "# FormulaFence portfolio report",
         "",
         (
@@ -6209,7 +6460,9 @@ def portfolio_to_markdown(
         "",
         "| Workbook | Status | Changes | Findings | Highest severity |",
         "| --- | --- | ---: | ---: | --- |",
-    ]
+        ],
+        max_bytes=max_bytes,
+    )
     for entry in payload["workbooks"]:
         entry_summary = entry["summary"]
         lines.append(
@@ -6243,12 +6496,13 @@ def portfolio_to_markdown(
         _append_report_markdown_sections(lines, entry, "####")
         _append_cross_workbook_impact_samples(lines, entry, "####")
         lines.append("")
-    return "\n".join(lines) + "\n"
+    return lines.render()
 
 
 def portfolio_to_html(
     report: PortfolioReport,
     *,
+    max_bytes: int | None = None,
     redact_external_workbook_links: bool = False,
     redact_formula_external_actions: bool = False,
     redact_python_in_excel: bool = False,
@@ -6309,67 +6563,103 @@ def portfolio_to_html(
         ),
         redact_formula_environment_information=redact_formula_environment_information,
     )
-    workbook_sections: list[str] = []
-    for entry in payload["workbooks"]:
-        entry_summary = entry["summary"]
-        workbook_sections.append(
-            "\n".join(
-                [
-                    '<section class="workbook">',
-                    f"<h2><code>{_html_text(entry['path'])}</code></h2>",
-                    (
-                        "<p>"
-                        f"Status: <strong>{_html_text(entry['status'])}</strong> · "
-                        f"Changes: {_html_text(entry_summary['change_count'])} · "
-                        f"Findings: {_html_text(entry_summary['finding_count'])} · "
-                        "Highest severity: "
-                        f"{_html_text(entry_summary['highest_severity'])}"
-                        "</p>"
-                    ),
-                    _html_review_section("Findings", entry["findings"], "finding"),
-                    _html_review_section(
-                        "Semantic changes", entry["changes"], "change"
-                    ),
-                    "</section>",
-                ]
-            )
-        )
-    content = "\n".join(
-        ["<h2>Workbook details</h2>", *workbook_sections]
-        if workbook_sections
-        else ['<p class="empty">No supported workbooks were found.</p>']
+    title = "FormulaFence portfolio report"
+    lede = (
+        "A portable local review artifact for recursively matched workbooks. "
+        "Use the filters to narrow findings and changes across the portfolio."
     )
-    return _html_document(
-        "FormulaFence portfolio report",
+    cards = (
+        ("Matched workbooks", summary["matched_workbook_count"]),
+        ("Semantic changes", summary["change_count"]),
+        ("Findings", summary["finding_count"]),
+        ("Highest severity", summary["highest_severity"]),
+    )
+    context = (
         (
-            "A portable local review artifact for recursively matched workbooks. "
-            "Use the filters to narrow findings and changes across the portfolio."
+            "Baseline / candidate workbooks: "
+            f"{payload['before']['workbook_count']} / "
+            f"{payload['after']['workbook_count']}"
         ),
         (
-            ("Matched workbooks", summary["matched_workbook_count"]),
-            ("Semantic changes", summary["change_count"]),
-            ("Findings", summary["finding_count"]),
-            ("Highest severity", summary["highest_severity"]),
+            "Added / removed / unreadable: "
+            f"{summary['added_workbook_count']} / "
+            f"{summary['removed_workbook_count']} / "
+            f"{summary['unreadable_workbook_count']}"
         ),
         (
-            (
-                "Baseline / candidate workbooks: "
-                f"{payload['before']['workbook_count']} / "
-                f"{payload['after']['workbook_count']}"
-            ),
-            (
-                "Added / removed / unreadable: "
-                f"{summary['added_workbook_count']} / "
-                f"{summary['removed_workbook_count']} / "
-                f"{summary['unreadable_workbook_count']}"
-            ),
-            (
-                "Cross-workbook impact analysis: "
-                f"{'incomplete' if summary['cross_workbook_impact_incomplete'] else 'complete'}"
-            ),
+            "Cross-workbook impact analysis: "
+            f"{'incomplete' if summary['cross_workbook_impact_incomplete'] else 'complete'}"
         ),
+    )
+    if max_bytes is None:
+        workbook_sections: list[str] = []
+        for entry in payload["workbooks"]:
+            entry_summary = entry["summary"]
+            workbook_sections.append(
+                "\n".join(
+                    [
+                        '<section class="workbook">',
+                        f"<h2><code>{_html_text(entry['path'])}</code></h2>",
+                        (
+                            "<p>"
+                            f"Status: <strong>{_html_text(entry['status'])}</strong> · "
+                            f"Changes: {_html_text(entry_summary['change_count'])} · "
+                            f"Findings: {_html_text(entry_summary['finding_count'])} · "
+                            "Highest severity: "
+                            f"{_html_text(entry_summary['highest_severity'])}"
+                            "</p>"
+                        ),
+                        _html_review_section("Findings", entry["findings"], "finding"),
+                        _html_review_section(
+                            "Semantic changes", entry["changes"], "change"
+                        ),
+                        "</section>",
+                    ]
+                )
+            )
+        content = "\n".join(
+            ["<h2>Workbook details</h2>", *workbook_sections]
+            if workbook_sections
+            else ['<p class="empty">No supported workbooks were found.</p>']
+        )
+        return _html_document(title, lede, cards, context, redactions, content)
+
+    def append_content(rendered: _BoundedText) -> None:
+        if not payload["workbooks"]:
+            _append_html_line(rendered, '<p class="empty">No supported workbooks were found.</p>')
+            return
+        _append_html_line(rendered, "<h2>Workbook details</h2>")
+        for entry in payload["workbooks"]:
+            entry_summary = entry["summary"]
+            _append_html_line(rendered, '<section class="workbook">')
+            _append_html_line(rendered, f"<h2><code>{_html_text(entry['path'])}</code></h2>")
+            _append_html_line(
+                rendered,
+                "<p>"
+                f"Status: <strong>{_html_text(entry['status'])}</strong> · "
+                f"Changes: {_html_text(entry_summary['change_count'])} · "
+                f"Findings: {_html_text(entry_summary['finding_count'])} · "
+                "Highest severity: "
+                f"{_html_text(entry_summary['highest_severity'])}"
+                "</p>",
+            )
+            _append_html_review_section(rendered, "Findings", entry["findings"], "finding")
+            _append_html_review_section(
+                rendered,
+                "Semantic changes",
+                entry["changes"],
+                "change",
+            )
+            _append_html_line(rendered, "</section>")
+
+    return _render_bounded_html_document(
+        title,
+        lede,
+        cards,
+        context,
         redactions,
-        content,
+        max_bytes=max_bytes,
+        append_content=append_content,
     )
 
 

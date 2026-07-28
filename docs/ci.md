@@ -32,13 +32,14 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.167.0
+        uses: SybilGambleyyu/formulafence@v0.168.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
           policy: models/formulafence.yml
           format: markdown
           output: reports/formulafence.md
+          max-report-bytes: '33554432'
           artifact-name: formulafence-report
 ```
 
@@ -278,7 +279,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.167.0
+  uses: SybilGambleyyu/formulafence@v0.168.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -288,6 +289,7 @@ per workbook in the consolidated artifact.
     max-portfolio-source-bytes: '2147483648'
     max-portfolio-snapshot-cells: '1000000'
     max-change-analysis-states: '100000'
+    max-report-bytes: '33554432'
     max-link-impact: '100000'
     format: sarif
     output: reports/formulafence-portfolio.sarif
@@ -319,6 +321,12 @@ evidence; a directory run shares one pool across matched workbooks. On overage,
 the Action returns FormulaFence status 2 rather than emitting a partial local
 impact report. Serialized shortest-path evidence remains a fixed sample and is
 reconstructed lazily from the bounded walk.
+`max-report-bytes` independently caps the final UTF-8 JSON, Markdown, HTML, or
+SARIF artifact at 33,554,432 bytes by default. It applies to single-workbook
+and directory comparisons, returns status 2 before the action publishes or
+replaces an over-limit report, and can be raised deliberately for a reviewed
+large artifact. JSON/SARIF use incremental encoding; Markdown and HTML account
+for their rendered review evidence while constructing it.
 
 The recursive directory walk fails closed if any supplied subtree cannot be
 enumerated. It does not treat an operating-system scan error as an empty branch,
@@ -412,7 +420,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.167.0/formulafence-0.167.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.168.0/formulafence-0.168.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

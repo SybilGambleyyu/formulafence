@@ -171,15 +171,20 @@ financial correctness or replace model review.
   the condition that makes `openpyxl` retain a `RowDimension`; namespaced
   extension attributes do not count. Every reader-visible `col` counts because
   `openpyxl` dispatches it before resolving its attributes, while raw dimension
-  scanners retain direct `cols` containers. It separately caps
-  repeated known stylesheet containers and every reader-materialized number-
-  format, font, fill, fill-child, gradient-stop, border, base-XF, named-style,
-  differential-style, palette, table-style, table-style-element, and extension
-  catalog at 4,096 records. Those counters follow the stylesheet reader's
-  local-name and nested-sequence behavior, including alternate namespaces and
-  unexpected direct nested records. It separately caps the
-  reader-materialized bootstrap catalogs at 4,096 content-type declarations,
-  4,096 workbook relationships, 512 workbook sheet declarations, and 100,000
+  scanners retain direct `cols` containers. The complete `xl/styles.xml`
+  reader tree is separately bounded: every local-name `extLst` subtree, foreign
+  direct root subtree, foreign root local name, and ignored direct child in a
+  named catalog permits 32,768 elements. Every materialized direct style record
+  permits 32,768 non-extension descendants and those records share 262,144
+  elements. Repeated known stylesheet containers and every reader-materialized
+  number-format, font, fill, fill-child, gradient-stop, border, base-XF,
+  named-style, differential-style, palette, table-style, table-style-element,
+  and extension catalog retain their existing 4,096-record bounds; effective
+  `cellXfs` retains its separate 65,490-style ceiling. The counters follow the
+  stylesheet reader's local-name and nested-sequence behavior, including
+  alternate namespaces and unexpected direct nested records. It separately
+  caps the reader-materialized bootstrap catalogs at 4,096 content-type
+  declarations, 4,096 workbook relationships, 512 workbook sheet declarations, and 100,000
   direct workbook defined-name declarations, including repeated declarations of
   one relationship target. It separately caps direct relationship-backed
   external-reference and pivot-cache declarations at 4,096 each, and caps
@@ -344,13 +349,19 @@ formula will produce.
   `RowDimension` allocation trigger; a namespace-qualified extension attribute
   does not count. Every reader-visible `col` counts because `openpyxl`
   dispatches it before examining attributes, and raw dimension scanners retain
-  direct `cols` containers. It also caps repeated known stylesheet
-  containers plus number-format, font, fill, fill-child, gradient-stop, border,
-  base-XF, named-style, differential-style, palette, table-style,
-  table-style-element, and extension records at 4,096 each. It follows
-  `openpyxl`'s local-name and nested-sequence behavior so alternate namespaces
-  and unexpected direct records cannot bypass those style bounds. It also
-  rejects a cell text value above 32,767 characters or stored formula/defined-name text above 8,192 characters, using
+  direct `cols` containers. The complete `xl/styles.xml` reader tree is
+  separately bounded: every local-name `extLst` subtree, foreign direct root
+  subtree, foreign root local name, and ignored direct child in a named catalog
+  permits 32,768 elements. Every materialized direct style record permits
+  32,768 non-extension descendants and those records share 262,144 elements.
+  Repeated known stylesheet containers plus number-format, font, fill,
+  fill-child, gradient-stop, border, base-XF, named-style, differential-style,
+  palette, table-style, table-style-element, and extension records retain their
+  4,096 bounds; effective `cellXfs` retains its separate 65,490-style ceiling.
+  The gate follows `openpyxl`'s local-name and nested-sequence behavior so
+  alternate namespaces and repeated ordinary-looking children cannot bypass
+  those style bounds. It also rejects a cell text value above 32,767 characters
+  or stored formula/defined-name text above 8,192 characters, using
   [Excel's published specifications and limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits)
   for the text, formula, and style compatibility ceilings. It caps manifest
   declarations and workbook relationships at 4,096 each, workbook sheet

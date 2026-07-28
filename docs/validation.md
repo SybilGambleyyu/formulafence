@@ -5,6 +5,57 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Stylesheet XML structural bounds — 2026-07-26
+
+Version 0.151.0 closes the remaining compact-allocation paths in
+`xl/styles.xml`. The Open XML SDK's
+[Stylesheet reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.stylesheet?view=openxml-3.0.1)
+lists the named root catalogs and its
+[ExtensionList reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.extensionlist?view=openxml-3.0.1)
+documents the extensible `ext` payload. The ordinary stylesheet reader reads
+the complete part into bytes and constructs a complete XML tree before it
+materializes its catalog objects. It dispatches named controls by local name;
+some nested sequences turn every direct child into a style object, while other
+descriptors ignore an unknown child only after that tree is already allocated.
+
+The semantic-reader preflight now streams the Styles part before that reader
+starts. Every local-name `extLst` subtree allows 32,768 elements. A foreign
+direct `styleSheet` child, a non-`styleSheet` root local name, and an ignored
+direct child inside a named root catalog each separately allow 32,768 elements.
+Each materialized direct style record allows 32,768 non-extension descendants,
+with 262,144 such descendants across the Styles part. Existing named catalog
+limits—including the 65,490 effective-`cellXfs` ceiling—remain in force. A
+successfully streamed overage produces the stable safety-preflight error and
+CLI status 2 rather than a partial profile. These are CI allocation limits, not
+SpreadsheetML validity rules.
+
+Controlled raw-ZIP fixtures began with a normal 4,835-byte workbook whose
+Styles part was 2,631 bytes. Seven hostile variants placed 500,000 elements in
+the documented root extension list (16,684-byte package / 6,002,830-byte
+Styles part), a foreign direct root child (16,632 / 6,002,705), an ignored
+`cellXfs` child (16,663 / 6,002,705), a foreign child inside one `xf` (16,668 /
+6,002,709), repeated `alignment` children inside one `xf` (16,618 /
+6,002,635), repeated `name` children inside one font (10,027 / 3,502,631), and
+a foreign Styles-root local name (16,624 / 6,002,748). The exact released
+0.150.0 wheel successfully profiled the normal, extension, root, catalog,
+record, repeated-alignment, repeated-font, and foreign-root fixtures in
+0.396208 seconds / 37,504 KiB, 6.613773 / 146,628 KiB, 6.257524 / 146,584 KiB,
+6.290636 / 147,260 KiB, 6.207826 / 146,740 KiB, 12.517622 / 267,672 KiB,
+9.636139 / 416,496 KiB, and 6.198354 / 147,236 KiB RSS respectively.
+
+The 0.151.0 source keeps the normal fixture accepted in 0.437032 seconds /
+37,444 KiB. It rejects the seven hostile fixtures in 0.508010–0.589207 seconds
+and 37,900–38,624 KiB RSS before profile output, with the corresponding
+extension-list, opaque-root, opaque-catalog, or style-record safety-preflight
+error. Root, catalog, record, repeated-known-child, aggregate, nested,
+alternate-namespace, exact/default-limit, and fail-before-reader regressions
+accompany the fixtures. The archive-safety suite passed 265 tests, and the
+complete source suite passed 1,133 tests in 162.48 seconds with zero failures
+or errors. `twine check` passed for the wheel and sdist. Fresh wheel and sdist
+installs each accepted the normal workbook and rejected all seven hostile
+fixtures before profile output with the corresponding stable stylesheet-XML
+safety-preflight error.
+
 ## Workbook XML structural bounds — 2026-07-26
 
 Version 0.150.0 closes the same compact-allocation path in the bootstrap

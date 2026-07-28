@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.151.0 — 2026-07-26
+
+- Bound compact reader-visible XML throughout `xl/styles.xml` before the
+  ordinary stylesheet reader can construct its complete tree. A documented
+  `extLst`, a foreign direct root subtree (or foreign root local name), and an
+  ignored direct child inside a named style catalog each allow 32,768 XML
+  elements; every materialized direct style record gets the same non-extension
+  budget and those records share a 262,144-element budget.
+- Preserve the existing named style catalog allowances while matching the
+  reader's local-name and nested-sequence dispatch. Repeated ordinary-looking
+  children such as `alignment`, unknown record descendants, and alternate-
+  namespace extension lists now fail through the stable semantic-reader safety
+  preflight and CLI status 2 rather than allocating a large complete tree.
+- Add root, catalog, record, repeated-known-child, aggregate, nested,
+  alternate-namespace, exact/default-limit, and fail-before-reader regressions.
+
 ## 0.150.0 — 2026-07-26
 
 - Bound compact reader-visible XML beneath the bootstrap `xl/workbook.xml`

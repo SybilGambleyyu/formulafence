@@ -371,6 +371,19 @@ _OOXML_READER_MAX_SHARED_STRING_COUNT = 500_000
 # allowance leaves room for compatible producer variance while keeping a small
 # styles.xml part from creating an impractical reader catalog. ``cellXfs``
 # retains Excel's documented 65,490 unique-cell-style ceiling.
+# ``apply_stylesheet`` still reads the complete Styles part and constructs an
+# XML tree before those catalog limits can apply. A stylesheet extension list
+# is an intentionally extensible payload, and a foreign direct root subtree is
+# retained until the parse ends. Unknown records can also appear inside a
+# named catalog, and a single accepted record can repeat arbitrary children
+# before the reader resolves their semantics. Bound those compact trees
+# separately while preserving every named styles catalog's format-aware
+# allowance. These are CI allocation limits, not OOXML validity limits.
+_OOXML_READER_MAX_STYLESHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_STYLESHEET_EXTENSION_LIST_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_STYLESHEET_OPAQUE_CATALOG_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_STYLESHEET_RECORD_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_STYLESHEET_AGGREGATE_RECORD_XML_ELEMENT_COUNT = 262_144
 _OOXML_READER_MAX_STYLESHEET_CONTAINER_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_NUMBER_FORMAT_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
 _OOXML_READER_MAX_FONT_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
@@ -3583,6 +3596,8 @@ def _stream_ooxml_reader_xml(
     member: str,
     *,
     on_start: Callable[[ElementTree.Element], None] | None = None,
+    on_start_with_tags: Callable[[ElementTree.Element, list[str]], None]
+    | None = None,
     on_end: Callable[[ElementTree.Element, list[str]], None] | None = None,
 ) -> None:
     """Stream one reader-visible XML part under structural resource limits."""
@@ -3610,6 +3625,8 @@ def _stream_ooxml_reader_xml(
                 elements.append(element)
                 if on_start is not None:
                     on_start(element)
+                if on_start_with_tags is not None:
+                    on_start_with_tags(element, tags)
                 continue
 
             if on_end is not None:
@@ -4796,6 +4813,39 @@ def _validate_ooxml_semantic_reader_resources(
     cell_style_count = 0
     stylesheet_container_count = 0
     stylesheet_catalog_counts: dict[str, int] = {}
+    stylesheet_opaque_root_xml_element_count = 0
+    stylesheet_extension_list_xml_element_count = 0
+    stylesheet_opaque_catalog_xml_element_count = 0
+    stylesheet_record_xml_element_count = 0
+    stylesheet_active_record: ElementTree.Element | None = None
+    stylesheet_active_record_xml_element_count = 0
+    stylesheet_catalog_root_local_names = frozenset(
+        {
+            "numFmts",
+            "fonts",
+            "fills",
+            "borders",
+            "cellStyleXfs",
+            "cellXfs",
+            "cellStyles",
+            "dxfs",
+            "tableStyles",
+            "colors",
+        }
+    )
+    stylesheet_standard_root_tags = _spreadsheetml_tags(
+        "numFmts",
+        "fonts",
+        "fills",
+        "borders",
+        "cellStyleXfs",
+        "cellXfs",
+        "cellStyles",
+        "dxfs",
+        "tableStyles",
+        "colors",
+        "extLst",
+    )
 
     def increment_stylesheet_catalog(
         catalog: str,
@@ -4808,11 +4858,171 @@ def _validate_ooxml_semantic_reader_resources(
         if count > limit:
             raise _reader_preflight_error(message)
 
+    def is_stylesheet_record_start(tags: list[str]) -> bool:
+        """Return whether a direct catalog child becomes a style record.
+
+        ``NestedSequence`` turns every direct child into its expected style
+        object. Other stylesheet controls use a named descriptor and ignore
+        foreign direct children, which receive the opaque-catalog boundary
+        below instead.
+        """
+        if len(tags) < 3 or _xml_local_name(tags[0]) != "styleSheet":
+            return False
+        parent_name = _xml_local_name(tags[1])
+        element_name = _xml_local_name(tags[2])
+        if parent_name in {"fonts", "fills", "borders", "dxfs"}:
+            return True
+        if parent_name == "numFmts":
+            return element_name == "numFmt"
+        if parent_name in {"cellStyleXfs", "cellXfs"}:
+            return element_name == "xf"
+        if parent_name == "cellStyles":
+            return element_name == "cellStyle"
+        if parent_name == "tableStyles":
+            return element_name == "tableStyle"
+        if parent_name == "colors":
+            return element_name in {"indexedColors", "mruColors"}
+        return False
+
+    def stylesheet_start(
+        element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        """Start a one-record structural budget before it can grow."""
+        nonlocal stylesheet_active_record
+        nonlocal stylesheet_active_record_xml_element_count
+        if len(tags) != 3 or not is_stylesheet_record_start(tags):
+            return
+        stylesheet_active_record = element
+        stylesheet_active_record_xml_element_count = 0
+
+    def stylesheet_opaque_root_end(
+        _element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        """Bound one complete unknown direct Stylesheet-root subtree.
+
+        The published Stylesheet grammar names the catalog controls below.
+        Their direct records retain the existing targeted limits; an opaque
+        root subtree—or an entire part with a foreign root local name—is not
+        ordinary style semantics and can be bounded before the complete reader
+        tree is constructed.
+        """
+        nonlocal stylesheet_opaque_root_xml_element_count
+        if len(tags) < 2:
+            return
+        if _xml_local_name(tags[0]) == "styleSheet":
+            if (
+                tags[1] in stylesheet_standard_root_tags
+                or _xml_local_name(tags[1]) == "extLst"
+            ):
+                return
+        stylesheet_opaque_root_xml_element_count += 1
+        if (
+            stylesheet_opaque_root_xml_element_count
+            > _OOXML_READER_MAX_STYLESHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "stylesheet opaque root XML structure exceeds the semantic-reader "
+                "safety limit."
+            )
+
+    def stylesheet_extension_list_end(
+        _element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        """Bound every extension subtree selected under a Stylesheet root.
+
+        A stylesheet extension list is documented at the root, while style
+        records can carry nested extension lists. The reader dispatches those
+        controls by local name, so namespace variations receive the same
+        boundary. Count a nested extension tree only once even when it itself
+        contains another extension list.
+        """
+        nonlocal stylesheet_extension_list_xml_element_count
+        if (
+            len(tags) < 2
+            or _xml_local_name(tags[0]) != "styleSheet"
+            or not any(_xml_local_name(tag) == "extLst" for tag in tags[1:])
+        ):
+            return
+        stylesheet_extension_list_xml_element_count += 1
+        if (
+            stylesheet_extension_list_xml_element_count
+            > _OOXML_READER_MAX_STYLESHEET_EXTENSION_LIST_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "stylesheet extension-list XML structure exceeds the semantic-reader "
+                "safety limit."
+            )
+
+    def stylesheet_opaque_catalog_end(
+        _element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        """Bound an ignored direct child beneath a named style catalog."""
+        nonlocal stylesheet_opaque_catalog_xml_element_count
+        if (
+            len(tags) < 3
+            or _xml_local_name(tags[0]) != "styleSheet"
+            or _xml_local_name(tags[1]) not in stylesheet_catalog_root_local_names
+            or is_stylesheet_record_start(tags)
+            or any(_xml_local_name(tag) == "extLst" for tag in tags[2:])
+        ):
+            return
+        stylesheet_opaque_catalog_xml_element_count += 1
+        if (
+            stylesheet_opaque_catalog_xml_element_count
+            > _OOXML_READER_MAX_STYLESHEET_OPAQUE_CATALOG_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "stylesheet opaque catalog XML structure exceeds the "
+                "semantic-reader safety limit."
+            )
+
+    def stylesheet_record_end(
+        element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        """Bound retained non-extension structure inside one style record."""
+        nonlocal stylesheet_active_record
+        nonlocal stylesheet_active_record_xml_element_count
+        nonlocal stylesheet_record_xml_element_count
+        if stylesheet_active_record is None:
+            return
+        if element is stylesheet_active_record:
+            stylesheet_active_record = None
+            return
+        if any(_xml_local_name(tag) == "extLst" for tag in tags[3:]):
+            return
+        stylesheet_active_record_xml_element_count += 1
+        if (
+            stylesheet_active_record_xml_element_count
+            > _OOXML_READER_MAX_STYLESHEET_RECORD_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "stylesheet record XML structure exceeds the semantic-reader "
+                "safety limit."
+            )
+        stylesheet_record_xml_element_count += 1
+        if (
+            stylesheet_record_xml_element_count
+            > _OOXML_READER_MAX_STYLESHEET_AGGREGATE_RECORD_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "aggregate stylesheet record XML structure exceeds the "
+                "semantic-reader safety limit."
+            )
+
     def stylesheet_end(
         element: ElementTree.Element,
         tags: list[str],
     ) -> None:
         nonlocal cell_style_count, stylesheet_container_count
+        stylesheet_extension_list_end(element, tags)
+        stylesheet_opaque_root_end(element, tags)
+        stylesheet_opaque_catalog_end(element, tags)
+        stylesheet_record_end(element, tags)
         element_name = _xml_local_name(element.tag)
 
         # ``Stylesheet.from_tree`` recognizes direct child containers by local
@@ -5193,6 +5403,7 @@ def _validate_ooxml_semantic_reader_resources(
                 _stream_ooxml_reader_xml(
                     archive,
                     "xl/styles.xml",
+                    on_start_with_tags=stylesheet_start,
                     on_end=stylesheet_end,
                 )
             for member_name in shared_string_members:

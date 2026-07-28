@@ -1564,6 +1564,217 @@ def _append_stylesheet_catalog_declarations(
     return len(parent)
 
 
+def _append_stylesheet_opaque_root_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    nested: bool = False,
+    member_name: str = "xl/styles.xml",
+) -> int:
+    """Append a direct non-Stylesheet child without building a style model."""
+    with ZipFile(path) as archive:
+        stylesheet = archive.read(member_name)
+    closing_offset = stylesheet.rfind(b"</")
+    if closing_offset < 0:
+        raise ValueError("stylesheet fixture XML has no closing root tag")
+    namespace = b"urn:formulafence:archive-safety"
+    entries = b"<ff:opaque/>" * count
+    if nested:
+        inserted = (
+            b'<ff:container xmlns:ff="'
+            + namespace
+            + b'">'
+            + b"<ff:nested>"
+            + entries
+            + b"</ff:nested></ff:container>"
+        )
+        element_count = count + 2
+    else:
+        inserted = (
+            b'<ff:container xmlns:ff="'
+            + namespace
+            + b'">'
+            + entries
+            + b"</ff:container>"
+        )
+        element_count = count + 1
+    _replace_member(
+        path,
+        member_name,
+        stylesheet[:closing_offset] + inserted + stylesheet[closing_offset:],
+    )
+    return element_count
+
+
+def _append_stylesheet_extension_list_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    nested: bool = False,
+    within_cell_style: bool = False,
+    extension_namespace: str | None = None,
+    member_name: str = "xl/styles.xml",
+) -> int:
+    """Append a stylesheet extension tree while preserving its namespace."""
+    with ZipFile(path) as archive:
+        stylesheet = archive.read(member_name)
+    root = ElementTree.fromstring(stylesheet)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    if not namespace:
+        raise ValueError("stylesheet fixture XML has no namespace")
+    extension_namespace = extension_namespace or namespace
+    extension_list = ElementTree.Element(f"{{{extension_namespace}}}extLst")
+    extension = ElementTree.SubElement(
+        extension_list,
+        f"{{{extension_namespace}}}ext",
+        {"uri": "{1F4A6F6A-EB4A-4C41-9C9E-9231F8EAF007}"},
+    )
+    if nested:
+        parent = ElementTree.SubElement(
+            extension,
+            "{urn:formulafence:archive-safety}container",
+        )
+        parent = ElementTree.SubElement(
+            parent,
+            "{urn:formulafence:archive-safety}nested",
+        )
+        element_count = count + 4
+    else:
+        parent = extension
+        element_count = count + 2
+    for _ in range(count):
+        ElementTree.SubElement(parent, "{urn:formulafence:archive-safety}opaque")
+    if within_cell_style:
+        cell_formats = next(
+            (child for child in root if child.tag == f"{{{namespace}}}cellXfs"),
+            None,
+        )
+        if cell_formats is None or not list(cell_formats):
+            raise ValueError("stylesheet fixture has no cell style")
+        cell_formats[0].append(extension_list)
+    else:
+        root.append(extension_list)
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+    return element_count
+
+
+def _append_stylesheet_opaque_catalog_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    nested: bool = False,
+    member_name: str = "xl/styles.xml",
+) -> int:
+    """Append an ignored direct child inside the named ``cellXfs`` catalog."""
+    with ZipFile(path) as archive:
+        stylesheet = archive.read(member_name)
+    closing_offset = stylesheet.find(b"</cellXfs>")
+    if closing_offset < 0:
+        raise ValueError("stylesheet fixture XML has no cellXfs container")
+    entries = b"<ff:opaque/>" * count
+    if nested:
+        inserted = (
+            b'<ff:container xmlns:ff="urn:formulafence:archive-safety">'
+            + b"<ff:nested>"
+            + entries
+            + b"</ff:nested></ff:container>"
+        )
+        element_count = count + 2
+    else:
+        inserted = (
+            b'<ff:container xmlns:ff="urn:formulafence:archive-safety">'
+            + entries
+            + b"</ff:container>"
+        )
+        element_count = count + 1
+    _replace_member(
+        path,
+        member_name,
+        stylesheet[:closing_offset] + inserted + stylesheet[closing_offset:],
+    )
+    return element_count
+
+
+def _append_cell_style_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    known_alignment: bool = False,
+    nested: bool = False,
+    member_name: str = "xl/styles.xml",
+) -> int:
+    """Append retained XML beneath one materialized ``cellXfs`` record."""
+    with ZipFile(path) as archive:
+        stylesheet = archive.read(member_name)
+    root = ElementTree.fromstring(stylesheet)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    cell_formats = next(
+        (child for child in root if child.tag == f"{{{namespace}}}cellXfs"),
+        None,
+    )
+    if cell_formats is None or not list(cell_formats):
+        raise ValueError("stylesheet fixture has no cell style")
+    cell_style = cell_formats[0]
+    if known_alignment:
+        for _ in range(count):
+            ElementTree.SubElement(cell_style, f"{{{namespace}}}alignment")
+        element_count = count
+    else:
+        parent = ElementTree.SubElement(
+            cell_style,
+            "{urn:formulafence:archive-safety}container",
+        )
+        if nested:
+            parent = ElementTree.SubElement(
+                parent,
+                "{urn:formulafence:archive-safety}nested",
+            )
+            element_count = count + 2
+        else:
+            element_count = count + 1
+        for _ in range(count):
+            ElementTree.SubElement(parent, "{urn:formulafence:archive-safety}opaque")
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+    return element_count
+
+
+def _replace_stylesheet_root_namespace(path: Path, namespace: str) -> None:
+    """Change only the stylesheet root namespace for parser-selection coverage."""
+    member_name = "xl/styles.xml"
+    with ZipFile(path) as archive:
+        stylesheet = archive.read(member_name)
+    root = ElementTree.fromstring(stylesheet)
+    root.tag = f"{{{namespace}}}{root.tag.rsplit('}', maxsplit=1)[-1]}"
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _replace_stylesheet_root_local_name(path: Path, local_name: str) -> None:
+    """Change the root local name without changing its child inventory."""
+    member_name = "xl/styles.xml"
+    with ZipFile(path) as archive:
+        stylesheet = archive.read(member_name)
+    root = ElementTree.fromstring(stylesheet)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    root.tag = f"{{{namespace}}}{local_name}" if namespace else local_name
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
 def _last_central_directory_offset(contents: bytes | bytearray) -> int:
     offset = contents.rfind(b"PK\x01\x02")
     assert offset >= 0
@@ -5232,6 +5443,344 @@ def test_semantic_reader_preflight_counts_unknown_font_children_before_scanners(
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "font records" in message
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_semantic_reader_preflight_rejects_opaque_stylesheet_root_xml_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    nested: bool,
+) -> None:
+    workbook = make_model(tmp_path / f"opaque-stylesheet-root-{nested}.xlsx")
+    element_count = _append_stylesheet_opaque_root_xml_elements(
+        workbook,
+        1,
+        nested=nested,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT",
+        element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet opaque root XML structure" in message
+
+
+def test_semantic_reader_preflight_covers_alternate_namespace_stylesheet_root_xml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "alternate-stylesheet-root-opaque.xml.xlsx")
+    _replace_stylesheet_root_namespace(
+        workbook,
+        "urn:formulafence:archive-safety-alternate-root",
+    )
+    element_count = _append_stylesheet_opaque_root_xml_elements(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT",
+        element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet opaque root XML structure" in message
+
+
+def test_semantic_reader_preflight_rejects_foreign_stylesheet_root_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "foreign-stylesheet-root.xlsx")
+    _replace_stylesheet_root_local_name(workbook, "foreignStyleSheet")
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT",
+        0,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet opaque root XML structure" in message
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_semantic_reader_preflight_rejects_opaque_stylesheet_catalog_xml_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    nested: bool,
+) -> None:
+    workbook = make_model(tmp_path / f"opaque-stylesheet-catalog-{nested}.xlsx")
+    element_count = _append_stylesheet_opaque_catalog_xml_elements(
+        workbook,
+        1,
+        nested=nested,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_OPAQUE_CATALOG_XML_ELEMENT_COUNT",
+        element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet opaque catalog XML structure" in message
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_semantic_reader_preflight_rejects_opaque_cell_style_xml_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    nested: bool,
+) -> None:
+    workbook = make_model(tmp_path / f"opaque-cell-style-{nested}.xlsx")
+    _append_cell_style_xml_elements(workbook, 6 if not nested else 5, nested=nested)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_RECORD_XML_ELEMENT_COUNT",
+        6,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet record XML structure" in message
+
+
+def test_semantic_reader_preflight_rejects_repeated_known_cell_style_xml_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "repeated-cell-style-alignment.xml.xlsx")
+    _append_cell_style_xml_elements(workbook, 7, known_alignment=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_RECORD_XML_ELEMENT_COUNT",
+        6,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet record XML structure" in message
+
+
+def test_semantic_reader_preflight_rejects_aggregate_cell_style_xml_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "aggregate-cell-style-xml.xlsx")
+    _replace_member(
+        workbook,
+        "xl/styles.xml",
+        (
+            b'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            b"<cellXfs>"
+            b'<xf numFmtId="0" fontId="0" fillId="0" borderId="0"><alignment/></xf>'
+            b'<xf numFmtId="0" fontId="0" fillId="0" borderId="0"><alignment/></xf>'
+            b"</cellXfs></styleSheet>"
+        ),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_RECORD_XML_ELEMENT_COUNT",
+        1,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_AGGREGATE_RECORD_XML_ELEMENT_COUNT",
+        1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "aggregate stylesheet record XML structure" in message
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_semantic_reader_preflight_rejects_stylesheet_extension_list_xml_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    nested: bool,
+) -> None:
+    workbook = make_model(tmp_path / f"stylesheet-extension-list-{nested}.xlsx")
+    element_count = _append_stylesheet_extension_list_xml_elements(
+        workbook,
+        1,
+        nested=nested,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_EXTENSION_LIST_XML_ELEMENT_COUNT",
+        element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet extension-list XML structure" in message
+
+
+def test_semantic_reader_preflight_covers_nested_cell_style_extension_lists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "nested-cell-style-extension-list.xlsx")
+    element_count = _append_stylesheet_extension_list_xml_elements(
+        workbook,
+        1,
+        within_cell_style=True,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_EXTENSION_LIST_XML_ELEMENT_COUNT",
+        element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet extension-list XML structure" in message
+
+
+def test_semantic_reader_preflight_covers_alternate_namespace_stylesheet_extension_lists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "alternate-cell-style-extension-list.xlsx")
+    element_count = _append_stylesheet_extension_list_xml_elements(
+        workbook,
+        1,
+        within_cell_style=True,
+        extension_namespace="urn:formulafence:archive-safety-alternate",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_EXTENSION_LIST_XML_ELEMENT_COUNT",
+        element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet extension-list XML structure" in message
+
+
+def test_semantic_reader_preflight_accepts_stylesheet_opaque_root_xml_at_exact_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "opaque-stylesheet-root-at-limit.xlsx")
+    element_count = _append_stylesheet_opaque_root_xml_elements(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT",
+        element_count,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_accepts_stylesheet_extension_list_at_exact_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "stylesheet-extension-list-at-limit.xlsx")
+    element_count = _append_stylesheet_extension_list_xml_elements(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT",
+        0,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_EXTENSION_LIST_XML_ELEMENT_COUNT",
+        element_count,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_keeps_standard_stylesheet_root_content_unmetered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "standard-stylesheet-root-content.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT",
+        0,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_STYLESHEET_EXTENSION_LIST_XML_ELEMENT_COUNT",
+        0,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_rejects_default_opaque_stylesheet_root_xml_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "default-opaque-stylesheet-root-limit.xlsx")
+    _append_stylesheet_opaque_root_xml_elements(
+        workbook,
+        workbook_module._OOXML_READER_MAX_STYLESHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet opaque root XML structure" in message
+
+
+def test_semantic_reader_preflight_rejects_default_stylesheet_extension_list_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "default-stylesheet-extension-list-limit.xlsx")
+    _append_stylesheet_extension_list_xml_elements(
+        workbook,
+        workbook_module._OOXML_READER_MAX_STYLESHEET_EXTENSION_LIST_XML_ELEMENT_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet extension-list XML structure" in message
+
+
+def test_semantic_reader_preflight_rejects_default_opaque_stylesheet_catalog_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "default-opaque-stylesheet-catalog-limit.xlsx")
+    _append_stylesheet_opaque_catalog_xml_elements(
+        workbook,
+        workbook_module._OOXML_READER_MAX_STYLESHEET_OPAQUE_CATALOG_XML_ELEMENT_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet opaque catalog XML structure" in message
+
+
+def test_semantic_reader_preflight_rejects_default_stylesheet_record_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "default-stylesheet-record-limit.xlsx")
+    _append_cell_style_xml_elements(
+        workbook,
+        workbook_module._OOXML_READER_MAX_STYLESHEET_RECORD_XML_ELEMENT_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "stylesheet record XML structure" in message
 
 
 def test_semantic_reader_preflight_rejects_excessive_cell_text_before_scanners(

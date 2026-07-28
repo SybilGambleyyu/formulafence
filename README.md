@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.150.0/formulafence-0.150.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.151.0/formulafence-0.151.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.150.0
+  uses: SybilGambleyyu/formulafence@v0.151.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2733,16 +2733,24 @@ name dispatch so alternate namespaces cannot bypass it. Named Workbook controls
 such as `sheets`, `definedNames`, and views remain on their existing
 format-aware catalog limits. These are CI allocation limits, not SpreadsheetML
 validity rules.
-The preflight also caps repeated known stylesheet containers and every
-reader-materialized number-format, font, fill, fill-child, gradient-stop,
-border, base-XF, named-style, differential-style, palette, table-style,
-table-style-element, and extension catalog at 4,096 records. It follows
-`openpyxl`'s local-name and nested-sequence behavior, so alternate namespaces
-or an unexpected direct child cannot evade a stylesheet bound. Before the raw
-shape, native-image, in-content Office Web Add-in, worksheet-chart, or ordinary
-workbook readers can materialize a shared DrawingML tree, the preflight follows
-direct internal `drawing` relationships from selected transitional or Strict
-worksheet parts. It streams every unique XML target under a 32,768-element
+The stylesheet reader also constructs a complete `xl/styles.xml` tree. Its
+documented [Stylesheet](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.stylesheet?view=openxml-3.0.1)
+and [ExtensionList](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.extensionlist?view=openxml-3.0.1)
+controls, including every nested local-name `extLst` subtree, allow 32,768
+elements. A foreign direct root subtree, a non-`styleSheet` root local name,
+and an ignored direct child inside a named catalog each have the same separate
+budget.
+Every materialized direct style record permits 32,768 non-extension descendants
+and those records share a 262,144-element budget. The existing format-aware
+number-format, font, fill, border, base-XF, named-style, differential-style,
+palette, table-style, table-style-element, and extension catalog limits remain;
+effective `cellXfs` retains its separate 65,490-style ceiling. These checks
+follow the reader's local-name and nested-sequence behavior, so a namespace
+variation or repeated ordinary-looking child cannot evade the boundary. Before
+the raw shape, native-image, in-content Office Web Add-in, worksheet-chart, or
+ordinary workbook readers can materialize a shared DrawingML tree. The
+preflight follows direct internal `drawing` relationships from selected
+transitional or Strict worksheet parts. It streams every unique XML target under a 32,768-element
 per-part and 65,536-element aggregate ceiling. A successfully parsed overage
 returns the stable safety-preflight error rather than a partial metadata report;
 missing, malformed, or non-XML optional targets keep their existing coverage

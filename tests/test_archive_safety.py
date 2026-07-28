@@ -2320,6 +2320,12 @@ def test_formula_defined_name_resolution_reuses_visibility_maps(
     assert len(marker_views) == 8
     assert len({id(view) for view in reference_views}) == 1
     assert len({id(view) for view in marker_views}) == 1
+    marker_view = marker_views[0]
+    assert isinstance(marker_view, workbook_module._NameMarkerMapping)
+    assert not hasattr(marker_view, "_markers")
+    assert marker_view["formulaname00000"] == (
+        "FORMULAFENCE_EXTERNAL_ACTION_MARKER_0",
+    )
 
 
 def test_formula_defined_name_state_budget_bounds_action_propagation(

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.173.0/formulafence-0.173.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.174.0/formulafence-0.174.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.173.0
+  uses: SybilGambleyyu/formulafence@v0.174.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2849,8 +2849,11 @@ instead of rebuilding the complete visible name catalog for each definition.
 This preserves worksheet-local shadowing, qualified-name visibility, and the
 explicit unresolved named-`LAMBDA` coverage signal while avoiding catalog
 materialization work that otherwise grows quadratically with a large valid
-defined-name list. It does not relax the actual formula-token or dependency
-work required by a definition.
+defined-name list. Its eleven private safety-marker kinds are generated only
+when a formula inspection resolves a name and are recovered only from bounded,
+canonical markers, so an otherwise inactive catalog does not retain an
+eleven-fold marker ledger. It does not relax the actual formula-token or
+dependency work required by a definition.
 For reader-selected transitional or Strict worksheets, the preflight also
 matches the published base Worksheet root-child grammar. A direct root subtree
 outside that grammar is limited to 32,768 XML elements per worksheet and

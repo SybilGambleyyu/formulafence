@@ -5,6 +5,32 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Formula-defined-name marker-ledger compaction — 2026-07-28
+
+Version 0.174.0 removes a residual large-catalog allocation left after the
+scope-aware formula-defined-name overlays introduced in 0.172.0. The resolver
+still preconstructed eleven identity-to-marker dictionaries and one reverse
+dictionary holding all eleven marker kinds, even when a workbook's names had
+no sensitive calls and no formula ever resolved them. FormulaFence now retains
+its existing identity-to-index catalog, generates a marker only on a real
+name lookup, and recognizes only the exact bounded canonical prefix/index form
+that it generated. This preserves the old reverse-lookup semantics without
+allowing an unbounded numeric suffix to reach integer conversion.
+
+For an independent valid 56,392-byte `.xlsx` with 20,000 formula-defined names
+whose bodies are all the static reference `=Model!$A$1`, the public 0.173.0
+wheel emitted a 519,802-byte JSON profile in 18.947417 seconds with a 151,460
+KiB peak resident set. The 0.174.0 candidate emitted the byte-identical profile
+(SHA-256 `fedc94ac1b52f3ad15e216158e89d00a6026095728834276dfdece1be8f5b645`)
+in 18.548948 seconds at 115,436 KiB: 36,024 KiB (about 23.8%) less resident
+memory. A 100-name action-bearing propagation chain at its exact 5,249-state
+boundary also remained byte-identical to the public wheel (42,102-byte JSON,
+SHA-256 `402f13d73cf4f537e732a97515454e440274478bb3b2a709dc8e30b72e577bb6`).
+Focused structural, formula/diff/policy, CLI, Action, and portfolio regressions
+verify the lazy mapping, marker propagation, no-output limits, and public
+report compatibility. The final source suite passed 1,289 tests in 213.11
+seconds; bytecode compilation, Ruff, and whitespace checks were clean.
+
 ## Formula-defined-name propagation budget — 2026-07-28
 
 Version 0.173.0 closes a temporary working-state amplification gap after

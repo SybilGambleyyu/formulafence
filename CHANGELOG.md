@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.174.0 — 2026-07-28
+
+- Compact the private safety-marker catalog used while formula-defined names
+  propagate action, DDE, custom-function, registration, XLM, and environment
+  information evidence. FormulaFence now keeps its existing one
+  identity-to-index catalog and generates each canonical marker only when a
+  formula inspection actually resolves that name, rather than retaining eleven
+  identity-to-marker maps and an eleven-kind reverse marker dictionary for a
+  complete valid catalog.
+- Preserve scope-aware visibility, deterministic propagated ledgers, and exact
+  state-budget accounting while recovering generated markers through bounded,
+  canonical prefix/index parsing. Structural and cross-release regressions hold
+  the lazy representation in place and retain byte-identical public profiles.
+
 ## 0.173.0 — 2026-07-28
 
 - Bound temporary sensitive-call propagation through formula-defined names.

@@ -48279,6 +48279,19 @@ class _FormulaDefinedName:
 
 _NameMapValue = TypeVar("_NameMapValue")
 _NameDefinitionIdentity = tuple[str | None, str]
+_FORMULA_DEFINED_NAME_MARKER_PREFIXES = (
+    "FORMULAFENCE_EXTERNAL_ACTION_MARKER_",
+    "FORMULAFENCE_FORMULA_DDE_LINK_MARKER_",
+    "FORMULAFENCE_OFFICE_CUSTOM_MARKER_",
+    "FORMULAFENCE_UNQUALIFIED_RUNTIME_FUNCTION_MARKER_",
+    "FORMULAFENCE_CODE_RESOURCE_REGISTRATION_MARKER_",
+    "FORMULAFENCE_FORMULA_DEFINED_XLM_REGISTRATION_MARKER_",
+    "FORMULAFENCE_FORMULA_DEFINED_XLM_EVALUATION_MARKER_",
+    "FORMULAFENCE_FORMULA_DEFINED_XLM_ACTION_MARKER_",
+    "FORMULAFENCE_FORMULA_DEFINED_XLM_GET_CELL_MARKER_",
+    "FORMULAFENCE_FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_MARKER_",
+    "FORMULAFENCE_FORMULA_ENVIRONMENT_INFORMATION_MARKER_",
+)
 
 
 class _OverlayNameMapping(Mapping[str, _NameMapValue]):
@@ -48326,15 +48339,17 @@ class _OverlayNameMapping(Mapping[str, _NameMapValue]):
 
 
 class _NameMarkerMapping(Mapping[str, tuple[str, ...]]):
-    """Expose one marker kind through reusable name-to-identity overlays."""
+    """Generate one marker ledger through reusable name-to-identity overlays."""
 
     def __init__(
         self,
         identities: Mapping[str, _NameDefinitionIdentity],
-        markers: Mapping[_NameDefinitionIdentity, str],
+        definition_indexes: Mapping[_NameDefinitionIdentity, int],
+        marker_prefix: str,
     ) -> None:
         self._identities = identities
-        self._markers = markers
+        self._definition_indexes = definition_indexes
+        self._marker_prefix = marker_prefix
 
     def __bool__(self) -> bool:
         return bool(self._identities)
@@ -48343,12 +48358,15 @@ class _NameMarkerMapping(Mapping[str, tuple[str, ...]]):
         return key in self._identities
 
     def __getitem__(self, key: str) -> tuple[str, ...]:
-        return (self._markers[self._identities[key]],)
+        return (
+            f"{self._marker_prefix}"
+            f"{self._definition_indexes[self._identities[key]]}",
+        )
 
     def get(self, key: str, default=None):
         if key not in self._identities:
             return default
-        return (self._markers[self._identities[key]],)
+        return self[key]
 
     def __iter__(self):
         return iter(self._identities)
@@ -48754,76 +48772,12 @@ def _named_reference_maps(
     definition_indexes = {
         identity: index for index, identity in enumerate(definition_identities)
     }
-    external_action_markers = {
-        identity: f"FORMULAFENCE_EXTERNAL_ACTION_MARKER_{index}"
-        for index, identity in enumerate(definition_identities)
-    }
-    formula_dde_link_markers = {
-        identity: f"FORMULAFENCE_FORMULA_DDE_LINK_MARKER_{index}"
-        for index, identity in enumerate(definition_identities)
-    }
-    custom_function_markers = {
-        identity: f"FORMULAFENCE_OFFICE_CUSTOM_MARKER_{index}"
-        for index, identity in enumerate(definition_identities)
-    }
-    unqualified_runtime_function_markers = {
-        identity: f"FORMULAFENCE_UNQUALIFIED_RUNTIME_FUNCTION_MARKER_{index}"
-        for index, identity in enumerate(definition_identities)
-    }
-    code_resource_registration_markers = {
-        identity: f"FORMULAFENCE_CODE_RESOURCE_REGISTRATION_MARKER_{index}"
-        for index, identity in enumerate(definition_identities)
-    }
-    formula_defined_xlm_registration_markers = {
-        identity: f"FORMULAFENCE_FORMULA_DEFINED_XLM_REGISTRATION_MARKER_{index}"
-        for index, identity in enumerate(definition_identities)
-    }
-    formula_defined_xlm_evaluation_markers = {
-        identity: f"FORMULAFENCE_FORMULA_DEFINED_XLM_EVALUATION_MARKER_{index}"
-        for index, identity in enumerate(definition_identities)
-    }
-    formula_defined_xlm_action_markers = {
-        identity: f"FORMULAFENCE_FORMULA_DEFINED_XLM_ACTION_MARKER_{index}"
-        for index, identity in enumerate(definition_identities)
-    }
-    formula_defined_xlm_get_cell_markers = {
-        identity: f"FORMULAFENCE_FORMULA_DEFINED_XLM_GET_CELL_MARKER_{index}"
-        for index, identity in enumerate(definition_identities)
-    }
-    formula_defined_xlm_environment_information_markers = {
-        identity: (
-            "FORMULAFENCE_FORMULA_DEFINED_XLM_ENVIRONMENT_INFORMATION_MARKER_"
-            f"{index}"
-        )
-        for index, identity in enumerate(definition_identities)
-    }
-    formula_environment_information_markers = {
-        identity: f"FORMULAFENCE_FORMULA_ENVIRONMENT_INFORMATION_MARKER_{index}"
-        for index, identity in enumerate(definition_identities)
-    }
-    identities_by_marker = {
-        marker: identity
-        for markers in (
-            external_action_markers,
-            formula_dde_link_markers,
-            custom_function_markers,
-            unqualified_runtime_function_markers,
-            code_resource_registration_markers,
-            formula_defined_xlm_registration_markers,
-            formula_defined_xlm_evaluation_markers,
-            formula_defined_xlm_action_markers,
-            formula_defined_xlm_get_cell_markers,
-            formula_defined_xlm_environment_information_markers,
-            formula_environment_information_markers,
-        )
-        for identity, marker in markers.items()
-    }
 
     # Marker propagation has the same visibility rules as references and
-    # named functions.  Keep that name-to-definition identity catalog once,
-    # then let each marker ledger translate an identity on demand.  Building a
-    # complete string/tuple map for every marker kind would otherwise retain
-    # eleven more full copies of a large defined-name catalog.
+    # named functions. Keep one identity-to-index catalog and generate each
+    # marker only when formula inspection actually resolves a name. Retaining
+    # eleven identity-to-marker maps plus one marker-to-identity dictionary
+    # otherwise made a valid 100,000-name catalog disproportionately expensive.
     formula_name_identities: dict[str, _NameDefinitionIdentity] = {
         key: identity_for(definition)
         for key, definition in global_formulas.items()
@@ -48870,29 +48824,31 @@ def _named_reference_maps(
         for scope in local_scopes
     }
 
-    def marker_visibility_maps(
-        markers_by_definition: Mapping[tuple[str | None, str], str],
-    ):
-        """Expose one marker ledger through the shared visibility catalogs."""
+    def marker_visibility_maps(marker_prefix: str):
+        """Expose one lazy marker kind through the shared visibility catalogs."""
         global_formula_view = _NameMarkerMapping(
             global_formula_identity_view,
-            markers_by_definition,
+            definition_indexes,
+            marker_prefix,
         )
         scoped_formula_views = {
             scope: _NameMarkerMapping(
                 scoped_formula_identity_views[scope],
-                markers_by_definition,
+                definition_indexes,
+                marker_prefix,
             )
             for scope in local_scopes
         }
         global_function_marker_view = _NameMarkerMapping(
             global_function_identity_view,
-            markers_by_definition,
+            definition_indexes,
+            marker_prefix,
         )
         scoped_function_marker_views = {
             scope: _NameMarkerMapping(
                 scoped_function_identity_views[scope],
-                markers_by_definition,
+                definition_indexes,
+                marker_prefix,
             )
             for scope in local_scopes
         }
@@ -48916,21 +48872,34 @@ def _named_reference_maps(
         )
 
     marker_visibility_sets = tuple(
-        marker_visibility_maps(markers)
-        for markers in (
-            external_action_markers,
-            formula_dde_link_markers,
-            custom_function_markers,
-            unqualified_runtime_function_markers,
-            code_resource_registration_markers,
-            formula_defined_xlm_registration_markers,
-            formula_defined_xlm_evaluation_markers,
-            formula_defined_xlm_action_markers,
-            formula_defined_xlm_get_cell_markers,
-            formula_defined_xlm_environment_information_markers,
-            formula_environment_information_markers,
-        )
+        marker_visibility_maps(marker_prefix)
+        for marker_prefix in _FORMULA_DEFINED_NAME_MARKER_PREFIXES
     )
+
+    marker_index_digit_limit = (
+        len(str(len(definition_identities) - 1)) if definition_identities else 0
+    )
+
+    def identity_for_marker(marker: object) -> _NameDefinitionIdentity | None:
+        """Recover one generated marker without retaining a reverse ledger."""
+        if not isinstance(marker, str):
+            return None
+        for marker_prefix in _FORMULA_DEFINED_NAME_MARKER_PREFIXES:
+            if not marker.startswith(marker_prefix):
+                continue
+            index_text = marker.removeprefix(marker_prefix)
+            if (
+                not index_text
+                or len(index_text) > marker_index_digit_limit
+                or not index_text.isascii()
+                or not index_text.isdecimal()
+            ):
+                return None
+            index = int(index_text)
+            if str(index) != index_text or index >= len(definition_identities):
+                return None
+            return definition_identities[index]
+        return None
 
     direct_external_action_functions: dict[
         tuple[str | None, str], tuple[str, ...]
@@ -49059,61 +49028,61 @@ def _named_reference_maps(
         direct_external_actions = tuple(
             function
             for function in inspection.external_action_functions
-            if function not in identities_by_marker
+            if identity_for_marker(function) is None
         )
         direct_dde_links = tuple(
             marker
             for marker in inspection.formula_dde_link_markers
-            if marker not in identities_by_marker
+            if identity_for_marker(marker) is None
         )
         direct_custom_candidates = tuple(
             candidate
             for candidate in inspection.office_custom_function_candidates
-            if candidate not in identities_by_marker
+            if identity_for_marker(candidate) is None
         )
         direct_unqualified_runtime_candidates = tuple(
             candidate
             for candidate in inspection.unqualified_runtime_function_candidates
-            if candidate not in identities_by_marker
+            if identity_for_marker(candidate) is None
         )
         direct_code_resource_registrations = tuple(
             function
             for function in inspection.worksheet_code_resource_registration_functions
-            if function not in identities_by_marker
+            if identity_for_marker(function) is None
         )
         direct_xlm_registrations = tuple(
             function
             for function in inspection.formula_defined_xlm_registration_functions
-            if function not in identities_by_marker
+            if identity_for_marker(function) is None
         )
         direct_xlm_evaluations = tuple(
             function
             for function in inspection.formula_defined_xlm_evaluation_functions
-            if function not in identities_by_marker
+            if identity_for_marker(function) is None
         )
         direct_xlm_actions = tuple(
             function
             for function in inspection.formula_defined_xlm_action_functions
-            if function not in identities_by_marker
+            if identity_for_marker(function) is None
         )
         direct_xlm_get_cell_calls = tuple(
             function
             for function in inspection.formula_defined_xlm_get_cell_functions
-            if function not in identities_by_marker
+            if identity_for_marker(function) is None
         )
         direct_xlm_environment_information_calls = tuple(
             function
             for function in inspection.formula_defined_xlm_environment_information_functions
-            if function not in identities_by_marker
+            if identity_for_marker(function) is None
         )
         direct_environment_information_calls = tuple(
             signal
             for signal in inspection.formula_environment_information_signal_values
-            if signal not in identities_by_marker
+            if identity_for_marker(signal) is None
         )
         dependencies = tuple(
             dict.fromkeys(
-                identities_by_marker[marker]
+                marker_identity
                 for marker in (
                     inspection.external_action_functions
                     + inspection.formula_dde_link_markers
@@ -49127,7 +49096,7 @@ def _named_reference_maps(
                     + inspection.formula_defined_xlm_environment_information_functions
                     + inspection.formula_environment_information_signal_values
                 )
-                if marker in identities_by_marker
+                if (marker_identity := identity_for_marker(marker)) is not None
             )
         )
         formula_defined_name_state_budget.consume(

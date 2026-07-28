@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.149.0 — 2026-07-26
+
+- Bound every relationship-selected SpreadsheetML Chartsheet and Dialogsheet
+  XML tree before FormulaFence's raw protection/Custom View readers or the
+  ordinary workbook reader can materialize it. These non-grid sheet grammars
+  allow 32,768 XML elements per part and 65,536 across selected parts; chart
+  definitions continue to use their separate DrawingML boundary.
+- Cover both the documented `extLst` future-feature container and opaque
+  root/descendant content without narrowing an ordinary worksheet's cell-grid
+  allowance. A successfully streamed overage becomes the stable semantic-reader
+  safety-preflight error and CLI status 2 instead of a partial profile.
+- Add direct/nested chart-sheet and dialog-sheet, cross-type aggregate,
+  exact/default-limit, normal-sheet, and fail-before-reader regressions.
+
 ## 0.148.0 — 2026-07-26
 
 - Bound every SpreadsheetML `extLst` subtree in a reader-selected

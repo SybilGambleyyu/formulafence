@@ -285,6 +285,17 @@ _OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT = 32_768
 _OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_XML_ELEMENT_COUNT = (
     2 * _OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT
 )
+# ``openpyxl`` reads a Chartsheet part into one complete byte string and XML
+# tree before it dispatches its sheet-level controls, and routes a Dialogsheet
+# through its ordinary worksheet reader. FormulaFence's raw protection and
+# Custom View boundaries also parse both compact parts. Neither sheet grammar
+# has a cell grid: chart definitions live behind separately bounded DrawingML
+# relationships and dialog sheets hold sheet-level controls. Bound every
+# relationship-selected non-grid sheet before any materializing reader sees it.
+_OOXML_READER_MAX_NON_GRID_SHEET_PART_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_NON_GRID_SHEET_XML_ELEMENT_COUNT = (
+    2 * _OOXML_READER_MAX_NON_GRID_SHEET_PART_XML_ELEMENT_COUNT
+)
 _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
 _OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT = 100_000
 _OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
@@ -4895,13 +4906,50 @@ def _validate_ooxml_semantic_reader_resources(
                     ),
                 )
 
-            worksheet_members = tuple(
-                dict.fromkeys(_worksheet_display_xml_paths(archive))
-            )
+            worksheet_members = tuple(dict.fromkeys(_worksheet_display_xml_paths(archive)))
+            sheet_parts = tuple(_sheet_xml_parts(archive).values())
             reader_sheet_members = list(worksheet_members)
-            for member_name, _ in _sheet_xml_parts(archive).values():
+            non_grid_sheet_members: list[str] = []
+            for member_name, sheet_kind in sheet_parts:
                 if member_name not in reader_sheet_members:
                     reader_sheet_members.append(member_name)
+                if (
+                    sheet_kind in {"chartsheet", "dialogsheet"}
+                    and member_name not in non_grid_sheet_members
+                ):
+                    non_grid_sheet_members.append(member_name)
+
+            non_grid_sheet_xml_element_count = 0
+            for non_grid_sheet_member in non_grid_sheet_members:
+                reader_member(non_grid_sheet_member)
+                try:
+                    element_count = _ooxml_xml_structure_element_count_within_budget(
+                        archive,
+                        non_grid_sheet_member,
+                        maximum_element_count=(
+                            _OOXML_READER_MAX_NON_GRID_SHEET_PART_XML_ELEMENT_COUNT
+                        ),
+                    )
+                except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+                    # Existing non-grid-sheet readers preserve their normal coverage
+                    # warning or parser diagnostic for malformed sheet XML. A valid
+                    # oversized tree, however, must stop before either parser
+                    # materializes it.
+                    continue
+                if element_count is None:
+                    raise _reader_preflight_error(
+                        "non-grid sheet XML structure exceeds the semantic-reader safety "
+                        "limit."
+                    )
+                non_grid_sheet_xml_element_count += element_count
+                if (
+                    non_grid_sheet_xml_element_count
+                    > _OOXML_READER_MAX_NON_GRID_SHEET_XML_ELEMENT_COUNT
+                ):
+                    raise _reader_preflight_error(
+                        "aggregate non-grid sheet XML elements exceed the semantic-reader "
+                        "safety limit."
+                    )
 
             # Multiple metadata boundaries inspect a worksheet's DrawingML
             # target before ``openpyxl`` starts.  Do not rely on the later

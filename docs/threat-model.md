@@ -153,7 +153,13 @@ financial correctness or replace model review.
   allows 32,768 XML elements per worksheet and 65,536 in aggregate. Ordinary
   `sheetData` and other named base controls remain on their existing specific
   budgets; these narrow counters are allocation boundaries for opaque root and
-  extension content, not a claim that they make foreign markup invalid. A row
+  extension content, not a claim that they make foreign markup invalid.
+  Relationship-selected Chartsheet and Dialogsheet parts are non-grid control
+  parts, so their complete XML trees separately allow 32,768 elements per part
+  and 65,536 in aggregate before raw control scanners or the workbook reader
+  can materialize them. This includes documented `extLst` content and opaque
+  markup; chart DrawingML remains under its dedicated relationship-selected
+  structural bound. A row
   counts only when it has an unqualified attribute other than `r` or `spans`,
   the condition that makes `openpyxl` retain a `RowDimension`; namespaced
   extension attributes do not count. Every reader-visible `col` counts because
@@ -316,7 +322,12 @@ formula will produce.
   a direct opaque root subtree and 65,536 across those subtrees. Every
   SpreadsheetML `extLst` subtree in those worksheets separately allows 32,768
   XML elements per worksheet and 65,536 in aggregate; ordinary `sheetData` and
-  other named base controls keep their existing specialized budgets. A row
+  other named base controls keep their existing specialized budgets.
+  Relationship-selected Chartsheet and Dialogsheet parts also each allow 32,768
+  complete XML elements, with 65,536 across that non-grid-sheet inventory,
+  before raw control scanners or the workbook reader can materialize them.
+  Their documented `extLst` and opaque content share that boundary while chart
+  DrawingML remains separately relationship-bounded. A row
   declaration counts only when it has an
   unqualified attribute other than `r` or `spans`, which is the `openpyxl`
   `RowDimension` allocation trigger; a namespace-qualified extension attribute

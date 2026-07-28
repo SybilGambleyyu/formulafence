@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.148.0/formulafence-0.148.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.149.0/formulafence-0.149.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.148.0
+  uses: SybilGambleyyu/formulafence@v0.149.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2719,6 +2719,11 @@ is separately limited to 32,768 XML elements per worksheet and 65,536 in
 aggregate. Ordinary `sheetData` and other named base controls keep their
 existing specialized budgets. These are CI allocation limits for opaque root
 and extension content, not SpreadsheetML validity rules.
+Every relationship-selected Chartsheet and Dialogsheet is separately bounded
+as a non-grid sheet: its complete XML tree allows 32,768 elements per part and
+65,536 across selected parts before raw control readers or the workbook reader
+can materialize it. This covers their documented `extLst` containers and opaque
+content while chart DrawingML remains under its dedicated structural boundary.
 The preflight also caps repeated known stylesheet containers and every
 reader-materialized number-format, font, fill, fill-child, gradient-stop,
 border, base-XF, named-style, differential-style, palette, table-style,

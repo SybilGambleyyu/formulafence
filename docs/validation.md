@@ -5,6 +5,51 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Non-grid sheet structural bounds — 2026-07-26
+
+Version 0.149.0 closes the adjacent compact-allocation path in relationship-
+selected chart-sheet and dialog-sheet XML. The Open XML SDK's
+[Chartsheet](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.chartsheet?view=openxml-3.0.1)
+reference identifies `extLst` as a direct child of the chart-sheet root. The
+published [Dialogsheet grammar](https://c-rex.net/samples/ooxml/e1/part4/OOXML_P4_DOCX_dialogsheet_topic_ID0ETIX4.html)
+likewise names `extLst` and contains only sheet-level control elements rather
+than a cell grid. FormulaFence's raw protection and Custom View scans parse
+both kinds of selected sheet; the ordinary reader loads a chart sheet as one
+complete XML tree and routes a dialog sheet through its worksheet path. Neither
+path needs an unbounded extension or opaque XML subtree to produce a profile.
+
+The semantic-reader preflight now streams each relationship-selected Chartsheet
+and Dialogsheet before either raw or ordinary reader starts. It permits 32,768
+XML elements in each non-grid sheet part and 65,536 across the selected
+inventory. That whole-part boundary covers direct `extLst` content, nested
+foreign extension descendants, and opaque root trees without imposing a small
+tree limit on ordinary worksheet cell grids; relationship-selected DrawingML
+continues to use its separate structural budget. A successfully parsed overage
+returns the stable safety-preflight error and CLI status 2 rather than a
+partial profile. These are CI allocation limits, not SpreadsheetML validity
+rules.
+
+Raw-ZIP fixtures began with a normal workbook containing one ordinary worksheet
+and a chart sheet. One fixture appended an `extLst`/`ext` container with
+500,000 foreign children to the chart sheet. A second changed the workbook
+relationship and content type to a `xl/dialogsheets/sheet1.xml` Dialogsheet,
+then added the same valid extension container. The chart-sheet package was
+18,858 bytes and its selected XML expanded to 6,000,521 bytes; the dialog-sheet
+package was 18,576 bytes and expanded to 6,000,306 bytes. The exact released
+0.148.0 wheel completed successful profiles in 3.550517 seconds / 90,328 KiB
+and 3.682121 seconds / 90,700 KiB respectively. The 0.149.0 source rejects the
+chart fixture in 0.386294 seconds / 38,000 KiB and the dialog fixture in
+0.406587 seconds / 37,580 KiB, before a profile is produced. A normal chart
+workbook remains accepted in 0.406379 seconds / 37,592 KiB. Direct/nested
+extension-list, direct opaque-root, cross-type aggregate, exact/default-limit,
+normal-sheet, and fail-before-reader regressions accompany the fixtures. The
+archive-safety suite passed 231 tests,
+and the complete source suite passed 1,099 tests in 158.62 seconds with zero
+failures or errors. `twine check` passed for the wheel and sdist. Fresh wheel
+and sdist installs each accepted the normal chart workbook and rejected both
+hostile packages before profile output with the stable non-grid-sheet
+safety-preflight error.
+
 ## Worksheet extension-list structural bounds — 2026-07-26
 
 Version 0.148.0 closes the remaining compact-allocation path inside a named

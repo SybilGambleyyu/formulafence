@@ -22,6 +22,7 @@ from .helpers import (
     make_external_data_refresh_model,
     make_external_link_package_model,
     make_model,
+    make_protection_model,
     make_rich_text_run_model,
     make_strict_custom_workbook_view_model,
     make_strict_worksheet_drawing_connector_model,
@@ -304,6 +305,167 @@ def _append_worksheet_extension_list_xml_elements(
         worksheet[:closing_offset] + inserted + worksheet[closing_offset:],
     )
     return element_count
+
+
+def _append_non_grid_sheet_extension_list_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    nested: bool = False,
+    member_name: str,
+) -> None:
+    """Append a non-grid-sheet extension tree without materializing that sheet."""
+    with ZipFile(path) as archive:
+        sheet = archive.read(member_name)
+    closing_offset = sheet.rfind(b"</")
+    if closing_offset < 0:
+        raise ValueError("non-grid sheet fixture XML has no closing root tag")
+    sheet_namespace = (
+        ElementTree.fromstring(sheet)
+        .tag.partition("}")[0]
+        .removeprefix("{")
+        .encode()
+    )
+    if not sheet_namespace:
+        raise ValueError("non-grid sheet fixture XML has no namespace")
+    namespace = b"urn:formulafence:archive-safety"
+    entries = b"<ff:opaque/>" * count
+    contents = (
+        b"<ff:container><ff:nested>" + entries + b"</ff:nested></ff:container>"
+        if nested
+        else entries
+    )
+    inserted = (
+        b'<ss:extLst xmlns:ss="'
+        + sheet_namespace
+        + b'">'
+        + b'<ss:ext xmlns:ff="'
+        + namespace
+        + b'" uri="{1F4A6F6A-EB4A-4C41-9C9E-9231F8EAF003}">'
+        + contents
+        + b"</ss:ext></ss:extLst>"
+    )
+    _replace_member(
+        path,
+        member_name,
+        sheet[:closing_offset] + inserted + sheet[closing_offset:],
+    )
+
+
+def _non_grid_sheet_xml_element_count(path: Path, member_name: str) -> int:
+    """Count one non-grid-sheet tree for exact structural-boundary tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member_name))
+    return sum(1 for _ in root.iter())
+
+
+def _append_non_grid_sheet_opaque_root_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    member_name: str,
+) -> None:
+    """Append foreign direct root content without materializing that sheet."""
+    with ZipFile(path) as archive:
+        sheet = archive.read(member_name)
+    closing_offset = sheet.rfind(b"</")
+    if closing_offset < 0:
+        raise ValueError("non-grid sheet fixture XML has no closing root tag")
+    inserted = (
+        b'<ff:container xmlns:ff="urn:formulafence:archive-safety">'
+        + (b"<ff:opaque/>" * count)
+        + b"</ff:container>"
+    )
+    _replace_member(
+        path,
+        member_name,
+        sheet[:closing_offset] + inserted + sheet[closing_offset:],
+    )
+
+
+def _convert_chartsheet_to_dialogsheet(path: Path, *, sheet_number: int = 1) -> None:
+    """Turn one synthetic chart tab into a minimal relationship-selected dialog tab."""
+    old_member = f"xl/chartsheets/sheet{sheet_number}.xml"
+    new_member = f"xl/dialogsheets/sheet{sheet_number}.xml"
+    old_relationship_member = f"xl/chartsheets/_rels/sheet{sheet_number}.xml.rels"
+    with ZipFile(path) as archive:
+        contents = {
+            member.filename: archive.read(member)
+            for member in archive.infolist()
+        }
+    contents.pop(old_member)
+    contents.pop(old_relationship_member, None)
+    relationship_tag = (
+        "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"
+    )
+    relationships = ElementTree.fromstring(contents["xl/_rels/workbook.xml.rels"])
+    relationship = next(
+        (
+            candidate
+            for candidate in relationships.findall(relationship_tag)
+            if candidate.get("Type", "").endswith("/chartsheet")
+            and candidate.get("Target", "").endswith(
+                f"/chartsheets/sheet{sheet_number}.xml"
+            )
+        ),
+        None,
+    )
+    if relationship is None:
+        raise ValueError("synthetic chart sheet relationship was not found")
+    relationship.set(
+        "Type",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet",
+    )
+    relationship.set("Target", f"/xl/dialogsheets/sheet{sheet_number}.xml")
+    contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+        relationships,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    override_tag = (
+        "{http://schemas.openxmlformats.org/package/2006/content-types}Override"
+    )
+    content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+    override = next(
+        (
+            candidate
+            for candidate in content_types.findall(override_tag)
+            if candidate.get("PartName") == f"/{old_member}"
+        ),
+        None,
+    )
+    if override is None:
+        raise ValueError("synthetic chart sheet content type was not found")
+    override.set("PartName", f"/{new_member}")
+    override.set(
+        "ContentType",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml",
+    )
+    contents["[Content_Types].xml"] = ElementTree.tostring(
+        content_types,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    contents[new_member] = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<dialogsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        b'<sheetViews><sheetView workbookViewId="0"/></sheetViews>'
+        b"</dialogsheet>"
+    )
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        for member_name, payload in contents.items():
+            archive.writestr(member_name, payload)
+
+
+def _make_non_grid_sheet_model(path: Path, sheet_kind: str) -> tuple[Path, str]:
+    """Create a normal workbook with one relationship-selected non-grid sheet."""
+    make_protection_model(path, include_chartsheet=True)
+    if sheet_kind == "chartsheet":
+        return path, "xl/chartsheets/sheet1.xml"
+    if sheet_kind == "dialogsheet":
+        _convert_chartsheet_to_dialogsheet(path)
+        return path, "xl/dialogsheets/sheet1.xml"
+    raise ValueError(f"unknown non-grid sheet kind: {sheet_kind}")
 
 
 def _redirect_shared_string_relationship(path: Path, target: str) -> None:
@@ -3120,6 +3282,154 @@ def test_semantic_reader_preflight_rejects_default_worksheet_extension_list_limi
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "worksheet extension-list XML structure" in message
+
+
+@pytest.mark.parametrize("sheet_kind", ("chartsheet", "dialogsheet"))
+@pytest.mark.parametrize("nested", (False, True))
+def test_semantic_reader_preflight_rejects_non_grid_sheet_xml_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sheet_kind: str,
+    nested: bool,
+) -> None:
+    workbook, member_name = _make_non_grid_sheet_model(
+        tmp_path / f"{sheet_kind}-xml-{nested}.xlsx",
+        sheet_kind,
+    )
+    _append_non_grid_sheet_extension_list_xml_elements(
+        workbook,
+        1,
+        nested=nested,
+        member_name=member_name,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_NON_GRID_SHEET_PART_XML_ELEMENT_COUNT",
+        _non_grid_sheet_xml_element_count(workbook, member_name) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "non-grid sheet XML structure" in message
+
+
+@pytest.mark.parametrize("sheet_kind", ("chartsheet", "dialogsheet"))
+def test_semantic_reader_preflight_rejects_non_grid_sheet_opaque_root_xml_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sheet_kind: str,
+) -> None:
+    workbook, member_name = _make_non_grid_sheet_model(
+        tmp_path / f"{sheet_kind}-opaque-root.xml.xlsx",
+        sheet_kind,
+    )
+    _append_non_grid_sheet_opaque_root_xml_elements(
+        workbook,
+        1,
+        member_name=member_name,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_NON_GRID_SHEET_PART_XML_ELEMENT_COUNT",
+        _non_grid_sheet_xml_element_count(workbook, member_name) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "non-grid sheet XML structure" in message
+
+
+def test_semantic_reader_preflight_aggregates_non_grid_sheet_xml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_protection_model(
+        tmp_path / "aggregate-chartsheet-xml.xlsx",
+        include_chartsheet=True,
+        chartsheet_count=2,
+    )
+    first_member = "xl/chartsheets/sheet1.xml"
+    _convert_chartsheet_to_dialogsheet(workbook, sheet_number=2)
+    second_member = "xl/dialogsheets/sheet2.xml"
+    _append_non_grid_sheet_extension_list_xml_elements(
+        workbook,
+        1,
+        member_name=first_member,
+    )
+    _append_non_grid_sheet_extension_list_xml_elements(
+        workbook,
+        1,
+        member_name=second_member,
+    )
+    first_count = _non_grid_sheet_xml_element_count(workbook, first_member)
+    second_count = _non_grid_sheet_xml_element_count(workbook, second_member)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_NON_GRID_SHEET_PART_XML_ELEMENT_COUNT",
+        max(first_count, second_count),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_NON_GRID_SHEET_XML_ELEMENT_COUNT",
+        first_count + second_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "aggregate non-grid sheet XML elements" in message
+
+
+@pytest.mark.parametrize("sheet_kind", ("chartsheet", "dialogsheet"))
+def test_semantic_reader_preflight_accepts_non_grid_sheet_xml_at_exact_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sheet_kind: str,
+) -> None:
+    workbook, member_name = _make_non_grid_sheet_model(
+        tmp_path / f"{sheet_kind}-xml-at-limits.xlsx",
+        sheet_kind,
+    )
+    _append_non_grid_sheet_extension_list_xml_elements(
+        workbook,
+        1,
+        member_name=member_name,
+    )
+    element_count = _non_grid_sheet_xml_element_count(workbook, member_name)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_NON_GRID_SHEET_PART_XML_ELEMENT_COUNT",
+        element_count,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_NON_GRID_SHEET_XML_ELEMENT_COUNT",
+        element_count,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+@pytest.mark.parametrize("sheet_kind", ("chartsheet", "dialogsheet"))
+def test_semantic_reader_preflight_rejects_default_non_grid_sheet_xml_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sheet_kind: str,
+) -> None:
+    workbook, member_name = _make_non_grid_sheet_model(
+        tmp_path / f"default-{sheet_kind}-xml-limit.xlsx",
+        sheet_kind,
+    )
+    _append_non_grid_sheet_extension_list_xml_elements(
+        workbook,
+        workbook_module._OOXML_READER_MAX_NON_GRID_SHEET_PART_XML_ELEMENT_COUNT,
+        member_name=member_name,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "non-grid sheet XML structure" in message
 
 
 def test_semantic_reader_preflight_covers_raw_relationship_selected_shared_strings(

@@ -11636,7 +11636,12 @@ def add_unsupported_extended_chart_relationship(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".extended-chart-unsupported.tmp.xlsx")
 
 
-def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Path:
+def make_protection_model(
+    path: Path,
+    *,
+    include_chartsheet: bool = False,
+    chartsheet_count: int = 1,
+) -> Path:
     """Create a workbook with operational protection and sparse style controls."""
     workbook = Workbook()
     inputs = workbook.active
@@ -11659,17 +11664,20 @@ def make_protection_model(path: Path, *, include_chartsheet: bool = False) -> Pa
     workbook.security.lockStructure = True
     workbook.security.set_workbook_password("synthetic-workbook-password")
     if include_chartsheet:
-        chart = BarChart()
-        chart.add_data(
-            Reference(inputs, min_col=2, min_row=2, max_row=2), titles_from_data=False
-        )
-        dashboard = workbook.create_chartsheet("Dashboard")
-        dashboard.add_chart(chart)
-        dashboard.sheetProtection = ChartsheetProtection(
-            content=True,
-            objects=True,
-            password="synthetic-chart-password",
-        )
+        for index in range(chartsheet_count):
+            chart = BarChart()
+            chart.add_data(
+                Reference(inputs, min_col=2, min_row=2, max_row=2), titles_from_data=False
+            )
+            dashboard = workbook.create_chartsheet(
+                "Dashboard" if index == 0 else f"Dashboard {index + 1}"
+            )
+            dashboard.add_chart(chart)
+            dashboard.sheetProtection = ChartsheetProtection(
+                content=True,
+                objects=True,
+                password="synthetic-chart-password",
+            )
     workbook.save(path)
     return add_protected_range(path)
 

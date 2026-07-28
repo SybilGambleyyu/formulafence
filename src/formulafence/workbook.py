@@ -31449,10 +31449,17 @@ def _worksheet_dimension_metadata(path: Path) -> _WorksheetDimensionMetadata:
                             )
                         )
 
-                column_states: list[tuple[str | None, bool]] = [
-                    (None, False)
-                ] * (MAX_EXCEL_COLUMN + 1)
                 column_sets = worksheet.findall(cols_tag)
+                # A worksheet without <cols> has no explicit width or AutoFit
+                # overrides. Keep that all-default state implicit rather than
+                # allocating and compressing 16,384 inert column entries.
+                # Sheet defaults and zero-width visibility controls are read
+                # separately above and in FF036's scanner.
+                column_states = (
+                    [(None, False)] * (MAX_EXCEL_COLUMN + 1)
+                    if column_sets
+                    else None
+                )
                 if len(column_sets) > 1:
                     note_issue(f"columns:{sheet_key}:multiple", len(column_sets))
                 for columns_index, columns in enumerate(column_sets):
@@ -31564,6 +31571,9 @@ def _worksheet_dimension_metadata(path: Path) -> _WorksheetDimensionMetadata:
                             )
                             continue
                         for column_number in range(minimum, maximum + 1):
+                            # An update implies a <cols> container, which
+                            # activates the explicit state table above.
+                            assert column_states is not None
                             old_width, old_best_fit = column_states[column_number]
                             column_states[column_number] = (
                                 width if valid_width else old_width,
@@ -31571,8 +31581,10 @@ def _worksheet_dimension_metadata(path: Path) -> _WorksheetDimensionMetadata:
                             )
                         column_update_count += span * update_count
 
-                column_signature = _worksheet_dimension_column_state_signature(
-                    column_states
+                column_signature = (
+                    _worksheet_dimension_column_state_signature(column_states)
+                    if column_states is not None
+                    else ()
                 )
                 if column_signature:
                     entries.append(

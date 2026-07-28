@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.180.0 — 2026-07-28
+
+- Keep worksheet-dimension column state implicit when a visual worksheet has
+  no SpreadsheetML `<cols>` declaration. The raw inspector no longer allocates
+  and compresses 16,384 default width/AutoFit states per ordinary columnless
+  sheet.
+- Preserve default dimensions, row dimensions, zero-width visibility handling,
+  populated and malformed `<cols>` parsing, update budgets, and canonical
+  evidence. Structural coverage makes the full-state signature raise if a
+  columnless dimension fixture reaches it.
+
 ## 0.179.0 — 2026-07-28
 
 - Reuse small, lexically validated OOXML payloads for the duration of one

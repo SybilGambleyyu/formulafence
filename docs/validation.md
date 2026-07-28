@@ -5,6 +5,34 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Columnless worksheet-dimension state view — 2026-07-28
+
+Version 0.180.0 removes one remaining fixed whole-column scan from the raw
+worksheet-dimension reader. Before this release, each visual worksheet built a
+16,385-entry `(width, bestFit)` state list and compressed all 16,384 Excel
+columns, even when its SpreadsheetML had no `<cols>` declaration. FormulaFence
+now leaves that state implicit for columnless sheets. Default sheet dimensions
+and row dimensions still flow through their existing parsers; zero-width
+visibility remains in FF036's separate scanner; populated, empty, and
+malformed `<cols>` containers retain the guarded update-budget and
+canonical-signature path.
+
+For the controlled valid 232,295-byte, 512-sheet `.xlsx` used for the prior
+columnless releases (SHA-256
+`224811129cb243b3494fc61f330583ee898103bb1c2dca1ca5a01f7445293881`), with
+one `=1` formula in each worksheet and no column declarations, the public
+0.179.0 wheel emitted a 122,090-byte JSON profile (SHA-256
+`27a6737a6f3ba3c2f9e3c70f94326da2cccd78f42900e459e70e1001adb81361`) in
+2.396862, 2.396375, 2.411005, 2.383804, and 2.421393 seconds. The 0.180.0
+candidate emitted the same bytes and digest in 1.940890, 1.939342, 1.940122,
+1.935190, and 1.936834 seconds. The medians fell from 2.396862 to 1.939342
+seconds: 0.457520 seconds, or about 19.1%, less elapsed time. A structural
+regression removes `<cols>`, makes the full-state signature raise if reached,
+and proves sheet defaults and row dimensions remain present while column
+assignments stay absent. The final source suite passed 1,297 tests in 120.89
+seconds with no failures, errors, or skips; bytecode compilation, Ruff, and
+whitespace checks were also clean.
+
 ## Snapshot-local OOXML payload reuse — 2026-07-28
 
 Version 0.179.0 removes repeated safe parsing of the same raw XML parts while

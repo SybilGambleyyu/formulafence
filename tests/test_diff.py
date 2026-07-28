@@ -15260,6 +15260,37 @@ def test_style_controls_skip_columnless_state_expansion(
     assert not any("number-format" in warning for warning in snapshot.parser_warnings)
 
 
+def test_worksheet_dimension_controls_skip_columnless_state_expansion(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Sheet and row dimensions remain without an explicit column state."""
+    workbook = make_worksheet_dimension_model(tmp_path / "columnless-dimensions.xlsx")
+    _remove_worksheet_column_declarations(workbook)
+
+    def unexpected_column_state_expansion(*_args, **_kwargs):
+        raise AssertionError("column state expansion should not run without <cols>")
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_worksheet_dimension_column_state_signature",
+        unexpected_column_state_expansion,
+    )
+
+    snapshot = load_snapshot(workbook)
+    controls = snapshot.worksheet_dimension_controls
+
+    assert controls.default_row_height_count == 1
+    assert controls.default_column_width_count == 1
+    assert controls.default_border_adjustment_sheet_count == 1
+    assert controls.row_height_assignment_count == 1
+    assert controls.row_border_adjustment_count == 1
+    assert controls.column_width_assignment_count == 0
+    assert controls.best_fit_column_assignment_count == 0
+    assert controls.unrecognized_dimension_count == 0
+    assert not any("worksheet-dimension" in warning for warning in snapshot.parser_warnings)
+
+
 def test_number_format_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
     baseline = make_number_format_model(tmp_path / "baseline.xlsx")
     candidate = make_number_format_model(tmp_path / "candidate.xlsx")

@@ -58,7 +58,11 @@ from formulafence.portfolio import (
     DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES,
     compare_portfolios,
 )
-from formulafence.workbook import load_snapshot, profile_snapshot
+from formulafence.workbook import (
+    DEFAULT_MAX_PROFILE_RECORDS,
+    load_snapshot,
+    profile_snapshot,
+)
 
 _FAIL_LEVELS = ("none", "low", "medium", "high", "critical")
 
@@ -260,6 +264,18 @@ def _add_report_byte_limit_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_profile_record_limit_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--max-profile-records",
+        type=_positive_integer,
+        default=DEFAULT_MAX_PROFILE_RECORDS,
+        help=(
+            "Fail closed before a profile materializes more than this many "
+            "aggregate inventory records"
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="formulafence",
@@ -272,6 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
         "profile", help="Inventory a workbook without exposing cell values"
     )
     profile.add_argument("workbook", type=Path)
+    _add_profile_record_limit_argument(profile)
     _add_report_byte_limit_argument(profile)
     _add_output_arguments(profile, ("json", "markdown"))
 
@@ -517,7 +534,10 @@ def _threshold_failed(severities: Sequence[str], fail_on: str) -> bool:
 
 def _run_profile(arguments: argparse.Namespace) -> int:
     _ensure_output_safe(arguments.output, arguments.workbook)
-    profile = profile_snapshot(load_snapshot(arguments.workbook))
+    profile = profile_snapshot(
+        load_snapshot(arguments.workbook),
+        max_profile_records=arguments.max_profile_records,
+    )
     content = (
         as_json(profile, max_bytes=arguments.max_report_bytes)
         if arguments.format == "json"

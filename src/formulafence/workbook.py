@@ -98,6 +98,7 @@ from formulafence.models import (
     FormulaDefinedXlmRegistrationSnapshot,
     FormulaEnvironmentInformationSnapshot,
     FormulaExternalActionSnapshot,
+    FormulaFenceError,
     IgnoredErrorSnapshot,
     LegacyCommentSnapshot,
     NamedSheetViewSnapshot,
@@ -150,6 +151,12 @@ from formulafence.models import (
 )
 
 _SUPPORTED_SUFFIXES = {".xlsx", ".xlsm"}
+# Profiles intentionally retain safe per-location inventory evidence.  The
+# ordinary reader already bounds the source workbook, but a sparse workbook can
+# still put many of those records into a new public profile object.  Keep the
+# CLI default independent from reader and rendered-artifact limits so callers
+# can deliberately opt up when a complete large inventory is required.
+DEFAULT_MAX_PROFILE_RECORDS = 100_000
 # Every source workbook passes this bounded ZIP inventory before FormulaFence
 # opens any OOXML part or hands the package to openpyxl.  The values preserve
 # support for the existing 512 MiB Power Pivot data-part allowance while
@@ -52885,8 +52892,112 @@ def _load_snapshot_from_stable_source(
     )
 
 
-def profile_snapshot(snapshot: WorkbookSnapshot) -> dict[str, object]:
-    """Return a data-minimising inventory suitable for a safe review artifact."""
+@dataclass
+class _ProfileRecordBudget:
+    """Track every serialised list item before building a profile artifact."""
+
+    max_records: int
+    consumed_records: int = 0
+
+    def consume(self, record_count: int) -> None:
+        if record_count > self.max_records - self.consumed_records:
+            raise FormulaFenceError(
+                "Profile inventory exceeds "
+                f"max_profile_records={self.max_records}."
+            )
+        self.consumed_records += record_count
+
+
+def _preflight_profile_record_budget(
+    snapshot: WorkbookSnapshot, max_profile_records: int | None
+) -> None:
+    """Reject an aggregate profile inventory before materialising its records.
+
+    The profile has a handful of compact aggregate controls, plus lists that
+    can preserve one safe record for each inspected location.  Count every
+    item that becomes a public list entry, including nested range/token lists,
+    before allocating the profile dictionaries and lists.  This remains
+    independent from the rendered-byte boundary: the two controls bound
+    different stages and use deliberately reviewable units.
+    """
+    if max_profile_records is None:
+        return
+    if max_profile_records < 1:
+        raise FormulaFenceError("max_profile_records must be at least 1.")
+
+    budget = _ProfileRecordBudget(max_profile_records)
+
+    # Top-level inventories and their nested list fields.
+    budget.consume(len(snapshot.sheets))
+    budget.consume(len(snapshot.tables))
+    for table in snapshot.tables.values():
+        budget.consume(len(table.columns))
+
+    budget.consume(len(snapshot.data_validations))
+    for validation in snapshot.data_validations:
+        budget.consume(len(validation.ranges))
+
+    budget.consume(len(snapshot.conditional_formatting))
+    for rule in snapshot.conditional_formatting:
+        budget.consume(len(rule.ranges))
+        budget.consume(len(rule.formatting_kinds))
+
+    budget.consume(len(snapshot.conditional_formatting_extensions))
+    budget.consume(len(snapshot.sheet_protections))
+    for protection in snapshot.sheet_protections:
+        budget.consume(len(protection.locked_actions))
+
+    budget.consume(len(snapshot.protected_ranges))
+    for protected_range in snapshot.protected_ranges:
+        budget.consume(len(protected_range.ranges))
+
+    budget.consume(len(snapshot.cell_protection_assignments))
+    budget.consume(len(snapshot.external_data_connections))
+    for connection in snapshot.external_data_connections:
+        budget.consume(len(connection.source_components))
+
+    budget.consume(len(snapshot.query_table_refresh_controls))
+    budget.consume(len(snapshot.pivot_cache_refresh_controls))
+    budget.consume(len(snapshot.defined_names))
+
+    # Formula and array coverage ledgers.  Each mapping becomes an outer list
+    # of location records whose token/function/reference sequence is itself a
+    # public list.
+    budget.consume(len(snapshot.external_references))
+    budget.consume(len(snapshot.broken_references))
+    budget.consume(len(snapshot.parser_warnings))
+
+    for records in (
+        snapshot.unresolved_reference_tokens,
+        snapshot.dynamic_reference_functions,
+        snapshot.three_d_reference_tokens,
+        snapshot.spill_reference_tokens,
+        snapshot.implicit_intersection_tokens,
+    ):
+        budget.consume(len(records))
+        for tokens in records.values():
+            budget.consume(len(tokens))
+
+    budget.consume(len(snapshot.legacy_array_formula_ranges))
+    budget.consume(len(snapshot.dynamic_array_formula_cells))
+    budget.consume(len(snapshot.dynamic_array_formula_ranges))
+    budget.consume(len(snapshot.dynamic_array_output_references))
+    for references in snapshot.dynamic_array_output_references.values():
+        budget.consume(len(references))
+    budget.consume(len(snapshot.unclassified_array_formula_cells))
+    budget.consume(len(snapshot.tokenization_failure_cells))
+
+
+def profile_snapshot(
+    snapshot: WorkbookSnapshot, *, max_profile_records: int | None = None
+) -> dict[str, object]:
+    """Return a data-minimising inventory suitable for a safe review artifact.
+
+    Programmatic callers retain the historical unlimited default.  The CLI
+    supplies its finite default before this function begins creating an
+    additional profile object.
+    """
+    _preflight_profile_record_budget(snapshot, max_profile_records)
     return {
         "schema_version": "1.0",
         "workbook": snapshot.summary(),

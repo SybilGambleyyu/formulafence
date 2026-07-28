@@ -1930,10 +1930,19 @@ cross-workbook `--max-link-impact` graph budget. Shortest paths are reconstructe
 only for the fixed serialized sample rather than eagerly for every reachable
 node.
 
-Separately, CLI artifacts have a 32 MiB UTF-8 rendering boundary by default
+Separately, the `profile` CLI has a 100,000-record inventory boundary by default
+(`--max-profile-records`) before profile construction. It counts every public
+profile-list item, including nested table columns, control ranges,
+token/function sequences, and dynamic-array references; an overage returns
+status `2` before FormulaFence materializes the profile object or writes a
+report. This is operational rather than a policy rule and is separate from the
+reader's snapshot state. Raise it only when a reviewer intentionally needs a
+complete known inventory.
+
+CLI artifacts also have a 32 MiB UTF-8 rendering boundary by default
 (`--max-report-bytes`; the Action exposes the same input for its comparison
-commands). It applies to `profile` JSON/Markdown after profile construction,
-and to JSON, Markdown, HTML, and SARIF from `diff`, `check`, and `portfolio`
+commands). It applies to `profile` JSON/Markdown after the profile inventory
+boundary, and to JSON, Markdown, HTML, and SARIF from `diff`, `check`, and `portfolio`
 after comparison and policy evaluation but before FormulaFence writes or
 replaces an output path. An overage returns status `2` rather than leaving a
 partial report. JSON/SARIF account for incremental encoder chunks, Markdown

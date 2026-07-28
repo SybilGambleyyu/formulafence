@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.169.0/formulafence-0.169.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.170.0/formulafence-0.170.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.169.0
+  uses: SybilGambleyyu/formulafence@v0.170.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -557,6 +557,14 @@ set from multiplying the per-source traversal limit into unbounded CI work or
 report data; an exhausted pool returns exit code `2` before a partial impact
 report can imply complete evidence. FormulaFence reconstructs only the bounded
 set of serialized shortest-path samples, not every reachable path prefix.
+`profile` has a separate 100,000-record in-memory inventory ceiling by default,
+configurable with `--max-profile-records`. It counts every public profile-list
+record—including nested table columns, control ranges, token/function entries,
+and dynamic-array references—before FormulaFence builds the new profile object.
+An overage returns exit code `2` before output rendering or publication; raise
+the positive limit only when a reviewer intentionally needs the complete known
+inventory. This profile-state boundary is independent from source-reader and
+rendered-artifact limits.
 Rendered artifact size has a separate 32 MiB UTF-8 ceiling, configurable with
 `--max-report-bytes`. It applies to `profile` JSON/Markdown and to JSON,
 Markdown, HTML, and SARIF from `diff`, `check`, and `portfolio`; an overage

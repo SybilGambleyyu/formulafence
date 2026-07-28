@@ -5,6 +5,40 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Profile inventory-record budget — 2026-07-28
+
+Version 0.170.0 closes the retained-profile-state gap left by the artifact byte
+boundary. A profile deliberately emits safe location and coverage evidence, but
+the 32 MiB `--max-report-bytes` check occurs only after FormulaFence has built
+that public Python object graph. A compact valid source can therefore force a
+large profile inventory even when no artifact is ultimately published.
+
+`profile` now defaults `--max-profile-records` to 100,000. Before constructing
+the profile, it counts every serialised list item: top-level sheet/control
+inventories, nested table columns and ranges, parser warnings, per-location
+token/function lists, and dynamic-array reference entries. The command returns
+status 2 before profile construction and before any output file exists when the
+aggregate exceeds the budget. It is separate from the reader's source/snapshot
+limits and from rendered bytes; a reviewer can deliberately choose a larger
+positive count for a complete known inventory.
+
+On the valid 2,590,768-byte workbook with 500,000 repeated `INDIRECT` formulas
+used for the 0.169 artifact boundary, version 0.170.0 rejected the default
+100,000-record budget in 418.596 seconds with no output. The known complete
+profile contains exactly 1,000,007 list records: 500,000 location entries,
+500,000 function entries, six parser warnings, and one sheet record. Supplying
+that exact record count together with the known 65,429,579-byte render budget
+completed in 434.598 seconds and produced a byte-for-byte match to the public
+0.168.0 JSON (SHA-256
+`862c1870e9307164749e9b6f4a24a82f47dc606f537f971a997a98439bdc7597`).
+Focused regression coverage proves exact capacity, nonpositive rejection,
+preflight before any location rendering, CLI default propagation, and no output
+publication on overage. The final source suite passed 1,274 tests in 389.76
+seconds with Ruff, bytecode compilation, Action-shell syntax, and whitespace
+checks clean. The final wheel and source distribution passed `twine check`; both
+fresh isolated installs passed `pip check`, wrote a normal JSON profile, and
+rejected a one-record JSON profile without publishing an output path.
+
 ## Profile artifact byte budget — 2026-07-28
 
 Version 0.169.0 completes the rendered-artifact boundary for the remaining CLI

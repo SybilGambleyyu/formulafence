@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.170.0 — 2026-07-28
+
+- Bound `profile`'s public inventory construction before rendering. The CLI now
+  defaults `--max-profile-records` to 100,000 and fails with status 2 before it
+  materializes an over-limit profile object or publishes an output artifact.
+  The budget counts every serialised profile-list record, including nested
+  range, table-column, token/function, and dynamic-array reference entries.
+- Keep this in-memory inventory boundary separate from the 32 MiB
+  `--max-report-bytes` artifact boundary. Reviewers can deliberately opt up to
+  a larger positive record budget for a complete known inventory; the
+  programmatic `profile_snapshot` API retains its historical unlimited default.
+
 ## 0.169.0 — 2026-07-28
 
 - Extend the 32 MiB UTF-8 rendered-artifact boundary to `profile` JSON and

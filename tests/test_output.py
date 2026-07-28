@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+import formulafence.workbook as workbook_module
 from formulafence.diff import compare_snapshots
-from formulafence.models import FormulaFenceError
+from formulafence.models import (
+    DataValidationSnapshot,
+    FormulaFenceError,
+    TableSnapshot,
+    WorkbookSnapshot,
+)
 from formulafence.output import (
     as_json,
     profile_to_markdown,
@@ -86,3 +94,67 @@ def test_profile_renderers_respect_the_report_byte_limit(tmp_path) -> None:
         as_json(profile, max_bytes=1)
     with pytest.raises(FormulaFenceError, match="max_report_bytes=1"):
         profile_to_markdown(profile, max_bytes=1)
+
+
+def test_profile_record_budget_is_exact_and_preflights_before_profile_build(
+    monkeypatch,
+) -> None:
+    snapshot = WorkbookSnapshot(
+        path=Path("model.xlsx"),
+        sha256="0" * 64,
+        file_type="xlsx",
+        sheets={},
+        cells={},
+        reverse_dependencies={},
+        range_dependencies=[],
+        external_references=set(),
+        broken_references=set(),
+        defined_names={},
+        macro_hash=None,
+        calculation_settings={},
+        parser_warnings=(),
+        tables={
+            "Sales": TableSnapshot(
+                name="Sales",
+                sheet="Model",
+                ref="A1:B2",
+                columns=("North", "South"),
+                header_row_count=1,
+                totals_row_count=0,
+            )
+        },
+        data_validations=(
+            DataValidationSnapshot(
+                sheet="Model",
+                ranges=("A1", "B2"),
+                validation_type="whole",
+                operator="between",
+                formula1=None,
+                formula2=None,
+                allow_blank=False,
+                dropdown_hidden=False,
+                prompts_disabled=False,
+                show_input_message=True,
+                show_error_message=True,
+                error_style="stop",
+                error_title=None,
+                error=None,
+                prompt_title=None,
+                prompt=None,
+                ime_mode="noControl",
+            ),
+        ),
+        dynamic_reference_functions={("Model", "A1"): ("INDIRECT",)},
+    )
+
+    expected = profile_snapshot(snapshot)
+    assert profile_snapshot(snapshot, max_profile_records=8) == expected
+
+    def unexpected_profile_construction(*args, **kwargs):
+        raise AssertionError("profile construction ran after the inventory limit failed")
+
+    monkeypatch.setattr(workbook_module, "display_location", unexpected_profile_construction)
+    with pytest.raises(FormulaFenceError, match="max_profile_records=7"):
+        profile_snapshot(snapshot, max_profile_records=7)
+    with pytest.raises(FormulaFenceError, match="must be at least 1"):
+        profile_snapshot(snapshot, max_profile_records=0)

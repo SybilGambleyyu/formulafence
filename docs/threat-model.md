@@ -292,6 +292,14 @@ financial correctness or replace model review.
   CI CPU or retained evidence. The command stops with status 2 rather than
   emitting a partial impact report, and reconstructs shortest paths only for
   the fixed review sample instead of every reachable path prefix.
+- Before it builds a public `profile` object, the CLI applies a separate
+  100,000-record default ceiling (`--max-profile-records`). It counts every
+  serialised profile-list item, including nested table columns, control ranges,
+  token/function sequences, and dynamic-array references. A profile inventory
+  overage returns status 2 before a new large Python object graph or an output
+  path exists; this is intentionally distinct from reader state and rendered
+  artifact bytes, and a reviewer can deliberately choose a larger positive
+  budget for a complete known inventory.
 - Rendered `profile`, `diff`, `check`, and `portfolio` artifacts have a
   separate 32 MiB UTF-8 default ceiling (`--max-report-bytes`). It applies to
   profile JSON/Markdown plus comparison JSON, Markdown, HTML, and SARIF before

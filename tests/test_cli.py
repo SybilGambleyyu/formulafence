@@ -8,7 +8,9 @@ from openpyxl.worksheet.datavalidation import DataValidation
 import formulafence.cli as cli_module
 import formulafence.policy as policy_module
 from formulafence.cli import main
+from formulafence.models import WorkbookSnapshot
 from formulafence.output import DEFAULT_MAX_REPORT_BYTES
+from formulafence.workbook import DEFAULT_MAX_PROFILE_RECORDS
 
 from .helpers import (
     change_formula_dde_link_input,
@@ -214,6 +216,51 @@ def test_profile_defaults_the_report_byte_limit() -> None:
     arguments = cli_module.build_parser().parse_args(["profile", "model.xlsx"])
 
     assert arguments.max_report_bytes == DEFAULT_MAX_REPORT_BYTES
+    assert arguments.max_profile_records == DEFAULT_MAX_PROFILE_RECORDS
+
+
+def test_profile_record_limit_fails_before_writing_an_output(tmp_path, monkeypatch, capsys) -> None:
+    class OversizedDynamicInventory:
+        def __len__(self) -> int:
+            return DEFAULT_MAX_PROFILE_RECORDS + 1
+
+        def values(self):
+            raise AssertionError("an oversized profile inventory was traversed")
+
+    snapshot = WorkbookSnapshot(
+        path=tmp_path / "model.xlsx",
+        sha256="0" * 64,
+        file_type="xlsx",
+        sheets={},
+        cells={},
+        reverse_dependencies={},
+        range_dependencies=[],
+        external_references=set(),
+        broken_references=set(),
+        defined_names={},
+        macro_hash=None,
+        calculation_settings={},
+        parser_warnings=(),
+        dynamic_reference_functions=OversizedDynamicInventory(),
+    )
+    output = tmp_path / "profile.json"
+    monkeypatch.setattr(cli_module, "load_snapshot", lambda path: snapshot)
+
+    assert (
+        main(
+            [
+                "profile",
+                str(snapshot.path),
+                "--format",
+                "json",
+                "--output",
+                str(output),
+            ]
+        )
+        == 2
+    )
+    assert not output.exists()
+    assert "max_profile_records=100000" in capsys.readouterr().err
 
 
 def test_profile_output_swap_cannot_overwrite_the_workbook(tmp_path, monkeypatch) -> None:

@@ -1615,6 +1615,25 @@ def _append_stylesheet_opaque_root_text(
     )
 
 
+def _append_stylesheet_opaque_root_markup(
+    path: Path,
+    markup: bytes,
+    *,
+    member_name: str = "xl/styles.xml",
+) -> None:
+    """Append raw ignored XML markup without materializing a style model."""
+    with ZipFile(path) as archive:
+        stylesheet = archive.read(member_name)
+    closing_offset = stylesheet.rfind(b"</")
+    if closing_offset < 0:
+        raise ValueError("style fixture XML has no closing root tag")
+    _replace_member(
+        path,
+        member_name,
+        stylesheet[:closing_offset] + markup + stylesheet[closing_offset:],
+    )
+
+
 def _append_stylesheet_opaque_root_xml_elements(
     path: Path,
     count: int,
@@ -5446,6 +5465,272 @@ def test_semantic_reader_preflight_accepts_stylesheet_text_at_configured_boundar
     snapshot = load_snapshot(workbook)
 
     assert snapshot.sheets
+
+
+@pytest.mark.parametrize(
+    ("prefix", "markup", "suffix", "maximum_markup_bytes"),
+    (
+        (b"<r>", b"<!--FormulaFence-->", b"</r>", len(b"<!--FormulaFence-->")),
+        (b"<r>", b"<?ff FormulaFence?>", b"</r>", len(b"<?ff FormulaFence?>")),
+        (b"<r>", b"<![CDATA[FormulaFence]]>", b"</r>", len(b"<![CDATA[")),
+        (
+            b"<FormulaFence>",
+            b"</FormulaFence>",
+            b"",
+            len(b"</FormulaFence>"),
+        ),
+        (b"<r>", b"&FormulaFence;", b"</r>", len(b"&FormulaFence;")),
+        (
+            b"",
+            b'<!DOCTYPE r SYSTEM "FormulaFence">',
+            b"<r/>",
+            len(b'<!DOCTYPE r SYSTEM "FormulaFence">'),
+        ),
+    ),
+)
+def test_xml_lexical_markup_budget_accepts_exact_boundaries(
+    prefix: bytes,
+    markup: bytes,
+    suffix: bytes,
+    maximum_markup_bytes: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_XML_LEXICAL_CHUNK_BYTES", 1)
+    payload = prefix + markup + suffix
+
+    assert workbook_module._xml_start_tags_within_budget(
+        io.BytesIO(payload),
+        maximum_markup_bytes=maximum_markup_bytes,
+    )
+    assert not workbook_module._xml_start_tags_within_budget(
+        io.BytesIO(payload),
+        maximum_markup_bytes=maximum_markup_bytes - 1,
+    )
+
+
+def test_xml_lexical_markup_budget_keeps_a_start_tag_violation_distinct() -> None:
+    payload = b"<root/>"
+
+    assert (
+        workbook_module._xml_lexical_markup_budget_violation(
+            io.BytesIO(payload),
+            maximum_start_tag_bytes=len(payload) - 1,
+            maximum_markup_bytes=len(payload) - 1,
+        )
+        == "start-tag"
+    )
+
+
+@pytest.mark.parametrize(
+    ("encoding", "bom"),
+    (
+        ("utf-16-le", b"\xff\xfe"),
+        ("utf-16-be", b"\xfe\xff"),
+        ("utf-32-le", b"\xff\xfe\x00\x00"),
+        ("utf-32-be", b"\x00\x00\xfe\xff"),
+        ("utf-16-le", b""),
+        ("utf-16-be", b""),
+        ("utf-32-le", b""),
+        ("utf-32-be", b""),
+    ),
+)
+@pytest.mark.parametrize("markup", ("<!--FormulaFence-->", "<?ff FormulaFence?>"))
+def test_xml_lexical_markup_budget_covers_fixed_width_xml_encodings(
+    encoding: str,
+    bom: bytes,
+    markup: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = bom + f"<root>{markup}</root>".encode(encoding)
+    maximum_markup_bytes = len(markup.encode(encoding))
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_XML_LEXICAL_CHUNK_BYTES", 1)
+
+    assert workbook_module._xml_start_tags_within_budget(
+        io.BytesIO(payload),
+        maximum_markup_bytes=maximum_markup_bytes,
+    )
+    assert not workbook_module._xml_start_tags_within_budget(
+        io.BytesIO(payload),
+        maximum_markup_bytes=maximum_markup_bytes - 1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "markup"),
+    (
+        ("comment", b"<!--" + (b"x" * 129) + b"-->"),
+        ("processing-instruction", b"<?ff " + (b"x" * 129) + b"?>"),
+        (
+            "entity-reference",
+            b'<ff:opaque xmlns:ff="urn:formulafence:archive-safety">&#'
+            + (b"0" * 129)
+            + b"65;</ff:opaque>",
+        ),
+    ),
+)
+def test_semantic_reader_preflight_rejects_oversized_ignored_markup_before_readers(
+    label: str,
+    markup: bytes,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / f"oversized-stylesheet-markup-{label}.xlsx")
+    _append_stylesheet_opaque_root_markup(workbook, markup)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_XML_NON_CHARACTER_DATA_MARKUP_BYTES",
+        128,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "XML non-character-data markup" in message
+
+
+@pytest.mark.parametrize(
+    ("label", "markup"),
+    (
+        ("comment", b"<!--" + (b"x" * 129) + b"-->"),
+        ("processing-instruction", b"<?ff " + (b"x" * 129) + b"?>"),
+        (
+            "entity-reference",
+            b'<ff:opaque xmlns:ff="urn:formulafence:archive-safety">&#'
+            + (b"0" * 129)
+            + b"65;</ff:opaque>",
+        ),
+    ),
+)
+def test_stream_reader_rejects_ignored_markup_before_elementtree(
+    label: str,
+    markup: bytes,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / f"stream-stylesheet-markup-{label}.xlsx")
+    _append_stylesheet_opaque_root_markup(workbook, markup)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_XML_NON_CHARACTER_DATA_MARKUP_BYTES",
+        128,
+    )
+
+    def unexpected_iterparse(*args, **kwargs):
+        raise AssertionError("ElementTree started before the lexical markup budget")
+
+    monkeypatch.setattr(workbook_module.ElementTree, "iterparse", unexpected_iterparse)
+    with ZipFile(workbook) as archive:
+        with pytest.raises(WorkbookLoadError, match="XML non-character-data markup"):
+            workbook_module._stream_ooxml_reader_xml(archive, "xl/styles.xml")
+
+
+def test_stream_reader_rejects_an_oversized_document_type_before_elementtree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "stream-stylesheet-doctype-before-elementtree.xlsx")
+    with ZipFile(workbook) as archive:
+        stylesheet = archive.read("xl/styles.xml")
+    document_type = b"<!DOCTYPE styleSheet [<!--" + (b"x" * 129) + b"-->]>"
+    _replace_member(workbook, "xl/styles.xml", document_type + stylesheet)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_XML_NON_CHARACTER_DATA_MARKUP_BYTES",
+        128,
+    )
+
+    def unexpected_iterparse(*args, **kwargs):
+        raise AssertionError("ElementTree started before the lexical markup budget")
+
+    monkeypatch.setattr(workbook_module.ElementTree, "iterparse", unexpected_iterparse)
+    with ZipFile(workbook) as archive:
+        with pytest.raises(WorkbookLoadError, match="XML non-character-data markup"):
+            workbook_module._stream_ooxml_reader_xml(archive, "xl/styles.xml")
+
+
+@pytest.mark.parametrize(
+    ("opening", "closing"),
+    (
+        (b"<!--", b"-->"),
+        (b"<?ff ", b"?>"),
+    ),
+)
+def test_semantic_reader_preflight_accepts_ignored_markup_at_configured_boundary(
+    opening: bytes,
+    closing: bytes,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / f"stylesheet-markup-at-limit-{opening!r}.xlsx")
+    markup = opening + (b"x" * 4_096) + closing
+    _append_stylesheet_opaque_root_markup(workbook, markup)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_XML_NON_CHARACTER_DATA_MARKUP_BYTES",
+        len(markup),
+    )
+
+    assert load_snapshot(workbook).sheets
+
+
+def test_in_memory_xml_readers_reject_oversized_ignored_markup_before_elementtree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"<root><!--" + (b"x" * 129) + b"--></root>"
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_XML_NON_CHARACTER_DATA_MARKUP_BYTES",
+        128,
+    )
+
+    def unexpected_parser(*args, **kwargs):
+        raise AssertionError("ElementTree started before the lexical markup budget")
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_ooxml_xml_parser_with_character_data_budget",
+        unexpected_parser,
+    )
+    with pytest.raises(ValueError, match="XML non-character-data markup"):
+        workbook_module._xml_root_from_payload(payload)
+
+
+def test_bounded_xml_parser_forbids_document_type_declarations() -> None:
+    with pytest.raises(ValueError, match="DTDForbidden"):
+        list(
+            workbook_module._iterparse_ooxml_xml_with_character_data_budget(
+                io.BytesIO(b"<!DOCTYPE root><root/>")
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("encoding", "bom"),
+    (
+        ("utf-8", b""),
+        ("utf-16-le", b"\xff\xfe"),
+        ("utf-16-be", b"\xfe\xff"),
+    ),
+)
+def test_in_memory_xml_parser_forbids_document_type_declarations(
+    encoding: str,
+    bom: bytes,
+) -> None:
+    payload = bom + "<!DOCTYPE root><root/>".encode(encoding)
+
+    with pytest.raises(ValueError, match="DTDForbidden"):
+        workbook_module._xml_root_from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        b"<root><!-- <!DOCTYPE root> --></root>",
+        b"<root><![CDATA[<!DOCTYPE root>]]></root>",
+        b"<root>&lt;!DOCTYPE root&gt;</root>",
+    ),
+)
+def test_in_memory_xml_parser_accepts_inert_document_type_spelling(payload: bytes) -> None:
+    assert workbook_module._xml_root_from_payload(payload).tag == "root"
 
 
 def test_xml_start_tag_budget_accepts_its_exact_physical_boundary() -> None:

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.153.0/formulafence-0.153.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.154.0/formulafence-0.154.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.153.0
+  uses: SybilGambleyyu/formulafence@v0.154.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2664,8 +2664,14 @@ After that header-only ZIP check, a semantic-reader preflight caps every
 XML/relationship part at 64 MiB, aggregate XML material at 256 MiB, and streams
 the reader-visible manifest, workbook, styles, shared strings, and bounded
 workbook-selected sheets before FormulaFence starts a complete in-memory reader
-or downstream raw OOXML scanning. It allows at most 4,000,000 XML elements per
-streamed part and 256 nesting levels, 500,000 populated SpreadsheetML cells,
+or downstream raw OOXML scanning. Before XML parser construction, it bounds
+each physical opening tag and every non-character-data lexical token to 128
+KiB: comments, processing instructions, declarations, end tags, and entity
+references cannot force an unbounded parser-side value. Document-type
+declarations are explicitly forbidden in the shared defused parser. Decoded
+ordinary text, tails, and CDATA remain separately limited to 1 MiB per node.
+It allows at most 4,000,000 XML elements per streamed part and 256 nesting
+levels, 500,000 populated SpreadsheetML cells,
 16,384 reader-materialized row-dimension declarations, 16,384 column-dimension
 declarations, 4,096 direct column-dimension containers, 500,000 shared-string
 entries, 65,490 effective `cellXfs` styles, 32,767

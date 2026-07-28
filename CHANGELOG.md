@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.154.0 — 2026-07-26
+
+- Bound every non-character-data XML lexical token to 128 KiB before a parser
+  can retain it: comments, processing instructions, declarations, closing tags,
+  and entity references. Opening tags retain their separate 128 KiB limit and
+  stable start-tag diagnostic; CDATA remains under the independent 1 MiB
+  decoded character-data limit.
+- Explicitly forbid document-type declarations in the shared defused XML
+  parser, including semantic-reader streams and bounded raw scans.
+- Add exact-boundary, one-byte chunk, UTF-16/UTF-32, comment, processing-
+  instruction, entity-reference, declaration, and fail-before-parser
+  regressions.
+
 ## 0.153.0 — 2026-07-26
 
 - Bound every decoded XML character-data node to 1 MiB before ElementTree's

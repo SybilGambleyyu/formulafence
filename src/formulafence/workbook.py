@@ -369,9 +369,16 @@ _OOXML_READER_MAX_XML_NESTING_DEPTH = 256
 # attribute objects. This remains generous for OOXML metadata while protecting
 # every semantic-reader XML stream from that parser-frontier allocation.
 _OOXML_READER_MAX_XML_START_TAG_BYTES = 128 * 1024
+# Comments, processing instructions, declarations, closing tags, and entity
+# references are parser tokens rather than character data. They can each force
+# the XML parser to hold one complete lexical value before any normal stream
+# event runs, so give those ignored tokens the same deliberately generous
+# physical allowance as an opening tag.
+_OOXML_READER_MAX_XML_NON_CHARACTER_DATA_MARKUP_BYTES = 128 * 1024
 _OOXML_READER_XML_LEXICAL_CHUNK_BYTES = 64 * 1024
 _OOXML_READER_XML_START_TAG_DELIMITER_PATTERN = re.compile(br"""[>"']""")
 _OOXML_READER_XML_DECLARATION_DELIMITER_PATTERN = re.compile(br"""["'\[\]>]""")
+_OOXML_READER_XML_TEXT_MARKER_PATTERN = re.compile(br"""[<&]""")
 # ElementTree gives its target character data incrementally, but its ordinary
 # tree builder accumulates all chunks for one text node until the next XML
 # boundary. Keep that parser-side buffer small before an end-event callback can
@@ -3650,7 +3657,10 @@ class _BoundedOoxmlXmlTreeBuilder(_ElementTreeBuilder):
 
 def _ooxml_xml_parser_with_character_data_budget():
     """Build the defused parser with incremental character-data protection."""
-    return ElementTree.XMLParser(target=_BoundedOoxmlXmlTreeBuilder())
+    return ElementTree.XMLParser(
+        target=_BoundedOoxmlXmlTreeBuilder(),
+        forbid_dtd=True,
+    )
 
 
 def _iterparse_ooxml_xml_with_character_data_budget(xml_stream):
@@ -3672,14 +3682,15 @@ def _iterparse_ooxml_reader_xml(xml_stream):
         ) from error
 
 
-def _xml_ascii_start_tags_within_budget(
+def _xml_ascii_lexical_markup_budget_violation(
     xml_stream,
     initial: bytes,
     initial_offset: int,
     *,
     maximum_start_tag_bytes: int,
-) -> bool:
-    """Bound ASCII-compatible XML start tags without visiting ordinary text.
+    maximum_markup_bytes: int,
+) -> str | None:
+    """Return an ASCII-compatible XML lexical allocation-boundary violation.
 
     Most OOXML uses UTF-8. Search its delimiter bytes in C and visit only the
     handful of punctuation marks that can change lexical state; a Python
@@ -3703,45 +3714,64 @@ def _xml_ascii_start_tags_within_budget(
         data_length = len(data)
         while position < data_length:
             if state == "text":
-                marker = data.find(b"<", position)
-                if marker < 0:
+                match = _OOXML_READER_XML_TEXT_MARKER_PATTERN.search(data, position)
+                if match is None:
                     position = data_length
                     break
+                marker = match.start()
                 opening_offset = data_offset + marker
-                state = "opening"
+                state = "opening" if data[marker] == ord("<") else "entity"
                 position = marker + 1
                 continue
 
             if state == "opening":
                 marker = data[position]
                 position += 1
+                markup_byte_count = data_offset + position - opening_offset
                 if marker == ord("?"):
+                    if markup_byte_count > maximum_markup_bytes:
+                        return "markup"
                     state = "processing-instruction"
                     processing_question = False
                 elif marker == ord("!"):
+                    if markup_byte_count > maximum_markup_bytes:
+                        return "markup"
                     state = "bang"
                     bang_prefix = b""
                 elif marker == ord("/"):
+                    if markup_byte_count > maximum_markup_bytes:
+                        return "markup"
                     state = "closing"
                 else:
                     state = "start"
-                    if data_offset + position - opening_offset > maximum_start_tag_bytes:
-                        return False
+                    if markup_byte_count > maximum_start_tag_bytes:
+                        return "start-tag"
+                    if markup_byte_count > maximum_markup_bytes:
+                        return "markup"
                 continue
 
             if state == "start":
+                maximum_token_bytes = min(
+                    maximum_start_tag_bytes,
+                    maximum_markup_bytes,
+                )
+                limit_violation = (
+                    "start-tag"
+                    if maximum_start_tag_bytes <= maximum_markup_bytes
+                    else "markup"
+                )
                 allowed_end = min(
                     data_length,
-                    opening_offset + maximum_start_tag_bytes - data_offset,
+                    opening_offset + maximum_token_bytes - data_offset,
                 )
                 if allowed_end <= position:
-                    return False
+                    return limit_violation
                 if quote is not None:
                     quote_marker = b'"' if quote == ord('"') else b"'"
                     marker = data.find(quote_marker, position, allowed_end)
                     if marker < 0:
                         if allowed_end < data_length:
-                            return False
+                            return limit_violation
                         position = data_length
                         break
                     quote = None
@@ -3754,7 +3784,7 @@ def _xml_ascii_start_tags_within_budget(
                 )
                 if match is None:
                     if allowed_end < data_length:
-                        return False
+                        return limit_violation
                     position = data_length
                     break
                 marker = match.start()
@@ -3767,8 +3797,16 @@ def _xml_ascii_start_tags_within_budget(
                 continue
 
             if state == "closing":
-                marker = data.find(b">", position)
+                allowed_end = min(
+                    data_length,
+                    opening_offset + maximum_markup_bytes - data_offset,
+                )
+                if allowed_end <= position:
+                    return "markup"
+                marker = data.find(b">", position, allowed_end)
                 if marker < 0:
+                    if allowed_end < data_length:
+                        return "markup"
                     position = data_length
                     break
                 state = "text"
@@ -3777,13 +3815,23 @@ def _xml_ascii_start_tags_within_budget(
 
             if state == "processing-instruction":
                 if processing_question and data[position : position + 1] == b">":
+                    if data_offset + position + 1 - opening_offset > maximum_markup_bytes:
+                        return "markup"
                     processing_question = False
                     state = "text"
                     position += 1
                     continue
                 processing_question = False
-                marker = data.find(b"?>", position)
+                allowed_end = min(
+                    data_length,
+                    opening_offset + maximum_markup_bytes - data_offset,
+                )
+                if allowed_end <= position:
+                    return "markup"
+                marker = data.find(b"?>", position, allowed_end)
                 if marker < 0:
+                    if allowed_end < data_length:
+                        return "markup"
                     processing_question = data[position:].endswith(b"?")
                     position = data_length
                     break
@@ -3793,6 +3841,8 @@ def _xml_ascii_start_tags_within_budget(
 
             if state == "comment":
                 if comment_tail == b"--" and data[position : position + 1] == b">":
+                    if data_offset + position + 1 - opening_offset > maximum_markup_bytes:
+                        return "markup"
                     comment_tail = b""
                     state = "text"
                     position += 1
@@ -3800,12 +3850,22 @@ def _xml_ascii_start_tags_within_budget(
                 if comment_tail.endswith(b"-") and data[
                     position : position + 2
                 ] == b"->":
+                    if data_offset + position + 2 - opening_offset > maximum_markup_bytes:
+                        return "markup"
                     comment_tail = b""
                     state = "text"
                     position += 2
                     continue
-                marker = data.find(b"-->", position)
+                allowed_end = min(
+                    data_length,
+                    opening_offset + maximum_markup_bytes - data_offset,
+                )
+                if allowed_end <= position:
+                    return "markup"
+                marker = data.find(b"-->", position, allowed_end)
                 if marker < 0:
+                    if allowed_end < data_length:
+                        return "markup"
                     comment_tail = (comment_tail + data[position:])[-2:]
                     position = data_length
                     break
@@ -3838,6 +3898,8 @@ def _xml_ascii_start_tags_within_budget(
             if state == "bang":
                 bang_prefix += data[position : position + 1]
                 position += 1
+                if data_offset + position - opening_offset > maximum_markup_bytes:
+                    return "markup"
                 if bang_prefix == b"--":
                     state = "comment"
                     comment_tail = bang_prefix
@@ -3865,10 +3927,35 @@ def _xml_ascii_start_tags_within_budget(
                         break
                 continue
 
+            if state == "entity":
+                allowed_end = min(
+                    data_length,
+                    opening_offset + maximum_markup_bytes - data_offset,
+                )
+                if allowed_end <= position:
+                    return "markup"
+                marker = data.find(b";", position, allowed_end)
+                if marker < 0:
+                    if allowed_end < data_length:
+                        return "markup"
+                    position = data_length
+                    break
+                state = "text"
+                position = marker + 1
+                continue
+
             if declaration_quote is not None:
                 quote_marker = b'"' if declaration_quote == ord('"') else b"'"
-                marker = data.find(quote_marker, position)
+                allowed_end = min(
+                    data_length,
+                    opening_offset + maximum_markup_bytes - data_offset,
+                )
+                if allowed_end <= position:
+                    return "markup"
+                marker = data.find(quote_marker, position, allowed_end)
                 if marker < 0:
+                    if allowed_end < data_length:
+                        return "markup"
                     position = data_length
                     break
                 declaration_quote = None
@@ -3877,8 +3964,14 @@ def _xml_ascii_start_tags_within_budget(
             match = _OOXML_READER_XML_DECLARATION_DELIMITER_PATTERN.search(
                 data,
                 position,
+                min(
+                    data_length,
+                    opening_offset + maximum_markup_bytes - data_offset,
+                ),
             )
             if match is None:
+                if opening_offset + maximum_markup_bytes - data_offset < data_length:
+                    return "markup"
                 position = data_length
                 break
             marker = match.start()
@@ -3896,22 +3989,27 @@ def _xml_ascii_start_tags_within_budget(
         data_offset += data_length
         data = xml_stream.read(_OOXML_READER_XML_LEXICAL_CHUNK_BYTES)
         if not data:
-            return True
+            return None
 
 
-def _xml_start_tags_within_budget(
+def _xml_lexical_markup_budget_violation(
     xml_stream,
     *,
-    maximum_start_tag_bytes: int = _OOXML_READER_MAX_XML_START_TAG_BYTES,
-) -> bool:
-    """Lexically bound XML opening tags before an XML parser allocates attributes.
+    maximum_start_tag_bytes: int | None = None,
+    maximum_markup_bytes: int | None = None,
+) -> str | None:
+    """Return the XML parser-frontier lexical allocation-boundary violation.
 
     The scanner only needs XML punctuation, so it decodes fixed-width UTF-16
     and UTF-32 code units when an OOXML part uses either encoding. UTF-8 and
     ASCII-compatible encodings retain their byte-oriented punctuation. It
-    skips comments, CDATA, processing instructions, and declarations rather
-    than treating their contents as element markup.
+    bounds start tags plus other parser-token markup without treating CDATA as
+    markup: its content is constrained by the incremental character-data target.
     """
+    if maximum_start_tag_bytes is None:
+        maximum_start_tag_bytes = _OOXML_READER_MAX_XML_START_TAG_BYTES
+    if maximum_markup_bytes is None:
+        maximum_markup_bytes = _OOXML_READER_MAX_XML_NON_CHARACTER_DATA_MARKUP_BYTES
     prefix = xml_stream.read(4)
     unit_width = 1
     byte_order = "big"
@@ -3944,22 +4042,25 @@ def _xml_start_tags_within_budget(
         prefix_skip = 3
 
     if unit_width == 1:
-        return _xml_ascii_start_tags_within_budget(
+        return _xml_ascii_lexical_markup_budget_violation(
             xml_stream,
             prefix[prefix_skip:],
             prefix_skip,
             maximum_start_tag_bytes=maximum_start_tag_bytes,
+            maximum_markup_bytes=maximum_markup_bytes,
         )
 
     text_state = "text"
     state = text_state
     opening_byte_size = 0
     start_tag_byte_count = 0
+    markup_byte_count = 0
     quote: int | None = None
     declaration_quote: int | None = None
     declaration_bracket_depth = 0
     bang_prefix: list[int] = []
     delimiter_tail: tuple[int, ...] = ()
+    violation: str | None = None
 
     def consume_declaration_character(character: int) -> None:
         nonlocal declaration_bracket_depth, declaration_quote, state
@@ -3978,13 +4079,35 @@ def _xml_start_tags_within_budget(
 
     def consume_character(character: int, byte_size: int) -> bool:
         nonlocal bang_prefix, declaration_bracket_depth, declaration_quote
-        nonlocal delimiter_tail, opening_byte_size, quote, start_tag_byte_count
-        nonlocal state
+        nonlocal delimiter_tail, markup_byte_count, opening_byte_size, quote
+        nonlocal start_tag_byte_count, state, violation
         if state == text_state:
+            markup_byte_count = 0
             if character == ord("<"):
                 state = "opening"
                 opening_byte_size = byte_size
+                markup_byte_count = byte_size
+            elif character == ord("&"):
+                state = "entity"
+                markup_byte_count = byte_size
+            if markup_byte_count > maximum_markup_bytes:
+                violation = "markup"
+                return False
             return True
+
+        if state == "cdata":
+            delimiter_tail = (*delimiter_tail[-2:], character)
+            if delimiter_tail == (ord("]"), ord("]"), ord(">")):
+                state = text_state
+            return True
+
+        markup_byte_count += byte_size
+        if (
+            markup_byte_count > maximum_markup_bytes
+            and state not in {"opening", "start"}
+        ):
+            violation = "markup"
+            return False
 
         if state == "opening":
             if character == ord("?"):
@@ -4000,12 +4123,20 @@ def _xml_start_tags_within_budget(
                 quote = character if character in {ord('"'), ord("'")} else None
                 start_tag_byte_count = opening_byte_size + byte_size
                 if start_tag_byte_count > maximum_start_tag_bytes:
+                    violation = "start-tag"
+                    return False
+                if markup_byte_count > maximum_markup_bytes:
+                    violation = "markup"
                     return False
             return True
 
         if state == "start":
             start_tag_byte_count += byte_size
             if start_tag_byte_count > maximum_start_tag_bytes:
+                violation = "start-tag"
+                return False
+            if markup_byte_count > maximum_markup_bytes:
+                violation = "markup"
                 return False
             if quote is not None:
                 if character == quote:
@@ -4033,14 +4164,13 @@ def _xml_start_tags_within_budget(
                 state = text_state
             return True
 
-        if state == "cdata":
-            delimiter_tail = (*delimiter_tail[-2:], character)
-            if delimiter_tail == (ord("]"), ord("]"), ord(">")):
-                state = text_state
-            return True
-
         if state == "declaration":
             consume_declaration_character(character)
+            return True
+
+        if state == "entity":
+            if character == ord(";"):
+                state = text_state
             return True
 
         # The only remaining state is the prefix after "<!". Classify the
@@ -4091,23 +4221,64 @@ def _xml_start_tags_within_budget(
             unit = pending[offset : offset + unit_width]
             character = unit[0] if unit_width == 1 else int.from_bytes(unit, byte_order)
             if not consume_character(character, unit_width):
-                return False
+                return violation
         pending = pending[usable_size:]
-    return True
+    return None
+
+
+def _xml_start_tags_within_budget(
+    xml_stream,
+    *,
+    maximum_start_tag_bytes: int | None = None,
+    maximum_markup_bytes: int | None = None,
+) -> bool:
+    """Return whether parser-frontier XML markup stays within its budgets.
+
+    The historic name remains because callers use it as the pre-parser lexical
+    gate. It now also protects ignored non-character-data tokens that can make
+    the XML parser allocate before a stream event is available.
+    """
+    return (
+        _xml_lexical_markup_budget_violation(
+            xml_stream,
+            maximum_start_tag_bytes=maximum_start_tag_bytes,
+            maximum_markup_bytes=maximum_markup_bytes,
+        )
+        is None
+    )
+
+
+def _ooxml_xml_lexical_markup_budget_violation(
+    archive: ZipFile,
+    member: str,
+    *,
+    maximum_start_tag_bytes: int | None = None,
+    maximum_markup_bytes: int | None = None,
+) -> str | None:
+    """Return an OOXML member's pre-parser lexical allocation-boundary violation."""
+    with archive.open(member) as xml_stream:
+        return _xml_lexical_markup_budget_violation(
+            xml_stream,
+            maximum_start_tag_bytes=maximum_start_tag_bytes,
+            maximum_markup_bytes=maximum_markup_bytes,
+        )
 
 
 def _ooxml_xml_start_tags_within_budget(
     archive: ZipFile,
     member: str,
     *,
-    maximum_start_tag_bytes: int = _OOXML_READER_MAX_XML_START_TAG_BYTES,
+    maximum_start_tag_bytes: int | None = None,
 ) -> bool:
-    """Check an OOXML part's lexical opening-tag budget without parsing it."""
-    with archive.open(member) as xml_stream:
-        return _xml_start_tags_within_budget(
-            xml_stream,
+    """Check an OOXML part's lexical parser-allocation budgets without parsing."""
+    return (
+        _ooxml_xml_lexical_markup_budget_violation(
+            archive,
+            member,
             maximum_start_tag_bytes=maximum_start_tag_bytes,
         )
+        is None
+    )
 
 
 def _stream_ooxml_reader_xml(
@@ -4120,9 +4291,14 @@ def _stream_ooxml_reader_xml(
     on_end: Callable[[ElementTree.Element, list[str]], None] | None = None,
 ) -> None:
     """Stream one reader-visible XML part under structural resource limits."""
-    if not _ooxml_xml_start_tags_within_budget(archive, member):
+    lexical_violation = _ooxml_xml_lexical_markup_budget_violation(archive, member)
+    if lexical_violation == "start-tag":
         raise _reader_preflight_error(
             "XML start tag exceeds the semantic-reader safety limit."
+        )
+    if lexical_violation is not None:
+        raise _reader_preflight_error(
+            "XML non-character-data markup exceeds the semantic-reader safety limit."
         )
     depth = 0
     element_count = 0
@@ -6000,10 +6176,13 @@ def _xml_root(archive: ZipFile, member: str) -> ElementTree.Element:
 
 def _xml_root_from_payload(payload: bytes) -> ElementTree.Element:
     """Parse untrusted XML payload without accepting document type declarations."""
-    if b"<!DOCTYPE" in payload or b"<!ENTITY" in payload:
-        raise ValueError("OOXML metadata contains a document type declaration")
-    if not _xml_start_tags_within_budget(io.BytesIO(payload)):
+    lexical_violation = _xml_lexical_markup_budget_violation(io.BytesIO(payload))
+    if lexical_violation == "start-tag":
         raise ValueError("OOXML metadata XML start tag exceeds the safety limit")
+    if lexical_violation is not None:
+        raise ValueError(
+            "OOXML metadata XML non-character-data markup exceeds the safety limit"
+        )
     parser = _ooxml_xml_parser_with_character_data_budget()
     try:
         for offset in range(0, len(payload), _OOXML_READER_XML_LEXICAL_CHUNK_BYTES):

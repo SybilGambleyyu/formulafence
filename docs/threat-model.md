@@ -130,14 +130,18 @@ financial correctness or replace model review.
   table (with their narrow fallbacks), and workbook-selected sheet parts. Every
   XML/relationship part is capped at 64
   MiB and aggregate XML material at 256 MiB. Each streamed reader part is also
-  capped at 4,000,000 elements and 256 nesting levels. The gate limits
-  every physical XML opening tag to 128 KiB before ElementTree receives its
-  first start callback and constructs a complete attribute map. The lexical
-  check is streaming, covers UTF-8/ASCII-compatible, UTF-16, and UTF-32
-  punctuation, and skips quoted delimiters, comments, CDATA, processing
-  instructions, and declarations. Bounded raw XML structure scans and
-  in-memory OOXML root reads use the same opening-tag check before tree
-  construction. A custom ElementTree target additionally limits each decoded
+  capped at 4,000,000 elements and 256 nesting levels. The gate limits every
+  physical XML opening tag to 128 KiB before ElementTree receives its first
+  start callback and constructs a complete attribute map. The same streaming
+  lexical gate caps each non-character-data token at 128 KiB: comments,
+  processing instructions, declarations, closing tags, and entity references
+  cannot make the parser retain an unbounded lexical value before an ordinary
+  stream event. It covers UTF-8/ASCII-compatible, UTF-16, and UTF-32
+  punctuation, preserves quoted delimiters, and leaves CDATA content to the
+  separate character-data bound. The shared defused parser explicitly forbids
+  document-type declarations. Bounded raw XML structure scans and in-memory
+  OOXML root reads use the same lexical gate before tree construction. A custom
+  ElementTree target additionally limits each decoded
   character-data node to 1 MiB before the ordinary tree builder can retain and
   join more parser chunks. It covers ordinary text, tails, and CDATA through
   the shared semantic-reader stream, bounded raw scans, and in-memory root

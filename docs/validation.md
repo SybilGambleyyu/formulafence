@@ -5,6 +5,50 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## XML non-character-data lexical bounds — 2026-07-26
+
+Version 0.154.0 closes the parser-frontier gap left by bounded opening tags
+and decoded text. An XML parser can need a complete comment, processing
+instruction, declaration, closing tag, or entity reference before an ordinary
+start/end stream event is available. FormulaFence now streams lexical
+punctuation before parser construction and allows at most 128 KiB of physical
+bytes for each of those non-character-data tokens. Opening tags retain their
+separate 128 KiB limit and stable diagnostic. The scanner covers
+UTF-8/ASCII-compatible XML plus UTF-16 and UTF-32 punctuation, preserves
+quoted delimiters, and does not count CDATA content as lexical markup: the
+existing 1 MiB incremental character-data target bounds that content instead.
+The shared defused parser now explicitly forbids document-type declarations,
+including paths that do not begin with an ASCII byte sequence. Python's
+[ElementTree parsing documentation](https://docs.python.org/3/library/xml.etree.elementtree.html)
+describes the incremental parser/target boundary that this guard precedes.
+
+Three controlled raw-ZIP fixtures began with the normal 4,835-byte workbook:
+a 20,000,000-character random comment and processing instruction appended at
+the Styles root, plus a 20,000,000-character comment in a document-type
+internal subset. Their `xl/styles.xml` members were 20,002,638, 20,002,638,
+and 20,002,663 bytes; their packages were 15,154,584, 15,154,668, and
+15,154,367 bytes. The random payloads avoid the ZIP ratio gate, so the parser
+frontier remains the measured path. In fresh isolated CLI processes, the exact
+public 0.153.0 wheel accepted the normal control in 0.404297 seconds at 37,900
+KiB RSS, then accepted the comment, processing-instruction, and document-type
+fixtures in 2.644092 seconds / 130,792 KiB, 2.529314 seconds / 149,520 KiB,
+and 1.728552 seconds / 130,920 KiB RSS respectively.
+
+The 0.154.0 source accepted the normal control in 0.372747 seconds at 38,144
+KiB RSS. It rejected those three hostile packages before parser entry in
+0.323810 seconds / 38,008 KiB, 0.323149 seconds / 38,120 KiB, and 0.335219
+seconds / 37,300 KiB RSS, each with CLI status 2 and the stable
+non-character-data-markup safety-preflight error. Exact boundary, one-byte
+chunk, UTF-16/UTF-32, comment, processing-instruction, CDATA, end-tag,
+entity-reference, declaration, document-type, direct-stream, real-workbook,
+and fail-before-parser regressions cover the gate. The archive-safety suite
+passed 325 tests in 14.61 seconds, and the complete versioned source suite
+passed 1,193 tests in 199.38 seconds. Ruff, bytecode compilation, and
+`git diff --check` passed. The release wheel and sdist passed `twine check`;
+fresh isolated installs of each reported FormulaFence 0.154.0, accepted the
+normal control, and rejected all three hostile workbooks through the CLI with
+status 2 and the non-character-data-markup safety-preflight error.
+
 ## XML character-data bounds — 2026-07-26
 
 Version 0.153.0 closes the remaining parser-frontier gap after XML start tags

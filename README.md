@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.155.0/formulafence-0.155.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.156.0/formulafence-0.156.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.155.0
+  uses: SybilGambleyyu/formulafence@v0.156.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2595,14 +2595,20 @@ allocation and coverage boundary, not a Power Query file-validity rule: a
 successfully parsed overage becomes visible `FF010`/`FF024` evidence while
 malformed input keeps its established diagnostic.
 
-The embedded logical package has a separate pre-read ZIP boundary. Each package
-source is limited to 768 KiB; members must be stored or deflated, can expand to
-at most 16 MiB each, and must stay at or below a 1,000:1 ratio. The full Power
-Query scan allows 512 package parts and 64 MiB of declared expanded data. If a
-package exceeds that boundary, FormulaFence does not inflate a member: it
-retains only a private opaque fingerprint and raises an explicit coverage
-warning, so a changed candidate remains visible through `FF010`/`FF024` rather
-than being treated as safely equivalent.
+Every nested Data Mashup ZIP is first scanned as bounded central-directory
+metadata before Python can materialize a ZIP entry catalog. This covers both
+the logical package and metadata embedded-content ZIPs, limits each source to
+768 KiB and raw member names to 1 KiB, and shares a 512-part budget across the
+complete Power Query scan. ZIP64, multi-disk, malformed, and filename-rewriting
+metadata (Unicode-path aliases, NULs, or platform separators) stays visible as a
+coverage gap rather than bypassing that boundary.
+The logical package alone is eligible for content reads; its members must be
+stored or deflated, can expand to at most 16 MiB each, must stay at or below a
+1,000:1 ratio, and share 64 MiB of declared expanded data. If either nested ZIP
+exceeds its safety boundary, FormulaFence retains only a private opaque
+fingerprint and raises an explicit coverage warning, so a changed candidate
+remains visible through `FF010`/`FF024` rather than being treated as safely
+equivalent.
 
 FormulaFence also follows a call to a workbook- or worksheet-local defined name
 when its complete definition is one statically resolvable `LAMBDA` expression.

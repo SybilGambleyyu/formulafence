@@ -977,6 +977,7 @@ _POWER_QUERY_TOTAL_XML_MAX_ELEMENT_COUNT = 2 * _POWER_QUERY_MAX_XML_ELEMENT_COUN
 # could otherwise make this inventory inflate and hash many large members.
 # Bound its metadata and declared expansion before any ``ZipFile.read`` call.
 _POWER_QUERY_PACKAGE_MAX_SOURCE_BYTES = 768 * 1024
+_POWER_QUERY_PACKAGE_MAX_MEMBER_NAME_BYTES = 1_024
 _POWER_QUERY_PACKAGE_MAX_MEMBER_BYTES = 16 * 1024 * 1024
 _POWER_QUERY_PACKAGE_TOTAL_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
 _POWER_QUERY_PACKAGE_TOTAL_PARTS = 512
@@ -2140,7 +2141,7 @@ class _PowerQueryXmlBudget:
 
 @dataclass
 class _PowerQueryPackageBudget:
-    """Bound nested Data Mashup logical-package expansion across one scan."""
+    """Bound nested Data Mashup ZIP parts across one Power Query scan."""
 
     remaining_parts: int = _POWER_QUERY_PACKAGE_TOTAL_PARTS
     remaining_uncompressed_bytes: int = _POWER_QUERY_PACKAGE_TOTAL_UNCOMPRESSED_BYTES
@@ -8422,26 +8423,42 @@ def _power_query_package_inventory(
     budget: _PowerQueryPackageBudget,
 ) -> tuple[int, int, int, str | None, str | None]:
     """Fingerprint logical query-package parts without exposing any part contents."""
-    if len(package_parts) > _POWER_QUERY_PACKAGE_MAX_SOURCE_BYTES:
+    entry_count, preflight_reason = _power_query_nested_zip_entry_count(
+        package_parts,
+        maximum_parts=budget.remaining_parts,
+    )
+    if entry_count is None:
+        if preflight_reason == "malformed-zip-metadata":
+            return _power_query_package_unreadable_fallback(
+                package_parts,
+                member,
+                warnings,
+                opaque_entries,
+                reason="ZIP metadata",
+            )
         return _power_query_package_resource_budget_fallback(
             package_parts,
             member,
             warnings,
             opaque_entries,
-            reason="source-size",
+            reason=preflight_reason or "zip-metadata",
         )
+    # The raw catalog already passed the shared part boundary. Reserve it
+    # before constructing ``ZipInfo`` objects, including if a later declared
+    # member resource check rejects this logical package.
+    budget.remaining_parts -= entry_count
     try:
         with ZipFile(io.BytesIO(package_parts)) as package:
             entries = package.infolist()
-            total_uncompressed_bytes = 0
-            if len(entries) > budget.remaining_parts:
-                return _power_query_package_resource_budget_fallback(
+            if len(entries) != entry_count:
+                return _power_query_package_unreadable_fallback(
                     package_parts,
                     member,
                     warnings,
                     opaque_entries,
-                    reason="part-count",
+                    reason="ZIP entry count",
                 )
+            total_uncompressed_bytes = 0
             for entry in entries:
                 if entry.flag_bits & 0x1:
                     return _power_query_package_resource_budget_fallback(
@@ -8488,7 +8505,6 @@ def _power_query_package_inventory(
                         opaque_entries,
                         reason="compression-ratio",
                     )
-            budget.remaining_parts -= len(entries)
             budget.remaining_uncompressed_bytes -= total_uncompressed_bytes
             formula_entries = [
                 entry for entry in entries if entry.filename == _POWER_QUERY_FORMULA_MEMBER
@@ -8511,14 +8527,13 @@ def _power_query_package_inventory(
                 entry.filename.startswith("Content/") for entry in entries
             )
     except (BadZipFile, OSError, RuntimeError, ValueError) as error:
-        warnings.add(
-            "FormulaFence could not inspect a Power Query package-part stream "
-            f"({type(error).__name__}); the affected query controls have a coverage gap."
+        return _power_query_package_unreadable_fallback(
+            package_parts,
+            member,
+            warnings,
+            opaque_entries,
+            reason=type(error).__name__,
         )
-        opaque_entries.append(
-            (f"{member}:package-parts", _private_payload_signature(package_parts))
-        )
-        return 0, 0, 0, None, None
     return (
         len(entries),
         len(formula_entries),
@@ -8526,6 +8541,159 @@ def _power_query_package_inventory(
         _private_external_data_signature(tuple(sorted(formula_material))),
         _private_external_data_signature(tuple(sorted(configuration_material))),
     )
+
+
+def _power_query_nested_zip_entry_count(
+    payload: bytes,
+    *,
+    maximum_parts: int,
+) -> tuple[int | None, str | None]:
+    """Count a nested ZIP before ``ZipFile`` can allocate its entry catalog."""
+    if len(payload) > _POWER_QUERY_PACKAGE_MAX_SOURCE_BYTES:
+        return None, "source-size"
+    if len(payload) < _ZIP_END_OF_CENTRAL_DIRECTORY.size:
+        return None, "malformed-zip-metadata"
+    try:
+        source_size = len(payload)
+        tail_size = min(
+            source_size,
+            _ZIP_MAX_COMMENT_BYTES + _ZIP_END_OF_CENTRAL_DIRECTORY.size,
+        )
+        end_record, end_offset = _ooxml_archive_end_of_central_directory(
+            payload[source_size - tail_size :],
+            source_size - tail_size,
+        )
+        (
+            _,
+            disk_number,
+            central_directory_disk,
+            entries_on_disk,
+            declared_entry_count,
+            central_directory_size,
+            central_directory_offset,
+            _,
+        ) = end_record
+        if (
+            entries_on_disk == _ZIP64_UINT16_SENTINEL
+            or declared_entry_count == _ZIP64_UINT16_SENTINEL
+            or central_directory_size == _ZIP64_UINT32_SENTINEL
+            or central_directory_offset == _ZIP64_UINT32_SENTINEL
+        ):
+            return None, "zip64-directory"
+        if (
+            disk_number != 0
+            or central_directory_disk != 0
+            or entries_on_disk != declared_entry_count
+        ):
+            return None, "malformed-zip-metadata"
+        if declared_entry_count > maximum_parts:
+            return None, "part-count"
+        if (
+            end_offset > source_size
+            or central_directory_offset > source_size
+            or central_directory_size > source_size - central_directory_offset
+            or central_directory_offset + central_directory_size > end_offset
+        ):
+            return None, "malformed-zip-metadata"
+        central_directory = memoryview(payload)[
+            central_directory_offset : central_directory_offset + central_directory_size
+        ]
+        cursor = 0
+        entry_count = 0
+        while cursor < len(central_directory):
+            if len(central_directory) - cursor < _ZIP_CENTRAL_DIRECTORY_HEADER.size:
+                return None, "malformed-zip-metadata"
+            (
+                signature,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                compressed_size,
+                uncompressed_size,
+                filename_size,
+                extra_size,
+                comment_size,
+                disk_start,
+                _,
+                _,
+                local_header_offset,
+            ) = _ZIP_CENTRAL_DIRECTORY_HEADER.unpack_from(central_directory, cursor)
+            if signature != _ZIP_CENTRAL_DIRECTORY_HEADER_SIGNATURE:
+                return None, "malformed-zip-metadata"
+            record_size = (
+                _ZIP_CENTRAL_DIRECTORY_HEADER.size
+                + filename_size
+                + extra_size
+                + comment_size
+            )
+            if record_size > len(central_directory) - cursor:
+                return None, "malformed-zip-metadata"
+            entry_count += 1
+            if entry_count > maximum_parts:
+                return None, "part-count"
+            if filename_size > _POWER_QUERY_PACKAGE_MAX_MEMBER_NAME_BYTES:
+                return None, "member-name"
+            filename_start = cursor + _ZIP_CENTRAL_DIRECTORY_HEADER.size
+            extra_start = filename_start + filename_size
+            filename_payload = central_directory[filename_start:extra_start]
+            if 0 in filename_payload or ord("\\") in filename_payload:
+                # ``ZipInfo`` truncates at NUL and normalizes path separators
+                # on Windows. Keep nested-package labels platform-independent
+                # and prevent post-preflight filename aliases.
+                return None, "member-name-alias"
+            extra_cursor = 0
+            extra = central_directory[extra_start : extra_start + extra_size]
+            while extra_cursor < len(extra):
+                if len(extra) - extra_cursor < 4:
+                    return None, "malformed-zip-metadata"
+                field_id, field_size = struct.unpack_from("<HH", extra, extra_cursor)
+                extra_cursor += 4
+                if field_size > len(extra) - extra_cursor:
+                    return None, "malformed-zip-metadata"
+                if field_id == 0x7075:
+                    # ``ZipInfo._decodeExtra`` can replace the short central
+                    # directory name with this alias after preflight.  Reject
+                    # it so the member-name allocation bound stays meaningful.
+                    return None, "unicode-path-alias"
+                extra_cursor += field_size
+            if (
+                compressed_size == _ZIP64_UINT32_SENTINEL
+                or uncompressed_size == _ZIP64_UINT32_SENTINEL
+                or local_header_offset == _ZIP64_UINT32_SENTINEL
+                or disk_start == _ZIP64_UINT16_SENTINEL
+            ):
+                return None, "zip64-member"
+            if disk_start != 0:
+                return None, "malformed-zip-metadata"
+            cursor += record_size
+        if entry_count != declared_entry_count:
+            return None, "malformed-zip-metadata"
+    except (WorkbookLoadError, struct.error, ValueError):
+        return None, "malformed-zip-metadata"
+    return entry_count, None
+
+
+def _power_query_package_unreadable_fallback(
+    package_parts: bytes,
+    member: str,
+    warnings: set[str],
+    opaque_entries: list[tuple[str, str]],
+    *,
+    reason: str,
+) -> tuple[int, int, int, str | None, str | None]:
+    """Retain coverage evidence for a malformed nested logical package."""
+    warnings.add(
+        "FormulaFence could not inspect a Power Query package-part stream "
+        f"({reason}); the affected query controls have a coverage gap."
+    )
+    opaque_entries.append((f"{member}:package-parts", _private_payload_signature(package_parts)))
+    return 0, 0, 0, None, None
 
 
 def _power_query_package_resource_budget_fallback(
@@ -8557,22 +8725,43 @@ def _power_query_metadata_content_count(
     member: str,
     warnings: set[str],
     opaque_entries: list[tuple[str, str]],
+    package_budget: _PowerQueryPackageBudget,
 ) -> int:
     """Count metadata-side embedded parts without reading their sensitive contents."""
     if not payload:
         return 0
-    try:
-        with ZipFile(io.BytesIO(payload)) as archive:
-            return len(archive.infolist())
-    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+    entry_count, preflight_reason = _power_query_nested_zip_entry_count(
+        payload,
+        maximum_parts=package_budget.remaining_parts,
+    )
+    if entry_count is None:
+        if preflight_reason == "malformed-zip-metadata":
+            warnings.add(
+                "FormulaFence could not inspect Power Query metadata embedded content "
+                "(ZIP metadata); the affected query controls have a coverage gap."
+            )
+            opaque_entries.append(
+                (f"{member}:metadata-content", _private_payload_signature(payload))
+            )
+            return 0
         warnings.add(
-            "FormulaFence could not inspect Power Query metadata embedded content "
-            f"({type(error).__name__}); the affected query controls have a coverage gap."
+            "FormulaFence did not fully inspect a Power Query metadata embedded-content "
+            "ZIP stream whose resources exceed the safety budget; affected query controls "
+            "have a coverage gap."
+        )
+        signature = _private_external_data_signature(
+            (
+                ("zip-resource-budget-exhausted", preflight_reason or "zip-metadata"),
+                ("source-size", str(len(payload))),
+                ("payload", _private_payload_signature(payload)),
+            )
         )
         opaque_entries.append(
-            (f"{member}:metadata-content", _private_payload_signature(payload))
+            (f"{member}:metadata-content-resource-budget", signature or "")
         )
         return 0
+    package_budget.remaining_parts -= entry_count
+    return entry_count
 
 
 def _power_query_metadata_inventory(
@@ -8581,6 +8770,7 @@ def _power_query_metadata_inventory(
     warnings: set[str],
     opaque_entries: list[tuple[str, str]],
     budget: _PowerQueryXmlBudget,
+    package_budget: _PowerQueryPackageBudget,
 ) -> tuple[int, int, int, str | None, str | None]:
     """Read stable query metadata while intentionally ignoring refresh-result noise."""
     if not payload:
@@ -8647,6 +8837,7 @@ def _power_query_metadata_inventory(
         member,
         warnings,
         opaque_entries,
+        package_budget,
     )
     structure_fallback_signature = (
         _power_query_xml_structure_budget_fallback_signature(
@@ -9021,6 +9212,7 @@ def _power_query_mashup_inspection(
         warnings,
         opaque_entries,
         xml_budget,
+        package_budget,
     )
     (
         permission_payload_count,

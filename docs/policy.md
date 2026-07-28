@@ -1854,13 +1854,18 @@ coverage limits, not a Power Query file-validity rule. A successfully parsed
 overage becomes visible `FF010`/`FF024` coverage evidence; malformed input
 retains its established parser diagnostic.
 
-The nested logical ZIP package is independently preflighted before FormulaFence
-reads any package member: 768 KiB package source, stored/deflated compression,
-512 package parts, 16 MiB per member, 64 MiB aggregate expanded data across the
-Power Query scan, and a 1,000:1 maximum member ratio. A package beyond that
-allocation boundary is not inflated; FormulaFence retains private opaque
+Every nested Data Mashup ZIP central directory is independently preflighted
+before Python can materialize an entry catalog: 768 KiB source, 1 KiB raw member
+names, and 512 parts shared across logical packages and metadata
+embedded-content ZIPs in the Power Query scan. ZIP64, multi-disk, malformed,
+and filename-rewriting metadata (Unicode-path aliases, NULs, or platform
+separators) remains visible coverage evidence. FormulaFence reads
+logical-package members only after that preflight: stored/deflated
+compression, 16 MiB per member, 64 MiB aggregate expanded data across the scan,
+and a 1,000:1 maximum member ratio. A nested ZIP beyond any allocation boundary
+is not cataloged or inflated further; FormulaFence retains private opaque
 evidence and emits coverage evidence, which makes a candidate change visible
-through `FF010`/`FF024` rather than accepting an uninspected package as equal.
+through `FF010`/`FF024` rather than accepting uninspected content as equal.
 
 ## Portfolio policies
 

@@ -5,6 +5,44 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Power Query nested ZIP catalog preflight — 2026-07-26
+
+Version 0.156.0 closes the remaining nested-ZIP catalog path in Power Query
+`DataMashup` custom XML. The previous release bounded a logical package before
+it inflated members, but metadata-side embedded content only called
+`ZipFile(...).infolist()` to count parts. Python creates one `ZipInfo` object
+per central-directory entry before returning that count, so a compact embedded
+ZIP could still allocate a large catalog even though FormulaFence never read
+its content.
+
+FormulaFence now scans bounded central-directory bytes before Python can create
+that catalog. It applies the existing 768 KiB nested-source limit and a 512-part
+budget shared across logical packages and metadata embedded-content ZIPs, caps
+raw member names at 1 KiB, and treats ZIP64, multi-disk, malformed, and
+filename-rewriting metadata (Unicode-path aliases, NULs, or platform
+separators) as explicit coverage gaps. Logical-package content still receives
+the independent stored/deflated, member-size, aggregate-size, and
+compression-ratio checks before any member read. Metadata embedded content is
+never opened or decompressed merely to count it.
+
+A controlled workbook used a 769,622-byte metadata embedded-content ZIP with
+7,400 empty entries. Its Custom XML part was 1,028,589 bytes and the outer
+workbook was 78,646 bytes. In fresh processes, the public 0.155.0 wheel
+accepted the catalog in 0.179804 seconds at 42,596 KiB RSS, reported 7,401
+embedded-content parts, and emitted no warning. The 0.156.0 source stopped at
+the shared catalog boundary in 0.159670 seconds at 38,968 KiB RSS, retained the
+ordinary logical-package count of one, and emitted the explicit opaque coverage
+warning. The corresponding normal control completed in 0.123762 seconds at
+35,564 KiB RSS with 0.155.0 and 0.123570 seconds at 35,916 KiB RSS with the new
+source, without warnings. Exact-capacity, fail-before-`ZipFile`, filename-
+rewrite, metadata-catalog, aggregate-across-mashups, report-visibility, and
+ordinary Power Query regressions cover the boundary; the complete source suite
+passed 1,207 tests in 200.16 seconds, with Ruff, bytecode compilation, and
+diff-whitespace checks also passing. The final wheel and source distribution
+passed `twine check`; fresh isolated installs of each reported FormulaFence
+0.156.0, passed `pip check`, accepted the normal control, and retained the
+hostile catalog's opaque warning.
+
 ## Power Query nested ZIP package bounds — 2026-07-26
 
 Version 0.155.0 closes a nested-archive expansion path in Power Query

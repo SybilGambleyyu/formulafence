@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.156.0 — 2026-07-26
+
+- Preflight every nested Power Query `DataMashup` ZIP central directory before
+  `ZipFile` can materialize an entry catalog. The shared 512-part scan budget
+  now covers both logical package parts and metadata embedded-content catalogs,
+  including catalogs whose content FormulaFence intentionally does not read.
+- Bound raw nested member names to 1 KiB and conservatively retain coverage
+  evidence for ZIP64, multi-disk, malformed, or filename-rewriting metadata
+  (Unicode-path aliases, NULs, and platform separators). This keeps Python's
+  post-preflight ZIP filename rewriting from bypassing the allocation boundary.
+- Preserve a private opaque fingerprint and explicit `FF010`/`FF024` coverage
+  evidence whenever an unsafe metadata catalog or logical package cannot be
+  fully inspected. Add exact-capacity, fail-before-`ZipFile`, filename-rewrite,
+  metadata-catalog, aggregate-across-mashups, and visible-diff regressions.
+
 ## 0.155.0 — 2026-07-26
 
 - Bound each nested ZIP logical package in a Power Query `DataMashup` before

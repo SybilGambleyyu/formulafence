@@ -5,6 +5,33 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Columnless style-control state views — 2026-07-28
+
+Version 0.178.0 removes the next repeated whole-column scan from the raw
+style-control readers. Number-format, font, fill, alignment, and border
+inspection each previously allocated an all-default 16,385-entry style list
+and scanned all 16,384 Excel columns for every worksheet without a `<cols>`
+container. FormulaFence now leaves that state implicit for a columnless sheet
+and treats direct cell lookups as the workbook default; populated, empty, and
+malformed `<cols>` containers still take the prior guarded parser, update
+budget, and canonical-signature path.
+
+For the controlled valid 232,295-byte, 512-sheet `.xlsx` used for 0.177.0,
+with one `=1` formula in each worksheet and no column declarations, the public
+0.177.0 wheel emitted a 122,090-byte JSON profile (SHA-256
+`27a6737a6f3ba3c2f9e3c70f94326da2cccd78f42900e459e70e1001adb81361`) in
+7.74 seconds. The 0.178.0 candidate emitted the byte-identical profile in
+3.95 seconds: 3.79 seconds, or about 49.0%, less elapsed time. A separately
+constructed styled columnless workbook has a byte-identical public profile
+(SHA-256 `a10a1fbfb8afc147be0a3d1813b8058ae801037ead0fd874a021fc45cc2824b1`)
+and changed-style diff
+(SHA-256 `e5e9eb9ece9a84e64718a365fbdeb4f28499e035371f8b66608ac529a467c7c0`).
+The structural regression patches all five full-state signature functions to
+raise, then proves direct cell and row number-format styles remain correct.
+The full source suite passed 1,293 tests in 159.63 seconds with no failures,
+errors, or skips; bytecode compilation, Ruff, and whitespace checks were
+clean.
+
 ## Columnless worksheet visibility fast path — 2026-07-28
 
 Version 0.177.0 removes an avoidable fixed scan from raw visibility metadata

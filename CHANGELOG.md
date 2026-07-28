@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.178.0 — 2026-07-28
+
+- Skip five more full 16,384-column style-state expansions when a worksheet
+  has no SpreadsheetML `<cols>` declaration: number formats, fonts, fills,
+  alignments, and borders. The raw inspectors now keep the implicit workbook
+  default for direct-cell comparisons rather than allocating and scanning an
+  all-default list for every columnless sheet.
+- Preserve exact private comparison evidence for direct cell styles,
+  row styles, non-default workbook styles, and populated or malformed
+  `<cols>` containers. Structural coverage makes each full-state signature
+  raise if it is reached by a styled columnless worksheet.
+
 ## 0.177.0 — 2026-07-28
 
 - Skip the full 16,384-column visibility-state expansion for a worksheet with

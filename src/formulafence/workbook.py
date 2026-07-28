@@ -27923,9 +27923,16 @@ def _number_format_metadata(path: Path) -> _NumberFormatMetadata:
             cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
             for sheet, member in _worksheet_xml_paths(archive).items():
                 worksheet = _xml_root(archive, member)
-                column_states = [default_style] * (MAX_EXCEL_COLUMN + 1)
-                column_updates = 0
                 column_sets = worksheet.findall(cols_tag)
+                # Without a <cols> container, every column retains the
+                # workbook default. Keep that implicit instead of expanding
+                # an otherwise unused 16,384-column style state.
+                column_states = (
+                    [default_style] * (MAX_EXCEL_COLUMN + 1)
+                    if column_sets
+                    else None
+                )
+                column_updates = 0
                 for columns_index, columns in enumerate(column_sets):
                     for column_index, column in enumerate(columns):
                         context = f"column:{sheet.casefold()}:{columns_index}:{column_index}"
@@ -27957,8 +27964,13 @@ def _number_format_metadata(path: Path) -> _NumberFormatMetadata:
                         column_states[minimum : maximum + 1] = [style] * span
                         column_updates += span
 
-                column_signature = _number_format_column_state_signature(
-                    column_states, default_style
+                column_signature = (
+                    _number_format_column_state_signature(
+                        column_states,
+                        default_style,
+                    )
+                    if column_states is not None
+                    else ()
                 )
                 if column_signature:
                     entries.append(
@@ -28076,7 +28088,10 @@ def _number_format_metadata(path: Path) -> _NumberFormatMetadata:
                     if (
                         style == default_style
                         and row_number not in relevant_rows
-                        and column_states[column_number] == default_style
+                        and (
+                            column_states is None
+                            or column_states[column_number] == default_style
+                        )
                     ):
                         continue
                     entries.append(
@@ -28554,9 +28569,14 @@ def _font_metadata(path: Path) -> _FontMetadata:
             cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
             for sheet, member in _worksheet_xml_paths(archive).items():
                 worksheet = _xml_root(archive, member)
-                column_states = [default_style] * (MAX_EXCEL_COLUMN + 1)
+                column_sets = worksheet.findall(cols_tag)
+                column_states = (
+                    [default_style] * (MAX_EXCEL_COLUMN + 1)
+                    if column_sets
+                    else None
+                )
                 column_updates = 0
-                for columns_index, columns in enumerate(worksheet.findall(cols_tag)):
+                for columns_index, columns in enumerate(column_sets):
                     for column_index, column in enumerate(columns):
                         context = f"column:{sheet.casefold()}:{columns_index}:{column_index}"
                         if column.tag != col_tag:
@@ -28587,7 +28607,11 @@ def _font_metadata(path: Path) -> _FontMetadata:
                         column_states[minimum : maximum + 1] = [style] * span
                         column_updates += span
 
-                column_signature = _font_column_state_signature(column_states, default_style)
+                column_signature = (
+                    _font_column_state_signature(column_states, default_style)
+                    if column_states is not None
+                    else ()
+                )
                 if column_signature:
                     entries.append(
                         (f"column-fonts:{sheet.casefold()}", repr(column_signature))
@@ -28700,7 +28724,10 @@ def _font_metadata(path: Path) -> _FontMetadata:
                     if (
                         style == default_style
                         and row_number not in relevant_rows
-                        and column_states[column_number] == default_style
+                        and (
+                            column_states is None
+                            or column_states[column_number] == default_style
+                        )
                     ):
                         continue
                     entries.append(
@@ -29378,9 +29405,14 @@ def _fill_metadata(path: Path) -> _FillMetadata:
             cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
             for sheet, member in _worksheet_xml_paths(archive).items():
                 worksheet = _xml_root(archive, member)
-                column_states = [default_style] * (MAX_EXCEL_COLUMN + 1)
+                column_sets = worksheet.findall(cols_tag)
+                column_states = (
+                    [default_style] * (MAX_EXCEL_COLUMN + 1)
+                    if column_sets
+                    else None
+                )
                 column_updates = 0
-                for columns_index, columns in enumerate(worksheet.findall(cols_tag)):
+                for columns_index, columns in enumerate(column_sets):
                     for column_index, column in enumerate(columns):
                         context = f"column:{sheet.casefold()}:{columns_index}:{column_index}"
                         if column.tag != col_tag:
@@ -29411,8 +29443,10 @@ def _fill_metadata(path: Path) -> _FillMetadata:
                         column_states[minimum : maximum + 1] = [style] * span
                         column_updates += span
 
-                column_signature = _fill_column_state_signature(
-                    column_states, default_style
+                column_signature = (
+                    _fill_column_state_signature(column_states, default_style)
+                    if column_states is not None
+                    else ()
                 )
                 if column_signature:
                     entries.append(
@@ -29523,7 +29557,10 @@ def _fill_metadata(path: Path) -> _FillMetadata:
                     if (
                         style == default_style
                         and row_number not in relevant_rows
-                        and column_states[column_number] == default_style
+                        and (
+                            column_states is None
+                            or column_states[column_number] == default_style
+                        )
                     ):
                         continue
                     entries.append(
@@ -30066,9 +30103,14 @@ def _alignment_metadata(path: Path) -> _AlignmentMetadata:
             cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
             for sheet, member in _worksheet_xml_paths(archive).items():
                 worksheet = _xml_root(archive, member)
-                column_states = [default_style] * (MAX_EXCEL_COLUMN + 1)
+                column_sets = worksheet.findall(cols_tag)
+                column_states = (
+                    [default_style] * (MAX_EXCEL_COLUMN + 1)
+                    if column_sets
+                    else None
+                )
                 column_updates = 0
-                for columns_index, columns in enumerate(worksheet.findall(cols_tag)):
+                for columns_index, columns in enumerate(column_sets):
                     for column_index, column in enumerate(columns):
                         context = (
                             f"column:{sheet.casefold()}:{columns_index}:{column_index}"
@@ -30108,9 +30150,13 @@ def _alignment_metadata(path: Path) -> _AlignmentMetadata:
                         column_states[minimum : maximum + 1] = [style] * span
                         column_updates += span
 
-                column_signature = _alignment_column_state_signature(
-                    column_states,
-                    default_style,
+                column_signature = (
+                    _alignment_column_state_signature(
+                        column_states,
+                        default_style,
+                    )
+                    if column_states is not None
+                    else ()
                 )
                 if column_signature:
                     entries.append(
@@ -30232,7 +30278,10 @@ def _alignment_metadata(path: Path) -> _AlignmentMetadata:
                     if (
                         style == default_style
                         and row_number not in relevant_rows
-                        and column_states[column_number] == default_style
+                        and (
+                            column_states is None
+                            or column_states[column_number] == default_style
+                        )
                     ):
                         continue
                     entries.append(
@@ -30738,9 +30787,14 @@ def _border_metadata(path: Path) -> _BorderMetadata:
                 sheet_data_tag = f"{{{worksheet_namespace}}}sheetData"
                 row_tag = f"{{{worksheet_namespace}}}row"
                 cell_tag = f"{{{worksheet_namespace}}}c"
-                column_states = [default_style] * (MAX_EXCEL_COLUMN + 1)
+                column_sets = worksheet.findall(cols_tag)
+                column_states = (
+                    [default_style] * (MAX_EXCEL_COLUMN + 1)
+                    if column_sets
+                    else None
+                )
                 column_updates = 0
-                for columns_index, columns in enumerate(worksheet.findall(cols_tag)):
+                for columns_index, columns in enumerate(column_sets):
                     for column_index, column in enumerate(columns):
                         context = (
                             f"column:{sheet.casefold()}:{columns_index}:{column_index}"
@@ -30780,9 +30834,13 @@ def _border_metadata(path: Path) -> _BorderMetadata:
                         column_states[minimum : maximum + 1] = [style] * span
                         column_updates += span
 
-                column_signature = _border_column_state_signature(
-                    column_states,
-                    default_style,
+                column_signature = (
+                    _border_column_state_signature(
+                        column_states,
+                        default_style,
+                    )
+                    if column_states is not None
+                    else ()
                 )
                 if column_signature:
                     entries.append(
@@ -30904,7 +30962,10 @@ def _border_metadata(path: Path) -> _BorderMetadata:
                     if (
                         style == default_style
                         and row_number not in relevant_rows
-                        and column_states[column_number] == default_style
+                        and (
+                            column_states is None
+                            or column_states[column_number] == default_style
+                        )
                     ):
                         continue
                     entries.append(

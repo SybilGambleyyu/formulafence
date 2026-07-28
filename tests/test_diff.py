@@ -15202,6 +15202,64 @@ def test_filter_visibility_skips_empty_column_state_expansion(
     )
 
 
+def _remove_worksheet_column_declarations(path) -> None:
+    """Remove a fixture's `<cols>` container while preserving styled cells."""
+    staging = path.with_suffix(".columnless.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            member.filename: archive.read(member)
+            for member in archive.infolist()
+        }
+    worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet1.xml"])
+    cols_tag = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}cols"
+    column_sets = worksheet.findall(cols_tag)
+    if not column_sets:
+        raise AssertionError("fixture has no worksheet column declarations")
+    for columns in column_sets:
+        worksheet.remove(columns)
+    contents["xl/worksheets/sheet1.xml"] = ElementTree.tostring(
+        worksheet,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for member, payload in contents.items():
+            archive.writestr(member, payload)
+    staging.replace(path)
+
+
+def test_style_controls_skip_columnless_state_expansion(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Direct styles still work when no worksheet column state exists."""
+    workbook = make_number_format_model(tmp_path / "columnless-styles.xlsx")
+    _remove_worksheet_column_declarations(workbook)
+
+    def unexpected_column_state_expansion(*_args, **_kwargs):
+        raise AssertionError("column state expansion should not run without <cols>")
+
+    for name in (
+        "_number_format_column_state_signature",
+        "_font_column_state_signature",
+        "_fill_column_state_signature",
+        "_alignment_column_state_signature",
+        "_border_column_state_signature",
+    ):
+        monkeypatch.setattr(
+            workbook_module,
+            name,
+            unexpected_column_state_expansion,
+        )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.number_format_controls.cell_format_assignment_count == 3
+    assert snapshot.number_format_controls.row_format_assignment_count == 1
+    assert snapshot.number_format_controls.column_format_assignment_count == 0
+    assert not any("number-format" in warning for warning in snapshot.parser_warnings)
+
+
 def test_number_format_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
     baseline = make_number_format_model(tmp_path / "baseline.xlsx")
     candidate = make_number_format_model(tmp_path / "candidate.xlsx")

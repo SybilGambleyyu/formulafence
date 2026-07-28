@@ -275,6 +275,16 @@ _OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_PART_XML_ELEMENT_COUNT = 32_768
 _OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT = (
     2 * _OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_PART_XML_ELEMENT_COUNT
 )
+# ``extLst`` is named in the Worksheet grammar, but is itself an arbitrary
+# extension container. Several raw worksheet readers need the complete root
+# before deciding whether an extension applies to their feature, so a compact
+# extension sequence could otherwise allocate a full tree under a standard
+# root child. Count each element beneath a Worksheet ``extLst`` before those
+# readers run. These are CI allocation limits, not an OOXML validity rule.
+_OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_XML_ELEMENT_COUNT = (
+    2 * _OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT
+)
 _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
 _OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT = 100_000
 _OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
@@ -3846,6 +3856,8 @@ def _validate_ooxml_semantic_reader_resources(
     page_break_declaration_count = 0
     worksheet_opaque_root_part_xml_element_count = 0
     worksheet_opaque_root_xml_element_count = 0
+    worksheet_extension_list_part_xml_element_count = 0
+    worksheet_extension_list_xml_element_count = 0
     shared_string_count = 0
     shared_string_item_xml_element_counts: list[int] = []
     shared_string_item_is_complex: list[bool] = []
@@ -3863,6 +3875,7 @@ def _validate_ooxml_semantic_reader_resources(
     inline_string_tags = _spreadsheetml_tags("is")
     shared_string_tags = _spreadsheetml_tags("si")
     shared_string_table_tags = _spreadsheetml_tags("sst")
+    worksheet_extension_list_tags = _spreadsheetml_tags("extLst")
     worksheet_standard_root_tags = _spreadsheetml_tags(
         "sheetPr",
         "dimension",
@@ -4459,6 +4472,45 @@ def _validate_ooxml_semantic_reader_resources(
                 "semantic-reader safety limit."
             )
 
+    def worksheet_extension_list_end(
+        _element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        """Bound one element under a selected Worksheet extension list.
+
+        A Worksheet ``extLst`` can appear beneath a named root child as well
+        as directly below the worksheet root. Count an entire extension
+        subtree only once even if it contains another extension list: any
+        matching ancestor is sufficient to make the completed element part of
+        this allocation boundary.
+        """
+        nonlocal worksheet_extension_list_part_xml_element_count
+        nonlocal worksheet_extension_list_xml_element_count
+        if (
+            len(tags) < 2
+            or tags[0] not in worksheet_tags
+            or not any(tag in worksheet_extension_list_tags for tag in tags[1:])
+        ):
+            return
+        worksheet_extension_list_part_xml_element_count += 1
+        if (
+            worksheet_extension_list_part_xml_element_count
+            > _OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "worksheet extension-list XML structure exceeds the "
+                "semantic-reader safety limit."
+            )
+        worksheet_extension_list_xml_element_count += 1
+        if (
+            worksheet_extension_list_xml_element_count
+            > _OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "aggregate worksheet extension-list XML elements exceed the "
+                "semantic-reader safety limit."
+            )
+
     def worksheet_end(
         element: ElementTree.Element,
         tags: list[str],
@@ -4469,6 +4521,7 @@ def _validate_ooxml_semantic_reader_resources(
         nonlocal column_dimension_count
         nonlocal page_break_container_count
         nonlocal page_break_declaration_count
+        worksheet_extension_list_end(element, tags)
         worksheet_opaque_root_end(element, tags)
         sheet_catalog_end(element, tags)
         merged_cell_end(element, tags)
@@ -5013,6 +5066,7 @@ def _validate_ooxml_semantic_reader_resources(
                 reader_member(member_name)
                 if member_name in worksheet_members:
                     worksheet_opaque_root_part_xml_element_count = 0
+                    worksheet_extension_list_part_xml_element_count = 0
                 _stream_ooxml_reader_xml(
                     archive,
                     member_name,

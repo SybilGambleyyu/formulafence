@@ -251,6 +251,61 @@ def _append_worksheet_opaque_root_xml_elements(
     return element_count
 
 
+def _append_worksheet_extension_list_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    nested: bool = False,
+    within_sheet_properties: bool = False,
+    member_name: str = "xl/worksheets/sheet1.xml",
+) -> int:
+    """Append one extension tree while preserving the Worksheet namespace."""
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    closing_offset = worksheet.rfind(b"</")
+    if closing_offset < 0:
+        raise ValueError("worksheet fixture XML has no closing root tag")
+    worksheet_namespace = (
+        ElementTree.fromstring(worksheet).tag.partition("}")[0].removeprefix("{").encode()
+    )
+    if not worksheet_namespace:
+        raise ValueError("worksheet fixture XML has no namespace")
+    namespace = b"urn:formulafence:archive-safety"
+    entries = b"<ff:opaque/>" * count
+    if nested:
+        contents = b"<ff:container><ff:nested>" + entries + b"</ff:nested></ff:container>"
+        element_count = count + 4
+    else:
+        contents = entries
+        element_count = count + 2
+    extension = (
+        b'<ss:ext xmlns:ff="'
+        + namespace
+        + b'" uri="{1F4A6F6A-EB4A-4C41-9C9E-9231F8EAF001}">'
+        + contents
+        + b"</ss:ext>"
+    )
+    inserted = (
+        b'<ss:sheetPr xmlns:ss="'
+        + worksheet_namespace
+        + b'"><ss:extLst>'
+        + extension
+        + b"</ss:extLst></ss:sheetPr>"
+        if within_sheet_properties
+        else b'<ss:extLst xmlns:ss="'
+        + worksheet_namespace
+        + b'">'
+        + extension
+        + b"</ss:extLst>"
+    )
+    _replace_member(
+        path,
+        member_name,
+        worksheet[:closing_offset] + inserted + worksheet[closing_offset:],
+    )
+    return element_count
+
+
 def _redirect_shared_string_relationship(path: Path, target: str) -> None:
     """Point the transitional shared-string relationship at a safe test part."""
     member_name = "xl/_rels/workbook.xml.rels"
@@ -2890,6 +2945,16 @@ def test_semantic_reader_preflight_keeps_standard_worksheet_root_content_unmeter
         "_OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT",
         0,
     )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT",
+        0,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_XML_ELEMENT_COUNT",
+        0,
+    )
 
     snapshot = load_snapshot(workbook)
 
@@ -2928,6 +2993,133 @@ def test_semantic_reader_preflight_rejects_default_opaque_worksheet_root_xml_lim
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "worksheet opaque root XML structure" in message
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_semantic_reader_preflight_rejects_worksheet_extension_list_xml_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    nested: bool,
+) -> None:
+    workbook = make_model(tmp_path / f"worksheet-extension-list-{nested}.xlsx")
+    element_count = _append_worksheet_extension_list_xml_elements(
+        workbook,
+        1,
+        nested=nested,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT",
+        element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet extension-list XML structure" in message
+
+
+def test_semantic_reader_preflight_covers_nested_worksheet_extension_lists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "nested-worksheet-extension-list.xlsx")
+    element_count = _append_worksheet_extension_list_xml_elements(
+        workbook,
+        1,
+        within_sheet_properties=True,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT",
+        element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet extension-list XML structure" in message
+
+
+def test_semantic_reader_preflight_aggregates_worksheet_extension_list_xml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "aggregate-worksheet-extension-list.xlsx")
+    first_count = _append_worksheet_extension_list_xml_elements(workbook, 1)
+    second_count = _append_worksheet_extension_list_xml_elements(
+        workbook,
+        1,
+        member_name="xl/worksheets/sheet2.xml",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT",
+        max(first_count, second_count),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_XML_ELEMENT_COUNT",
+        first_count + second_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "aggregate worksheet extension-list XML elements" in message
+
+
+def test_semantic_reader_preflight_accepts_worksheet_extension_list_at_exact_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "worksheet-extension-list-at-limits.xlsx")
+    element_count = _append_worksheet_extension_list_xml_elements(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT",
+        element_count,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_XML_ELEMENT_COUNT",
+        element_count,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_covers_strict_worksheet_extension_list_xml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_strict_worksheet_print_layout_model(
+        tmp_path / "strict-worksheet-extension-list.xlsx"
+    )
+    element_count = _append_worksheet_extension_list_xml_elements(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT",
+        element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet extension-list XML structure" in message
+
+
+def test_semantic_reader_preflight_rejects_default_worksheet_extension_list_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "default-worksheet-extension-list-limit.xlsx")
+    _append_worksheet_extension_list_xml_elements(
+        workbook,
+        workbook_module._OOXML_READER_MAX_WORKSHEET_EXTENSION_LIST_PART_XML_ELEMENT_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet extension-list XML structure" in message
 
 
 def test_semantic_reader_preflight_covers_raw_relationship_selected_shared_strings(

@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Worksheet extension-list structural bounds — 2026-07-26
+
+Version 0.148.0 closes the remaining compact-allocation path inside a named
+Worksheet extension container. The Open XML SDK's
+[Worksheet](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.worksheet?view=openxml-3.0.1)
+reference lists `WorksheetExtensionList` alongside the ordinary root children.
+That correctly leaves `extLst` outside the 0.147 opaque-root counter, but an
+extension list can itself carry arbitrary XML. FormulaFence's Office Web
+Add-in worksheet scan parses every selected worksheet to locate that extension
+location, and the ordinary worksheet reader dispatches it as an extension list.
+Neither path needs an unbounded opaque extension tree to produce a profile.
+
+The semantic-reader preflight now tracks every element below a SpreadsheetML
+`extLst` in each selected transitional or Strict worksheet before either reader
+starts. It permits 32,768 extension-list elements per worksheet and 65,536 in
+aggregate. The scan detects a list nested beneath another named Worksheet
+control as well as a direct root list, without double-counting an element if a
+nested extension list occurs. Ordinary `sheetData` and other named base
+controls retain their existing specialist limits. A successfully parsed
+overage returns the stable safety-preflight error and CLI status 2 rather than
+a partial profile. These are CI allocation limits for extension content, not a
+SpreadsheetML validity rule.
+
+A raw-ZIP fixture generated without FormulaFence retained a four-sheet model
+and appended one `extLst`/`ext` container with 500,000 foreign children to one
+worksheet. The workbook was 18,225 bytes; its selected worksheet XML expanded
+to 6,000,799 bytes. The exact released 0.147.0 wheel completed a successful
+profile in 16.513316 seconds at 126,176 KiB RSS. The 0.148.0 source rejects the
+same input before the traced Office Web Add-in scan in 0.477682 seconds at
+37,436 KiB RSS, with the stable worksheet extension-list safety-preflight error
+and no profile JSON. A normal 6,408-byte model profile completed in 0.467634
+seconds at 37,996 KiB RSS. Direct/nested, nested-under-`sheetPr`, aggregate,
+exact/default-limit, normal-sheet, Strict-worksheet, and fail-before-reader
+regressions accompany the fixture. The full archive-safety suite passed 220
+tests with zero failures, and the complete source suite passed 1,088 tests in
+158.73 seconds with zero failures or errors.
+
 ## Worksheet opaque-root structural bounds — 2026-07-26
 
 Version 0.147.0 closes a compact-allocation path shared by FormulaFence's raw

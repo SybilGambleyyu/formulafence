@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.147.0/formulafence-0.147.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.148.0/formulafence-0.148.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.147.0
+  uses: SybilGambleyyu/formulafence@v0.148.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2713,9 +2713,12 @@ For reader-selected transitional or Strict worksheets, the preflight also
 matches the published base Worksheet root-child grammar. A direct root subtree
 outside that grammar is limited to 32,768 XML elements per worksheet and
 65,536 in aggregate before raw worksheet scanners or the ordinary reader can
-retain it. This leaves ordinary `sheetData` and every named base control on
-their existing specialized budgets; it is a CI allocation limit for opaque
-root content, not a SpreadsheetML validity rule.
+retain it. A SpreadsheetML `extLst` is a named extension container rather than
+ordinary base content, so every extension-list subtree in a selected worksheet
+is separately limited to 32,768 XML elements per worksheet and 65,536 in
+aggregate. Ordinary `sheetData` and other named base controls keep their
+existing specialized budgets. These are CI allocation limits for opaque root
+and extension content, not SpreadsheetML validity rules.
 The preflight also caps repeated known stylesheet containers and every
 reader-materialized number-format, font, fill, fill-child, gradient-stop,
 border, base-XF, named-style, differential-style, palette, table-style,

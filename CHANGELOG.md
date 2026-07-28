@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.148.0 — 2026-07-26
+
+- Bound every SpreadsheetML `extLst` subtree in a reader-selected
+  transitional or Strict worksheet before raw worksheet scanners or the
+  ordinary workbook reader can materialize it. Each selected worksheet allows
+  32,768 extension-list XML elements and the selected worksheet inventory
+  allows 65,536 in aggregate.
+- Keep the direct opaque-root boundary distinct: the published Worksheet
+  grammar names `extLst`, but it is an arbitrary extension container. Ordinary
+  `sheetData` and other named base controls retain their existing specialized
+  budgets. A successfully streamed extension-list overage becomes the stable
+  semantic-reader safety-preflight error and CLI status 2.
+- Add direct/nested, nested-under-`sheetPr`, aggregate, exact/default-limit,
+  normal-sheet, Strict-worksheet, and fail-before-reader regressions.
+
 ## 0.147.0 — 2026-07-26
 
 - Bound complete direct worksheet-root subtrees that are absent from the

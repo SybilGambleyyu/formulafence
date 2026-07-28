@@ -148,9 +148,12 @@ financial correctness or replace model review.
   for selected transitional and Strict worksheet parts. A direct subtree rooted
   at any other child allows 32,768 XML elements per worksheet and 65,536 in
   aggregate before raw worksheet scanners or the ordinary reader can retain it.
-  Standard root children, including `sheetData` and `extLst`, remain on their
-  existing specific budgets; this narrow counter is an allocation boundary for
-  opaque root content, not a claim that it makes foreign markup invalid. A row
+  A named SpreadsheetML `extLst` is itself an arbitrary extension container,
+  so every extension-list subtree in those selected worksheets separately
+  allows 32,768 XML elements per worksheet and 65,536 in aggregate. Ordinary
+  `sheetData` and other named base controls remain on their existing specific
+  budgets; these narrow counters are allocation boundaries for opaque root and
+  extension content, not a claim that they make foreign markup invalid. A row
   counts only when it has an unqualified attribute other than `r` or `spans`,
   the condition that makes `openpyxl` retain a `RowDimension`; namespaced
   extension attributes do not count. Every reader-visible `col` counts because
@@ -310,8 +313,10 @@ formula will produce.
   32,768 opaque direct `sst`-child elements per selected table with 65,536 in
   aggregate; simple shared strings still use the 500,000-entry budget. Each
   selected transitional or Strict worksheet also allows 32,768 XML elements in
-  a direct opaque root subtree and 65,536 across those subtrees; standard
-  Worksheet root children keep their existing specialized budgets. A row
+  a direct opaque root subtree and 65,536 across those subtrees. Every
+  SpreadsheetML `extLst` subtree in those worksheets separately allows 32,768
+  XML elements per worksheet and 65,536 in aggregate; ordinary `sheetData` and
+  other named base controls keep their existing specialized budgets. A row
   declaration counts only when it has an
   unqualified attribute other than `r` or `spans`, which is the `openpyxl`
   `RowDimension` allocation trigger; a namespace-qualified extension attribute

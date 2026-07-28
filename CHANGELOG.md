@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.177.0 — 2026-07-28
+
+- Skip the full 16,384-column visibility-state expansion for a worksheet with
+  no SpreadsheetML `<cols>` declaration. This removes four empty state arrays,
+  four aggregate scans, and one full canonical-signature scan from the common
+  columnless-sheet path.
+- Preserve the exact canonical all-column control and count for
+  `defaultColWidth="0"` without a `<cols>` declaration. Existing empty,
+  malformed, and populated `<cols>` containers continue through the guarded
+  control parser, update budget, and coverage-gap path unchanged.
+
 ## 0.176.0 — 2026-07-28
 
 - Replace repeated materialized endpoint and static-reference maps while

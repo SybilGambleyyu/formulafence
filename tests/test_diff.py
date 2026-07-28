@@ -15167,6 +15167,41 @@ def test_filter_visibility_free_workbook_has_no_inventory(tmp_path) -> None:
     )
 
 
+def test_filter_visibility_skips_empty_column_state_expansion(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Columnless sheets should not scan Excel's full column space."""
+    ordinary = make_model(tmp_path / "ordinary.xlsx")
+    default_hidden_width = make_zero_dimension_visibility_model(
+        tmp_path / "default-hidden-width.xlsx"
+    )
+    change_default_zero_dimension_visibility_controls(default_hidden_width)
+
+    def unexpected_column_state_expansion(*_args, **_kwargs):
+        raise AssertionError("column state expansion should not run without <cols>")
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_filter_visibility_column_state_signature",
+        unexpected_column_state_expansion,
+    )
+
+    ordinary_snapshot = load_snapshot(ordinary)
+    default_hidden_width_snapshot = load_snapshot(default_hidden_width)
+
+    assert ordinary_snapshot.filter_visibility_controls.present is False
+    assert (
+        default_hidden_width_snapshot.filter_visibility_controls
+        .default_zero_width_sheet_count
+        == 1
+    )
+    assert (
+        default_hidden_width_snapshot.filter_visibility_controls.zero_width_column_count
+        == 16_384
+    )
+
+
 def test_number_format_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
     baseline = make_number_format_model(tmp_path / "baseline.xlsx")
     candidate = make_number_format_model(tmp_path / "candidate.xlsx")

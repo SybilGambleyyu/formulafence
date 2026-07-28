@@ -23851,100 +23851,130 @@ def _filter_visibility_metadata(path: Path) -> _FilterVisibilityMetadata:
                     default_zero_width_sheet_count += default_zero_width
                     unrecognized_control_count += bool(sheet_format_issues)
 
-                column_issues: set[str] = set()
                 column_sets = worksheet.findall(cols_tag)
-                hidden_columns = bytearray(MAX_EXCEL_COLUMN + 1)
-                outline_levels = bytearray(MAX_EXCEL_COLUMN + 1)
-                collapsed_columns = bytearray(MAX_EXCEL_COLUMN + 1)
-                zero_width_columns = bytearray(MAX_EXCEL_COLUMN + 1)
-                if default_zero_width:
-                    zero_width_columns[1:] = bytes([1]) * MAX_EXCEL_COLUMN
-                for columns in column_sets:
-                    if not list(columns):
-                        column_issues.add("empty-column-information")
-                    if (columns.text or "").strip():
-                        column_issues.add("unexpected-column-information-text")
-                    for column in columns:
-                        if column.tag != col_tag:
-                            column_issues.add("unsupported-column-information-child")
-                            continue
-                        captured_column = _filter_visibility_column_control(
-                            column,
-                            issues=column_issues,
-                        )
-                        if captured_column is None:
-                            continue
-                        (
-                            minimum,
-                            maximum,
-                            hidden,
-                            outline_level,
-                            collapsed,
-                            zero_width,
-                        ) = captured_column
-                        attribute_count = sum(
-                            value is not None
-                            for value in (hidden, outline_level, collapsed, zero_width)
-                        )
-                        if not attribute_count:
-                            continue
-                        span = maximum - minimum + 1
-                        if (
-                            column_update_count + span * attribute_count
-                            > _FILTER_VISIBILITY_COLUMN_UPDATE_BUDGET
-                        ):
-                            column_issues.add("column-visibility-update-budget")
-                            continue
-                        if hidden is not None:
-                            hidden_columns[minimum : maximum + 1] = (
-                                bytes([int(hidden)]) * span
-                            )
-                        if outline_level is not None:
-                            outline_levels[minimum : maximum + 1] = (
-                                bytes([outline_level]) * span
-                            )
-                        if collapsed is not None:
-                            collapsed_columns[minimum : maximum + 1] = (
-                                bytes([int(collapsed)]) * span
-                            )
-                        if zero_width is not None:
-                            zero_width_columns[minimum : maximum + 1] = (
-                                bytes([int(zero_width)]) * span
-                            )
-                        column_update_count += span * attribute_count
-                column_signature = _filter_visibility_column_state_signature(
-                    hidden_columns,
-                    outline_levels,
-                    collapsed_columns,
-                    zero_width_columns,
-                )
-                if column_signature:
-                    entries.append(
-                        (
-                            f"column-visibility:{sheet.casefold()}",
-                            repr(column_signature),
-                        )
-                    )
-                hidden_column_count += sum(hidden_columns)
-                zero_width_column_count += sum(zero_width_columns)
-                outlined_column_count += sum(level > 0 for level in outline_levels)
-                collapsed_column_count += sum(collapsed_columns)
-                if column_issues:
-                    entries.append(
-                        (
-                            f"column-visibility-issues:{sheet.casefold()}",
-                            _private_payload_signature(
-                                b"".join(
-                                    ElementTree.tostring(
-                                        columns,
-                                        encoding="utf-8",
+                if not column_sets:
+                    # Ordinary sheets have no column controls. Avoid expanding
+                    # four 16,384-column state arrays merely to prove that.
+                    # A zero-width default is the one effective all-column
+                    # control possible without a <cols> declaration.
+                    if default_zero_width:
+                        entries.append(
+                            (
+                                f"column-visibility:{sheet.casefold()}",
+                                repr(
+                                    (
+                                        (
+                                            1,
+                                            MAX_EXCEL_COLUMN,
+                                            False,
+                                            0,
+                                            False,
+                                            True,
+                                        ),
                                     )
-                                    for columns in column_sets
-                                )
-                            ),
+                                ),
+                            )
                         )
+                        zero_width_column_count += MAX_EXCEL_COLUMN
+                else:
+                    column_issues: set[str] = set()
+                    hidden_columns = bytearray(MAX_EXCEL_COLUMN + 1)
+                    outline_levels = bytearray(MAX_EXCEL_COLUMN + 1)
+                    collapsed_columns = bytearray(MAX_EXCEL_COLUMN + 1)
+                    zero_width_columns = bytearray(MAX_EXCEL_COLUMN + 1)
+                    if default_zero_width:
+                        zero_width_columns[1:] = bytes([1]) * MAX_EXCEL_COLUMN
+                    for columns in column_sets:
+                        if not list(columns):
+                            column_issues.add("empty-column-information")
+                        if (columns.text or "").strip():
+                            column_issues.add("unexpected-column-information-text")
+                        for column in columns:
+                            if column.tag != col_tag:
+                                column_issues.add("unsupported-column-information-child")
+                                continue
+                            captured_column = _filter_visibility_column_control(
+                                column,
+                                issues=column_issues,
+                            )
+                            if captured_column is None:
+                                continue
+                            (
+                                minimum,
+                                maximum,
+                                hidden,
+                                outline_level,
+                                collapsed,
+                                zero_width,
+                            ) = captured_column
+                            attribute_count = sum(
+                                value is not None
+                                for value in (
+                                    hidden,
+                                    outline_level,
+                                    collapsed,
+                                    zero_width,
+                                )
+                            )
+                            if not attribute_count:
+                                continue
+                            span = maximum - minimum + 1
+                            if (
+                                column_update_count + span * attribute_count
+                                > _FILTER_VISIBILITY_COLUMN_UPDATE_BUDGET
+                            ):
+                                column_issues.add("column-visibility-update-budget")
+                                continue
+                            if hidden is not None:
+                                hidden_columns[minimum : maximum + 1] = (
+                                    bytes([int(hidden)]) * span
+                                )
+                            if outline_level is not None:
+                                outline_levels[minimum : maximum + 1] = (
+                                    bytes([outline_level]) * span
+                                )
+                            if collapsed is not None:
+                                collapsed_columns[minimum : maximum + 1] = (
+                                    bytes([int(collapsed)]) * span
+                                )
+                            if zero_width is not None:
+                                zero_width_columns[minimum : maximum + 1] = (
+                                    bytes([int(zero_width)]) * span
+                                )
+                            column_update_count += span * attribute_count
+                    column_signature = _filter_visibility_column_state_signature(
+                        hidden_columns,
+                        outline_levels,
+                        collapsed_columns,
+                        zero_width_columns,
                     )
-                    unrecognized_control_count += 1
+                    if column_signature:
+                        entries.append(
+                            (
+                                f"column-visibility:{sheet.casefold()}",
+                                repr(column_signature),
+                            )
+                        )
+                    hidden_column_count += sum(hidden_columns)
+                    zero_width_column_count += sum(zero_width_columns)
+                    outlined_column_count += sum(level > 0 for level in outline_levels)
+                    collapsed_column_count += sum(collapsed_columns)
+                    if column_issues:
+                        entries.append(
+                            (
+                                f"column-visibility-issues:{sheet.casefold()}",
+                                _private_payload_signature(
+                                    b"".join(
+                                        ElementTree.tostring(
+                                            columns,
+                                            encoding="utf-8",
+                                        )
+                                        for columns in column_sets
+                                    )
+                                ),
+                            )
+                        )
+                        unrecognized_control_count += 1
 
                 auto_filters = worksheet.findall(auto_filter_tag)
                 for auto_filter in auto_filters:

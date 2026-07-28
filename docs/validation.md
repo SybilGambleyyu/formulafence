@@ -5,6 +5,31 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Columnless worksheet visibility fast path — 2026-07-28
+
+Version 0.177.0 removes an avoidable fixed scan from raw visibility metadata
+inspection. Before this release, every worksheet allocated four 16,385-byte
+column-state buffers, summed them, and scanned all 16,384 Excel columns to
+produce a canonical signature even when its SpreadsheetML contained no
+`<cols>` declaration. FormulaFence now bypasses that no-op path. A
+`defaultColWidth="0"` declaration without `<cols>` still emits the exact
+all-column canonical signature and 16,384 zero-width-column count, while an
+empty, malformed, or populated `<cols>` container remains on the existing
+fail-closed parser path.
+
+For a controlled valid 232,295-byte `.xlsx` at the 512-sheet semantic-reader
+limit, with one `=1` formula in each worksheet and no column declarations, the
+public 0.176.0 wheel emitted a 122,090-byte JSON profile (SHA-256
+`27a6737a6f3ba3c2f9e3c70f94326da2cccd78f42900e459e70e1001adb81361`) in
+9.74 seconds. The 0.177.0 candidate emitted the byte-identical profile in
+7.72 seconds: 2.02 seconds, or about 20.7%, less elapsed time. A separate
+columnless default-zero-width fixture has byte-identical public-release
+profile and diff artifacts, including the 16,384-column effective count.
+The structural regression makes the full-state signature function raise if a
+columnless worksheet reaches it. The full source suite passed 1,292 tests in
+192.71 seconds with no failures, errors, or skips; bytecode compilation, Ruff,
+and whitespace checks were clean.
+
 ## Live external formula-defined-name endpoint views — 2026-07-28
 
 Version 0.176.0 removes a remaining quadratic fixed-point cost in external

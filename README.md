@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.157.0/formulafence-0.157.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.158.0/formulafence-0.158.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.157.0
+  uses: SybilGambleyyu/formulafence@v0.158.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2669,6 +2669,16 @@ are 1 MiB of source, 4,096 YAML nodes, 64 nesting levels, 4,096 characters per
 scalar, and 512 selectors in each selector list. See the [policy
 reference](docs/policy.md#policy-file-safety-and-syntax) for the supported
 syntax and the [threat model](docs/threat-model.md) for the CI boundary.
+
+For each snapshot, FormulaFence first materializes one bounded private copy of
+the regular workbook source. The archive preflight, semantic-reader gate, raw
+OOXML scanners, ordinary workbook reader, and snapshot `sha256` all operate on
+that one inspected copy; the snapshot's visible path remains the path supplied
+by the caller. A later replacement of that pathname therefore cannot mix
+preflight evidence from one workbook with report evidence from another. This is
+not a lock on a producer that edits a file in place: use atomic artifact
+handoff and isolated workspace permissions when source-producer integrity is a
+requirement.
 
 Every `.xlsx` and `.xlsm` source passes a fail-closed OOXML archive preflight
 before FormulaFence reads an OOXML part or opens the workbook reader. The

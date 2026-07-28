@@ -154,6 +154,7 @@ _SUPPORTED_SUFFIXES = {".xlsx", ".xlsm"}
 # support for the existing 512 MiB Power Pivot data-part allowance while
 # placing a finite ceiling around untrusted CI inputs.
 _OOXML_ARCHIVE_MAX_SOURCE_BYTES = 1 * 1024 * 1024 * 1024
+_OOXML_SOURCE_SNAPSHOT_COPY_BLOCK_BYTES = 1 * 1024 * 1024
 _OOXML_ARCHIVE_MAX_CENTRAL_DIRECTORY_BYTES = 32 * 1024 * 1024
 _OOXML_ARCHIVE_MAX_ENTRY_COUNT = 4_096
 _OOXML_ARCHIVE_MAX_MEMBER_NAME_BYTES = 1_024
@@ -51380,16 +51381,94 @@ def _structured_table_map(tables: dict[str, TableSnapshot]) -> dict[str, Structu
     }
 
 
+def _remove_stable_workbook_source(path: Path) -> None:
+    """Best-effort cleanup for a private inspection copy."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _materialize_stable_workbook_source(source: Path) -> Path:
+    """Copy one bounded regular file before any repeated workbook inspection."""
+    temporary_path: Path | None = None
+    completed = False
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix="formulafence-source-",
+            suffix=source.suffix,
+        )
+        temporary_path = Path(temporary_name)
+        input_flags = (
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+        )
+        copied_bytes = 0
+        remaining_bytes = _OOXML_ARCHIVE_MAX_SOURCE_BYTES + 1
+        with os.fdopen(descriptor, "wb") as destination:
+            source_descriptor = os.open(source, input_flags)
+            try:
+                source_file = os.fdopen(source_descriptor, "rb")
+            except BaseException:
+                os.close(source_descriptor)
+                raise
+            with source_file:
+                source_stat = os.fstat(source_file.fileno())
+                if not stat.S_ISREG(source_stat.st_mode):
+                    raise WorkbookLoadError("Workbook source is not a regular file.")
+                if source_stat.st_size > _OOXML_ARCHIVE_MAX_SOURCE_BYTES:
+                    raise _archive_preflight_error(
+                        "source size exceeds the supported safety limit."
+                    )
+                while remaining_bytes:
+                    block = source_file.read(
+                        min(_OOXML_SOURCE_SNAPSHOT_COPY_BLOCK_BYTES, remaining_bytes)
+                    )
+                    if not block:
+                        break
+                    if copied_bytes + len(block) > _OOXML_ARCHIVE_MAX_SOURCE_BYTES:
+                        raise _archive_preflight_error(
+                            "source size exceeds the supported safety limit."
+                        )
+                    destination.write(block)
+                    copied_bytes += len(block)
+                    remaining_bytes -= len(block)
+        completed = True
+        return temporary_path
+    except OSError as error:
+        raise WorkbookLoadError(
+            "Could not create a stable private copy of the workbook source."
+        ) from error
+    finally:
+        if not completed and temporary_path is not None:
+            _remove_stable_workbook_source(temporary_path)
+
+
 def load_snapshot(path: str | Path) -> WorkbookSnapshot:
-    """Load a workbook as a semantic snapshot without evaluating its contents."""
-    source = Path(path)
-    if not source.exists() or not source.is_file():
-        raise WorkbookLoadError(f"Workbook does not exist or is not a file: {source}")
-    if source.suffix.lower() not in _SUPPORTED_SUFFIXES:
+    """Load one immutable workbook snapshot without evaluating its contents."""
+    reported_source = Path(path)
+    if not reported_source.exists() or not reported_source.is_file():
+        raise WorkbookLoadError(
+            f"Workbook does not exist or is not a file: {reported_source}"
+        )
+    if reported_source.suffix.lower() not in _SUPPORTED_SUFFIXES:
         supported = ", ".join(sorted(_SUPPORTED_SUFFIXES))
         raise WorkbookLoadError(
-            f"Unsupported workbook type {source.suffix!r}; supported types: {supported}"
+            "Unsupported workbook type "
+            f"{reported_source.suffix!r}; supported types: {supported}"
         )
+
+    source = _materialize_stable_workbook_source(reported_source)
+    try:
+        return _load_snapshot_from_stable_source(source, reported_source)
+    finally:
+        _remove_stable_workbook_source(source)
+
+
+def _load_snapshot_from_stable_source(
+    source: Path,
+    reported_source: Path,
+) -> WorkbookSnapshot:
+    """Inspect only the private source copy materialized for one snapshot."""
 
     archive_members = _validate_ooxml_archive(source)
     _validate_ooxml_semantic_reader_resources(source, archive_members)
@@ -51463,7 +51542,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         TypeError,
         ValueError,
     ) as error:
-        raise WorkbookLoadError(f"Could not read workbook {source}: {error}") from error
+        raise WorkbookLoadError(
+            f"Could not read workbook {reported_source}: {error}"
+        ) from error
     finally:
         if temporary_reader_source is not None:
             try:
@@ -52605,9 +52686,9 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
     )
 
     return WorkbookSnapshot(
-        path=source,
+        path=reported_source,
         sha256=sha256_file(source),
-        file_type=source.suffix.lower().lstrip("."),
+        file_type=reported_source.suffix.lower().lstrip("."),
         sheets=sheets,
         cells=cells,
         reverse_dependencies=dict(reverse_dependencies),

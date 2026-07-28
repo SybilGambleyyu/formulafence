@@ -116,8 +116,19 @@ financial correctness or replace model review.
   workbook input. It accepts one UTF-8 YAML document with ordinary mappings,
   lists, and scalars; duplicate keys, anchors, aliases, and merge keys fail
   closed rather than silently changing a reviewed control.
+- For every workbook snapshot, FormulaFence opens one regular source and makes
+  one bounded private copy before archive preflight. The archive inventory,
+  semantic-reader gate, downstream raw scanners, ordinary reader, and snapshot
+  hash all consume that same copy, while the public snapshot path remains the
+  caller-supplied path. A pathname replacement after materialization therefore
+  cannot make an earlier preflight describe different bytes from later evidence.
+  This establishes an internally coherent inspection artifact; it does not
+  lock a source against an in-place producer write or defend against another
+  process able to modify FormulaFence's private temporary file under the same
+  operating-system identity. Use atomic producer handoff and isolated CI
+  workspace permissions when provenance or writer integrity is in scope.
 - Before any raw OOXML member scanner or `openpyxl` reader runs, FormulaFence
-  performs a bounded, fail-closed inventory of the original ZIP container. It
+  performs a bounded, fail-closed inventory of that private ZIP container. It
   reads only ZIP headers and central-directory metadata at this stage; it does
   not extract members. The inventory requires one canonical single-disk package
   with stored or deflated members, checks central and local-header consistency,

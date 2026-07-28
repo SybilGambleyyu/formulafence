@@ -22371,10 +22371,15 @@ def test_diff_surfaces_new_parser_coverage_warning(tmp_path, monkeypatch) -> Non
     candidate = make_model(tmp_path / "candidate.xlsx")
     import formulafence.workbook as workbook_module
 
+    # The ordinary-reader input is a private stable copy, so distinguish the
+    # otherwise equivalent fixtures by a ZIP-level no-op rather than its path.
+    with ZipFile(candidate, "a") as archive:
+        archive.comment = b"candidate parser-coverage fixture"
+    candidate_sha256 = workbook_module.sha256_file(candidate)
     original_load_workbook = workbook_module.load_workbook
 
     def conditionally_noisy_load_workbook(path, *args, **kwargs):
-        if str(path) == str(candidate):
+        if workbook_module.sha256_file(path) == candidate_sha256:
             warnings.warn("candidate-only unsupported extension", UserWarning, stacklevel=2)
         return original_load_workbook(path, *args, **kwargs)
 

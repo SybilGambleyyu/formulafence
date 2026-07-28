@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Stable workbook source snapshots — 2026-07-28
+
+Version 0.158.0 closes a source-path time-of-check/time-of-use boundary in
+workbook inspection. Earlier releases preflighted a pathname, then reopened
+that pathname for semantic preflight, raw OOXML scanners, the ordinary reader,
+and its final content hash. A concurrent replacement could therefore make the
+preflight describe one package while the resulting snapshot described another.
+
+A deterministic controlled pair used an original workbook whose `Model!B2`
+formula was `=Inputs!B2*2` and a replacement whose formula was
+`=Inputs!B3*2`. A shim that copied the replacement immediately after the public
+0.157.0 wheel's archive preflight produced a snapshot hash matching the
+replacement and the replacement formula. For the 0.158.0 source, a shim copied
+the same replacement to the public pathname immediately after FormulaFence had
+made its private source copy. Its snapshot hash instead matched the original
+and `Model!B2` retained `=Inputs!B2*2`, while the public pathname's final hash
+matched the replacement. The snapshot is consequently internally coherent
+after materialization; it is not a lock against an in-place producer write or a
+same-identity process that can alter the private temporary file.
+
+In fresh processes, ten complete snapshots of a 5,301-byte, two-sheet normal
+control took 0.710387 seconds at 35,432 KiB RSS with the public 0.157.0 wheel
+and 0.716368 seconds at 34,720 KiB RSS with the 0.158.0 source. The source adds
+one bounded 1 MiB-block copy before the existing reader work, with no material
+normal-control memory or elapsed-time regression in this control. Exact
+source-replacement, cleanup-on-preflight-error, source-size fail-before-reader,
+and parser-warning regressions cover the boundary; the complete source suite
+passed 1,221 tests in 200.04 seconds. Release artifacts are separately built
+from the tagged commit, checked with `twine`, installed from both wheel and
+source distribution into fresh environments, and compared against the public
+release bytes.
+
 ## Policy-as-code YAML bounds — 2026-07-26
 
 Version 0.157.0 closes the policy-input boundary used by `check` and

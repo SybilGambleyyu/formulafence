@@ -3,6 +3,7 @@ from __future__ import annotations
 import binascii
 import hashlib
 import io
+import shutil
 import stat
 import struct
 import zipfile
@@ -2007,6 +2008,75 @@ def test_archive_preflight_accepts_a_valid_zip64_workbook(
 
     assert bytes((80, 75, 6, 6)) in workbook.read_bytes()
     assert load_snapshot(workbook).file_type == "xlsx"
+
+
+def test_load_snapshot_uses_one_stable_private_source_after_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "source-race.xlsx")
+    original_sha256 = hashlib.sha256(workbook.read_bytes()).hexdigest()
+    replacement = tmp_path / "replacement.xlsx"
+    shutil.copyfile(workbook, replacement)
+    with ZipFile(replacement) as archive:
+        model_xml = archive.read("xl/worksheets/sheet2.xml")
+    assert b"Inputs!B2*2" in model_xml
+    _replace_member(replacement, "xl/worksheets/sheet2.xml", model_xml.replace(
+        b"Inputs!B2*2", b"Inputs!B3*2", 1
+    ))
+    replacement_sha256 = hashlib.sha256(replacement.read_bytes()).hexdigest()
+    stable_sources: list[Path] = []
+    materialize_source = workbook_module._materialize_stable_workbook_source
+
+    def materialize_then_replace(path: Path) -> Path:
+        stable_source = materialize_source(path)
+        stable_sources.append(stable_source)
+        shutil.copyfile(replacement, path)
+        return stable_source
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_materialize_stable_workbook_source",
+        materialize_then_replace,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.path == workbook
+    assert snapshot.sha256 == original_sha256
+    assert snapshot.cells[("Model", "B2")].formula == "=Inputs!B2*2"
+    assert hashlib.sha256(workbook.read_bytes()).hexdigest() == replacement_sha256
+    assert stable_sources and not stable_sources[0].exists()
+
+
+def test_load_snapshot_removes_stable_private_source_after_preflight_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "private-source-cleanup.xlsx")
+    stable_sources: list[Path] = []
+    materialize_source = workbook_module._materialize_stable_workbook_source
+
+    def materialize_then_record(path: Path) -> Path:
+        stable_source = materialize_source(path)
+        stable_sources.append(stable_source)
+        return stable_source
+
+    def reject_private_source(path: Path):
+        assert stable_sources == [path]
+        raise WorkbookLoadError("controlled private-source preflight failure")
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_materialize_stable_workbook_source",
+        materialize_then_record,
+    )
+    monkeypatch.setattr(workbook_module, "_validate_ooxml_archive", reject_private_source)
+
+    with pytest.raises(WorkbookLoadError, match="controlled private-source"):
+        load_snapshot(workbook)
+
+    assert stable_sources and not stable_sources[0].exists()
 
 
 def test_archive_preflight_rejects_source_size_before_any_zip_reader(

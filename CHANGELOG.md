@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.158.0 — 2026-07-28
+
+- Materialize one bounded private copy of each regular workbook source before
+  archive preflight. The archive inventory, semantic-reader gate, raw OOXML
+  scanners, ordinary workbook reader, and reported content hash now all use the
+  same inspected bytes, while snapshots retain the caller's requested path.
+- Close the source-path replacement window in which a preflighted workbook
+  could be swapped before later scans. The existing 1 GiB package ceiling is
+  enforced while copying; non-regular sources fail closed, and private copies
+  are removed after either success or failure.
+- Add deterministic source-replacement, cleanup-on-preflight-error,
+  fail-before-reader, and parser-warning regressions for the stable-source
+  boundary.
+
 ## 0.157.0 — 2026-07-26
 
 - Bound policy-as-code input before YAML construction or workbook inspection:

@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.159.0
+        uses: SybilGambleyyu/formulafence@v0.160.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -49,6 +49,10 @@ severity values.
 The Action exposes `steps.formulafence.outputs.report-path` and
 `steps.formulafence.outputs.exit-code`. It confines the report plus every
 workbook and policy input to the workspace and refuses to overwrite an input.
+It writes the rendered report to a private temporary file in the destination
+directory, then atomically replaces the final directory entry; a post-check
+final-component symlink or hard link is replaced rather than followed into an
+input. Parent-directory permissions remain part of the workflow's trust boundary.
 It validates a bounded, unambiguous UTF-8 policy before it inspects either
 workbook, so duplicate keys, anchors, aliases, merge keys, or an over-limit
 policy fail the job without spending workbook-reader resources. The policy is
@@ -274,7 +278,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.159.0
+  uses: SybilGambleyyu/formulafence@v0.160.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -378,7 +382,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.159.0/formulafence-0.159.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.160.0/formulafence-0.160.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

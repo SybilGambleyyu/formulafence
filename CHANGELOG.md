@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.160.0 — 2026-07-28
+
+- Publish CLI reports and `init` starter policies through a private temporary
+  file plus atomic replacement instead of writing through the requested final
+  pathname. A final-component symlink or hard link substituted after safety
+  checks is replaced as a directory entry rather than followed into an input.
+- Keep the existing refusal to name an input as report output, preserve
+  `init --force`, and clean up an unpublished temporary file on write or
+  replacement failure.
+- Add end-to-end report-path and starter-policy symlink-swap regressions, plus
+  an existing-policy `init --force` compatibility regression.
+
 ## 0.159.0 — 2026-07-28
 
 - Read a policy source through one file descriptor, requesting nonblocking mode

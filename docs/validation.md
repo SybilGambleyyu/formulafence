@@ -5,6 +5,36 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Atomic report and policy publication — 2026-07-28
+
+Version 0.160.0 closes the final output-path race after FormulaFence has
+validated that a report will not overwrite an inspected input. Earlier releases
+performed that check, then wrote directly through the report pathname. A
+concurrent final-component symlink replacement could therefore redirect the
+write into a workbook or policy input after it had been inspected.
+
+A deterministic `profile` control began with a normal workbook and an absent
+report path, then substituted a report-path symlink to the workbook immediately
+after the public 0.159.0 output check. The command returned success, left the
+report path as a symlink, and changed the workbook into Markdown. Version
+0.160.0 writes the rendered text to a private same-directory temporary file and
+atomically replaces the final directory entry. Under the identical swap, it
+returned success with the workbook byte-identical and the report path replaced
+by an ordinary report file. Equivalent `init` coverage confirms a swapped
+starter-policy path cannot overwrite a target and that `--force` still replaces
+an existing policy.
+
+In fresh processes, ten JSON profiles of a 5,301-byte normal workbook took
+0.744942 seconds at 38,172 KiB RSS with the public 0.159.0 wheel and 0.744002
+seconds at 38,860 KiB RSS with the 0.160.0 source. The final-entry guard does
+not protect a hostile output parent directory; its permissions remain part of
+the caller's workspace boundary. End-to-end report-swap, starter-policy-swap,
+`init --force`, input-overwrite, and ordinary CLI regressions cover the change.
+The complete source suite passed 1,225 tests in 198.66 seconds. Release
+artifacts are separately built from the tagged commit, checked with `twine`,
+installed from both wheel and source distribution into fresh environments, and
+compared against the public release bytes.
+
 ## Policy source descriptor boundary — 2026-07-28
 
 Version 0.159.0 closes a post-check pathname boundary in policy loading. The

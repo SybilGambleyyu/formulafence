@@ -121,6 +121,13 @@ financial correctness or replace model review.
   stalling a runner. The policy accepts one UTF-8 YAML document with ordinary
   mappings, lists, and scalars; duplicate keys, anchors, aliases, and merge
   keys fail closed rather than silently changing a reviewed control.
+- A CLI report and an `init` starter policy are written first to a private
+  temporary file in the requested destination directory, then published by
+  atomic replacement of the final directory entry. A final-component symlink
+  or hard link swapped in after report-input validation is consequently replaced
+  rather than followed into an inspected input. This protects that final-entry
+  race, not a hostile parent-directory owner or a caller's broader workspace
+  permissions.
 - For every workbook snapshot, FormulaFence opens one regular source and makes
   one bounded private copy before archive preflight. The archive inventory,
   semantic-reader gate, downstream raw scanners, ordinary reader, and snapshot

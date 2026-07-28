@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -336,11 +338,45 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _replace_text_atomically(path: Path, content: str) -> None:
+    """Publish text by replacing the final pathname instead of following it."""
+    descriptor: int | None = None
+    temporary_path: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix="formulafence-output-",
+            suffix=path.suffix,
+            dir=path.parent,
+        )
+        temporary_path = Path(temporary_name)
+        payload = memoryview(content.encode("utf-8"))
+        while payload:
+            written = os.write(descriptor, payload)
+            if written <= 0:
+                raise OSError("Could not write FormulaFence output.")
+            payload = payload[written:]
+        os.close(descriptor)
+        descriptor = None
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def _emit(content: str, output: Path | None) -> None:
     if output is None:
         sys.stdout.write(content)
         return
-    output.write_text(content, encoding="utf-8")
+    _replace_text_atomically(output, content)
 
 
 def _ensure_output_safe(
@@ -712,7 +748,7 @@ def _run_init(arguments: argparse.Namespace) -> int:
         raise FormulaFenceError(
             f"Refusing to replace existing policy: {arguments.path} (use --force to replace it)"
         )
-    arguments.path.write_text(DEFAULT_POLICY, encoding="utf-8")
+    _replace_text_atomically(arguments.path, DEFAULT_POLICY)
     sys.stdout.write(f"Wrote starter FormulaFence policy to {arguments.path}\n")
     return 0
 

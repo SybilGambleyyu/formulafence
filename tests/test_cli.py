@@ -133,6 +133,55 @@ def test_profile_does_not_expose_cell_values(tmp_path) -> None:
     assert '"formula_cells"' in profile
 
 
+def test_profile_output_swap_cannot_overwrite_the_workbook(tmp_path, monkeypatch) -> None:
+    workbook = make_model(tmp_path / "model.xlsx")
+    original_workbook = workbook.read_bytes()
+    output = tmp_path / "profile.md"
+    original_ensure_output_safe = cli_module._ensure_output_safe
+
+    def ensure_then_swap(path, *inputs, **kwargs):
+        original_ensure_output_safe(path, *inputs, **kwargs)
+        assert path == output
+        output.symlink_to(workbook)
+
+    monkeypatch.setattr(cli_module, "_ensure_output_safe", ensure_then_swap)
+
+    assert main(["profile", str(workbook), "--output", str(output)]) == 0
+
+    assert workbook.read_bytes() == original_workbook
+    assert not output.is_symlink()
+    assert output.read_text(encoding="utf-8").startswith("# FormulaFence workbook profile")
+
+
+def test_init_path_swap_cannot_overwrite_a_target_file(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "protected.txt"
+    target.write_text("preserve this file", encoding="utf-8")
+    policy = tmp_path / "formulafence.yml"
+    original_replace_text_atomically = cli_module._replace_text_atomically
+
+    def swap_then_replace(path, content):
+        assert path == policy
+        policy.symlink_to(target)
+        original_replace_text_atomically(path, content)
+
+    monkeypatch.setattr(cli_module, "_replace_text_atomically", swap_then_replace)
+
+    assert main(["init", str(policy)]) == 0
+
+    assert target.read_text(encoding="utf-8") == "preserve this file"
+    assert not policy.is_symlink()
+    assert policy.read_text(encoding="utf-8") == cli_module.DEFAULT_POLICY
+
+
+def test_init_force_replaces_an_existing_policy(tmp_path) -> None:
+    policy = tmp_path / "formulafence.yml"
+    policy.write_text("old policy", encoding="utf-8")
+
+    assert main(["init", str(policy), "--force"]) == 0
+
+    assert policy.read_text(encoding="utf-8") == cli_module.DEFAULT_POLICY
+
+
 def test_cli_can_redact_external_workbook_link_material_from_shared_reports(tmp_path) -> None:
     baseline_marker = "PRIVATE-SHARED-BASELINE"
     candidate_marker = "PRIVATE-SHARED-CANDIDATE"

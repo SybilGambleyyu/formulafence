@@ -10,6 +10,7 @@ portfolio report.
 
 from __future__ import annotations
 
+import stat
 from collections import Counter, defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
@@ -41,7 +42,7 @@ from formulafence.policy import (
     evaluate_portfolio_link_policy,
     evaluate_portfolio_membership_policy,
 )
-from formulafence.workbook import load_snapshot
+from formulafence.workbook import WorkbookSourceIdentity, load_snapshot
 
 _SUPPORTED_SUFFIXES = frozenset({".xlsx", ".xlsm"})
 _UNSUPPORTED_EXCEL_SUFFIXES = frozenset(
@@ -57,6 +58,14 @@ PortfolioNode = tuple[str, CellKey]
 
 class PortfolioError(FormulaFenceError):
     """The supplied portfolio cannot be safely compared."""
+
+
+@dataclass(frozen=True)
+class _PortfolioWorkbookSource:
+    """A workbook path coupled to the regular file observed during inventory."""
+
+    path: Path
+    identity: WorkbookSourceIdentity
 
 
 def _path_sort_key(value: str) -> tuple[str, str]:
@@ -156,14 +165,14 @@ def _resolve_directory(path: str | Path, label: str) -> Path:
     return resolved
 
 
-def discover_workbooks(
+def _discover_portfolio_workbook_sources(
     root: str | Path,
     *,
     label: str,
     max_workbooks: int = _DEFAULT_MAX_WORKBOOKS,
     max_inventory_entries: int = DEFAULT_MAX_INVENTORY_ENTRIES,
-) -> dict[str, Path]:
-    """Return supported workbook files keyed by a stable relative path.
+) -> dict[str, _PortfolioWorkbookSource]:
+    """Return supported inventoried workbook sources keyed by relative path.
 
     Office lock files (``~$*.xlsx``) are transient and intentionally ignored.
     Every other known spreadsheet extension outside FormulaFence's `.xlsx` /
@@ -189,17 +198,18 @@ def discover_workbooks(
         raise PortfolioError(f"Could not inventory {label} portfolio directory.") from error
     candidates.sort(key=lambda item: _path_sort_key(item.as_posix()))
 
-    workbooks: dict[str, Path] = {}
+    workbooks: dict[str, _PortfolioWorkbookSource] = {}
     casefolded_paths: dict[str, str] = {}
     unsupported: list[str] = []
     for candidate in candidates:
         try:
-            if candidate.is_symlink():
+            candidate_stat = candidate.stat(follow_symlinks=False)
+            if stat.S_ISLNK(candidate_stat.st_mode):
                 relative = _safe_relative_path(candidate, resolved_root)
                 raise PortfolioError(
                     f"Refusing symlinked path in {label} portfolio: {relative}"
                 )
-            if not candidate.is_file():
+            if not stat.S_ISREG(candidate_stat.st_mode):
                 continue
         except OSError as error:
             raise PortfolioError(f"Could not inspect a path in {label} portfolio.") from error
@@ -229,7 +239,15 @@ def discover_workbooks(
                 f"{previous} and {relative}"
             )
         casefolded_paths[portable_key] = relative
-        workbooks[relative] = candidate
+        workbooks[relative] = _PortfolioWorkbookSource(
+            path=candidate,
+            identity=WorkbookSourceIdentity(
+                device=candidate_stat.st_dev,
+                inode=candidate_stat.st_ino,
+                changed_at_ns=candidate_stat.st_ctime_ns,
+                size=candidate_stat.st_size,
+            ),
+        )
 
     if unsupported:
         shown = ", ".join(unsupported[:5])
@@ -244,6 +262,28 @@ def discover_workbooks(
             f"exceeding max_workbooks={max_workbooks}."
         )
     return workbooks
+
+
+def discover_workbooks(
+    root: str | Path,
+    *,
+    label: str,
+    max_workbooks: int = _DEFAULT_MAX_WORKBOOKS,
+    max_inventory_entries: int = DEFAULT_MAX_INVENTORY_ENTRIES,
+) -> dict[str, Path]:
+    """Return supported workbook files keyed by a stable relative path.
+
+    This public inventory view intentionally exposes paths for callers that
+    only need to inspect membership. Portfolio comparison keeps the matching
+    private file identities and validates them when it later opens each file.
+    """
+    sources = _discover_portfolio_workbook_sources(
+        root,
+        label=label,
+        max_workbooks=max_workbooks,
+        max_inventory_entries=max_inventory_entries,
+    )
+    return {relative: source.path for relative, source in sources.items()}
 
 
 def _resolve_relative_external_workbook(
@@ -1073,11 +1113,19 @@ def _unreadable_entry(
     )
 
 
-def _load_portfolio_workbook(path: Path | None) -> tuple[WorkbookSnapshot | None, bool]:
-    if path is None:
+def _load_portfolio_workbook(
+    source: _PortfolioWorkbookSource | None,
+) -> tuple[WorkbookSnapshot | None, bool]:
+    if source is None:
         return None, False
     try:
-        return load_snapshot(path), False
+        return (
+            load_snapshot(
+                source.path,
+                expected_source_identity=source.identity,
+            ),
+            False,
+        )
     except Exception:  # noqa: BLE001 - malformed workbooks must not erase portfolio evidence
         return None, True
 
@@ -1100,13 +1148,13 @@ def compare_portfolios(
     """
     if max_link_impact < 1:
         raise PortfolioError("max_link_impact must be at least 1.")
-    baseline = discover_workbooks(
+    baseline = _discover_portfolio_workbook_sources(
         baseline_directory,
         label="baseline",
         max_workbooks=max_workbooks,
         max_inventory_entries=max_inventory_entries,
     )
-    candidate = discover_workbooks(
+    candidate = _discover_portfolio_workbook_sources(
         candidate_directory,
         label="candidate",
         max_workbooks=max_workbooks,

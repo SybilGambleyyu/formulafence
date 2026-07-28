@@ -12,6 +12,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.table import Table
 
+import formulafence.portfolio as portfolio_module
 from formulafence.cli import build_parser, main
 from formulafence.models import ExternalWorkbookStructuredReference
 from formulafence.output import as_json, portfolio_to_markdown, portfolio_to_sarif
@@ -2050,6 +2051,88 @@ def test_portfolio_inventory_refuses_symlinked_paths(tmp_path: Path) -> None:
 
     with pytest.raises(PortfolioError, match="symlinked path"):
         discover_workbooks(baseline, label="baseline")
+
+
+@pytest.mark.parametrize(
+    "replacement_mode",
+    ("in-place", "regular", "symlink"),
+)
+def test_portfolio_marks_a_workbook_unreadable_when_its_source_changes_after_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_mode: str,
+) -> None:
+    baseline, candidate = _portfolio_pair(tmp_path)
+    inventoried_source = baseline / "models" / "shared.xlsx"
+    replacement = make_model(tmp_path / "outside.xlsx")
+    replacement_workbook = load_workbook(replacement)
+    replacement_workbook["Model"]["B2"] = "=Inputs!B3*2"
+    replacement_workbook.save(replacement)
+    original_load_snapshot = portfolio_module.load_snapshot
+    swapped = False
+
+    def swap_then_load(path: Path, **kwargs: object):
+        nonlocal swapped
+        if Path(path) == inventoried_source:
+            if replacement_mode == "in-place":
+                shutil.copyfile(replacement, inventoried_source)
+            else:
+                inventoried_source.unlink()
+            if replacement_mode == "symlink":
+                inventoried_source.symlink_to(replacement)
+            elif replacement_mode == "regular":
+                shutil.copyfile(replacement, inventoried_source)
+            swapped = True
+        return original_load_snapshot(path, **kwargs)
+
+    monkeypatch.setattr(portfolio_module, "load_snapshot", swap_then_load)
+
+    report = compare_portfolios(baseline, candidate)
+    entry = report.workbooks[0]
+
+    assert swapped
+    assert inventoried_source.is_symlink() is (replacement_mode == "symlink")
+    assert report.incomplete
+    assert entry.status == "unreadable"
+    assert entry.before is None
+    assert entry.after is not None
+    assert {finding.rule_id for finding in entry.findings} == {"FF078"}
+
+
+def test_portfolio_cli_preserves_incomplete_evidence_for_a_late_source_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline, candidate = _portfolio_pair(tmp_path)
+    inventoried_source = baseline / "models" / "shared.xlsx"
+    replacement = make_model(tmp_path / "replacement.xlsx")
+    original_load_snapshot = portfolio_module.load_snapshot
+    replaced = False
+
+    def replace_then_load(path: Path, **kwargs: object):
+        nonlocal replaced
+        if Path(path) == inventoried_source:
+            shutil.copyfile(replacement, inventoried_source)
+            replaced = True
+        return original_load_snapshot(path, **kwargs)
+
+    monkeypatch.setattr(portfolio_module, "load_snapshot", replace_then_load)
+    output = tmp_path / "portfolio.md"
+
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline),
+                str(candidate),
+                "--output",
+                str(output),
+            ]
+        )
+        == 2
+    )
+    assert replaced
+    assert "FF078" in output.read_text(encoding="utf-8")
 
 
 def test_portfolio_inventory_refuses_case_colliding_paths(tmp_path: Path) -> None:

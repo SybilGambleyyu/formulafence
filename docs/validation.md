@@ -5,6 +5,35 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Portfolio source-identity binding — 2026-07-28
+
+Version 0.163.0 closes the remaining inventory-to-read path window in directory
+portfolios. Earlier releases rejected symlinks during recursive inventory, but
+retained a pathname and opened it later while comparing workbooks. A concurrent
+producer could replace that file after inventory with a new regular file or a
+symlink, causing the report to inspect a different workbook than the one whose
+relative membership had been reviewed.
+
+Each retained regular workbook now carries the device, inode, change timestamp,
+and size observed during inventory. The later read requests a no-follow final
+component where the host supports it, verifies the opened descriptor still has
+that observed state, then makes the existing bounded private inspection copy.
+Any in-place rewrite, new regular file, or symlink substitution becomes redacted
+`FF078` incomplete evidence and exit code `2`; the report remains available for
+the rest of the portfolio.
+
+On one ordinary baseline/candidate workbook pair, 20 complete portfolio
+comparisons took 2.100858 seconds at 37,504 KiB RSS with the public 0.162.0
+wheel and 2.148245 seconds at 37,540 KiB with the 0.163.0 candidate. In the
+controlled late-replacement path, 0.162 reported
+`incomplete=False, status=changed`; 0.163 reported
+`incomplete=True, status=unreadable, findings=FF078`. The final source suite
+passed 1,238 tests in 201.81 seconds, with Ruff, bytecode compilation,
+Action-shell syntax, and whitespace checks clean. The final wheel and source
+distribution passed `twine check`. Fresh isolated installs of both passed
+`pip check`, version, normal/hostile-policy, exact/overflow-inventory, and
+direct/CLI late-source-change controls.
+
 ## Bounded portfolio filesystem inventories — 2026-07-28
 
 Version 0.162.0 closes a portfolio discovery allocation gap. The prior

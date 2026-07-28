@@ -277,9 +277,12 @@ financial correctness or replace model review.
   case, and bounds each directory to 512 supported workbooks plus 32,768 raw
   filesystem entries by default. The raw-entry budget is applied before paths
   are retained or sorted, so arbitrary non-workbook files and directories cannot
-  create an unbounded inventory; both limits are caller-configurable. A malformed
-  supported file produces redacted `FF078` evidence and a final incomplete exit
-  status, while remaining paths are still reported.
+  create an unbounded inventory; both limits are caller-configurable. For every
+  retained workbook, the later private-copy read verifies the observed regular
+  file's identity and state, requesting a no-follow final component where the
+  host supports it. A post-inventory in-place rewrite, regular-file replacement,
+  or symlink substitution produces redacted `FF078` evidence and a final
+  incomplete exit status, while remaining paths are still reported.
 - Cross-workbook portfolio impact evidence is candidate-only and local to the
   supplied inventory. FormulaFence retains raw external source spellings and
   package targets only as private parser state, then resolves a direct static

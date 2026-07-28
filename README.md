@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.162.0/formulafence-0.162.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.163.0/formulafence-0.163.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.162.0
+  uses: SybilGambleyyu/formulafence@v0.163.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -530,6 +530,11 @@ entries per directory. The entry budget is enforced before FormulaFence retains
 or sorts paths, so non-workbook files, directories, lock files, and symlinks
 cannot make a broad CI directory consume an unbounded inventory. Tune the
 separate limits with `--max-workbooks` and `--max-inventory-entries`.
+For every retained workbook, FormulaFence also records the observed regular-file
+identity and state before comparison. Its later private snapshot read verifies
+that observation and refuses a late in-place rewrite, regular-file replacement,
+or symlink replacement as redacted `FF078` incomplete evidence rather than
+following a newly redirected path.
 Cross-workbook traversal has a separate global bound of 100,000 source-to-node
 graph states, configurable with `--max-link-impact`; an exhausted bound emits
 critical `FF080` and returns exit code `2` rather than claiming complete impact
@@ -2694,10 +2699,16 @@ the regular workbook source. The archive preflight, semantic-reader gate, raw
 OOXML scanners, ordinary workbook reader, and snapshot `sha256` all operate on
 that one inspected copy; the snapshot's visible path remains the path supplied
 by the caller. A later replacement of that pathname therefore cannot mix
-preflight evidence from one workbook with report evidence from another. This is
-not a lock on a producer that edits a file in place: use atomic artifact
-handoff and isolated workspace permissions when source-producer integrity is a
-requirement.
+preflight evidence from one workbook with report evidence from another. This
+direct-snapshot process is not a lock on a producer that edits a file in place:
+use atomic artifact handoff and isolated workspace permissions when
+source-producer integrity is a requirement.
+
+Portfolio scans additionally bind each later source opening to the regular file
+and state observed while they built the bounded directory inventory. A source
+that changes in place or is replaced after inventory is reported as unreadable,
+so a report cannot silently switch to a newly named workbook between membership
+review and semantic inspection.
 
 Every `.xlsx` and `.xlsm` source passes a fail-closed OOXML archive preflight
 before FormulaFence reads an OOXML part or opens the workbook reader. The

@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.162.0
+        uses: SybilGambleyyu/formulafence@v0.163.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -278,7 +278,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.162.0
+  uses: SybilGambleyyu/formulafence@v0.163.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -303,6 +303,12 @@ the entry count is enforced before paths are retained or sorted, including
 ordinary non-workbook entries. The Action also passes `max-link-impact` to the
 candidate-only static cross-workbook graph; its default is 100,000
 source-to-node states across the portfolio.
+
+Each supported workbook is coupled to the regular-file identity and state
+observed during that inventory. Before its private snapshot is made, the Action
+verifies that same source rather than following a late replacement; an in-place
+rewrite, regular-file replacement, or symlink substitution becomes redacted
+`FF078` incomplete evidence and an exit code of `2`.
 
 When an exact relative external A1 link, 3-D span such as
 `=[Inputs.xlsx]Jan:Mar!$B$2`, direct workbook-scoped name such as
@@ -385,7 +391,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.162.0/formulafence-0.162.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.163.0/formulafence-0.163.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import errno
 import hashlib
 import io
 import os
@@ -51389,7 +51390,21 @@ def _remove_stable_workbook_source(path: Path) -> None:
         pass
 
 
-def _materialize_stable_workbook_source(source: Path) -> Path:
+@dataclass(frozen=True)
+class WorkbookSourceIdentity:
+    """Observed regular-file identity and state for a guarded workbook read."""
+
+    device: int
+    inode: int
+    changed_at_ns: int
+    size: int
+
+
+def _materialize_stable_workbook_source(
+    source: Path,
+    *,
+    expected_source_identity: WorkbookSourceIdentity | None = None,
+) -> Path:
     """Copy one bounded regular file before any repeated workbook inspection."""
     temporary_path: Path | None = None
     completed = False
@@ -51402,10 +51417,19 @@ def _materialize_stable_workbook_source(source: Path) -> Path:
         input_flags = (
             os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
         )
+        if expected_source_identity is not None:
+            input_flags |= getattr(os, "O_NOFOLLOW", 0)
         copied_bytes = 0
         remaining_bytes = _OOXML_ARCHIVE_MAX_SOURCE_BYTES + 1
         with os.fdopen(descriptor, "wb") as destination:
-            source_descriptor = os.open(source, input_flags)
+            try:
+                source_descriptor = os.open(source, input_flags)
+            except OSError as error:
+                if expected_source_identity is not None and error.errno == errno.ELOOP:
+                    raise WorkbookLoadError(
+                        "Workbook source changed after portfolio inventory."
+                    ) from error
+                raise
             try:
                 source_file = os.fdopen(source_descriptor, "rb")
             except BaseException:
@@ -51415,6 +51439,17 @@ def _materialize_stable_workbook_source(source: Path) -> Path:
                 source_stat = os.fstat(source_file.fileno())
                 if not stat.S_ISREG(source_stat.st_mode):
                     raise WorkbookLoadError("Workbook source is not a regular file.")
+                # A just-unlinked inode can be reused. Pair its device/inode
+                # with state that a normal writer cannot restore invisibly.
+                if expected_source_identity is not None and (
+                    source_stat.st_dev != expected_source_identity.device
+                    or source_stat.st_ino != expected_source_identity.inode
+                    or source_stat.st_ctime_ns != expected_source_identity.changed_at_ns
+                    or source_stat.st_size != expected_source_identity.size
+                ):
+                    raise WorkbookLoadError(
+                        "Workbook source changed after portfolio inventory."
+                    )
                 if source_stat.st_size > _OOXML_ARCHIVE_MAX_SOURCE_BYTES:
                     raise _archive_preflight_error(
                         "source size exceeds the supported safety limit."
@@ -51443,8 +51478,18 @@ def _materialize_stable_workbook_source(source: Path) -> Path:
             _remove_stable_workbook_source(temporary_path)
 
 
-def load_snapshot(path: str | Path) -> WorkbookSnapshot:
-    """Load one immutable workbook snapshot without evaluating its contents."""
+def load_snapshot(
+    path: str | Path,
+    *,
+    expected_source_identity: WorkbookSourceIdentity | None = None,
+) -> WorkbookSnapshot:
+    """Load one immutable workbook snapshot without evaluating its contents.
+
+    A caller that has already inventoried a portfolio can provide the regular
+    file identity it observed. The final descriptor must still identify that
+    same file state, preventing a later pathname replacement or in-place
+    mutation from widening the portfolio's inspected scope.
+    """
     reported_source = Path(path)
     if not reported_source.exists() or not reported_source.is_file():
         raise WorkbookLoadError(
@@ -51457,7 +51502,13 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             f"{reported_source.suffix!r}; supported types: {supported}"
         )
 
-    source = _materialize_stable_workbook_source(reported_source)
+    if expected_source_identity is None:
+        source = _materialize_stable_workbook_source(reported_source)
+    else:
+        source = _materialize_stable_workbook_source(
+            reported_source,
+            expected_source_identity=expected_source_identity,
+        )
     try:
         return _load_snapshot_from_stable_source(source, reported_source)
     finally:

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.163.0 — 2026-07-28
+
+- Bind every later portfolio workbook read to the regular-file identity and
+  state observed during inventory. The guarded read requests a no-follow final
+  component where the host supports it, then checks the opened descriptor's
+  device, inode, change timestamp, and size before creating its private
+  inspection copy.
+- A late in-place rewrite, new regular file, or symlink replacement now remains
+  explicit redacted `FF078` incomplete evidence instead of silently changing
+  which workbook a portfolio review inspects.
+- Keep the public `discover_workbooks` path mapping stable while retaining the
+  observed identity privately for comparisons, with deterministic regressions
+  for all three post-inventory replacement forms.
+
 ## 0.162.0 — 2026-07-28
 
 - Bound every recursive portfolio directory inventory before FormulaFence

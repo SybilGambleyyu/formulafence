@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.153.0 — 2026-07-26
+
+- Bound every decoded XML character-data node to 1 MiB before ElementTree's
+  ordinary tree builder can join unbounded parser chunks. The shared bounded
+  target covers semantic-reader streams, bounded raw-structure scans, rich-text
+  and rich-data raw streams, array-formula metadata streams, and in-memory
+  OOXML root parsing.
+- Reject an oversized reader-visible text node through the stable
+  semantic-reader safety preflight and CLI status 2. Other bounded raw readers
+  retain their existing fail-closed coverage behavior rather than retaining an
+  opaque text node.
+- Add exact-boundary, one-byte incremental-feed, ordinary-text, CDATA,
+  direct-stream, real-workbook, and fail-before-reader regressions. The limit
+  resets at XML markup boundaries, so adjacent valid text and tail nodes retain
+  their independent allowance.
+
 ## 0.152.0 — 2026-07-26
 
 - Bound every XML opening tag at 128 KiB before ElementTree can construct an

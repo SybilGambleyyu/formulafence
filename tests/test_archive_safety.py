@@ -1591,6 +1591,30 @@ def _append_stylesheet_start_tag_attributes(
     return end - start + len(attributes) + 1
 
 
+def _append_stylesheet_opaque_root_text(
+    path: Path,
+    character_count: int,
+    *,
+    member_name: str = "xl/styles.xml",
+) -> None:
+    """Append an ignored stylesheet-root text node without building a style model."""
+    with ZipFile(path) as archive:
+        stylesheet = archive.read(member_name)
+    closing_offset = stylesheet.rfind(b"</")
+    if closing_offset < 0:
+        raise ValueError("style fixture XML has no closing root tag")
+    opaque_text = (
+        b'<ff:opaque xmlns:ff="urn:formulafence:archive-safety">'
+        + (b"x" * character_count)
+        + b"</ff:opaque>"
+    )
+    _replace_member(
+        path,
+        member_name,
+        stylesheet[:closing_offset] + opaque_text + stylesheet[closing_offset:],
+    )
+
+
 def _append_stylesheet_opaque_root_xml_elements(
     path: Path,
     count: int,
@@ -5327,6 +5351,101 @@ def test_semantic_reader_preflight_rejects_excessive_xml_elements_before_scanner
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "XML element count" in message
+
+
+def test_xml_character_data_budget_accepts_its_exact_boundary_per_text_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_XML_CHARACTER_DATA_CHARACTERS",
+        5,
+    )
+    payload = b"<root><![CDATA[alpha]]><child/>bravo</root>"
+
+    assert (
+        workbook_module._xml_payload_structure_element_count_within_budget(
+            payload,
+            maximum_element_count=2,
+        )
+        == 2
+    )
+    assert workbook_module._xml_root_from_payload(payload).tag == "root"
+
+
+@pytest.mark.parametrize("text", (b"abcdef", b"<![CDATA[abcdef]]>"))
+def test_xml_character_data_budget_rejects_text_and_cdata_overages(
+    text: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_XML_CHARACTER_DATA_CHARACTERS",
+        5,
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_XML_LEXICAL_CHUNK_BYTES", 1)
+    payload = b"<root>" + text + b"</root>"
+
+    assert (
+        workbook_module._xml_payload_structure_element_count_within_budget(
+            payload,
+            maximum_element_count=1,
+        )
+        is None
+    )
+    with pytest.raises(ValueError, match="XML character data"):
+        workbook_module._xml_root_from_payload(payload)
+
+
+def test_semantic_reader_preflight_rejects_oversized_stylesheet_text_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "oversized-stylesheet-text.xlsx")
+    _append_stylesheet_opaque_root_text(workbook, 129)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_XML_CHARACTER_DATA_CHARACTERS",
+        128,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "XML character data" in message
+
+
+def test_stream_reader_reports_an_oversized_text_node_as_a_safety_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "stream-oversized-stylesheet-text.xlsx")
+    _append_stylesheet_opaque_root_text(workbook, 129)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_XML_CHARACTER_DATA_CHARACTERS",
+        128,
+    )
+
+    with ZipFile(workbook) as archive:
+        with pytest.raises(WorkbookLoadError, match="XML character data"):
+            workbook_module._stream_ooxml_reader_xml(archive, "xl/styles.xml")
+
+
+def test_semantic_reader_preflight_accepts_stylesheet_text_at_configured_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "stylesheet-text-at-limit.xlsx")
+    _append_stylesheet_opaque_root_text(workbook, 128)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_XML_CHARACTER_DATA_CHARACTERS",
+        128,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.sheets
 
 
 def test_xml_start_tag_budget_accepts_its_exact_physical_boundary() -> None:

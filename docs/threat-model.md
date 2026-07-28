@@ -137,7 +137,12 @@ financial correctness or replace model review.
   punctuation, and skips quoted delimiters, comments, CDATA, processing
   instructions, and declarations. Bounded raw XML structure scans and
   in-memory OOXML root reads use the same opening-tag check before tree
-  construction. It also limits
+  construction. A custom ElementTree target additionally limits each decoded
+  character-data node to 1 MiB before the ordinary tree builder can retain and
+  join more parser chunks. It covers ordinary text, tails, and CDATA through
+  the shared semantic-reader stream, bounded raw scans, and in-memory root
+  reads; the allowance resets at XML markup boundaries rather than treating a
+  document's unrelated text nodes as one value. It also limits
   populated SpreadsheetML cell records and shared-string entries to 500,000
   each, row-dimension declarations to 16,384 across selected ordinary
   worksheet parts, column-dimension declarations to 16,384, and direct

@@ -5,6 +5,41 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## XML character-data bounds — 2026-07-26
+
+Version 0.153.0 closes the remaining parser-frontier gap after XML start tags
+have passed their lexical limit. ElementTree supplies parsed character data to
+its tree-builder target while parsing, but the ordinary builder joins the
+successive chunks for one text or tail node until an XML markup boundary. That
+means an end-event semantic check is too late for otherwise ignored opaque text.
+FormulaFence now uses a bounded tree-builder target with its defused XML parser:
+each decoded character-data node can retain at most 1 MiB before the next chunk
+is handed to the ordinary builder. The same target covers semantic-reader
+streams, raw XML structure scans, rich-text/rich-data/array-formula streams,
+and in-memory OOXML root reads. The public
+[ElementTree parsing documentation](https://docs.python.org/3/library/xml.etree.elementtree.html)
+describes parser targets and incremental parsing; the limit is an allocation
+boundary, not an OOXML validity rule.
+
+A controlled raw-ZIP fixture started from the normal 4,835-byte workbook and
+appended one ignored `ff:opaque` Styles-root child with 20,000,000 base64
+characters. Its `xl/styles.xml` expanded to 20,002,693 bytes and the package
+to 15,154,612 bytes, avoiding the ZIP ratio gate so the parser path could be
+measured. In fresh processes, the exact released 0.152.0 wheel accepted the
+fixture in 1.500564 seconds at 88,792 KiB RSS. The 0.153.0 source rejected it
+in 0.087663 seconds at 35,492 KiB RSS with the stable XML-character-data
+safety-preflight error. The normal control remained accepted in 0.053025
+seconds / 35,224 KiB RSS, versus 0.051307 / 35,160 for the released wheel.
+
+Exact-boundary, one-byte incremental-feed, ordinary-text, CDATA, independent
+text/tail-node, direct-stream, real-workbook, and fail-before-reader
+regressions cover the target. The archive-safety suite passed 284 tests, and
+the complete source suite passed 1,153 tests in 191.38 seconds.
+Twine metadata checks passed for the wheel and sdist. Fresh isolated wheel and
+sdist installs each accepted the normal control and rejected the hostile
+workbook through the CLI with status 2 and the XML-character-data
+safety-preflight error.
+
 ## XML opening-tag attribute bounds — 2026-07-26
 
 Version 0.152.0 closes the parser-frontier allocation gap left by structural

@@ -20,6 +20,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TypeVar
+from xml.etree.ElementTree import TreeBuilder as _ElementTreeBuilder
 from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
 from defusedxml import ElementTree
@@ -371,6 +372,13 @@ _OOXML_READER_MAX_XML_START_TAG_BYTES = 128 * 1024
 _OOXML_READER_XML_LEXICAL_CHUNK_BYTES = 64 * 1024
 _OOXML_READER_XML_START_TAG_DELIMITER_PATTERN = re.compile(br"""[>"']""")
 _OOXML_READER_XML_DECLARATION_DELIMITER_PATTERN = re.compile(br"""["'\[\]>]""")
+# ElementTree gives its target character data incrementally, but its ordinary
+# tree builder accumulates all chunks for one text node until the next XML
+# boundary. Keep that parser-side buffer small before an end-event callback can
+# inspect text-based semantic limits. Spreadsheet cell and formula payloads
+# have much smaller established ceilings; this leaves a generous allowance for
+# ordinary OOXML metadata while stopping opaque text amplification.
+_OOXML_READER_MAX_XML_CHARACTER_DATA_CHARACTERS = 1 * 1024 * 1024
 _OOXML_READER_MAX_SHARED_STRING_COUNT = 500_000
 # ``Stylesheet.from_tree`` dispatches its direct children by local name, then
 # eagerly builds lists for number formats, fonts, fills, borders, base/effective
@@ -3602,6 +3610,68 @@ def _spreadsheetml_tags(*local_names: str) -> frozenset[str]:
     )
 
 
+class _OoxmlXmlCharacterDataLimitError(ValueError):
+    """Signal a text node that would make the XML tree builder retain too much."""
+
+
+class _BoundedOoxmlXmlTreeBuilder(_ElementTreeBuilder):
+    """Stop one XML character-data node before the tree builder joins its chunks."""
+
+    def __init__(
+        self,
+        maximum_character_data_characters: int | None = None,
+    ) -> None:
+        super().__init__()
+        self._maximum_character_data_characters = (
+            _OOXML_READER_MAX_XML_CHARACTER_DATA_CHARACTERS
+            if maximum_character_data_characters is None
+            else maximum_character_data_characters
+        )
+        self._current_character_data_characters = 0
+
+    def start(self, tag, attributes):
+        self._current_character_data_characters = 0
+        return super().start(tag, attributes)
+
+    def data(self, data):
+        self._current_character_data_characters += len(data)
+        if (
+            self._current_character_data_characters
+            > self._maximum_character_data_characters
+        ):
+            raise _OoxmlXmlCharacterDataLimitError
+        return super().data(data)
+
+    def end(self, tag):
+        element = super().end(tag)
+        self._current_character_data_characters = 0
+        return element
+
+
+def _ooxml_xml_parser_with_character_data_budget():
+    """Build the defused parser with incremental character-data protection."""
+    return ElementTree.XMLParser(target=_BoundedOoxmlXmlTreeBuilder())
+
+
+def _iterparse_ooxml_xml_with_character_data_budget(xml_stream):
+    """Iterate XML events without letting one text node grow unbounded."""
+    return ElementTree.iterparse(
+        xml_stream,
+        events=("start", "end"),
+        parser=_ooxml_xml_parser_with_character_data_budget(),
+    )
+
+
+def _iterparse_ooxml_reader_xml(xml_stream):
+    """Yield reader XML events while turning a text overage into a stable error."""
+    try:
+        yield from _iterparse_ooxml_xml_with_character_data_budget(xml_stream)
+    except _OoxmlXmlCharacterDataLimitError as error:
+        raise _reader_preflight_error(
+            "XML character data exceeds the semantic-reader safety limit."
+        ) from error
+
+
 def _xml_ascii_start_tags_within_budget(
     xml_stream,
     initial: bytes,
@@ -4059,10 +4129,7 @@ def _stream_ooxml_reader_xml(
     elements: list[ElementTree.Element] = []
     tags: list[str] = []
     with archive.open(member) as xml_stream:
-        for event, element in ElementTree.iterparse(
-            xml_stream,
-            events=("start", "end"),
-        ):
+        for event, element in _iterparse_ooxml_reader_xml(xml_stream):
             if event == "start":
                 depth += 1
                 if depth > _OOXML_READER_MAX_XML_NESTING_DEPTH:
@@ -4106,27 +4173,29 @@ def _ooxml_xml_structure_element_count_within_budget(
     depth = 0
     element_count = 0
     elements: list[ElementTree.Element] = []
-    with archive.open(member) as xml_stream:
-        for event, element in ElementTree.iterparse(
-            xml_stream,
-            events=("start", "end"),
-        ):
-            if event == "start":
-                depth += 1
-                element_count += 1
-                if (
-                    depth > maximum_nesting_depth
-                    or element_count > maximum_element_count
-                ):
-                    return None
-                elements.append(element)
-                continue
-            parent = elements[-2] if len(elements) > 1 else None
-            if parent is not None:
-                parent.remove(element)
-            element.clear()
-            elements.pop()
-            depth -= 1
+    try:
+        with archive.open(member) as xml_stream:
+            for event, element in _iterparse_ooxml_xml_with_character_data_budget(
+                xml_stream
+            ):
+                if event == "start":
+                    depth += 1
+                    element_count += 1
+                    if (
+                        depth > maximum_nesting_depth
+                        or element_count > maximum_element_count
+                    ):
+                        return None
+                    elements.append(element)
+                    continue
+                parent = elements[-2] if len(elements) > 1 else None
+                if parent is not None:
+                    parent.remove(element)
+                element.clear()
+                elements.pop()
+                depth -= 1
+    except _OoxmlXmlCharacterDataLimitError:
+        return None
     return element_count
 
 
@@ -4142,27 +4211,29 @@ def _xml_payload_structure_element_count_within_budget(
     depth = 0
     element_count = 0
     elements: list[ElementTree.Element] = []
-    with io.BytesIO(payload) as xml_stream:
-        for event, element in ElementTree.iterparse(
-            xml_stream,
-            events=("start", "end"),
-        ):
-            if event == "start":
-                depth += 1
-                element_count += 1
-                if (
-                    depth > maximum_nesting_depth
-                    or element_count > maximum_element_count
-                ):
-                    return None
-                elements.append(element)
-                continue
-            parent = elements[-2] if len(elements) > 1 else None
-            if parent is not None:
-                parent.remove(element)
-            element.clear()
-            elements.pop()
-            depth -= 1
+    try:
+        with io.BytesIO(payload) as xml_stream:
+            for event, element in _iterparse_ooxml_xml_with_character_data_budget(
+                xml_stream
+            ):
+                if event == "start":
+                    depth += 1
+                    element_count += 1
+                    if (
+                        depth > maximum_nesting_depth
+                        or element_count > maximum_element_count
+                    ):
+                        return None
+                    elements.append(element)
+                    continue
+                parent = elements[-2] if len(elements) > 1 else None
+                if parent is not None:
+                    parent.remove(element)
+                element.clear()
+                elements.pop()
+                depth -= 1
+    except _OoxmlXmlCharacterDataLimitError:
+        return None
     return element_count
 
 
@@ -5889,6 +5960,10 @@ def _validate_ooxml_semantic_reader_resources(
                 )
     except WorkbookLoadError:
         raise
+    except _OoxmlXmlCharacterDataLimitError as error:
+        raise _reader_preflight_error(
+            "XML character data exceeds the semantic-reader safety limit."
+        ) from error
     except (
         BadZipFile,
         ElementTree.ParseError,
@@ -5929,7 +6004,15 @@ def _xml_root_from_payload(payload: bytes) -> ElementTree.Element:
         raise ValueError("OOXML metadata contains a document type declaration")
     if not _xml_start_tags_within_budget(io.BytesIO(payload)):
         raise ValueError("OOXML metadata XML start tag exceeds the safety limit")
-    return ElementTree.fromstring(payload)
+    parser = _ooxml_xml_parser_with_character_data_budget()
+    try:
+        for offset in range(0, len(payload), _OOXML_READER_XML_LEXICAL_CHUNK_BYTES):
+            parser.feed(payload[offset : offset + _OOXML_READER_XML_LEXICAL_CHUNK_BYTES])
+        return parser.close()
+    except _OoxmlXmlCharacterDataLimitError as error:
+        raise ValueError(
+            "OOXML metadata XML character data exceeds the safety limit"
+        ) from error
 
 
 def _normalise_package_target(target: str) -> str | None:
@@ -33616,9 +33699,8 @@ def _rich_text_shared_string_items(
     items: list[_RichTextItem | None] = []
 
     with archive.open(member) as xml_stream:
-        for event, element in ElementTree.iterparse(
-            xml_stream,
-            events=("start", "end"),
+        for event, element in _iterparse_ooxml_xml_with_character_data_budget(
+            xml_stream
         ):
             if event == "start":
                 stack.append(element)
@@ -39088,9 +39170,8 @@ def _rich_data_worksheet_value_metadata_bindings(
     parents: list[ElementTree.Element] = []
     try:
         with archive.open(member) as xml_stream:
-            for event, element in ElementTree.iterparse(
-                xml_stream,
-                events=("start", "end"),
+            for event, element in _iterparse_ooxml_xml_with_character_data_budget(
+                xml_stream
             ):
                 if event == "start":
                     if not parents:
@@ -47179,7 +47260,9 @@ def _array_formula_worksheet_metadata(
     cell_scans: list[_ArrayFormulaCellScan] = []
     depth = 0
     with archive.open(member) as xml_stream:
-        for event, element in ElementTree.iterparse(xml_stream, events=("start", "end")):
+        for event, element in _iterparse_ooxml_xml_with_character_data_budget(
+            xml_stream
+        ):
             if event == "start":
                 depth += 1
                 if element.tag == cell_tag:

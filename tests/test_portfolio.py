@@ -19,6 +19,7 @@ from formulafence.output import as_json, portfolio_to_markdown, portfolio_to_sar
 from formulafence.policy import parse_policy
 from formulafence.portfolio import (
     DEFAULT_MAX_INVENTORY_ENTRIES,
+    DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES,
     PortfolioError,
     _canonical_external_table_references,
     _canonical_three_d_sheet_span,
@@ -2013,6 +2014,83 @@ def test_portfolio_inventory_bounds_all_filesystem_entries_before_filtering(
         discover_workbooks(root, label="baseline", max_inventory_entries=0)
 
 
+def test_portfolio_source_byte_budget_is_exact_and_precedes_snapshot_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline, candidate = _portfolio_pair(tmp_path)
+    first = baseline / "models" / "shared.xlsx"
+    _copy_workbook(first, baseline / "second.xlsx")
+    _copy_workbook(first, candidate / "second.xlsx")
+    total_source_bytes = sum(
+        workbook.stat().st_size
+        for workbook in (baseline / "models" / "shared.xlsx", baseline / "second.xlsx")
+    )
+
+    exact_report = compare_portfolios(
+        baseline,
+        candidate,
+        max_portfolio_source_bytes=total_source_bytes,
+    )
+    assert exact_report.incomplete is False
+
+    snapshot_reads: list[Path] = []
+
+    def fail_if_called(path: Path, **kwargs: object):
+        snapshot_reads.append(Path(path))
+        raise AssertionError("source-byte preflight must run before snapshot reads")
+
+    monkeypatch.setattr(portfolio_module, "load_snapshot", fail_if_called)
+    with pytest.raises(
+        PortfolioError,
+        match=f"max_portfolio_source_bytes={total_source_bytes - 1}",
+    ):
+        compare_portfolios(
+            baseline,
+            candidate,
+            max_portfolio_source_bytes=total_source_bytes - 1,
+        )
+    assert snapshot_reads == []
+
+
+def test_portfolio_source_byte_budget_rejects_a_nonpositive_limit(tmp_path: Path) -> None:
+    baseline, candidate = _portfolio_pair(tmp_path)
+
+    with pytest.raises(
+        PortfolioError, match="max_portfolio_source_bytes must be at least 1"
+    ):
+        compare_portfolios(baseline, candidate, max_portfolio_source_bytes=0)
+
+
+def test_portfolio_source_byte_budget_checks_the_candidate_before_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline, candidate = _portfolio_pair(tmp_path)
+    candidate_source = candidate / "models" / "shared.xlsx"
+
+    def grow_candidate_source(workbook) -> None:
+        workbook["Inputs"]["A1"] = "".join(f"{index:04x}" for index in range(4_096))
+
+    rewrite(candidate_source, grow_candidate_source)
+    baseline_source = baseline / "models" / "shared.xlsx"
+    assert candidate_source.stat().st_size > baseline_source.stat().st_size
+    snapshot_reads: list[Path] = []
+
+    def fail_if_called(path: Path, **kwargs: object):
+        snapshot_reads.append(Path(path))
+        raise AssertionError("source-byte preflight must run before snapshot reads")
+
+    monkeypatch.setattr(portfolio_module, "load_snapshot", fail_if_called)
+    with pytest.raises(PortfolioError, match="Candidate portfolio contains"):
+        compare_portfolios(
+            baseline,
+            candidate,
+            max_portfolio_source_bytes=baseline_source.stat().st_size,
+        )
+    assert snapshot_reads == []
+
+
 def test_portfolio_cli_passes_the_inventory_entry_limit(tmp_path: Path) -> None:
     baseline, candidate = _portfolio_pair(tmp_path)
     (baseline / "note.txt").write_text("ignored", encoding="utf-8")
@@ -2032,10 +2110,33 @@ def test_portfolio_cli_passes_the_inventory_entry_limit(tmp_path: Path) -> None:
     )
 
 
+def test_portfolio_cli_passes_the_source_byte_limit(tmp_path: Path) -> None:
+    baseline, candidate = _portfolio_pair(tmp_path)
+
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline),
+                str(candidate),
+                "--max-portfolio-source-bytes",
+                "1",
+            ]
+        )
+        == 2
+    )
+
+
 def test_portfolio_cli_defaults_the_inventory_entry_limit() -> None:
     arguments = build_parser().parse_args(["portfolio", "before", "after"])
 
     assert arguments.max_inventory_entries == DEFAULT_MAX_INVENTORY_ENTRIES
+
+
+def test_portfolio_cli_defaults_the_source_byte_limit() -> None:
+    arguments = build_parser().parse_args(["portfolio", "before", "after"])
+
+    assert arguments.max_portfolio_source_bytes == DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES
 
 
 def test_portfolio_inventory_ignores_office_lock_files(tmp_path: Path) -> None:

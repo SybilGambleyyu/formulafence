@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Aggregate portfolio source budget — 2026-07-28
+
+Version 0.165.0 closes the next portfolio-scale resource gap. FormulaFence
+already limited each source package to 1 GiB, but the 512-workbook directory
+ceiling still allowed one supplied side to schedule up to 512 GiB of source
+bytes for private copies and semantic readers. A broad generated-model
+portfolio could therefore remain impractical despite every individual workbook
+passing its own archive checks.
+
+Each side now sums the size captured with every supported regular-file identity
+during inventory. The default 4 GiB ceiling is checked after supported-file
+filtering but before any `load_snapshot` call. It neither reopens a pathname
+nor mixes baseline and candidate budgets: a later replacement still hits the
+existing identity guard, while each directory gets its own configurable
+`--max-portfolio-source-bytes` allowance.
+
+Direct regressions prove an exact two-workbook boundary succeeds and that a
+one-byte overflow reaches no snapshot loader at all. A separate larger-candidate
+fixture proves the candidate-side preflight occurs before any source read too.
+CLI defaults and a controlled low-budget command return status 2, while the
+public composite Action validates the new positive integer input and propagates
+the same fail-closed result.
+
+Against the public 0.164.0 wheel, 20 complete comparisons of a 16-workbook
+baseline/candidate portfolio took 73.563222 seconds at 40,632 KiB maximum RSS;
+the 0.165.0 candidate wheel took 73.085537 seconds at 40,444 KiB. Fresh isolated
+wheel and sdist installations reported 0.165.0, passed `pip check`, completed a
+normal exact-per-side-budget portfolio, and rejected a one-byte aggregate
+overflow before an intentionally malformed `.xlsx` source could be inspected.
+The final source suite passed 1,246 tests in 387.82 seconds, with Ruff, bytecode
+compilation, Action-shell syntax, and whitespace checks clean.
+
 ## Fail-closed portfolio traversal — 2026-07-28
 
 Version 0.164.0 closes a coverage gap in recursive directory portfolios. The

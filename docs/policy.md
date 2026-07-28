@@ -1905,7 +1905,12 @@ cause an explicit unsupported-format error rather than being omitted. Before
 the supported-file filter, each recursive directory inventory is capped at
 32,768 filesystem entries by default (`--max-inventory-entries`); the bound
 includes ordinary non-workbook files and directories, is enforced before paths
-are retained or sorted, and is separate from `--max-workbooks`.
+are retained or sorted, and is separate from `--max-workbooks`. After supported
+regular files are inventoried, each side has a separate 4 GiB aggregate observed
+source-byte ceiling by default (`--max-portfolio-source-bytes`). FormulaFence
+checks the total before opening any snapshot, using the same regular-file sizes
+and identities later guarded reads require; it is separate from both the raw
+entry and supported-workbook limits.
 
 Candidate-only portfolio analysis also builds a separate static dependency graph
 across a deliberately narrow subset of external A1 formulas and 3-D A1 spans,

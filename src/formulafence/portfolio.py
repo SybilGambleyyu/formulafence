@@ -51,6 +51,7 @@ _UNSUPPORTED_EXCEL_SUFFIXES = frozenset(
 )
 _DEFAULT_MAX_WORKBOOKS = 512
 DEFAULT_MAX_INVENTORY_ENTRIES = 32_768
+DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES = 4 * 1024 * 1024 * 1024
 DEFAULT_MAX_LINK_IMPACT = 100_000
 _LINK_IMPACT_SAMPLE_LIMIT = 10
 
@@ -309,6 +310,28 @@ def discover_workbooks(
         max_inventory_entries=max_inventory_entries,
     )
     return {relative: source.path for relative, source in sources.items()}
+
+
+def _validate_portfolio_source_bytes(
+    sources: dict[str, _PortfolioWorkbookSource],
+    *,
+    label: str,
+    max_portfolio_source_bytes: int,
+) -> None:
+    """Reject an aggregate source set before any workbook snapshot is opened.
+
+    Each source is already a regular file whose identity and byte size were
+    recorded during inventory.  Count those observed compressed package bytes,
+    rather than reopening paths or estimating expanded OOXML material, so this
+    preflight binds to the same source state that later guarded reads require.
+    """
+    total_source_bytes = sum(source.identity.size for source in sources.values())
+    if total_source_bytes > max_portfolio_source_bytes:
+        raise PortfolioError(
+            f"{label.capitalize()} portfolio contains {total_source_bytes} total "
+            "workbook source bytes, exceeding "
+            f"max_portfolio_source_bytes={max_portfolio_source_bytes}."
+        )
 
 
 def _resolve_relative_external_workbook(
@@ -1162,6 +1185,7 @@ def compare_portfolios(
     policy: Policy | None = None,
     max_workbooks: int = _DEFAULT_MAX_WORKBOOKS,
     max_inventory_entries: int = DEFAULT_MAX_INVENTORY_ENTRIES,
+    max_portfolio_source_bytes: int = DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES,
     max_link_impact: int = DEFAULT_MAX_LINK_IMPACT,
 ) -> PortfolioReport:
     """Compare every workbook at the same relative path in two directories.
@@ -1171,6 +1195,8 @@ def compare_portfolios(
     unreadable, or cross-workbook impact material rather than silently treating
     it as unchanged.
     """
+    if max_portfolio_source_bytes < 1:
+        raise PortfolioError("max_portfolio_source_bytes must be at least 1.")
     if max_link_impact < 1:
         raise PortfolioError("max_link_impact must be at least 1.")
     baseline = _discover_portfolio_workbook_sources(
@@ -1184,6 +1210,16 @@ def compare_portfolios(
         label="candidate",
         max_workbooks=max_workbooks,
         max_inventory_entries=max_inventory_entries,
+    )
+    _validate_portfolio_source_bytes(
+        baseline,
+        label="baseline",
+        max_portfolio_source_bytes=max_portfolio_source_bytes,
+    )
+    _validate_portfolio_source_bytes(
+        candidate,
+        label="candidate",
+        max_portfolio_source_bytes=max_portfolio_source_bytes,
     )
     if not baseline and not candidate:
         raise PortfolioError(

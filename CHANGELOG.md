@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.165.0 — 2026-07-28
+
+- Add a fail-closed aggregate compressed-source-byte budget to each directory
+  portfolio before FormulaFence opens any workbook snapshot. The 4 GiB default
+  limits the total observed size of supported regular `.xlsx` / `.xlsm`
+  sources independently on the baseline and candidate sides, rather than
+  allowing the 512-workbook ceiling to multiply the 1 GiB per-workbook source
+  limit into an impractical CI read set.
+- Expose the limit as `--max-portfolio-source-bytes` and the matching public
+  GitHub Action input. Exact-boundary, overflow-before-read, CLI default, and
+  Action validation/propagation regressions keep the preflight deterministic.
+
 ## 0.164.0 — 2026-07-28
 
 - Replace recursive globbing in portfolio discovery with a bounded direct

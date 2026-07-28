@@ -85,6 +85,10 @@ inputs:
     description: Maximum filesystem entries per directory portfolio before workbook filtering; fail closed above this inventory budget.
     required: false
     default: '32768'
+  max-portfolio-source-bytes:
+    description: Maximum aggregate bytes across supported workbook sources in each directory portfolio before snapshot reads; fail closed above this source budget.
+    required: false
+    default: '4294967296'
   max-link-impact:
     description: Maximum static cross-workbook dependency graph states for a directory portfolio before the action fails closed.
     required: false
@@ -137,6 +141,7 @@ runs:
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_MAX_WORKBOOKS: ${{ inputs.max-workbooks }}
         INPUT_MAX_INVENTORY_ENTRIES: ${{ inputs.max-inventory-entries }}
+        INPUT_MAX_PORTFOLIO_SOURCE_BYTES: ${{ inputs.max-portfolio-source-bytes }}
         INPUT_MAX_LINK_IMPACT: ${{ inputs.max-link-impact }}
         INPUT_INSTALL: ${{ inputs.install }}
         INPUT_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}

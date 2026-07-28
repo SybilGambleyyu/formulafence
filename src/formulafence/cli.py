@@ -49,6 +49,7 @@ from formulafence.policy import DEFAULT_POLICY, evaluate_policy, load_policy
 from formulafence.portfolio import (
     DEFAULT_MAX_INVENTORY_ENTRIES,
     DEFAULT_MAX_LINK_IMPACT,
+    DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES,
     compare_portfolios,
 )
 from formulafence.workbook import load_snapshot, profile_snapshot
@@ -315,6 +316,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Fail when either portfolio contains more than this many filesystem "
             "entries before workbook filtering"
+        ),
+    )
+    portfolio.add_argument(
+        "--max-portfolio-source-bytes",
+        type=_positive_integer,
+        default=DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES,
+        help=(
+            "Fail when either portfolio's supported workbook sources exceed this "
+            "aggregate byte budget before snapshot reads"
         ),
     )
     portfolio.add_argument(
@@ -642,6 +652,7 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
         policy=policy,
         max_workbooks=arguments.max_workbooks,
         max_inventory_entries=arguments.max_inventory_entries,
+        max_portfolio_source_bytes=arguments.max_portfolio_source_bytes,
         max_link_impact=arguments.max_link_impact,
     )
     if arguments.format == "json":

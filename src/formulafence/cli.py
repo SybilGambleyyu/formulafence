@@ -387,10 +387,11 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
     if enforce_policy:
         inputs.append(arguments.policy)
     _ensure_output_safe(arguments.output, *inputs)
+    policy = load_policy(arguments.policy) if enforce_policy else None
     report = compare_snapshots(load_snapshot(arguments.before), load_snapshot(arguments.after))
     policy_findings = []
-    if enforce_policy:
-        policy_findings = evaluate_policy(report, load_policy(arguments.policy))
+    if policy is not None:
+        policy_findings = evaluate_policy(report, policy)
 
     if arguments.format == "json":
         payload = report.to_dict(policy_findings)

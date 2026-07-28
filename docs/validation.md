@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Policy-as-code YAML bounds — 2026-07-26
+
+Version 0.157.0 closes the policy-input boundary used by `check` and
+policy-backed `portfolio` runs. Earlier releases read an entire YAML file before
+parsing it, accepted duplicate mappings with PyYAML's last-wins behavior, and
+loaded a `check` policy only after both workbook snapshots. A pull request could
+therefore hide a disabled rule behind a repeated key or make a CI job allocate
+for a large policy before FormulaFence reached the schema error.
+
+FormulaFence now reads at most 1 MiB of strict UTF-8 source and composes one
+bounded document before it inspects a workbook: 4,096 YAML nodes, 64 nesting
+levels, 4,096 characters per scalar, and 512 selectors in either selector
+list. Anchors, aliases, merge keys, and duplicate mapping keys are rejected,
+as are non-string schema keys. This deliberately small configuration subset
+makes the reviewed policy unambiguous rather than attempting to support YAML
+inheritance or graph semantics.
+
+A controlled pair of 4,815-byte workbooks used a 20,971,553-byte policy with
+an unknown top-level field containing a 20 MiB scalar. In fresh processes, the
+public 0.156.0 wheel read and parsed that policy before emitting its ordinary
+unknown-field error in 7.252205 seconds at 98,768 KiB RSS. The 0.157.0 source
+rejected it before YAML construction or workbook inspection in 0.341406 seconds
+at 38,704 KiB RSS, with the explicit 1 MiB policy-source diagnostic. The same
+46-byte normal policy completed in 0.427354 seconds at 38,176 KiB RSS with
+0.156.0 and 0.446255 seconds at 38,188 KiB RSS with the new source. Exact
+source, node, nesting, scalar, selector, UTF-8, ambiguous-YAML, schema-key,
+and fail-before-workbook regressions cover the boundary; the complete source
+suite passed 1,219 tests in 202.43 seconds. The final wheel and source
+distribution passed `twine check`; fresh isolated installs of each reported
+FormulaFence 0.157.0, passed `pip check`, accepted the normal control, and
+rejected the hostile policy before workbook inspection.
+
 ## Power Query nested ZIP catalog preflight — 2026-07-26
 
 Version 0.156.0 closes the remaining nested-ZIP catalog path in Power Query

@@ -14,7 +14,7 @@ inputs:
     description: Candidate .xlsx/.xlsm workbook, or a directory portfolio, inside the workspace.
     required: true
   policy:
-    description: Optional FormulaFence policy inside the workspace. A directory run applies it to matched workbooks, membership changes, and static cross-workbook impact evidence.
+    description: Optional bounded FormulaFence policy inside the workspace. A directory run applies it to matched workbooks, membership changes, and static cross-workbook impact evidence.
     required: false
     default: ''
   format:

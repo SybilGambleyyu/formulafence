@@ -5,6 +5,8 @@ import json
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
+import formulafence.cli as cli_module
+import formulafence.policy as policy_module
 from formulafence.cli import main
 
 from .helpers import (
@@ -90,6 +92,34 @@ def test_check_emits_sarif_and_fails_for_a_policy_violation(tmp_path) -> None:
         {"path": ["Model!B2", "Model!C2", "Dashboard!B12"], "target": "Dashboard!B12"},
         {"path": ["Model!B2", "Model!C2"], "target": "Model!C2"},
     ]
+
+
+def test_check_rejects_an_oversized_policy_before_loading_workbooks(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    policy = tmp_path / "oversized.yml"
+    policy.write_bytes(b"x" * 33)
+    monkeypatch.setattr(policy_module, "_POLICY_MAX_SOURCE_BYTES", 32)
+
+    def unexpected_snapshot_load(*args, **kwargs):
+        raise AssertionError("an oversized policy reached workbook inspection")
+
+    monkeypatch.setattr(cli_module, "load_snapshot", unexpected_snapshot_load)
+
+    result = cli_module.main(
+        [
+            "check",
+            str(tmp_path / "before.xlsx"),
+            str(tmp_path / "after.xlsx"),
+            "--policy",
+            str(policy),
+        ]
+    )
+
+    assert result == 2
+    assert "Policy source exceeds" in capsys.readouterr().err
 
 
 def test_profile_does_not_expose_cell_values(tmp_path) -> None:

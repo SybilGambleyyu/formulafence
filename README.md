@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.156.0/formulafence-0.156.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.157.0/formulafence-0.157.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.156.0
+  uses: SybilGambleyyu/formulafence@v0.157.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2661,6 +2661,14 @@ FormulaFence reads workbook structure only. It does not recalculate formulas,
 run VBA, follow external links, or claim that a workbook's numbers are correct.
 It is a review and control layer; human review remains essential for material
 models.
+
+Policy input is bounded before FormulaFence opens either workbook: it accepts
+one UTF-8 YAML document with ordinary mappings, lists, and scalars, while
+rejecting duplicate keys, anchors, aliases, and merge keys. The policy limits
+are 1 MiB of source, 4,096 YAML nodes, 64 nesting levels, 4,096 characters per
+scalar, and 512 selectors in each selector list. See the [policy
+reference](docs/policy.md#policy-file-safety-and-syntax) for the supported
+syntax and the [threat model](docs/threat-model.md) for the CI boundary.
 
 Every `.xlsx` and `.xlsm` source passes a fail-closed OOXML archive preflight
 before FormulaFence reads an OOXML part or opens the workbook reader. The

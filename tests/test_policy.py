@@ -3,9 +3,10 @@ from __future__ import annotations
 import pytest
 from openpyxl import load_workbook
 
+import formulafence.policy as policy_module
 from formulafence.diff import compare_snapshots
 from formulafence.models import PolicyError
-from formulafence.policy import evaluate_policy, parse_policy
+from formulafence.policy import evaluate_policy, load_policy, parse_policy
 from formulafence.workbook import load_snapshot
 
 from .helpers import (
@@ -184,6 +185,128 @@ def test_policy_rejects_unknown_fields_and_unsafe_selectors() -> None:
         parse_policy({"version": 1, "rules": {"no_formula_to_number": True}})
     with pytest.raises(PolicyError, match="sheet-qualified"):
         parse_policy({"version": 1, "protected_cells": ["B12"]})
+
+
+def test_load_policy_rejects_oversized_source_before_yaml_load(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    policy = tmp_path / "oversized.yml"
+    monkeypatch.setattr(policy_module, "_POLICY_MAX_SOURCE_BYTES", 32)
+    policy.write_bytes(b"x" * 33)
+
+    def unexpected_yaml_load(*args, **kwargs):
+        raise AssertionError("an oversized policy reached the YAML loader")
+
+    monkeypatch.setattr(policy_module.yaml, "load", unexpected_yaml_load)
+
+    with pytest.raises(PolicyError, match="32 bytes safety limit"):
+        load_policy(policy)
+
+
+def test_load_policy_accepts_the_exact_source_limit(tmp_path, monkeypatch) -> None:
+    policy = tmp_path / "exact.yml"
+    source_limit = 64
+    source = "version: 1\nrules: {}\n#"
+    source += "x" * (source_limit - len(source.encode("utf-8")))
+    assert len(source.encode("utf-8")) == source_limit
+    policy.write_text(source, encoding="utf-8")
+    monkeypatch.setattr(policy_module, "_POLICY_MAX_SOURCE_BYTES", source_limit)
+
+    parsed = load_policy(policy)
+
+    assert parsed.version == 1
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    (
+        (
+            "version: 1\nversion: 1\nrules: {}\n",
+            "duplicate mapping keys",
+        ),
+        (
+            "version: 1\nrules:\n  no_formula_to_value: true\n  no_formula_to_value: false\n",
+            "duplicate mapping keys",
+        ),
+        ("version: 1\nrules: &rules {}\n", "anchors and aliases"),
+        ("version: 1\nrules: *missing\n", "anchors and aliases"),
+        (
+            "version: 1\nrules:\n  <<: {no_formula_to_value: true}\n",
+            "merge keys",
+        ),
+    ),
+)
+def test_load_policy_rejects_ambiguous_yaml_constructs(
+    tmp_path,
+    source: str,
+    message: str,
+) -> None:
+    policy = tmp_path / "ambiguous.yml"
+    policy.write_text(source, encoding="utf-8")
+
+    with pytest.raises(PolicyError, match=message):
+        load_policy(policy)
+
+
+def test_load_policy_rejects_invalid_utf8(tmp_path) -> None:
+    policy = tmp_path / "invalid-utf8.yml"
+    policy.write_bytes(b"version: 1\nrules: {}\n\xff")
+
+    with pytest.raises(PolicyError, match="valid UTF-8"):
+        load_policy(policy)
+
+
+def test_load_policy_bounds_yaml_nodes_nesting_and_scalars(tmp_path) -> None:
+    node_limited = tmp_path / "nodes.yml"
+    node_limited.write_text(
+        "version: 1\nrules: {}\nprotected_cells:\n"
+        + "".join(f"  - Dashboard!A{index}\n" for index in range(1, 4_098)),
+        encoding="utf-8",
+    )
+    nested = tmp_path / "nested.yml"
+    nested.write_text(
+        "version: 1\nrules: {}\nallowed_changes:\n"
+        + "  - " * 64
+        + "Dashboard!A1\n",
+        encoding="utf-8",
+    )
+    scalar = tmp_path / "scalar.yml"
+    scalar.write_text(
+        "version: 1\nrules: {}\nallowed_changes: \""
+        + "x" * 4_097
+        + "\"\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PolicyError, match="node safety limit"):
+        load_policy(node_limited)
+    with pytest.raises(PolicyError, match="nesting safety limit"):
+        load_policy(nested)
+    with pytest.raises(PolicyError, match="scalar values exceed"):
+        load_policy(scalar)
+
+
+def test_policy_bounds_selector_lists() -> None:
+    selectors = [f"Dashboard!A{index}" for index in range(1, 513)]
+
+    parsed = parse_policy({"version": 1, "protected_cells": selectors})
+
+    assert len(parsed.protected_cells) == 512
+    with pytest.raises(PolicyError, match="512-entry safety limit"):
+        parse_policy(
+            {
+                "version": 1,
+                "protected_cells": selectors + ["Dashboard!A513"],
+            }
+        )
+
+
+def test_policy_rejects_non_string_mapping_keys() -> None:
+    with pytest.raises(PolicyError, match="field names must be strings"):
+        parse_policy({1: "invalid"})
+    with pytest.raises(PolicyError, match="rules field names must be strings"):
+        parse_policy({"version": 1, "rules": {1: True}})
 
 
 def test_policy_can_block_new_formula_coverage_gaps(tmp_path) -> None:

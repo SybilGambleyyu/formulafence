@@ -112,6 +112,10 @@ financial correctness or replace model review.
 - External-data source material is never emitted: connection names/descriptions,
   paths, URLs, connection strings, commands, parameter values, SSO identifiers,
   cached records, and opaque extension XML remain private comparison evidence.
+- A policy is bounded and parsed before a policy-enforcing command opens a
+  workbook input. It accepts one UTF-8 YAML document with ordinary mappings,
+  lists, and scalars; duplicate keys, anchors, aliases, and merge keys fail
+  closed rather than silently changing a reviewed control.
 - Before any raw OOXML member scanner or `openpyxl` reader runs, FormulaFence
   performs a bounded, fail-closed inventory of the original ZIP container. It
   reads only ZIP headers and central-directory metadata at this stage; it does
@@ -335,6 +339,11 @@ formula will produce.
   content. These are resource and
   interpretation limits for untrusted CI input, not a claim to detect every
   hostile document or to make an untrusted runner safe.
+- Policy source is independently capped at 1 MiB, 4,096 composed YAML nodes,
+  64 nesting levels, 4,096 characters per scalar, and 512 selectors in each
+  selector list. It is one UTF-8 YAML document; FormulaFence rejects duplicate
+  mapping keys, anchors, aliases, and merge keys so a committed policy cannot
+  hide a last-wins or inherited control change.
 - After that ZIP-only pass, the semantic-reader limit is 64 MiB for each
   XML/relationship part, 256 MiB for aggregate XML material, 4,000,000 XML
   elements and 256 nesting levels for every reader-visible part it streams,

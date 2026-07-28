@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.157.0 — 2026-07-26
+
+- Bound policy-as-code input before YAML construction or workbook inspection:
+  1 MiB source, 4,096 composed YAML nodes, 64 nesting levels, 4,096 characters
+  per scalar, and 512 selectors per selector list.
+- Reject duplicate mapping keys, anchors, aliases, merge keys, invalid UTF-8,
+  and non-string schema keys rather than allowing YAML's last-wins or inherited
+  mappings to weaken a reviewed control.
+- Load a `check` policy before either workbook, preserving the CLI's stable
+  policy-error status while avoiding unnecessary archive inspection. Add
+  exact-limit, malformed/ambiguous YAML, selector, and fail-before-workbook
+  regressions.
+
 ## 0.156.0 — 2026-07-26
 
 - Preflight every nested Power Query `DataMashup` ZIP central directory before

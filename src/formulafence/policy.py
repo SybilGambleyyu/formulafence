@@ -9,6 +9,8 @@ from typing import Any
 
 import yaml
 from openpyxl.utils.cell import coordinate_to_tuple
+from yaml.events import AliasEvent
+from yaml.nodes import ScalarNode
 
 from formulafence.formulas import ParsedReference, parse_reference_token
 from formulafence.models import CellKey, DiffReport, Finding, PolicyError
@@ -93,6 +95,80 @@ _RULE_FIELDS = {
     "max_downstream_impact",
 }
 _TOP_LEVEL_FIELDS = {"version", "rules", "protected_cells", "allowed_changes"}
+_POLICY_MAX_SOURCE_BYTES = 1 * 1024 * 1024
+_POLICY_MAX_YAML_NODE_COUNT = 4_096
+_POLICY_MAX_YAML_NESTING = 64
+_POLICY_MAX_SCALAR_CHARACTERS = 4_096
+_POLICY_MAX_SELECTOR_COUNT = 512
+
+
+def _format_policy_source_limit() -> str:
+    """Render the source ceiling accurately, including in boundary tests."""
+    mebibyte = 1024 * 1024
+    if _POLICY_MAX_SOURCE_BYTES % mebibyte == 0:
+        return f"{_POLICY_MAX_SOURCE_BYTES // mebibyte} MiB"
+    return f"{_POLICY_MAX_SOURCE_BYTES:,} bytes"
+
+
+class _PolicyYamlSafetyError(yaml.YAMLError):
+    """Signal a policy YAML construct outside FormulaFence's safe subset."""
+
+
+class _BoundedPolicyYamlLoader(yaml.SafeLoader):
+    """Construct one small, unambiguous policy YAML document."""
+
+    def __init__(self, stream) -> None:
+        super().__init__(stream)
+        self._policy_yaml_node_count = 0
+        self._policy_yaml_nesting = 0
+
+    def compose_node(self, parent, index):
+        event = self.peek_event()
+        if isinstance(event, AliasEvent) or getattr(event, "anchor", None) is not None:
+            raise _PolicyYamlSafetyError(
+                "Policy YAML anchors and aliases are unsupported."
+            )
+        self._policy_yaml_nesting += 1
+        try:
+            if self._policy_yaml_nesting > _POLICY_MAX_YAML_NESTING:
+                raise _PolicyYamlSafetyError(
+                    "Policy YAML exceeds the "
+                    f"{_POLICY_MAX_YAML_NESTING}-level nesting safety limit."
+                )
+            self._policy_yaml_node_count += 1
+            if self._policy_yaml_node_count > _POLICY_MAX_YAML_NODE_COUNT:
+                raise _PolicyYamlSafetyError(
+                    "Policy YAML exceeds the "
+                    f"{_POLICY_MAX_YAML_NODE_COUNT:,}-node safety limit."
+                )
+            return super().compose_node(parent, index)
+        finally:
+            self._policy_yaml_nesting -= 1
+
+    def compose_scalar_node(self, anchor):
+        event = self.peek_event()
+        if len(event.value) > _POLICY_MAX_SCALAR_CHARACTERS:
+            raise _PolicyYamlSafetyError(
+                "Policy YAML scalar values exceed the "
+                f"{_POLICY_MAX_SCALAR_CHARACTERS:,}-character safety limit."
+            )
+        return super().compose_scalar_node(anchor)
+
+    def compose_mapping_node(self, anchor):
+        node = super().compose_mapping_node(anchor)
+        keys: set[tuple[str, str]] = set()
+        for key_node, _ in node.value:
+            if not isinstance(key_node, ScalarNode):
+                continue
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                raise _PolicyYamlSafetyError("Policy YAML merge keys are unsupported.")
+            key = (key_node.tag, key_node.value)
+            if key in keys:
+                raise _PolicyYamlSafetyError(
+                    "Policy YAML contains duplicate mapping keys."
+                )
+            keys.add(key)
+        return node
 
 
 @dataclass(frozen=True)
@@ -318,6 +394,10 @@ def _parse_selectors(value: object, field_name: str) -> tuple[CellSelector, ...]
         return ()
     if not isinstance(value, list):
         raise PolicyError(f"{field_name} must be a YAML list")
+    if len(value) > _POLICY_MAX_SELECTOR_COUNT:
+        raise PolicyError(
+            f"{field_name} exceeds the {_POLICY_MAX_SELECTOR_COUNT:,}-entry safety limit"
+        )
     return tuple(_parse_selector(item, field_name) for item in value)
 
 
@@ -340,6 +420,8 @@ def _integer_rule(rules: dict[str, Any], name: str) -> int | None:
 def parse_policy(data: object) -> Policy:
     if not isinstance(data, dict):
         raise PolicyError("Policy root must be a mapping")
+    if any(not isinstance(field, str) for field in data):
+        raise PolicyError("Policy field names must be strings")
     unknown_fields = set(data) - _TOP_LEVEL_FIELDS
     if unknown_fields:
         raise PolicyError(f"Unknown policy fields: {', '.join(sorted(unknown_fields))}")
@@ -349,6 +431,8 @@ def parse_policy(data: object) -> Policy:
     rules = data.get("rules", {})
     if not isinstance(rules, dict):
         raise PolicyError("rules must be a mapping")
+    if any(not isinstance(rule, str) for rule in rules):
+        raise PolicyError("rules field names must be strings")
     unknown_rules = set(rules) - _RULE_FIELDS
     if unknown_rules:
         raise PolicyError(f"Unknown rules: {', '.join(sorted(unknown_rules))}")
@@ -536,8 +620,24 @@ def load_policy(path: str | Path) -> Policy:
     if not policy_path.exists() or not policy_path.is_file():
         raise PolicyError(f"Policy does not exist or is not a file: {policy_path}")
     try:
-        data = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as error:
+        with policy_path.open("rb") as policy_file:
+            source = policy_file.read(_POLICY_MAX_SOURCE_BYTES + 1)
+    except OSError as error:
+        raise PolicyError(f"Could not read policy {policy_path}: {error}") from error
+    if len(source) > _POLICY_MAX_SOURCE_BYTES:
+        raise PolicyError(
+            "Policy source exceeds FormulaFence's "
+            f"{_format_policy_source_limit()} safety limit."
+        )
+    try:
+        text = source.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise PolicyError("Policy must be valid UTF-8 text.") from error
+    try:
+        data = yaml.load(text, Loader=_BoundedPolicyYamlLoader)
+    except _PolicyYamlSafetyError as error:
+        raise PolicyError(str(error)) from error
+    except (RecursionError, yaml.YAMLError) as error:
         raise PolicyError(f"Could not read policy {policy_path}: {error}") from error
     return parse_policy(data)
 

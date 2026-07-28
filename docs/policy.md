@@ -96,6 +96,16 @@ allowed_changes:
 FormulaFence rejects unknown fields and rules. This is deliberate: a misspelled
 control should fail closed rather than silently weaken review.
 
+## Policy-file safety and syntax
+
+A policy is one bounded UTF-8 YAML document. FormulaFence supports ordinary
+mappings, lists, and scalar values, but rejects duplicate mapping keys,
+anchors, aliases, and merge keys so a reviewed policy has one unambiguous
+meaning. Its fixed limits are 1 MiB of source, 4,096 composed YAML nodes, 64
+levels of nesting, 4,096 characters per scalar, and 512 selectors in each of
+`protected_cells` and `allowed_changes`. A policy error fails closed before a
+`check` or policy-backed `portfolio` command inspects its workbook input.
+
 ## Root fields
 
 | Field | Type | Meaning |

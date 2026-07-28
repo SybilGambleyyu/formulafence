@@ -209,6 +209,48 @@ def _append_shared_string_root_xml_elements(
     )
 
 
+def _append_worksheet_opaque_root_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    nested: bool = False,
+    member_name: str = "xl/worksheets/sheet1.xml",
+) -> int:
+    """Append a direct non-Worksheet child without building a worksheet tree."""
+    with ZipFile(path) as archive:
+        worksheet = archive.read(member_name)
+    closing_offset = worksheet.rfind(b"</")
+    if closing_offset < 0:
+        raise ValueError("worksheet fixture XML has no closing root tag")
+    namespace = b"urn:formulafence:archive-safety"
+    entries = b"<ff:opaque/>" * count
+    if nested:
+        inserted = (
+            b'<ff:container xmlns:ff="'
+            + namespace
+            + b'">'
+            + b"<ff:nested>"
+            + entries
+            + b"</ff:nested></ff:container>"
+        )
+        element_count = count + 2
+    else:
+        inserted = (
+            b'<ff:container xmlns:ff="'
+            + namespace
+            + b'">'
+            + entries
+            + b"</ff:container>"
+        )
+        element_count = count + 1
+    _replace_member(
+        path,
+        member_name,
+        worksheet[:closing_offset] + inserted + worksheet[closing_offset:],
+    )
+    return element_count
+
+
 def _redirect_shared_string_relationship(path: Path, target: str) -> None:
     """Point the transitional shared-string relationship at a safe test part."""
     member_name = "xl/_rels/workbook.xml.rels"
@@ -2759,6 +2801,133 @@ def test_semantic_reader_preflight_rejects_opaque_shared_string_root_xml_before_
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "shared-string opaque XML structure" in message
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_semantic_reader_preflight_rejects_opaque_worksheet_root_xml_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    nested: bool,
+) -> None:
+    workbook = make_model(tmp_path / f"opaque-worksheet-root-{nested}.xlsx")
+    element_count = _append_worksheet_opaque_root_xml_elements(
+        workbook,
+        1,
+        nested=nested,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_PART_XML_ELEMENT_COUNT",
+        element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet opaque root XML structure" in message
+
+
+def test_semantic_reader_preflight_aggregates_opaque_worksheet_root_xml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "aggregate-opaque-worksheet-root.xlsx")
+    first_count = _append_worksheet_opaque_root_xml_elements(workbook, 1)
+    second_count = _append_worksheet_opaque_root_xml_elements(
+        workbook,
+        1,
+        member_name="xl/worksheets/sheet2.xml",
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_PART_XML_ELEMENT_COUNT",
+        max(first_count, second_count),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT",
+        first_count + second_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "aggregate worksheet opaque root XML elements" in message
+
+
+def test_semantic_reader_preflight_accepts_opaque_worksheet_root_xml_at_exact_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "opaque-worksheet-root-at-limits.xlsx")
+    element_count = _append_worksheet_opaque_root_xml_elements(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_PART_XML_ELEMENT_COUNT",
+        element_count,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT",
+        element_count,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_keeps_standard_worksheet_root_content_unmetered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "standard-worksheet-root-content.xlsx")
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_PART_XML_ELEMENT_COUNT",
+        0,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT",
+        0,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_covers_strict_opaque_worksheet_root_xml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_strict_worksheet_print_layout_model(
+        tmp_path / "strict-opaque-worksheet-root.xlsx"
+    )
+    element_count = _append_worksheet_opaque_root_xml_elements(workbook, 1)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_PART_XML_ELEMENT_COUNT",
+        element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet opaque root XML structure" in message
+
+
+def test_semantic_reader_preflight_rejects_default_opaque_worksheet_root_xml_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "default-opaque-worksheet-root-limit.xlsx")
+    _append_worksheet_opaque_root_xml_elements(
+        workbook,
+        workbook_module._OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_PART_XML_ELEMENT_COUNT,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "worksheet opaque root XML structure" in message
 
 
 def test_semantic_reader_preflight_covers_raw_relationship_selected_shared_strings(

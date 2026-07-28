@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.147.0 — 2026-07-26
+
+- Bound complete direct worksheet-root subtrees that are absent from the
+  published base SpreadsheetML Worksheet child grammar before raw worksheet
+  scanners or the ordinary workbook reader can retain them. Each selected
+  transitional or Strict worksheet allows 32,768 opaque-root XML elements and
+  the selected worksheet inventory allows 65,536 in aggregate.
+- Keep normal `sheetData` and every named base Worksheet child outside this
+  narrow counter, preserving the existing populated-cell, dimension, merge,
+  validation, conditional-formatting, Scenario Manager, print-break, and
+  specialist metadata budgets. A successfully streamed opaque-root overage
+  becomes the stable semantic-reader safety-preflight error and CLI status 2.
+- Add direct/nested, aggregate, exact/default-limit, standard-root,
+  Strict-worksheet, and fail-before-reader regressions.
+
 ## 0.146.0 — 2026-07-26
 
 - Stream the raw shared-string rich-text scan one direct SpreadsheetML `si`

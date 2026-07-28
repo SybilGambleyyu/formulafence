@@ -265,6 +265,16 @@ _OOXML_READER_MAX_SHARED_STRING_OPAQUE_PART_XML_ELEMENT_COUNT = 32_768
 _OOXML_READER_MAX_SHARED_STRING_OPAQUE_XML_ELEMENT_COUNT = (
     2 * _OOXML_READER_MAX_SHARED_STRING_OPAQUE_PART_XML_ELEMENT_COUNT
 )
+# A worksheet can legitimately carry a large ``sheetData`` sequence, so do not
+# impose a compact whole-part tree limit. A direct root child outside the base
+# Worksheet grammar is different: ``openpyxl`` leaves it attached to the
+# parser's root, while FormulaFence's raw worksheet readers can construct the
+# full tree before ignoring it. Bound that opaque subtree before either path
+# can allocate it. These are CI allocation limits, not an OOXML validity rule.
+_OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_PART_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT = (
+    2 * _OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_PART_XML_ELEMENT_COUNT
+)
 _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
 _OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT = 100_000
 _OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
@@ -3834,6 +3844,8 @@ def _validate_ooxml_semantic_reader_resources(
     column_dimension_count = 0
     page_break_container_count = 0
     page_break_declaration_count = 0
+    worksheet_opaque_root_part_xml_element_count = 0
+    worksheet_opaque_root_xml_element_count = 0
     shared_string_count = 0
     shared_string_item_xml_element_counts: list[int] = []
     shared_string_item_is_complex: list[bool] = []
@@ -3851,6 +3863,47 @@ def _validate_ooxml_semantic_reader_resources(
     inline_string_tags = _spreadsheetml_tags("is")
     shared_string_tags = _spreadsheetml_tags("si")
     shared_string_table_tags = _spreadsheetml_tags("sst")
+    worksheet_standard_root_tags = _spreadsheetml_tags(
+        "sheetPr",
+        "dimension",
+        "sheetViews",
+        "sheetFormatPr",
+        "cols",
+        "sheetData",
+        "sheetCalcPr",
+        "sheetProtection",
+        "protectedRanges",
+        "scenarios",
+        "autoFilter",
+        "sortState",
+        "dataConsolidate",
+        "customSheetViews",
+        "mergeCells",
+        "phoneticPr",
+        "conditionalFormatting",
+        "dataValidations",
+        "hyperlinks",
+        "printOptions",
+        "pageMargins",
+        "pageSetup",
+        "headerFooter",
+        "rowBreaks",
+        "colBreaks",
+        "customProperties",
+        "cellWatches",
+        "ignoredErrors",
+        "smartTags",
+        "drawing",
+        "legacyDrawing",
+        "legacyDrawingHF",
+        "drawingHF",
+        "picture",
+        "oleObjects",
+        "controls",
+        "webPublishItems",
+        "tableParts",
+        "extLst",
+    )
     text_tags = _spreadsheetml_tags("t")
     value_tags = _spreadsheetml_tags("v")
     data_validation_container_tags = _spreadsheetml_tags("dataValidations")
@@ -4367,6 +4420,45 @@ def _validate_ooxml_semantic_reader_resources(
                     "limit."
                 )
 
+    def worksheet_opaque_root_end(
+        _element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        """Bound one complete unknown direct worksheet-root subtree.
+
+        The published Worksheet child grammar deliberately leaves ordinary
+        ``sheetData`` and supported controls outside this narrow counter. The
+        counter instead follows an opaque root child through every descendant,
+        including a foreign namespace child that the ordinary parser will not
+        dispatch and raw readers do not need to retain as semantic evidence.
+        """
+        nonlocal worksheet_opaque_root_part_xml_element_count
+        nonlocal worksheet_opaque_root_xml_element_count
+        if (
+            len(tags) < 2
+            or tags[0] not in worksheet_tags
+            or tags[1] in worksheet_standard_root_tags
+        ):
+            return
+        worksheet_opaque_root_part_xml_element_count += 1
+        if (
+            worksheet_opaque_root_part_xml_element_count
+            > _OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_PART_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "worksheet opaque root XML structure exceeds the semantic-reader "
+                "safety limit."
+            )
+        worksheet_opaque_root_xml_element_count += 1
+        if (
+            worksheet_opaque_root_xml_element_count
+            > _OOXML_READER_MAX_WORKSHEET_OPAQUE_ROOT_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "aggregate worksheet opaque root XML elements exceed the "
+                "semantic-reader safety limit."
+            )
+
     def worksheet_end(
         element: ElementTree.Element,
         tags: list[str],
@@ -4377,6 +4469,7 @@ def _validate_ooxml_semantic_reader_resources(
         nonlocal column_dimension_count
         nonlocal page_break_container_count
         nonlocal page_break_declaration_count
+        worksheet_opaque_root_end(element, tags)
         sheet_catalog_end(element, tags)
         merged_cell_end(element, tags)
         worksheet_reader_catalog_end(element, tags)
@@ -4918,6 +5011,8 @@ def _validate_ooxml_semantic_reader_resources(
                 )
             for member_name in reader_sheet_members:
                 reader_member(member_name)
+                if member_name in worksheet_members:
+                    worksheet_opaque_root_part_xml_element_count = 0
                 _stream_ooxml_reader_xml(
                     archive,
                     member_name,

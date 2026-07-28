@@ -5,6 +5,42 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Worksheet opaque-root structural bounds — 2026-07-26
+
+Version 0.147.0 closes a compact-allocation path shared by FormulaFence's raw
+worksheet scanners and the ordinary worksheet reader. The Open XML SDK's
+[Worksheet](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.worksheet?view=openxml-3.0.1)
+reference enumerates the base root children, including `sheetData`, controls,
+relationships, and the `extLst` extension location. The semantic-reader
+preflight intentionally permits a large `sheetData` sequence under its existing
+cell and dimension budgets. It previously had no compact structural boundary
+for a complete direct root subtree whose tag is outside that base grammar,
+though raw worksheet metadata readers can build a complete XML tree and the
+ordinary reader can retain an unrecognized root child until parsing completes.
+
+The preflight now matches the documented direct child grammar in both
+transitional and Strict Worksheet parts before either reader starts. It counts
+each complete subtree rooted at any other direct child, allowing 32,768 XML
+elements per selected worksheet and 65,536 in aggregate. Named base children,
+including `sheetData`, remain outside this narrow counter and retain their
+existing specialist limits. A successfully parsed overage returns the stable
+safety-preflight error and CLI status 2 rather than a partial profile. These
+are CI allocation limits for opaque root content, not a SpreadsheetML validity
+rule.
+
+A raw-ZIP fixture generated without FormulaFence retained a four-sheet model
+and appended 500,000 ignored foreign direct children to one worksheet root.
+The workbook was 87,143 bytes; its selected worksheet XML expanded to
+28,001,080 bytes. The exact released unguarded 0.146.0 wheel completed a
+successful profile in 18.774197 seconds at 133,860 KiB RSS, emitting no warning
+or failure. The 0.147.0 source rejects the same input before any workbook
+reader starts in 0.459208 seconds at 37,588 KiB RSS, with the stable worksheet
+opaque-root safety-preflight error and no profile JSON. A normal 6,408-byte
+model profile completed in 0.443235 seconds at 37,508 KiB RSS. Direct/nested,
+aggregate, exact/default-limit, standard-root, Strict-worksheet, and
+fail-before-reader regressions accompany the fixture. The complete source suite
+passed 1,081 tests in 158.31 seconds with zero failures or errors.
+
 ## Shared-string rich-text structural bounds — 2026-07-26
 
 Version 0.146.0 closes a compact-allocation path in the raw rich-text scanner

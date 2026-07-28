@@ -972,6 +972,15 @@ _EXTERNAL_RELATIONSHIP_KNOWN_ATTRIBUTES = frozenset(
 # parsers materialize them.
 _POWER_QUERY_MAX_XML_ELEMENT_COUNT = 32_768
 _POWER_QUERY_TOTAL_XML_MAX_ELEMENT_COUNT = 2 * _POWER_QUERY_MAX_XML_ELEMENT_COUNT
+# A Data Mashup also embeds a ZIP-like logical package. The outer custom XML
+# member is byte- and character-data-bounded, but one compact nested archive
+# could otherwise make this inventory inflate and hash many large members.
+# Bound its metadata and declared expansion before any ``ZipFile.read`` call.
+_POWER_QUERY_PACKAGE_MAX_SOURCE_BYTES = 768 * 1024
+_POWER_QUERY_PACKAGE_MAX_MEMBER_BYTES = 16 * 1024 * 1024
+_POWER_QUERY_PACKAGE_TOTAL_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
+_POWER_QUERY_PACKAGE_TOTAL_PARTS = 512
+_POWER_QUERY_PACKAGE_MAX_COMPRESSION_RATIO = 1_000
 _WORKSHEET_SPARKLINE_MAX_WORKSHEET_XML_BYTES = 16 * 1024 * 1024
 _WORKSHEET_SPARKLINE_TOTAL_XML_MAX_BYTES = 64 * 1024 * 1024
 _WORKSHEET_SPARKLINE_TOTAL_XML_MAX_COUNT = 512
@@ -2130,6 +2139,14 @@ class _PowerQueryXmlBudget:
 
 
 @dataclass
+class _PowerQueryPackageBudget:
+    """Bound nested Data Mashup logical-package expansion across one scan."""
+
+    remaining_parts: int = _POWER_QUERY_PACKAGE_TOTAL_PARTS
+    remaining_uncompressed_bytes: int = _POWER_QUERY_PACKAGE_TOTAL_UNCOMPRESSED_BYTES
+
+
+@dataclass
 class _ThreadedCommentBudget:
     """Bound threaded-comment/person XML bytes, parts, and structure per scan."""
 
@@ -2868,7 +2885,6 @@ _POWER_QUERY_VOLATILE_METADATA_TYPES = frozenset(
     }
 )
 _POWER_QUERY_FORMULA_MEMBER = "Formulas/Section1.m"
-_POWER_QUERY_MAX_FORMULA_BYTES = 16 * 1024 * 1024
 _NAMED_SHEET_VIEW_RELATIONSHIP = (
     "http://schemas.microsoft.com/office/2019/04/relationships/namedSheetView"
 )
@@ -8403,11 +8419,77 @@ def _power_query_package_inventory(
     member: str,
     warnings: set[str],
     opaque_entries: list[tuple[str, str]],
+    budget: _PowerQueryPackageBudget,
 ) -> tuple[int, int, int, str | None, str | None]:
     """Fingerprint logical query-package parts without exposing any part contents."""
+    if len(package_parts) > _POWER_QUERY_PACKAGE_MAX_SOURCE_BYTES:
+        return _power_query_package_resource_budget_fallback(
+            package_parts,
+            member,
+            warnings,
+            opaque_entries,
+            reason="source-size",
+        )
     try:
         with ZipFile(io.BytesIO(package_parts)) as package:
             entries = package.infolist()
+            total_uncompressed_bytes = 0
+            if len(entries) > budget.remaining_parts:
+                return _power_query_package_resource_budget_fallback(
+                    package_parts,
+                    member,
+                    warnings,
+                    opaque_entries,
+                    reason="part-count",
+                )
+            for entry in entries:
+                if entry.flag_bits & 0x1:
+                    return _power_query_package_resource_budget_fallback(
+                        package_parts,
+                        member,
+                        warnings,
+                        opaque_entries,
+                        reason="encrypted-member",
+                    )
+                if entry.compress_type not in {ZIP_STORED, ZIP_DEFLATED}:
+                    return _power_query_package_resource_budget_fallback(
+                        package_parts,
+                        member,
+                        warnings,
+                        opaque_entries,
+                        reason="compression-method",
+                    )
+                if entry.file_size > _POWER_QUERY_PACKAGE_MAX_MEMBER_BYTES:
+                    return _power_query_package_resource_budget_fallback(
+                        package_parts,
+                        member,
+                        warnings,
+                        opaque_entries,
+                        reason="member-size",
+                    )
+                total_uncompressed_bytes += entry.file_size
+                if total_uncompressed_bytes > budget.remaining_uncompressed_bytes:
+                    return _power_query_package_resource_budget_fallback(
+                        package_parts,
+                        member,
+                        warnings,
+                        opaque_entries,
+                        reason="aggregate-size",
+                    )
+                if entry.file_size and (
+                    not entry.compress_size
+                    or entry.file_size
+                    > entry.compress_size * _POWER_QUERY_PACKAGE_MAX_COMPRESSION_RATIO
+                ):
+                    return _power_query_package_resource_budget_fallback(
+                        package_parts,
+                        member,
+                        warnings,
+                        opaque_entries,
+                        reason="compression-ratio",
+                    )
+            budget.remaining_parts -= len(entries)
+            budget.remaining_uncompressed_bytes -= total_uncompressed_bytes
             formula_entries = [
                 entry for entry in entries if entry.filename == _POWER_QUERY_FORMULA_MEMBER
             ]
@@ -8420,21 +8502,7 @@ def _power_query_package_inventory(
             configuration_material: list[tuple[str, str]] = []
             for entry in entries:
                 label = f"{member}:{entry.filename}"
-                if entry.file_size > _POWER_QUERY_MAX_FORMULA_BYTES:
-                    warnings.add(
-                        "FormulaFence did not fully read an oversized Power Query package part; "
-                        "the affected query controls have a coverage gap."
-                    )
-                    signature = _private_external_data_signature(
-                        (
-                            ("size", str(entry.file_size)),
-                            ("crc", str(entry.CRC)),
-                            ("compressed_size", str(entry.compress_size)),
-                        )
-                    )
-                    opaque_entries.append((f"{label}:oversized", signature or ""))
-                else:
-                    signature = _private_payload_signature(package.read(entry))
+                signature = _private_payload_signature(package.read(entry))
                 if entry.filename == _POWER_QUERY_FORMULA_MEMBER:
                     formula_material.append((label, signature or ""))
                 else:
@@ -8458,6 +8526,30 @@ def _power_query_package_inventory(
         _private_external_data_signature(tuple(sorted(formula_material))),
         _private_external_data_signature(tuple(sorted(configuration_material))),
     )
+
+
+def _power_query_package_resource_budget_fallback(
+    package_parts: bytes,
+    member: str,
+    warnings: set[str],
+    opaque_entries: list[tuple[str, str]],
+    *,
+    reason: str,
+) -> tuple[int, int, int, str | None, str | None]:
+    """Retain private evidence when nested ZIP resources cannot be read safely."""
+    warnings.add(
+        "FormulaFence did not fully read a Power Query package-part stream whose ZIP "
+        "resources exceed the safety budget; affected query controls have a coverage gap."
+    )
+    signature = _private_external_data_signature(
+        (
+            ("zip-resource-budget-exhausted", reason),
+            ("source-size", str(len(package_parts))),
+            ("payload", _private_payload_signature(package_parts)),
+        )
+    )
+    opaque_entries.append((f"{member}:package-resource-budget", signature or ""))
+    return 0, 0, 0, None, None
 
 
 def _power_query_metadata_content_count(
@@ -8854,7 +8946,8 @@ def _power_query_mashup_inspection(
     root: ElementTree.Element,
     member: str,
     warnings: set[str],
-    budget: _PowerQueryXmlBudget,
+    xml_budget: _PowerQueryXmlBudget,
+    package_budget: _PowerQueryPackageBudget,
 ) -> _PowerQueryMashupInspection:
     """Inspect one Data Mashup part while keeping formulas and sources private."""
     opaque_entries: list[tuple[str, str]] = []
@@ -8914,6 +9007,7 @@ def _power_query_mashup_inspection(
         member,
         warnings,
         opaque_entries,
+        package_budget,
     )
     (
         metadata_document_count,
@@ -8926,7 +9020,7 @@ def _power_query_mashup_inspection(
         member,
         warnings,
         opaque_entries,
-        budget,
+        xml_budget,
     )
     (
         permission_payload_count,
@@ -8940,7 +9034,7 @@ def _power_query_mashup_inspection(
         member,
         warnings,
         permission_opaque_entries,
-        budget,
+        xml_budget,
     )
     package_signature_entries = [("stream-version", str(version))]
     if package_configuration_signature is not None:
@@ -8979,7 +9073,8 @@ def _power_query_snapshot(
 ) -> PowerQuerySnapshot:
     """Inventory Data Mashup parts identified by the custom-state structural pass."""
     inspections: list[tuple[str, _PowerQueryMashupInspection]] = []
-    budget = _PowerQueryXmlBudget()
+    xml_budget = _PowerQueryXmlBudget()
+    package_budget = _PowerQueryPackageBudget()
     for member in sorted(set(power_query_item_members), key=str.casefold):
         try:
             root = _xml_root(archive, member)
@@ -8997,7 +9092,13 @@ def _power_query_snapshot(
         inspections.append(
             (
                 member,
-                _power_query_mashup_inspection(root, member, warnings, budget),
+                _power_query_mashup_inspection(
+                    root,
+                    member,
+                    warnings,
+                    xml_budget,
+                    package_budget,
+                ),
             )
         )
     if not inspections:

@@ -1802,7 +1802,12 @@ formula will produce.
   FormulaFence streams each document before private parsing: 32,768 elements
   per document and 65,536 across the Power Query scan. A successfully parsed
   overage is visible `FF010`/`FF024` coverage evidence; malformed input retains
-  its established diagnostic.
+  its established diagnostic. The nested logical ZIP package is separately
+  preflighted before member reads: 768 KiB of package source, stored/deflated
+  entries only, 512 parts, 16 MiB per member, 64 MiB declared expanded data
+  across the scan, and a 1,000:1 maximum member ratio. An unsafe package is not
+  inflated; FormulaFence preserves a private opaque fingerprint and a coverage
+  warning instead of treating it as inspected content.
 - Explicit implicit intersection is inventoried for literal `@` display syntax,
   `@` applied to a function, and persisted `SINGLE()` OOXML. When `SINGLE()`
   has one direct static A1 cell or range argument with an unambiguous

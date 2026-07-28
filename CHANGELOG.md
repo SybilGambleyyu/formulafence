@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.155.0 — 2026-07-26
+
+- Bound each nested ZIP logical package in a Power Query `DataMashup` before
+  any package member is inflated: 768 KiB package source, stored/deflated
+  entries only, 512 parts, 16 MiB per part, 64 MiB aggregate expanded data
+  across the Power Query scan, and a 1,000:1 maximum member ratio.
+- Preserve private, hashed opaque evidence and an explicit coverage warning
+  when that nested-package boundary is exceeded rather than reading the
+  package's contents. A baseline-to-candidate diff consequently surfaces the
+  existing `FF010`/`FF024` evidence.
+- Add source-bound, compact ZIP-bomb fail-before-read, aggregate-across-
+  mashups, visible-coverage, and normal Power Query regressions.
+
 ## 0.154.0 — 2026-07-26
 
 - Bound every non-character-data XML lexical token to 128 KiB before a parser

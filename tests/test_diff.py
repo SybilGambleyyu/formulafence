@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import shutil
 import struct
@@ -12301,6 +12302,57 @@ def _power_query_mashup_fields(payload: bytes) -> tuple[int, list[bytes]]:
     return version, fields
 
 
+def _power_query_package_payload(parts: dict[str, bytes]) -> bytes:
+    """Build one compact nested package for a Data Mashup fixture."""
+    payload = io.BytesIO()
+    with ZipFile(payload, "w", compression=ZIP_DEFLATED) as archive:
+        for name, value in parts.items():
+            archive.writestr(name, value)
+    return payload.getvalue()
+
+
+def _replace_power_query_package_parts(path, package_parts: bytes) -> None:
+    """Replace the nested logical package in a synthetic Data Mashup fixture."""
+    staging = path.with_suffix(".power-query-package-parts.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    root = ElementTree.fromstring(contents["customXml/item1.xml"])
+    stream = base64.b64decode("".join((root.text or "").split()), validate=True)
+    version, fields = _power_query_mashup_fields(stream)
+    fields[0] = package_parts
+    rewritten_stream = struct.pack("<I", version)
+    for field in fields:
+        rewritten_stream += struct.pack("<I", len(field)) + field
+    root.text = base64.b64encode(rewritten_stream).decode("ascii")
+    contents["customXml/item1.xml"] = ElementTree.tostring(
+        root,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for member, payload in contents.items():
+            archive.writestr(member, payload)
+    staging.replace(path)
+
+
+def _duplicate_power_query_mashup(path) -> None:
+    """Add a second fixture Data Mashup to exercise aggregate package limits."""
+    staging = path.with_suffix(".power-query-duplicate.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+        }
+    contents["customXml/item2.xml"] = contents["customXml/item1.xml"]
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for member, payload in contents.items():
+            archive.writestr(member, payload)
+    staging.replace(path)
+
+
 def _power_query_nested_xml_payload(path, kind: str) -> bytes:
     """Return one decoded XML payload from the synthetic Data Mashup fixture."""
     with ZipFile(path) as archive:
@@ -18789,6 +18841,128 @@ def test_power_query_nested_xml_budget_fingerprints_same_size_overages() -> None
         "Power Query metadata XML payload whose XML structure" in warning
         for warning in warnings
     )
+
+
+def test_power_query_package_budget_rejects_oversized_source_before_opening_zip(
+    monkeypatch,
+) -> None:
+    package_parts = b"not-a-nested-package"
+    warnings: set[str] = set()
+    opaque_entries: list[tuple[str, str]] = []
+
+    def unexpected_zip_open(*args, **kwargs):
+        raise AssertionError("an oversized nested package reached ZipFile")
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_POWER_QUERY_PACKAGE_MAX_SOURCE_BYTES",
+        len(package_parts) - 1,
+    )
+    monkeypatch.setattr(workbook_module.ZipFile, "__init__", unexpected_zip_open)
+
+    result = workbook_module._power_query_package_inventory(
+        package_parts,
+        "customXml/item1.xml",
+        warnings,
+        opaque_entries,
+        workbook_module._PowerQueryPackageBudget(),
+    )
+
+    assert result == (0, 0, 0, None, None)
+    assert opaque_entries
+    assert any("ZIP resources exceed the safety budget" in warning for warning in warnings)
+
+
+def test_power_query_package_budget_stops_compact_member_inflation_before_read(
+    monkeypatch,
+) -> None:
+    package_parts = _power_query_package_payload(
+        {"Config/expansion.bin": b"\0" * (2 * 1024 * 1024)}
+    )
+    with ZipFile(io.BytesIO(package_parts)) as package:
+        info = package.getinfo("Config/expansion.bin")
+    assert len(package_parts) <= workbook_module._POWER_QUERY_PACKAGE_MAX_SOURCE_BYTES
+    assert (
+        info.file_size
+        > info.compress_size * workbook_module._POWER_QUERY_PACKAGE_MAX_COMPRESSION_RATIO
+    )
+    warnings: set[str] = set()
+    opaque_entries: list[tuple[str, str]] = []
+
+    def unexpected_member_read(*args, **kwargs):
+        raise AssertionError("a nested ZIP member was inflated after its preflight failed")
+
+    monkeypatch.setattr(workbook_module.ZipFile, "read", unexpected_member_read)
+
+    result = workbook_module._power_query_package_inventory(
+        package_parts,
+        "customXml/item1.xml",
+        warnings,
+        opaque_entries,
+        workbook_module._PowerQueryPackageBudget(),
+    )
+
+    assert result == (0, 0, 0, None, None)
+    assert opaque_entries
+    assert any("ZIP resources exceed the safety budget" in warning for warning in warnings)
+
+
+def test_power_query_package_budget_aggregates_across_mashups(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_power_query_model(tmp_path / "candidate.xlsx")
+    package_parts = _power_query_package_payload(
+        {"Config/aggregate.bin": b"power-query-package-budget"}
+    )
+    with ZipFile(io.BytesIO(package_parts)) as package:
+        entries = package.infolist()
+    total_uncompressed_bytes = sum(entry.file_size for entry in entries)
+    _replace_power_query_package_parts(workbook, package_parts)
+    _duplicate_power_query_mashup(workbook)
+    budget_type = workbook_module._PowerQueryPackageBudget
+    monkeypatch.setattr(
+        workbook_module,
+        "_PowerQueryPackageBudget",
+        lambda: budget_type(
+            remaining_parts=2 * len(entries),
+            remaining_uncompressed_bytes=2 * total_uncompressed_bytes - 1,
+        ),
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.power_query.mashup_count == 2
+    assert snapshot.power_query.package_part_count == len(entries)
+    assert snapshot.power_query.opaque_metadata.present is True
+    assert any(
+        "ZIP resources exceed the safety budget" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_power_query_package_budget_remains_visible_without_inflating_zip_bomb(
+    tmp_path,
+) -> None:
+    baseline = make_power_query_model(tmp_path / "baseline.xlsx")
+    candidate = make_power_query_model(tmp_path / "candidate.xlsx")
+    package_parts = _power_query_package_payload(
+        {"Config/expansion.bin": b"\0" * (2 * 1024 * 1024)}
+    )
+    _replace_power_query_package_parts(candidate, package_parts)
+
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+
+    assert candidate_snapshot.power_query.present is True
+    assert candidate_snapshot.power_query.parsed_mashup_count == 1
+    assert candidate_snapshot.power_query.package_part_count == 0
+    assert candidate_snapshot.power_query.opaque_metadata.present is True
+    assert any(
+        "ZIP resources exceed the safety budget" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert {"FF010", "FF024"} <= {finding.rule_id for finding in report.findings}
 
 
 def test_legacy_excel_notes_are_profiled_diffed_and_redacted(tmp_path) -> None:

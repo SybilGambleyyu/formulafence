@@ -5,6 +5,35 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Power Query nested ZIP package bounds — 2026-07-26
+
+Version 0.155.0 closes a nested-archive expansion path in Power Query
+`DataMashup` custom XML. The outer custom XML and decoded metadata/permission
+XML already have independent boundaries, but the logical package is itself a
+ZIP stream. Earlier releases listed and read every member to hash it, so a
+small inner archive could make the inspection repeatedly inflate a much larger
+declared payload.
+
+FormulaFence now checks the package source before opening it and checks every
+listed entry before any member read: 768 KiB source, stored/deflated entries,
+512 parts, 16 MiB per part, 64 MiB aggregate expanded data across the Power
+Query scan, and a 1,000:1 maximum member compression ratio. The boundary is a
+CI allocation and coverage limit rather than a Power Query validity rule. An
+overage retains a private opaque fingerprint and produces a parser coverage
+warning; a baseline-to-candidate diff therefore reports `FF010` and `FF024`.
+
+A controlled workbook used a 537,768-byte inner ZIP with `Section1.m` plus
+128 zero-filled 4 MiB configuration entries. It declared 536,870,947 expanded
+bytes while the Base64 `DataMashup` Custom XML remained 718,485 bytes and the
+outer workbook was 12,385 bytes. The public 0.154.0 wheel accepted that package
+in 2.738963 seconds. The 0.155.0 source returned the explicit coverage warning
+without inflating a nested member in 0.491038 seconds; its normal Power Query
+control completed in 0.470811 seconds. Source-bound, fail-before-open,
+fail-before-member-read, aggregate-across-mashups, report-visibility, and
+normal-control regressions cover the boundary. The complete 0.155.0 source
+suite passed 1,197 tests in 199.85 seconds; Ruff, bytecode compilation, and
+diff-whitespace checks also passed.
+
 ## XML non-character-data lexical bounds — 2026-07-26
 
 Version 0.154.0 closes the parser-frontier gap left by bounded opening tags

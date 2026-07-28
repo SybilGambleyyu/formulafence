@@ -1854,6 +1854,14 @@ coverage limits, not a Power Query file-validity rule. A successfully parsed
 overage becomes visible `FF010`/`FF024` coverage evidence; malformed input
 retains its established parser diagnostic.
 
+The nested logical ZIP package is independently preflighted before FormulaFence
+reads any package member: 768 KiB package source, stored/deflated compression,
+512 package parts, 16 MiB per member, 64 MiB aggregate expanded data across the
+Power Query scan, and a 1,000:1 maximum member ratio. A package beyond that
+allocation boundary is not inflated; FormulaFence retains private opaque
+evidence and emits coverage evidence, which makes a candidate change visible
+through `FF010`/`FF024` rather than accepting an uninspected package as equal.
+
 ## Portfolio policies
 
 `formulafence portfolio BASELINE_DIRECTORY CANDIDATE_DIRECTORY --policy

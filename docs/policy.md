@@ -162,7 +162,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_new_spill_references` | boolean | A formula adds a dynamic-array spill reference; FormulaFence traces its anchor but not its variable extent or blockers. |
 | `no_new_dynamic_array_output_references` | boolean | A formula newly intersects a non-anchor member of an OOXML-observed dynamic-array output range. |
 | `no_new_implicit_intersections` | boolean | A formula adds explicit `@` / `SINGLE()` implicit intersection, which can change which value a range or array contributes. |
-| `no_array_formula_semantics_changes` | boolean | A legacy-CSE or dynamic-array formula is added, removed, or changes mode, or a legacy CSE formula's fixed output range changes. |
+| `no_array_formula_semantics_changes` | boolean | A legacy-CSE or dynamic-array formula is added, removed, or changes mode; a legacy CSE formula's fixed output range changes; or raw OOXML array-formula metadata coverage materially changes. |
 | `no_new_tokenization_failures` | boolean | A formula is newly introduced that the underlying formula tokenizer cannot inspect. |
 | `no_table_definition_changes` | boolean | An Excel table is added, removed, moved, renamed, or has its columns/header/total-row configuration changed. |
 | `no_data_validation_changes` | boolean | A worksheet data-validation control changes, including its target ranges, criteria, blank/dropdown behavior, prompts, error alert, or global prompt-disable setting. |
@@ -248,11 +248,18 @@ output range and similarly links formulas that read its non-anchor members.
 That is an observed graph relationship, not a fixed-size guarantee: Excel can
 grow, shrink, or block the spill during recalculation. A new observed
 output-member relationship emits `FF019`; enable
-`no_new_dynamic_array_output_references` to make it `FFP019` in CI. An array
-formula with unrecognized metadata remains an explicit coverage warning without
-aliases. A change between ordinary, fixed CSE, and dynamic modes, or a fixed CSE
-output-range change, emits `FF018`; adding or removing a legacy-CSE or
-dynamic-array formula also emits `FF018`. Enable
+`no_new_dynamic_array_output_references` to make it `FFP019` in CI. Before
+parsing the canonical `xl/metadata.xml` mapping, FormulaFence streams it under
+a 16 MiB / 32,768-element bound. A successfully streamed overage never reaches
+the materializing metadata reader: every observed array formula is instead
+unclassified, receives no fixed-CSE or observed-spill alias, and produces a
+visible `FF010` coverage warning. FormulaFence also streams the raw worksheet
+cell/formula binding pass rather than retaining a second worksheet tree. The
+private fallback fingerprint is compared without exposing XML, metadata, or
+cell values; a material unavailable-metadata change emits `FF018`. A change
+between ordinary, fixed CSE, and dynamic modes, a fixed CSE output-range change,
+or adding/removing a legacy-CSE or dynamic-array formula also emits `FF018`.
+Enable
 `no_array_formula_semantics_changes` to make it `FFP018` in CI.
 
 FormulaFence separately inventories worksheet data-validation controls. It

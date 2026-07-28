@@ -359,10 +359,16 @@ formula will produce.
   blocked at recalculation time, and FormulaFence does not predict future spill
   dimensions or blockers. A newly observed output-member relationship emits
   `FF019` and can be blocked by `no_new_dynamic_array_output_references`.
-  Array formulas with absent, malformed, or unrecognized metadata mappings are
-  reported as coverage notes and receive no aliases. FormulaFence reports
-  adding, removing, or changing mode, plus a fixed CSE output-range change, as
-  `FF018`; it does not calculate either array form.
+  Before parsing the canonical `xl/metadata.xml` mapping, FormulaFence streams
+  it under a 16 MiB / 32,768-element boundary. A successfully streamed overage
+  never reaches the metadata tree parser, makes array-formula classification
+  unavailable, and receives no aliases; raw worksheet `c`/`f` bindings are
+  streamed rather than retained as a second worksheet tree. Array formulas with
+  absent, malformed, unrecognized, or unavailable metadata mappings are
+  reported as coverage notes. A private fallback fingerprint keeps a material
+  unavailable-metadata change visible as `FF018` without exposing raw XML.
+  FormulaFence also reports adding, removing, or changing mode, plus a fixed
+  CSE output-range change, as `FF018`; it does not calculate either array form.
 - Excel What-If Data Tables are distinct from Excel tables. FormulaFence reads
   each worksheet `f t="dataTable"` master directly from OOXML and privately
   compares its declared output range, one-/two-variable form, one-variable

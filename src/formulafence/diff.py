@@ -2026,6 +2026,45 @@ def _array_formula_semantics_changes(
     findings: list[Finding] = []
     known_modes = {"absent", "value", "ordinary", "legacy_cse", "dynamic"}
 
+    if (
+        before.array_formula_metadata_complete
+        != after.array_formula_metadata_complete
+        or before.array_formula_metadata_coverage_signature
+        != after.array_formula_metadata_coverage_signature
+    ):
+        details: dict[str, object] = {
+            "before_array_formula_metadata_complete": (
+                before.array_formula_metadata_complete
+            ),
+            "after_array_formula_metadata_complete": (
+                after.array_formula_metadata_complete
+            ),
+        }
+        if (
+            before.array_formula_metadata_coverage_signature
+            != after.array_formula_metadata_coverage_signature
+        ):
+            details["array_formula_metadata_coverage_material_changed"] = True
+        changes.append(
+            Change(
+                "array_formula_metadata_coverage_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF018",
+                "high",
+                (
+                    "Raw OOXML array-formula metadata coverage changed; dynamic-array "
+                    "or fixed-CSE classification may be incomplete."
+                ),
+                details=details,
+            )
+        )
+
     def formula_mode(cell: CellSnapshot | None) -> str:
         if cell is None:
             return "absent"

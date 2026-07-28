@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.143.0/formulafence-0.143.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.144.0/formulafence-0.144.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.143.0
+  uses: SybilGambleyyu/formulafence@v0.144.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -731,10 +731,18 @@ as `Model!B2`, FormulaFence adds the same compact anchor-to-consumer graph edge
 and records the relationship in the profile. It never calls that range fixed:
 Excel can grow, shrink, or block a spill during recalculation. A newly observed
 output-member relationship emits `FF019`; enable
-`no_new_dynamic_array_output_references` for `FFP019`. Unknown array metadata
-stays visible as a parser coverage warning with no aliases. FormulaFence emits
-`FF018` when a legacy-CSE or dynamic-array formula is added, removed, or changes
-mode, or when a legacy CSE fixed output range changes; enable
+`no_new_dynamic_array_output_references` for `FFP019`. Before it reads the
+canonical `xl/metadata.xml` mapping that identifies `XLDAPR`/`fDynamic`,
+FormulaFence streams it under a 16 MiB and 32,768-element boundary. A
+successfully streamed overage stays out of the tree parser, leaves array
+formulas unclassified with no aliases, and emits a visible parser-coverage
+warning. The direct worksheet `c`/`f` binding pass is streamed too, so it does
+not retain a second complete worksheet tree. Private opaque fallback evidence
+keeps a material unavailable-metadata change reviewable as `FF018` without
+disclosing XML or metadata material. FormulaFence emits `FF018` when a
+legacy-CSE or dynamic-array formula is added, removed, or changes mode, when a
+legacy CSE fixed output range changes, or when raw array-formula metadata
+coverage materially changes; enable
 `no_array_formula_semantics_changes` for `FFP018`. This follows Microsoft's
 [dynamic-versus-legacy array guidance](https://support.microsoft.com/en-us/excel/dynamic-array-formulas-and-spilled-array-behavior)
 and [XlsxWriter's documented CSE/dynamic serialization behavior](https://xlsxwriter.readthedocs.io/working_with_formulas.html).

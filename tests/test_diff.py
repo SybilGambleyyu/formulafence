@@ -956,6 +956,67 @@ def test_legacy_cse_output_aliases_do_not_expand_a_declared_huge_range(tmp_path)
     }
 
 
+_DYNAMIC_ARRAY_METADATA_XML_MEMBER = "xl/metadata.xml"
+_DYNAMIC_ARRAY_METADATA_AUDIT_NAMESPACE = "urn:formulafence:dynamic-metadata-audit"
+
+
+def _dynamic_array_metadata_xml_payload(path) -> bytes:
+    """Return raw dynamic-array metadata from the synthetic workbook fixture."""
+    with ZipFile(path) as archive:
+        return archive.read(_DYNAMIC_ARRAY_METADATA_XML_MEMBER)
+
+
+def _rewrite_dynamic_array_metadata_xml(path, payload: bytes) -> None:
+    """Replace raw dynamic-array metadata without FormulaFence's reader."""
+    staging = path.with_suffix(".dynamic-array-metadata.tmp.xlsx")
+    with ZipFile(path) as archive:
+        contents = {
+            entry.filename: archive.read(entry)
+            for entry in archive.infolist()
+            if not entry.is_dir()
+        }
+    contents[_DYNAMIC_ARRAY_METADATA_XML_MEMBER] = payload
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+    staging.replace(path)
+
+
+def _append_dynamic_array_metadata_xml_elements(
+    path,
+    count: int,
+    *,
+    entry_name: str = "entry",
+) -> None:
+    """Append ignored foreign metadata records without building them as a tree."""
+    payload = _dynamic_array_metadata_xml_payload(path)
+    closing_tag = b"</metadata>"
+    if not payload.endswith(closing_tag):
+        raise ValueError("fixture dynamic-array metadata has no closing metadata tag")
+    entries = b"<ff:" + entry_name.encode("ascii") + b"/>"
+    inserted = (
+        b'<ff:opaque xmlns:ff="'
+        + _DYNAMIC_ARRAY_METADATA_AUDIT_NAMESPACE.encode("ascii")
+        + b'">'
+        + entries * count
+        + b"</ff:opaque>"
+    )
+    _rewrite_dynamic_array_metadata_xml(
+        path,
+        payload[: -len(closing_tag)] + inserted + closing_tag,
+    )
+
+
+def _dynamic_array_metadata_xml_element_count(path) -> int:
+    """Count the complete dynamic-array metadata tree for exact budget tests."""
+    return sum(
+        1
+        for _ in ElementTree.fromstring(
+            _dynamic_array_metadata_xml_payload(path)
+        ).iter()
+    )
+
+
 def test_dynamic_array_metadata_traces_observed_output_member_consumers(tmp_path) -> None:
     workbook = make_legacy_array_model(tmp_path / "dynamic.xlsx")
     mark_array_formula_dynamic(workbook)
@@ -996,6 +1057,226 @@ def test_dynamic_array_metadata_traces_observed_output_member_consumers(tmp_path
     ]
     assert "## Dynamic-array formula anchors" in profile_to_markdown(profile)
     assert "observed from this workbook, not fixed" in profile_to_markdown(profile)
+
+
+def test_dynamic_array_metadata_xml_budget_stops_all_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_legacy_array_model(tmp_path / "dynamic.xlsx")
+    mark_array_formula_dynamic(workbook)
+    _append_dynamic_array_metadata_xml_elements(workbook, 8)
+    metadata_xml = _dynamic_array_metadata_xml_payload(workbook)
+    monkeypatch.setattr(
+        workbook_module,
+        "_DYNAMIC_ARRAY_METADATA_MAX_XML_ELEMENT_COUNT",
+        _dynamic_array_metadata_xml_element_count(workbook) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == metadata_xml:
+            raise AssertionError(
+                "the over-budget dynamic-array metadata XML tree was materialized"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    metadata = workbook_module._array_formula_metadata(workbook)
+
+    assert metadata.dynamic_cells == set()
+    assert metadata.unclassified_cells == set()
+    assert metadata.complete is False
+    assert any(
+        "dynamic-array metadata XML whose XML structure" in warning
+        for warning in metadata.warnings
+    )
+
+
+def test_dynamic_array_metadata_streams_worksheets_without_a_second_tree(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_legacy_array_model(tmp_path / "dynamic.xlsx")
+    mark_array_formula_dynamic(workbook)
+    with ZipFile(workbook) as archive:
+        worksheet_xml = archive.read("xl/worksheets/sheet2.xml")
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == worksheet_xml:
+            raise AssertionError("the raw array-formula worksheet tree was materialized")
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    metadata = workbook_module._array_formula_metadata(workbook)
+
+    assert metadata.complete is True
+    assert metadata.dynamic_cells == {("Model", "B1")}
+    assert metadata.unclassified_cells == set()
+
+
+def test_dynamic_array_metadata_xml_byte_budget_stops_tree_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_legacy_array_model(tmp_path / "dynamic.xlsx")
+    mark_array_formula_dynamic(workbook)
+    metadata_xml = _dynamic_array_metadata_xml_payload(workbook)
+    monkeypatch.setattr(
+        workbook_module,
+        "_DYNAMIC_ARRAY_METADATA_MAX_XML_PART_BYTES",
+        len(metadata_xml) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == metadata_xml:
+            raise AssertionError("the oversized dynamic-array metadata XML tree was materialized")
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    metadata = workbook_module._array_formula_metadata(workbook)
+
+    assert metadata.dynamic_cells == set()
+    assert metadata.unclassified_cells == set()
+    assert metadata.complete is False
+    assert any(
+        "oversized dynamic-array metadata XML part" in warning
+        for warning in metadata.warnings
+    )
+
+
+def test_dynamic_array_metadata_xml_budget_accepts_the_default_capacity(tmp_path) -> None:
+    workbook = make_legacy_array_model(tmp_path / "dynamic.xlsx")
+    mark_array_formula_dynamic(workbook)
+    _append_dynamic_array_metadata_xml_elements(
+        workbook,
+        workbook_module._DYNAMIC_ARRAY_METADATA_MAX_XML_ELEMENT_COUNT
+        - _dynamic_array_metadata_xml_element_count(workbook)
+        - 1,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.dynamic_array_formula_cells == {("Model", "B1")}
+    assert snapshot.array_formula_metadata_complete is True
+    assert not any(
+        "dynamic-array metadata XML whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_dynamic_array_metadata_xml_budget_rejects_the_default_overage(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    workbook = make_legacy_array_model(tmp_path / "dynamic.xlsx")
+    mark_array_formula_dynamic(workbook)
+    _append_dynamic_array_metadata_xml_elements(
+        workbook,
+        workbook_module._DYNAMIC_ARRAY_METADATA_MAX_XML_ELEMENT_COUNT
+        - _dynamic_array_metadata_xml_element_count(workbook),
+    )
+    metadata_xml = _dynamic_array_metadata_xml_payload(workbook)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_tree_parse(payload):
+        if payload == metadata_xml:
+            raise AssertionError(
+                "the default-overage dynamic-array metadata XML tree was materialized"
+            )
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", unexpected_tree_parse)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.dynamic_array_formula_cells == set()
+    assert snapshot.unclassified_array_formula_cells == {("Model", "B1")}
+    assert snapshot.array_formula_metadata_complete is False
+    assert any(
+        "dynamic-array metadata XML whose XML structure" in warning
+        for warning in snapshot.parser_warnings
+    )
+
+
+def test_dynamic_array_metadata_xml_budget_fingerprints_same_size_overages(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    first = make_legacy_array_model(tmp_path / "first.xlsx")
+    second = make_legacy_array_model(tmp_path / "second.xlsx")
+    mark_array_formula_dynamic(first)
+    mark_array_formula_dynamic(second)
+    _append_dynamic_array_metadata_xml_elements(first, 1, entry_name="entrya")
+    _append_dynamic_array_metadata_xml_elements(second, 1, entry_name="entryb")
+    with ZipFile(first) as archive:
+        first_info = archive.getinfo(_DYNAMIC_ARRAY_METADATA_XML_MEMBER)
+    with ZipFile(second) as archive:
+        second_info = archive.getinfo(_DYNAMIC_ARRAY_METADATA_XML_MEMBER)
+    monkeypatch.setattr(
+        workbook_module,
+        "_DYNAMIC_ARRAY_METADATA_MAX_XML_ELEMENT_COUNT",
+        1,
+    )
+
+    first_snapshot = load_snapshot(first)
+    second_snapshot = load_snapshot(second)
+    report = compare_snapshots(first_snapshot, second_snapshot)
+    metadata_change = next(
+        change
+        for change in report.changes
+        if change.kind == "array_formula_metadata_coverage_changed"
+    )
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(second_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+
+    assert first_info.file_size == second_info.file_size
+    assert first_snapshot.array_formula_metadata_coverage_signature != (
+        second_snapshot.array_formula_metadata_coverage_signature
+    )
+    assert metadata_change.details == {
+        "before_array_formula_metadata_complete": False,
+        "after_array_formula_metadata_complete": False,
+        "array_formula_metadata_coverage_material_changed": True,
+    }
+    assert "FF018" in {finding.rule_id for finding in report.findings}
+    assert "FF010" not in {finding.rule_id for finding in report.findings}
+    assert all(
+        sensitive_value not in artifact
+        for sensitive_value in (
+            _DYNAMIC_ARRAY_METADATA_AUDIT_NAMESPACE,
+            "entrya",
+            "entryb",
+        )
+        for artifact in rendered_artifacts
+    )
+
+
+def test_malformed_dynamic_array_metadata_keeps_a_parser_diagnostic(tmp_path) -> None:
+    workbook = make_legacy_array_model(tmp_path / "dynamic.xlsx")
+    mark_array_formula_dynamic(workbook)
+    _rewrite_dynamic_array_metadata_xml(
+        workbook,
+        b'<?xml version="1.0"?><metadata><cellMetadata>',
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.dynamic_array_formula_cells == set()
+    assert snapshot.unclassified_array_formula_cells == {("Model", "B1")}
+    assert any(
+        "could not inspect array-formula OOXML metadata (ParseError)" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_dynamic_array_observed_output_aliases_connect_input_changes(tmp_path) -> None:

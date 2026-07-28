@@ -552,6 +552,8 @@ _RICH_DATA_TOTAL_XML_BYTES = 64 * 1024 * 1024
 _RICH_DATA_TOTAL_XML_PARTS = 512
 _RICH_DATA_MAX_XML_ELEMENT_COUNT = 32_768
 _RICH_DATA_TOTAL_XML_MAX_ELEMENT_COUNT = 2 * _RICH_DATA_MAX_XML_ELEMENT_COUNT
+_DYNAMIC_ARRAY_METADATA_MAX_XML_PART_BYTES = 16 * 1024 * 1024
+_DYNAMIC_ARRAY_METADATA_MAX_XML_ELEMENT_COUNT = 32_768
 _RICH_DATA_METADATA_TYPE_NAME = "XLRICHVALUE"
 _RICH_DATA_METADATA_EXTENSION_URI = "{3E2802C4-A4D2-4D8B-9148-E3BE6C30E623}"
 _RICH_DATA_PART_CONTENT_TYPES = {
@@ -1163,6 +1165,27 @@ _CHART_TYPE_ELEMENT_NAMES = frozenset(
 
 
 @dataclass(frozen=True)
+class _DynamicArrayMetadataInspection:
+    """Bounded raw metadata needed to recognize dynamic-array formulas."""
+
+    dynamic_indexes: frozenset[int]
+    complete: bool
+    coverage_signature: str | None
+    warnings: tuple[str, ...]
+
+
+@dataclass
+class _ArrayFormulaCellScan:
+    """The small direct-cell state retained by the streaming array scanner."""
+
+    depth: int
+    coordinate: str | None
+    metadata_index: str | None
+    formula_seen: bool = False
+    is_array_formula: bool = False
+
+
+@dataclass(frozen=True)
 class _ArrayFormulaMetadata:
     """Raw OOXML metadata needed to distinguish CSE from dynamic arrays."""
 
@@ -1170,6 +1193,7 @@ class _ArrayFormulaMetadata:
     unclassified_cells: set[CellKey]
     scanned_sheets: set[str]
     complete: bool
+    coverage_signature: str | None
     warnings: tuple[str, ...]
 
 
@@ -1183,6 +1207,8 @@ class _ArrayFormulaClassification:
     dynamic_cells: set[CellKey]
     dynamic_ranges: tuple[ArrayFormulaRange, ...]
     unclassified_cells: set[CellKey]
+    metadata_complete: bool
+    metadata_coverage_signature: str | None
     warnings: tuple[str, ...]
 
 
@@ -19916,12 +19942,105 @@ def _worksheet_embedded_control_metadata(
     return _WorksheetEmbeddedControlMetadata(snapshot, tuple(sorted(warnings)))
 
 
-def _dynamic_metadata_indexes(archive: ZipFile) -> set[int]:
-    """Return the one-based cell-metadata indexes marked as dynamic arrays."""
+def _dynamic_array_metadata_coverage_signature(
+    archive: ZipFile,
+    info: ZipInfo,
+    *,
+    reason: str,
+) -> str:
+    """Fingerprint an unread dynamic-array metadata part without retaining it."""
+    metadata = repr((info.filename, info.file_size, info.compress_size, info.CRC))
+    entries: list[tuple[str, str]] = [
+        ("dynamic-array-metadata-coverage-gap", reason),
+        ("metadata", metadata),
+    ]
+    if (
+        payload_signature := _private_archive_member_payload_signature(archive, info)
+    ) is not None:
+        entries.append(("payload", payload_signature))
+    return _private_external_data_signature(tuple(entries))
+
+
+def _dynamic_array_metadata_failure(
+    archive: ZipFile,
+    info: ZipInfo,
+    *,
+    reason: str,
+    warning: str,
+) -> _DynamicArrayMetadataInspection:
+    """Return fail-closed dynamic-array metadata coverage evidence."""
+    return _DynamicArrayMetadataInspection(
+        dynamic_indexes=frozenset(),
+        complete=False,
+        coverage_signature=_dynamic_array_metadata_coverage_signature(
+            archive,
+            info,
+            reason=reason,
+        ),
+        warnings=(warning,),
+    )
+
+
+def _dynamic_metadata_indexes(archive: ZipFile) -> _DynamicArrayMetadataInspection:
+    """Return bounded dynamic-array indexes from the canonical metadata part."""
     try:
-        metadata = _xml_root(archive, "xl/metadata.xml")
+        info = archive.getinfo("xl/metadata.xml")
     except KeyError:
-        return set()
+        return _DynamicArrayMetadataInspection(
+            dynamic_indexes=frozenset(),
+            complete=True,
+            coverage_signature=None,
+            warnings=(),
+        )
+    if info.file_size > _DYNAMIC_ARRAY_METADATA_MAX_XML_PART_BYTES:
+        return _dynamic_array_metadata_failure(
+            archive,
+            info,
+            reason="oversized-metadata-part",
+            warning=(
+                "FormulaFence did not fully read an oversized dynamic-array metadata "
+                "XML part; dynamic-array output aliases were not traced."
+            ),
+        )
+    try:
+        element_count = _ooxml_xml_structure_element_count_within_budget(
+            archive,
+            info.filename,
+            maximum_element_count=_DYNAMIC_ARRAY_METADATA_MAX_XML_ELEMENT_COUNT,
+        )
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        return _dynamic_array_metadata_failure(
+            archive,
+            info,
+            reason=f"stream-parse-{type(error).__name__}",
+            warning=(
+                "FormulaFence could not inspect array-formula OOXML metadata "
+                f"({type(error).__name__}); fixed CSE output aliases were not traced."
+            ),
+        )
+    if element_count is None:
+        return _dynamic_array_metadata_failure(
+            archive,
+            info,
+            reason="xml-structure-budget-exhausted",
+            warning=(
+                "FormulaFence did not fully read dynamic-array metadata XML whose XML "
+                "structure exceeds the safety budget; dynamic-array output aliases "
+                "were not traced."
+            ),
+        )
+    try:
+        metadata = _xml_root(archive, info.filename)
+    except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
+        return _dynamic_array_metadata_failure(
+            archive,
+            info,
+            reason=f"tree-parse-{type(error).__name__}",
+            warning=(
+                "FormulaFence could not inspect array-formula OOXML metadata "
+                f"({type(error).__name__}); fixed CSE output aliases were not traced."
+            ),
+        )
 
     def tag(name: str) -> str:
         return f"{{{_SPREADSHEETML_NS}}}{name}"
@@ -19949,7 +20068,12 @@ def _dynamic_metadata_indexes(archive: ZipFile) -> set[int]:
 
     cell_metadata = metadata.find(tag("cellMetadata"))
     if cell_metadata is None:
-        return set()
+        return _DynamicArrayMetadataInspection(
+            dynamic_indexes=frozenset(),
+            complete=True,
+            coverage_signature=None,
+            warnings=(),
+        )
     dynamic_cell_indexes: set[int] = set()
     for cell_index, metadata_block in enumerate(cell_metadata.findall(tag("bk")), start=1):
         for record in metadata_block.findall(tag("rc")):
@@ -19964,7 +20088,12 @@ def _dynamic_metadata_indexes(archive: ZipFile) -> set[int]:
             if value_index in dynamic_future_indexes.get(type_name, set()):
                 dynamic_cell_indexes.add(cell_index)
                 break
-    return dynamic_cell_indexes
+    return _DynamicArrayMetadataInspection(
+        dynamic_indexes=frozenset(dynamic_cell_indexes),
+        complete=True,
+        coverage_signature=None,
+        warnings=(),
+    )
 
 
 _WHAT_IF_DATA_TABLE_FORMULA_TYPE = "dataTable"
@@ -45834,46 +45963,120 @@ def _worksheet_image_metadata(path: Path) -> _WorksheetImageMetadata:
     return _WorksheetImageMetadata(snapshot, tuple(sorted(warnings)))
 
 
+def _array_formula_worksheet_metadata(
+    archive: ZipFile,
+    sheet: str,
+    member: str,
+    dynamic_indexes: frozenset[int],
+) -> tuple[set[CellKey], set[CellKey]]:
+    """Stream raw array-formula bindings without retaining a worksheet tree."""
+    cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+    formula_tag = f"{{{_SPREADSHEETML_NS}}}f"
+    dynamic_cells: set[CellKey] = set()
+    unclassified_cells: set[CellKey] = set()
+    cell_scans: list[_ArrayFormulaCellScan] = []
+    depth = 0
+    with archive.open(member) as xml_stream:
+        for event, element in ElementTree.iterparse(xml_stream, events=("start", "end")):
+            if event == "start":
+                depth += 1
+                if element.tag == cell_tag:
+                    cell_scans.append(
+                        _ArrayFormulaCellScan(
+                            depth=depth,
+                            coordinate=element.get("r"),
+                            metadata_index=element.get("cm"),
+                        )
+                    )
+                elif (
+                    cell_scans
+                    and depth == cell_scans[-1].depth + 1
+                    and element.tag == formula_tag
+                    and not cell_scans[-1].formula_seen
+                ):
+                    cell_scans[-1].formula_seen = True
+                    cell_scans[-1].is_array_formula = element.get("t") == "array"
+                continue
+
+            if (
+                element.tag == cell_tag
+                and cell_scans
+                and depth == cell_scans[-1].depth
+            ):
+                cell = cell_scans.pop()
+                if cell.is_array_formula and cell.coordinate:
+                    try:
+                        metadata_index = int(cell.metadata_index or "0")
+                    except ValueError:
+                        unclassified_cells.add((sheet, cell.coordinate))
+                    else:
+                        if metadata_index > 0:
+                            if metadata_index in dynamic_indexes:
+                                dynamic_cells.add((sheet, cell.coordinate))
+                            else:
+                                unclassified_cells.add((sheet, cell.coordinate))
+            element.clear()
+            depth -= 1
+    return dynamic_cells, unclassified_cells
+
+
 def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
     """Inspect raw markers that openpyxl intentionally does not expose."""
     dynamic_cells: set[CellKey] = set()
     unclassified_cells: set[CellKey] = set()
     scanned_sheets: set[str] = set()
+    inspection = _DynamicArrayMetadataInspection(
+        dynamic_indexes=frozenset(),
+        complete=False,
+        coverage_signature=None,
+        warnings=(),
+    )
     try:
         with ZipFile(path) as archive:
-            dynamic_indexes = _dynamic_metadata_indexes(archive)
+            inspection = _dynamic_metadata_indexes(archive)
+            if not inspection.complete:
+                return _ArrayFormulaMetadata(
+                    dynamic_cells=set(),
+                    unclassified_cells=set(),
+                    scanned_sheets=set(),
+                    complete=False,
+                    coverage_signature=inspection.coverage_signature,
+                    warnings=inspection.warnings,
+                )
             for sheet, member in _worksheet_xml_paths(archive).items():
-                worksheet = _xml_root(archive, member)
+                sheet_dynamic_cells, sheet_unclassified_cells = (
+                    _array_formula_worksheet_metadata(
+                        archive,
+                        sheet,
+                        member,
+                        inspection.dynamic_indexes,
+                    )
+                )
+                dynamic_cells.update(sheet_dynamic_cells)
+                unclassified_cells.update(sheet_unclassified_cells)
                 scanned_sheets.add(sheet)
-                for cell in worksheet.iter(f"{{{_SPREADSHEETML_NS}}}c"):
-                    formula = cell.find(f"{{{_SPREADSHEETML_NS}}}f")
-                    coordinate = cell.get("r")
-                    if (
-                        formula is None
-                        or formula.get("t") != "array"
-                        or not coordinate
-                    ):
-                        continue
-                    try:
-                        metadata_index = int(cell.get("cm", "0"))
-                    except ValueError:
-                        unclassified_cells.add((sheet, coordinate))
-                        continue
-                    if metadata_index <= 0:
-                        continue
-                    if metadata_index in dynamic_indexes:
-                        dynamic_cells.add((sheet, coordinate))
-                    else:
-                        unclassified_cells.add((sheet, coordinate))
-    except (BadZipFile, ElementTree.ParseError, OSError, ValueError) as error:
+    except (
+        BadZipFile,
+        ElementTree.ParseError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as error:
         return _ArrayFormulaMetadata(
             dynamic_cells=set(),
             unclassified_cells=set(),
             scanned_sheets=set(),
             complete=False,
-            warnings=(
-                "FormulaFence could not inspect array-formula OOXML metadata "
-                f"({type(error).__name__}); fixed CSE output aliases were not traced.",
+            coverage_signature=inspection.coverage_signature,
+            warnings=tuple(
+                sorted(
+                    {
+                        *inspection.warnings,
+                        "FormulaFence could not inspect array-formula OOXML metadata "
+                        f"({type(error).__name__}); fixed CSE output aliases were not traced.",
+                    }
+                )
             ),
         )
     return _ArrayFormulaMetadata(
@@ -45881,7 +46084,8 @@ def _array_formula_metadata(path: Path) -> _ArrayFormulaMetadata:
         unclassified_cells=unclassified_cells,
         scanned_sheets=scanned_sheets,
         complete=True,
-        warnings=(),
+        coverage_signature=None,
+        warnings=inspection.warnings,
     )
 
 
@@ -45982,6 +46186,8 @@ def _classify_array_formulas(
         dynamic_cells=dynamic_cells,
         dynamic_ranges=tuple(dynamic_ranges),
         unclassified_cells=unclassified_cells,
+        metadata_complete=metadata.complete,
+        metadata_coverage_signature=metadata.coverage_signature,
         warnings=tuple(sorted(warnings)),
     )
 
@@ -49567,6 +49773,8 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
             dynamic_cells=set(),
             dynamic_ranges=(),
             unclassified_cells=set(),
+            metadata_complete=True,
+            metadata_coverage_signature=None,
             warnings=(),
         )
     parser_warnings.update(array_formula_classification.warnings)
@@ -50669,6 +50877,10 @@ def load_snapshot(path: str | Path) -> WorkbookSnapshot:
         static_global_defined_name_references=static_global_defined_name_references,
         static_local_defined_name_references=static_local_defined_name_references,
         unclassified_array_formula_cells=array_formula_classification.unclassified_cells,
+        array_formula_metadata_complete=array_formula_classification.metadata_complete,
+        array_formula_metadata_coverage_signature=(
+            array_formula_classification.metadata_coverage_signature
+        ),
         array_formula_output_dependents=array_formula_output_dependents,
         tokenization_failure_cells=tokenization_failure_cells,
         tables=tables,

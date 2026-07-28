@@ -4521,6 +4521,14 @@ class WorkbookSnapshot:
         str, dict[str, tuple[ParsedReference, ...]]
     ] = field(default_factory=dict, repr=False)
     unclassified_array_formula_cells: set[CellKey] = field(default_factory=set)
+    # The bounded raw metadata reader can decline a dynamic-array catalog
+    # before materializing it. Keep the exact fallback private, but retain its
+    # comparison state so an opaque same-sized change remains reviewable.
+    array_formula_metadata_complete: bool = True
+    array_formula_metadata_coverage_signature: str | None = field(
+        default=None,
+        repr=False,
+    )
     array_formula_output_dependents: dict[CellKey, set[CellKey]] = field(
         default_factory=dict
     )

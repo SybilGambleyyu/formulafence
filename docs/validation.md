@@ -5,6 +5,41 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Dynamic-array metadata XML structural bounds — 2026-07-26
+
+Version 0.144.0 closes a compact-allocation path in the raw
+`xl/metadata.xml` reader used to distinguish legacy CSE formulas from dynamic
+arrays. The metadata definition links a `futureMetadata` record to a metadata
+type, including the `XLDAPR` dynamic-array properties used by FormulaFence's
+classification ([MS-XLSX metadata](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/3dd44d53-847b-402f-a8c7-41a85024caf7)). A byte-permitted metadata part could
+therefore first materialize a repetitive tree even when all added children were
+foreign and irrelevant to the mapping. The classifier also previously built a
+second complete worksheet tree only to recover direct `c` / `f` bindings.
+
+FormulaFence now streams the canonical metadata part before parsing it, allowing
+16 MiB and 32,768 XML elements. A successful structural or byte overage stays
+out of the metadata tree parser, marks raw array-formula classification
+incomplete, and leaves every observed array formula unclassified with no
+fixed-CSE or observed-spill alias. It emits `FF010`; a private streamed SHA-256
+fallback fingerprint makes same-size opaque coverage changes visible through
+`FF018`, while JSON, Markdown, and SARIF expose neither metadata nor raw XML.
+The direct worksheet binding scan is now streaming as well. Malformed metadata
+retains its parser diagnostic. These are allocation boundaries for this named
+dynamic-array classifier, not a general SpreadsheetML validity limit.
+
+A controlled dynamic-array fixture retained a real `cm=1` / `XLDAPR` binding
+at `Model!B1` and appended 1,000,000 ignored foreign direct metadata children.
+Its `xl/metadata.xml` part was 6,000,781 bytes uncompressed and 9,243 bytes
+compressed; the whole workbook was 15,291 bytes. The released unguarded 0.143.0
+reader completed the hostile comparison in 1.301145 seconds / 134,580 KiB with
+no findings, no warning, and no diff. The 0.144.0 source completed the same
+comparison in 0.284295 seconds / 47,360 KiB without materializing the hostile
+tree, emitting `FF010` and `FF018` with
+`parser_coverage_warning_added` and `array_formula_metadata_coverage_changed`.
+A normal self-comparison completed in 0.160159 seconds / 38,316 KiB with no
+findings or changes. The hostile output contained neither the injected namespace
+nor the foreign element tag.
+
 ## XLM macro-sheet XML structural bounds — 2026-07-26
 
 Version 0.143.0 closes a compact-allocation path in raw Excel 4.0 / XLM

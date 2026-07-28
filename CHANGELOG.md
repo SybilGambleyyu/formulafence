@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.144.0 — 2026-07-26
+
+- Bound the canonical raw `xl/metadata.xml` reader that identifies OOXML
+  `XLDAPR` / `fDynamic` dynamic-array formula markers before it can materialize
+  a compact, repetitive metadata tree. The dynamic-array classifier now allows
+  16 MiB and 32,768 XML elements for that one named metadata part.
+- Stream raw worksheet cell/formula bindings for array classification rather
+  than constructing a second full worksheet XML tree after the ordinary
+  workbook reader has already loaded it.
+- Turn an oversized or structurally over-budget dynamic-array metadata part
+  into visible `FF010` coverage evidence and fail closed by classifying affected
+  array formulas as unclassified with no fixed-CSE or observed-spill aliases.
+  A private streamed fallback fingerprint makes same-size opaque coverage
+  changes diff-visible through `FF018` without exposing metadata, XML tags, or
+  cell values; malformed XML retains its parser diagnostic.
+- Add dynamic-array metadata byte/structural, exact/default, full-load,
+  worksheet-streaming, same-size-fingerprint, redaction, and malformed-input
+  regressions.
+
 ## 0.143.0 — 2026-07-26
 
 - Bound raw XLM macro-sheet XML before FormulaFence, its temporary

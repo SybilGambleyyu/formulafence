@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.158.0
+        uses: SybilGambleyyu/formulafence@v0.159.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -51,7 +51,10 @@ The Action exposes `steps.formulafence.outputs.report-path` and
 workbook and policy input to the workspace and refuses to overwrite an input.
 It validates a bounded, unambiguous UTF-8 policy before it inspects either
 workbook, so duplicate keys, anchors, aliases, merge keys, or an over-limit
-policy fail the job without spending workbook-reader resources.
+policy fail the job without spending workbook-reader resources. The policy is
+opened through one regular-file descriptor with nonblocking mode where the host
+supports it, so a post-check FIFO or device replacement cannot stall the job on
+those hosts.
 
 Artifact upload defaults to `true`. Set `upload-artifact: 'false'` when a
 workflow needs to collect several reports itself. Set `install: 'false'` only
@@ -271,7 +274,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.158.0
+  uses: SybilGambleyyu/formulafence@v0.159.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -375,7 +378,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.158.0/formulafence-0.158.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.159.0/formulafence-0.159.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

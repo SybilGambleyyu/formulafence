@@ -5,6 +5,34 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Policy source descriptor boundary — 2026-07-28
+
+Version 0.159.0 closes a post-check pathname boundary in policy loading. The
+previous loader checked that a policy pathname was a file, then opened that
+pathname with ordinary blocking I/O. A concurrent replacement between those two
+steps could substitute a FIFO or device and stall a `check` or policy-backed
+`portfolio` command before YAML validation.
+
+On a host with POSIX nonblocking descriptor opens, a deterministic control
+started with a valid policy then replaced its pathname with a FIFO immediately
+before the public 0.158.0 wheel opened it. An alarm had to interrupt the old
+pathname open after 1.000191 seconds; its eventual diagnostic was the generic
+policy-read error. The 0.159.0 source opens one descriptor with `O_NONBLOCK`,
+checks it is regular with `fstat`, and reads the bounded source from that same
+descriptor. The equivalent replacement returned `Policy source is not a regular
+file.` in 0.000094 seconds, without reaching YAML construction. Hosts without a
+nonblocking descriptor-open flag retain their platform behavior; the regular
+descriptor check and bounded read still apply.
+
+In fresh processes, 250 parses of a 46-byte normal policy took 0.068762 seconds
+at 31,872 KiB RSS with the public 0.158.0 wheel and 0.060042 seconds at 32,364
+KiB RSS with the 0.159.0 source. Exact source-limit, post-check FIFO,
+regular-file, source-size, UTF-8, YAML-ambiguity, and fail-before-workbook
+regressions cover the policy boundary. The complete source suite passed 1,222
+tests in 201.42 seconds. Release artifacts are separately built from the tagged
+commit, checked with `twine`, installed from both wheel and source distribution
+into fresh environments, and compared against the public release bytes.
+
 ## Stable workbook source snapshots — 2026-07-28
 
 Version 0.158.0 closes a source-path time-of-check/time-of-use boundary in

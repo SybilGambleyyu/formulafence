@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.159.0 — 2026-07-28
+
+- Read a policy source through one file descriptor, requesting nonblocking mode
+  where the host provides it, and verify the opened object is a regular file
+  before consuming its bounded UTF-8 bytes. The 1 MiB source ceiling now also
+  gates an already-known oversized file before any read.
+- Close the post-check pathname-replacement case where a policy swapped for a
+  FIFO or device could block a CI command before YAML validation on hosts with
+  nonblocking descriptor opens. Descriptor reads use bounded blocks and retain
+  the existing source-size, UTF-8, YAML, and schema diagnostics.
+- Add a deterministic post-check FIFO replacement regression that asserts the
+  nonblocking descriptor path, regular-file rejection, and absence of a
+  pathname reopen.
+
 ## 0.158.0 — 2026-07-28
 
 - Materialize one bounded private copy of each regular workbook source before

@@ -106,6 +106,13 @@ levels of nesting, 4,096 characters per scalar, and 512 selectors in each of
 `protected_cells` and `allowed_changes`. A policy error fails closed before a
 `check` or policy-backed `portfolio` command inspects its workbook input.
 
+FormulaFence reads the policy through one file descriptor, requests nonblocking
+mode where the host provides it, and verifies the opened object is a regular
+file before it consumes source bytes. The descriptor, not a later pathname
+reopen, supplies the bounded policy text; a pathname replaced with a FIFO or
+device after the initial path check therefore fails closed instead of stalling
+CI on hosts that provide nonblocking descriptor opens.
+
 ## Root fields
 
 | Field | Type | Meaning |

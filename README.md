@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.158.0/formulafence-0.158.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.159.0/formulafence-0.159.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.158.0
+  uses: SybilGambleyyu/formulafence@v0.159.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2666,8 +2666,12 @@ Policy input is bounded before FormulaFence opens either workbook: it accepts
 one UTF-8 YAML document with ordinary mappings, lists, and scalars, while
 rejecting duplicate keys, anchors, aliases, and merge keys. The policy limits
 are 1 MiB of source, 4,096 YAML nodes, 64 nesting levels, 4,096 characters per
-scalar, and 512 selectors in each selector list. See the [policy
-reference](docs/policy.md#policy-file-safety-and-syntax) for the supported
+scalar, and 512 selectors in each selector list. FormulaFence reads that source
+through one descriptor, requests nonblocking mode where the host supports it,
+and verifies that the opened object is a regular file before parsing; a policy
+pathname replaced with a FIFO or device after the initial check fails closed on
+hosts that provide nonblocking descriptor opens rather than stalling CI. See
+the [policy reference](docs/policy.md#policy-file-safety-and-syntax) for the supported
 syntax and the [threat model](docs/threat-model.md) for the CI boundary.
 
 For each snapshot, FormulaFence first materializes one bounded private copy of

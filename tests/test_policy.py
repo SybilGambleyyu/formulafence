@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 from openpyxl import load_workbook
 
@@ -216,6 +219,39 @@ def test_load_policy_accepts_the_exact_source_limit(tmp_path, monkeypatch) -> No
     parsed = load_policy(policy)
 
     assert parsed.version == 1
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"),
+    reason="requires POSIX nonblocking FIFO support",
+)
+def test_load_policy_rejects_post_check_fifo_replacement_without_blocking(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    policy = tmp_path / "race.yml"
+    policy.write_text("version: 1\nrules: {}\n", encoding="utf-8")
+    original_open = policy_module.os.open
+
+    def replace_with_fifo(path, flags):
+        if Path(path) == policy:
+            assert flags & os.O_NONBLOCK
+            policy.unlink()
+            os.mkfifo(policy)
+        return original_open(path, flags)
+
+    def unexpected_path_open(*args, **kwargs):
+        raise AssertionError("policy loading reopened the pathname through Path.open")
+
+    monkeypatch.setattr(policy_module.os, "open", replace_with_fifo)
+    monkeypatch.setattr(Path, "open", unexpected_path_open)
+
+    try:
+        with pytest.raises(PolicyError, match="not a regular file"):
+            load_policy(policy)
+    finally:
+        if policy.exists() or policy.is_symlink():
+            policy.unlink()
 
 
 @pytest.mark.parametrize(

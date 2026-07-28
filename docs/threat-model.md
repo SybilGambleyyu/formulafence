@@ -113,9 +113,14 @@ financial correctness or replace model review.
   paths, URLs, connection strings, commands, parameter values, SSO identifiers,
   cached records, and opaque extension XML remain private comparison evidence.
 - A policy is bounded and parsed before a policy-enforcing command opens a
-  workbook input. It accepts one UTF-8 YAML document with ordinary mappings,
-  lists, and scalars; duplicate keys, anchors, aliases, and merge keys fail
-  closed rather than silently changing a reviewed control.
+  workbook input. FormulaFence opens it once through a file descriptor,
+  requests nonblocking mode where the host provides it, verifies that descriptor
+  is a regular file, and reads bounded source bytes from that descriptor rather
+  than reopening its pathname. On hosts with nonblocking descriptor opens, a
+  post-check FIFO or device replacement therefore fails closed instead of
+  stalling a runner. The policy accepts one UTF-8 YAML document with ordinary
+  mappings, lists, and scalars; duplicate keys, anchors, aliases, and merge
+  keys fail closed rather than silently changing a reviewed control.
 - For every workbook snapshot, FormulaFence opens one regular source and makes
   one bounded private copy before archive preflight. The archive inventory,
   semantic-reader gate, downstream raw scanners, ordinary reader, and snapshot
@@ -352,9 +357,10 @@ formula will produce.
   hostile document or to make an untrusted runner safe.
 - Policy source is independently capped at 1 MiB, 4,096 composed YAML nodes,
   64 nesting levels, 4,096 characters per scalar, and 512 selectors in each
-  selector list. It is one UTF-8 YAML document; FormulaFence rejects duplicate
-  mapping keys, anchors, aliases, and merge keys so a committed policy cannot
-  hide a last-wins or inherited control change.
+  selector list. It is one UTF-8 YAML document read from one verified regular
+  descriptor, requesting nonblocking mode where available; FormulaFence rejects
+  duplicate mapping keys, anchors, aliases, and merge keys so a committed policy
+  cannot hide a last-wins or inherited control change.
 - After that ZIP-only pass, the semantic-reader limit is 64 MiB for each
   XML/relationship part, 256 MiB for aggregate XML material, 4,000,000 XML
   elements and 256 nesting levels for every reader-visible part it streams,

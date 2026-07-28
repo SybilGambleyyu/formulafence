@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,6 +102,7 @@ _POLICY_MAX_YAML_NODE_COUNT = 4_096
 _POLICY_MAX_YAML_NESTING = 64
 _POLICY_MAX_SCALAR_CHARACTERS = 4_096
 _POLICY_MAX_SELECTOR_COUNT = 512
+_POLICY_SOURCE_READ_BLOCK_BYTES = 64 * 1024
 
 
 def _format_policy_source_limit() -> str:
@@ -615,15 +618,50 @@ def parse_policy(data: object) -> Policy:
     )
 
 
+def _read_bounded_regular_policy_source(policy_path: Path) -> bytes:
+    """Read one bounded regular-file policy source without a blocking path race."""
+    descriptor: int | None = None
+    try:
+        input_flags = (
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+        )
+        descriptor = os.open(policy_path, input_flags)
+        source_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise PolicyError("Policy source is not a regular file.")
+        if source_stat.st_size > _POLICY_MAX_SOURCE_BYTES:
+            raise PolicyError(
+                "Policy source exceeds FormulaFence's "
+                f"{_format_policy_source_limit()} safety limit."
+            )
+
+        source = bytearray()
+        remaining_bytes = _POLICY_MAX_SOURCE_BYTES + 1
+        while remaining_bytes:
+            block = os.read(
+                descriptor,
+                min(_POLICY_SOURCE_READ_BLOCK_BYTES, remaining_bytes),
+            )
+            if not block:
+                break
+            source.extend(block)
+            remaining_bytes -= len(block)
+        return bytes(source)
+    except OSError as error:
+        raise PolicyError(f"Could not read policy {policy_path}: {error}") from error
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
 def load_policy(path: str | Path) -> Policy:
     policy_path = Path(path)
     if not policy_path.exists() or not policy_path.is_file():
         raise PolicyError(f"Policy does not exist or is not a file: {policy_path}")
-    try:
-        with policy_path.open("rb") as policy_file:
-            source = policy_file.read(_POLICY_MAX_SOURCE_BYTES + 1)
-    except OSError as error:
-        raise PolicyError(f"Could not read policy {policy_path}: {error}") from error
+    source = _read_bounded_regular_policy_source(policy_path)
     if len(source) > _POLICY_MAX_SOURCE_BYTES:
         raise PolicyError(
             "Policy source exceeds FormulaFence's "

@@ -5,6 +5,37 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Profile artifact byte budget — 2026-07-28
+
+Version 0.169.0 completes the rendered-artifact boundary for the remaining CLI
+path. A profile intentionally publishes safe structural and coverage metadata,
+including one location/function record for each dynamically referenced formula.
+Those records remain useful review evidence, but a compressed source at the
+allowed reader cell count can otherwise serialize into a much larger JSON or
+Markdown file after bounded workbook inspection has already completed.
+
+`profile` now accepts the same positive `--max-report-bytes` control as the
+comparison commands and defaults to 33,554,432 UTF-8 bytes (32 MiB). JSON uses
+the incremental encoder; Markdown streams every line through the shared byte
+counter. An overage returns status 2 before FormulaFence writes or replaces the
+requested output. This is an artifact-publication boundary, not a reduction of
+the separate bounded profile/snapshot state retained while inspection runs; a
+reviewer can deliberately opt up for a complete known-size artifact.
+
+For a valid 2,590,768-byte `.xlsx` containing exactly 500,000 repeated
+`INDIRECT` formulas on a 28-character sheet name, the public 0.168.0 wheel
+completed in 6m44.010s and wrote a 65,429,579-byte JSON profile. The 0.169.0
+candidate default failed closed in 7m06.956s with no report at the 32 MiB
+ceiling. Giving it exactly 65,429,579 bytes completed in 6m59.999s and wrote a
+byte-for-byte identical profile (SHA-256
+`862c1870e9307164749e9b6f4a24a82f47dc606f537f971a997a98439bdc7597`).
+The focused profile/rendering/CLI regression set passed 12 tests in 3.31
+seconds. The final source suite passed 1,272 tests in 356.55 seconds, with
+Ruff, bytecode compilation, Action-shell syntax, and whitespace checks clean.
+The final wheel and source distribution passed `twine check`; fresh isolated
+installs of both passed `pip check`, wrote a normal JSON profile, and rejected a
+one-byte Markdown profile budget without publishing an output path.
+
 ## Rendered report byte budget — 2026-07-28
 
 Version 0.168.0 closes the remaining artifact-amplification gap after workbook

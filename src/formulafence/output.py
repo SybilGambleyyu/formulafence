@@ -2058,9 +2058,11 @@ def _credential_summary(credential: dict[str, Any]) -> str:
     return "; ".join(kinds)
 
 
-def profile_to_markdown(profile: dict[str, Any]) -> str:
+def profile_to_markdown(
+    profile: dict[str, Any], *, max_bytes: int | None = None
+) -> str:
     workbook = profile["workbook"]
-    lines = [
+    initial_lines = [
         "# FormulaFence workbook profile",
         "",
         f"- **Workbook:** `{workbook['path']}`",
@@ -2322,6 +2324,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
         "| Sheet | State | Non-empty cells | Formula cells | Used range |",
         "| --- | --- | ---: | ---: | --- |",
     ]
+    lines = _BoundedLines(initial_lines, max_bytes=max_bytes)
     for sheet in profile["sheets"]:
         safe_sheet = {key: _markdown_escape(value) for key, value in sheet.items()}
         lines.append(
@@ -5267,7 +5270,7 @@ def profile_to_markdown(profile: dict[str, Any]) -> str:
                 f"- Formula tokenizer could not inspect `{location}`; "
                 "dependency impact may be incomplete"
             )
-    return "\n".join(lines) + "\n"
+    return lines.render()
 
 
 def _report_payload_for_rendering(

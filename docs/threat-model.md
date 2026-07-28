@@ -292,14 +292,15 @@ financial correctness or replace model review.
   CI CPU or retained evidence. The command stops with status 2 rather than
   emitting a partial impact report, and reconstructs shortest paths only for
   the fixed review sample instead of every reachable path prefix.
-- Rendered `diff`, `check`, and `portfolio` artifacts have a separate 32 MiB
-  UTF-8 default ceiling (`--max-report-bytes`). It applies to JSON, Markdown,
-  HTML, and SARIF before FormulaFence writes or replaces the requested output,
-  so a highly compressible workbook cannot turn bounded reader state into an
-  impractical CI artifact. JSON/SARIF count incremental encoding, Markdown
-  streams lines into the shared budget, and HTML counts escaped review entries; an
-  overage returns status 2 without publishing a partial file. A caller may set
-  a larger positive limit only for an intentionally reviewed artifact.
+- Rendered `profile`, `diff`, `check`, and `portfolio` artifacts have a
+  separate 32 MiB UTF-8 default ceiling (`--max-report-bytes`). It applies to
+  profile JSON/Markdown plus comparison JSON, Markdown, HTML, and SARIF before
+  FormulaFence writes or replaces the requested output, so a highly compressible
+  workbook cannot turn bounded reader state into an impractical CI artifact.
+  JSON/SARIF count incremental encoding, Markdown streams lines into the shared
+  budget, and HTML counts escaped review entries; an overage returns status 2
+  without publishing a partial file. A caller may set a larger positive limit
+  only for an intentionally reviewed artifact.
 - Cross-workbook portfolio impact evidence is candidate-only and local to the
   supplied inventory. FormulaFence retains raw external source spellings and
   package targets only as private parser state, then resolves a direct static

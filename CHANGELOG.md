@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.169.0 — 2026-07-28
+
+- Extend the 32 MiB UTF-8 rendered-artifact boundary to `profile` JSON and
+  Markdown output. `profile` now accepts `--max-report-bytes`, returns status 2
+  before output publication on overage, and preserves the complete artifact
+  when a reviewer deliberately supplies the exact or larger budget.
+- Reuse the existing incremental JSON encoder and streaming Markdown line
+  writer, so profile publication has the same byte-accurate fail-closed
+  behavior as `diff`, `check`, and `portfolio` without changing default
+  programmatic rendering APIs.
+
 ## 0.168.0 — 2026-07-28
 
 - Bound the rendered artifact produced by `diff`, `check`, and `portfolio` to

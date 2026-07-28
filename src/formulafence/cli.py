@@ -255,7 +255,7 @@ def _add_report_byte_limit_argument(parser: argparse.ArgumentParser) -> None:
         type=_positive_integer,
         default=DEFAULT_MAX_REPORT_BYTES,
         help=(
-            "Fail closed before a rendered comparison report exceeds this many UTF-8 bytes"
+            "Fail closed before a rendered artifact exceeds this many UTF-8 bytes"
         ),
     )
 
@@ -272,6 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
         "profile", help="Inventory a workbook without exposing cell values"
     )
     profile.add_argument("workbook", type=Path)
+    _add_report_byte_limit_argument(profile)
     _add_output_arguments(profile, ("json", "markdown"))
 
     diff = commands.add_parser("diff", help="Compare two workbooks semantically")
@@ -517,7 +518,11 @@ def _threshold_failed(severities: Sequence[str], fail_on: str) -> bool:
 def _run_profile(arguments: argparse.Namespace) -> int:
     _ensure_output_safe(arguments.output, arguments.workbook)
     profile = profile_snapshot(load_snapshot(arguments.workbook))
-    content = as_json(profile) if arguments.format == "json" else profile_to_markdown(profile)
+    content = (
+        as_json(profile, max_bytes=arguments.max_report_bytes)
+        if arguments.format == "json"
+        else profile_to_markdown(profile, max_bytes=arguments.max_report_bytes)
+    )
     _emit(content, arguments.output)
     return 0
 

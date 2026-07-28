@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.168.0/formulafence-0.168.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.169.0/formulafence-0.169.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.168.0
+  uses: SybilGambleyyu/formulafence@v0.169.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -528,7 +528,7 @@ symlinked paths, over-limit inventories, or an unreadable workbook.
 The default bounds are 512 supported workbooks, 32,768 total filesystem entries,
 4 GiB of supported-workbook source bytes, 2,000,000 populated retained snapshot
 cells per directory, 100,000 aggregate local change-analysis states, and 32 MiB
-of rendered report text. The
+of rendered artifact text. The
 entry budget is enforced before FormulaFence
 retains or sorts paths, so non-workbook files, directories, lock files, and
 symlinks cannot make a broad CI directory consume an unbounded inventory. After
@@ -558,13 +558,14 @@ report data; an exhausted pool returns exit code `2` before a partial impact
 report can imply complete evidence. FormulaFence reconstructs only the bounded
 set of serialized shortest-path samples, not every reachable path prefix.
 Rendered artifact size has a separate 32 MiB UTF-8 ceiling, configurable with
-`--max-report-bytes`. It applies to JSON, Markdown, HTML, and SARIF from
-`diff`, `check`, and `portfolio`; an overage returns exit code `2` before
-FormulaFence writes or replaces the requested output path. JSON/SARIF count
-incremental encoder chunks, Markdown streams each line, and HTML counts each
-escaped review entry, so a compact but repetitive workbook cannot
-inflate into an unbounded CI artifact. Set a larger positive value only when a
-reviewer intentionally needs the corresponding complete artifact.
+`--max-report-bytes`. It applies to `profile` JSON/Markdown and to JSON,
+Markdown, HTML, and SARIF from `diff`, `check`, and `portfolio`; an overage
+returns exit code `2` before FormulaFence writes or replaces the requested
+output path. JSON/SARIF count incremental encoder chunks, Markdown streams each
+line, and HTML counts each escaped review entry, so a compact but repetitive
+workbook cannot inflate into an unbounded CI artifact. Set a larger positive
+value only when a reviewer intentionally needs the corresponding complete
+artifact.
 Cross-workbook traversal has a separate global bound of 100,000 source-to-node
 graph states, configurable with `--max-link-impact`; an exhausted bound emits
 critical `FF080` and returns exit code `2` rather than claiming complete impact

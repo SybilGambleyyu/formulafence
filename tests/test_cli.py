@@ -186,6 +186,36 @@ def test_diff_defaults_the_report_byte_limit() -> None:
     assert arguments.max_report_bytes == DEFAULT_MAX_REPORT_BYTES
 
 
+def test_profile_fails_before_writing_an_oversized_artifact(tmp_path, capsys) -> None:
+    workbook = make_model(tmp_path / "model.xlsx")
+    for output_format, suffix in (("json", "json"), ("markdown", "md")):
+        output = tmp_path / f"profile.{suffix}"
+
+        assert (
+            main(
+                [
+                    "profile",
+                    str(workbook),
+                    "--format",
+                    output_format,
+                    "--output",
+                    str(output),
+                    "--max-report-bytes",
+                    "1",
+                ]
+            )
+            == 2
+        )
+        assert not output.exists()
+    assert "max_report_bytes=1" in capsys.readouterr().err
+
+
+def test_profile_defaults_the_report_byte_limit() -> None:
+    arguments = cli_module.build_parser().parse_args(["profile", "model.xlsx"])
+
+    assert arguments.max_report_bytes == DEFAULT_MAX_REPORT_BYTES
+
+
 def test_profile_output_swap_cannot_overwrite_the_workbook(tmp_path, monkeypatch) -> None:
     workbook = make_model(tmp_path / "model.xlsx")
     original_workbook = workbook.read_bytes()

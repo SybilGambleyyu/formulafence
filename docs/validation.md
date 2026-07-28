@@ -29,7 +29,10 @@ candidate rejected the same directory at a deliberately reduced 128-entry
 budget in 0.004794 seconds at 38,636 KiB RSS, before collecting the remaining
 paths for sorting. The final source suite passed 1,234 tests in 203.63 seconds,
 with Ruff, bytecode compilation, Action-shell syntax, and whitespace checks
-clean.
+clean. The locally built wheel and source distribution passed `twine check`;
+fresh installs of both passed `pip check`, normal and hostile policy controls,
+the exact/overflow portfolio-entry controls, and the retained report-output
+swap control.
 
 ## Atomic no-clobber starter-policy publication — 2026-07-28
 

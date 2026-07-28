@@ -6,6 +6,7 @@ import base64
 import binascii
 import errno
 import hashlib
+import heapq
 import io
 import os
 import posixpath
@@ -48240,6 +48241,86 @@ class _FormulaDefinedName:
     scope: str | None
 
 
+_NameMapValue = TypeVar("_NameMapValue")
+_NameDefinitionIdentity = tuple[str | None, str]
+
+
+class _OverlayNameMapping(Mapping[str, _NameMapValue]):
+    """A live, constant-time lookup overlay for scoped formula-name state.
+
+    ``inspect_formula`` only needs membership and lookup.  Materializing every
+    visible workbook/local name map for every formula-defined name turns the
+    allowed catalog into quadratic work.  This overlay keeps a fixed small
+    lookup chain over mutable resolution dictionaries instead.  Its explicit
+    truthiness avoids ``Mapping.__len__`` work when ``inspect_formula`` uses a
+    supplied map in a boolean context.
+    """
+
+    def __init__(self, *mappings: Mapping[str, _NameMapValue]) -> None:
+        self._mappings = mappings
+
+    def __bool__(self) -> bool:
+        return any(bool(mapping) for mapping in self._mappings)
+
+    def __contains__(self, key: object) -> bool:
+        return any(key in mapping for mapping in self._mappings)
+
+    def __getitem__(self, key: str) -> _NameMapValue:
+        for mapping in self._mappings:
+            if key in mapping:
+                return mapping[key]
+        raise KeyError(key)
+
+    def get(self, key: str, default=None):
+        for mapping in self._mappings:
+            if key in mapping:
+                return mapping[key]
+        return default
+
+    def __iter__(self):
+        seen: set[str] = set()
+        for mapping in self._mappings:
+            for key in mapping:
+                if key not in seen:
+                    seen.add(key)
+                    yield key
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
+class _NameMarkerMapping(Mapping[str, tuple[str, ...]]):
+    """Expose one marker kind through reusable name-to-identity overlays."""
+
+    def __init__(
+        self,
+        identities: Mapping[str, _NameDefinitionIdentity],
+        markers: Mapping[_NameDefinitionIdentity, str],
+    ) -> None:
+        self._identities = identities
+        self._markers = markers
+
+    def __bool__(self) -> bool:
+        return bool(self._identities)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._identities
+
+    def __getitem__(self, key: str) -> tuple[str, ...]:
+        return (self._markers[self._identities[key]],)
+
+    def get(self, key: str, default=None):
+        if key not in self._identities:
+            return default
+        return (self._markers[self._identities[key]],)
+
+    def __iter__(self):
+        return iter(self._identities)
+
+    def __len__(self) -> int:
+        return len(self._identities)
+
+
 def _formula_defined_name(
     name: str, definition: object, scope: str | None
 ) -> _FormulaDefinedName | None:
@@ -48419,12 +48500,73 @@ def _named_reference_maps(
         for scope, definitions in local_lambdas.items()
         for key, definition in definitions.items()
     }
-    resolved_definitions: dict[tuple[str | None, str], tuple[ParsedReference, ...]] = {}
-    resolving: set[tuple[str | None, str]] = set()
-    failed: set[tuple[str | None, str]] = set()
 
     def identity_for(definition: _FormulaDefinedName) -> tuple[str | None, str]:
         return definition.scope, definition.key
+
+    formula_definition_identities = {
+        identity_for(definition)
+        for definition in global_formulas.values()
+    } | {
+        identity_for(definition)
+        for definitions in local_formulas.values()
+        for definition in definitions.values()
+    }
+    local_scopes = set(local_references) | set(local_formulas) | set(local_lambdas)
+
+    # Keep static ordinary names and newly resolved formula names in live
+    # overlays. Rebuilding this complete catalog at every resolver call made a
+    # compact workbook with many formula-defined names quadratic to inspect.
+    static_global_reference_values = dict(global_references)
+    for local_scope, references in local_references.items():
+        for key, values in references.items():
+            static_global_reference_values[
+                _qualified_name_key(sheet_titles[local_scope], key)
+            ] = values
+    resolved_reference_values: dict[str, tuple[ParsedReference, ...]] = {}
+    resolved_local_reference_values = {
+        scope: {} for scope in local_scopes
+    }
+    global_reference_view = _OverlayNameMapping(
+        resolved_reference_values,
+        static_global_reference_values,
+    )
+    scoped_reference_views = {
+        scope: _OverlayNameMapping(
+            resolved_local_reference_values[scope],
+            local_references.get(scope, {}),
+            global_reference_view,
+        )
+        for scope in local_scopes
+    }
+
+    # A known named LAMBDA must remain visible even before it is safely
+    # resolvable: ``None`` is FormulaFence's explicit coverage-gap signal for
+    # that callable. The values update in place as LAMBDAs resolve.
+    global_function_values: dict[str, tuple[ParsedReference, ...] | None] = {
+        key: None for key in global_lambdas
+    }
+    local_function_values: dict[
+        str, dict[str, tuple[ParsedReference, ...] | None]
+    ] = {scope: {} for scope in local_scopes}
+    for local_scope, definitions in local_lambdas.items():
+        for key in definitions:
+            global_function_values[_qualified_name_key(sheet_titles[local_scope], key)] = (
+                None
+            )
+            local_function_values[local_scope][key] = None
+    global_function_view = _OverlayNameMapping(global_function_values)
+    scoped_function_views = {
+        scope: _OverlayNameMapping(
+            local_function_values[scope],
+            global_function_view,
+        )
+        for scope in local_scopes
+    }
+
+    resolved_definitions: dict[tuple[str | None, str], tuple[ParsedReference, ...]] = {}
+    resolving: set[tuple[str | None, str]] = set()
+    failed: set[tuple[str | None, str]] = set()
 
     def cached_references(
         definition: _FormulaDefinedName,
@@ -48434,47 +48576,38 @@ def _named_reference_maps(
     def has_cached_references(definition: _FormulaDefinedName) -> bool:
         return identity_for(definition) in resolved_definitions
 
-    def visible_references(scope: str | None) -> dict[str, tuple[ParsedReference, ...]]:
-        references = dict(global_references)
-        for key, definition in global_formulas.items():
-            if cached := cached_references(definition):
-                references[key] = cached
-            elif has_cached_references(definition):
-                references[key] = ()
-        for local_scope, values in local_references.items():
-            for key, local_values in values.items():
-                references[_qualified_name_key(sheet_titles[local_scope], key)] = local_values
-        for local_scope, definitions in local_formulas.items():
-            for key, definition in definitions.items():
-                if cached := cached_references(definition):
-                    references[_qualified_name_key(sheet_titles[local_scope], key)] = cached
-                elif has_cached_references(definition):
-                    references[_qualified_name_key(sheet_titles[local_scope], key)] = ()
-        if scope is not None:
-            references.update(local_references.get(scope, {}))
-            for key, definition in local_formulas.get(scope, {}).items():
-                if cached := cached_references(definition):
-                    references[key] = cached
-                elif has_cached_references(definition):
-                    references[key] = ()
-        return references
+    def visible_references(
+        scope: str | None,
+    ) -> Mapping[str, tuple[ParsedReference, ...]]:
+        return scoped_reference_views.get(scope, global_reference_view)
 
     def visible_named_functions(
         scope: str | None,
-    ) -> dict[str, tuple[ParsedReference, ...] | None]:
-        functions: dict[str, tuple[ParsedReference, ...] | None] = {
-            key: cached_references(definition)
-            for key, definition in global_lambdas.items()
-        }
-        for local_scope, definitions in local_lambdas.items():
-            for key, definition in definitions.items():
-                functions[_qualified_name_key(sheet_titles[local_scope], key)] = (
-                    cached_references(definition)
-                )
-        if scope is not None:
-            for key, definition in local_lambdas.get(scope, {}).items():
-                functions[key] = cached_references(definition)
-        return functions
+    ) -> Mapping[str, tuple[ParsedReference, ...] | None]:
+        return scoped_function_views.get(scope, global_function_view)
+
+    def record_resolved_definition(
+        definition: _FormulaDefinedName,
+        references: tuple[ParsedReference, ...],
+    ) -> None:
+        """Expose one completed definition through the reusable name views."""
+        identity = identity_for(definition)
+        if identity in formula_definition_identities:
+            if definition.scope is None:
+                resolved_reference_values[definition.key] = references
+            else:
+                resolved_reference_values[
+                    _qualified_name_key(sheet_titles[definition.scope], definition.key)
+                ] = references
+                resolved_local_reference_values[definition.scope][definition.key] = references
+            return
+        if definition.scope is None:
+            global_function_values[definition.key] = references
+        else:
+            global_function_values[
+                _qualified_name_key(sheet_titles[definition.scope], definition.key)
+            ] = references
+            local_function_values[definition.scope][definition.key] = references
 
     def named_definition_for(
         token: str, scope: str | None
@@ -48555,6 +48688,7 @@ def _named_reference_maps(
             failed.add(identity)
             return None
         resolved_definitions[identity] = resolved_references
+        record_resolved_definition(definition, resolved_references)
         return resolved_references
 
     for definition in global_formulas.values():
@@ -48648,41 +48782,118 @@ def _named_reference_maps(
         for identity, marker in markers.items()
     }
 
-    def visible_named_markers(
-        scope: str | None,
-        markers_by_definition: Mapping[tuple[str | None, str], str],
-    ) -> dict[str, tuple[str, ...]]:
-        markers = {
-            key: (markers_by_definition[identity_for(definition)],)
-            for key, definition in global_formulas.items()
-        }
-        for local_scope, definitions in local_formulas.items():
-            for key, definition in definitions.items():
-                markers[_qualified_name_key(sheet_titles[local_scope], key)] = (
-                    markers_by_definition[identity_for(definition)],
-                )
-        if scope is not None:
-            for key, definition in local_formulas.get(scope, {}).items():
-                markers[key] = (markers_by_definition[identity_for(definition)],)
-        return markers
+    # Marker propagation has the same visibility rules as references and
+    # named functions.  Keep that name-to-definition identity catalog once,
+    # then let each marker ledger translate an identity on demand.  Building a
+    # complete string/tuple map for every marker kind would otherwise retain
+    # eleven more full copies of a large defined-name catalog.
+    formula_name_identities: dict[str, _NameDefinitionIdentity] = {
+        key: identity_for(definition)
+        for key, definition in global_formulas.items()
+    }
+    local_formula_name_identities: dict[
+        str, dict[str, _NameDefinitionIdentity]
+    ] = {scope: {} for scope in local_scopes}
+    for local_scope, definitions in local_formulas.items():
+        for key, definition in definitions.items():
+            identity = identity_for(definition)
+            formula_name_identities[
+                _qualified_name_key(sheet_titles[local_scope], key)
+            ] = identity
+            local_formula_name_identities[local_scope][key] = identity
+    global_formula_identity_view = _OverlayNameMapping(formula_name_identities)
+    scoped_formula_identity_views = {
+        scope: _OverlayNameMapping(
+            local_formula_name_identities[scope],
+            global_formula_identity_view,
+        )
+        for scope in local_scopes
+    }
 
-    def visible_named_function_markers(
-        scope: str | None,
+    function_name_identities: dict[str, _NameDefinitionIdentity] = {
+        key: identity_for(definition)
+        for key, definition in global_lambdas.items()
+    }
+    local_function_name_identities: dict[
+        str, dict[str, _NameDefinitionIdentity]
+    ] = {scope: {} for scope in local_scopes}
+    for local_scope, definitions in local_lambdas.items():
+        for key, definition in definitions.items():
+            identity = identity_for(definition)
+            function_name_identities[
+                _qualified_name_key(sheet_titles[local_scope], key)
+            ] = identity
+            local_function_name_identities[local_scope][key] = identity
+    global_function_identity_view = _OverlayNameMapping(function_name_identities)
+    scoped_function_identity_views = {
+        scope: _OverlayNameMapping(
+            local_function_name_identities[scope],
+            global_function_identity_view,
+        )
+        for scope in local_scopes
+    }
+
+    def marker_visibility_maps(
         markers_by_definition: Mapping[tuple[str | None, str], str],
-    ) -> dict[str, tuple[str, ...]]:
-        markers = {
-            key: (markers_by_definition[identity_for(definition)],)
-            for key, definition in global_lambdas.items()
+    ):
+        """Expose one marker ledger through the shared visibility catalogs."""
+        global_formula_view = _NameMarkerMapping(
+            global_formula_identity_view,
+            markers_by_definition,
+        )
+        scoped_formula_views = {
+            scope: _NameMarkerMapping(
+                scoped_formula_identity_views[scope],
+                markers_by_definition,
+            )
+            for scope in local_scopes
         }
-        for local_scope, definitions in local_lambdas.items():
-            for key, definition in definitions.items():
-                markers[_qualified_name_key(sheet_titles[local_scope], key)] = (
-                    markers_by_definition[identity_for(definition)],
-                )
-        if scope is not None:
-            for key, definition in local_lambdas.get(scope, {}).items():
-                markers[key] = (markers_by_definition[identity_for(definition)],)
-        return markers
+        global_function_marker_view = _NameMarkerMapping(
+            global_function_identity_view,
+            markers_by_definition,
+        )
+        scoped_function_marker_views = {
+            scope: _NameMarkerMapping(
+                scoped_function_identity_views[scope],
+                markers_by_definition,
+            )
+            for scope in local_scopes
+        }
+        return (
+            global_formula_view,
+            scoped_formula_views,
+            global_function_marker_view,
+            scoped_function_marker_views,
+        )
+
+    def marker_visibility_for_scope(scope: str | None, visibility_maps):
+        (
+            global_formula_view,
+            scoped_formula_views,
+            global_function_marker_view,
+            scoped_function_marker_views,
+        ) = visibility_maps
+        return (
+            scoped_formula_views.get(scope, global_formula_view),
+            scoped_function_marker_views.get(scope, global_function_marker_view),
+        )
+
+    marker_visibility_sets = tuple(
+        marker_visibility_maps(markers)
+        for markers in (
+            external_action_markers,
+            formula_dde_link_markers,
+            custom_function_markers,
+            unqualified_runtime_function_markers,
+            code_resource_registration_markers,
+            formula_defined_xlm_registration_markers,
+            formula_defined_xlm_evaluation_markers,
+            formula_defined_xlm_action_markers,
+            formula_defined_xlm_get_cell_markers,
+            formula_defined_xlm_environment_information_markers,
+            formula_environment_information_markers,
+        )
+    )
 
     direct_external_action_functions: dict[
         tuple[str | None, str], tuple[str, ...]
@@ -48717,103 +48928,89 @@ def _named_reference_maps(
         tuple[str | None, str], tuple[tuple[str | None, str], ...]
     ] = {}
     for definition in all_definitions:
+        (
+            (
+                external_action_formula_marker_view,
+                external_action_function_marker_view,
+            ),
+            (dde_formula_marker_view, dde_function_marker_view),
+            (custom_function_formula_marker_view, custom_function_function_marker_view),
+            (
+                unqualified_runtime_formula_marker_view,
+                unqualified_runtime_function_marker_view,
+            ),
+            (
+                code_resource_formula_marker_view,
+                code_resource_function_marker_view,
+            ),
+            (xlm_registration_formula_marker_view, xlm_registration_function_marker_view),
+            (xlm_evaluation_formula_marker_view, xlm_evaluation_function_marker_view),
+            (xlm_action_formula_marker_view, xlm_action_function_marker_view),
+            (xlm_get_cell_formula_marker_view, xlm_get_cell_function_marker_view),
+            (xlm_environment_formula_marker_view, xlm_environment_function_marker_view),
+            (
+                native_environment_formula_marker_view,
+                native_environment_function_marker_view,
+            ),
+        ) = tuple(
+            marker_visibility_for_scope(definition.scope, visibility_maps)
+            for visibility_maps in marker_visibility_sets
+        )
         inspection = inspect_formula(
             definition.formula,
             named_references=visible_references(definition.scope),
             structured_tables=structured_tables,
             sheet_order=sheet_order,
             named_function_references=visible_named_functions(definition.scope),
-            named_formula_external_action_functions=visible_named_markers(
-                definition.scope, external_action_markers
-            ),
+            named_formula_external_action_functions=external_action_formula_marker_view,
             named_function_formula_external_action_functions=(
-                visible_named_function_markers(
-                    definition.scope, external_action_markers
-                )
+                external_action_function_marker_view
             ),
-            named_formula_dde_link_markers=visible_named_markers(
-                definition.scope, formula_dde_link_markers
-            ),
-            named_function_formula_dde_link_markers=(
-                visible_named_function_markers(
-                    definition.scope, formula_dde_link_markers
-                )
-            ),
-            named_custom_function_candidates=visible_named_markers(
-                definition.scope, custom_function_markers
-            ),
-            named_function_custom_function_candidates=visible_named_function_markers(
-                definition.scope, custom_function_markers
-            ),
-            named_unqualified_runtime_function_candidates=visible_named_markers(
-                definition.scope, unqualified_runtime_function_markers
+            named_formula_dde_link_markers=dde_formula_marker_view,
+            named_function_formula_dde_link_markers=dde_function_marker_view,
+            named_custom_function_candidates=custom_function_formula_marker_view,
+            named_function_custom_function_candidates=custom_function_function_marker_view,
+            named_unqualified_runtime_function_candidates=(
+                unqualified_runtime_formula_marker_view
             ),
             named_function_unqualified_runtime_function_candidates=(
-                visible_named_function_markers(
-                    definition.scope, unqualified_runtime_function_markers
-                )
+                unqualified_runtime_function_marker_view
             ),
             named_worksheet_code_resource_registration_functions=(
-                visible_named_markers(
-                    definition.scope, code_resource_registration_markers
-                )
+                code_resource_formula_marker_view
             ),
             named_function_worksheet_code_resource_registration_functions=(
-                visible_named_function_markers(
-                    definition.scope, code_resource_registration_markers
-                )
+                code_resource_function_marker_view
             ),
             named_formula_defined_xlm_registration_functions=(
-                visible_named_markers(
-                    definition.scope, formula_defined_xlm_registration_markers
-                )
+                xlm_registration_formula_marker_view
             ),
             named_function_formula_defined_xlm_registration_functions=(
-                visible_named_function_markers(
-                    definition.scope, formula_defined_xlm_registration_markers
-                )
+                xlm_registration_function_marker_view
             ),
-            named_formula_defined_xlm_evaluation_functions=visible_named_markers(
-                definition.scope, formula_defined_xlm_evaluation_markers
-            ),
+            named_formula_defined_xlm_evaluation_functions=xlm_evaluation_formula_marker_view,
             named_function_formula_defined_xlm_evaluation_functions=(
-                visible_named_function_markers(
-                    definition.scope, formula_defined_xlm_evaluation_markers
-                )
+                xlm_evaluation_function_marker_view
             ),
-            named_formula_defined_xlm_action_functions=visible_named_markers(
-                definition.scope, formula_defined_xlm_action_markers
-            ),
+            named_formula_defined_xlm_action_functions=xlm_action_formula_marker_view,
             named_function_formula_defined_xlm_action_functions=(
-                visible_named_function_markers(
-                    definition.scope, formula_defined_xlm_action_markers
-                )
+                xlm_action_function_marker_view
             ),
-            named_formula_defined_xlm_get_cell_functions=visible_named_markers(
-                definition.scope, formula_defined_xlm_get_cell_markers
-            ),
+            named_formula_defined_xlm_get_cell_functions=xlm_get_cell_formula_marker_view,
             named_function_formula_defined_xlm_get_cell_functions=(
-                visible_named_function_markers(
-                    definition.scope, formula_defined_xlm_get_cell_markers
-                )
+                xlm_get_cell_function_marker_view
             ),
             named_formula_defined_xlm_environment_information_functions=(
-                visible_named_markers(
-                    definition.scope, formula_defined_xlm_environment_information_markers
-                )
+                xlm_environment_formula_marker_view
             ),
             named_function_formula_defined_xlm_environment_information_functions=(
-                visible_named_function_markers(
-                    definition.scope, formula_defined_xlm_environment_information_markers
-                )
+                xlm_environment_function_marker_view
             ),
-            named_formula_environment_information_functions=visible_named_markers(
-                definition.scope, formula_environment_information_markers
+            named_formula_environment_information_functions=(
+                native_environment_formula_marker_view
             ),
             named_function_formula_environment_information_functions=(
-                visible_named_function_markers(
-                    definition.scope, formula_environment_information_markers
-                )
+                native_environment_function_marker_view
             ),
             inspect_formula_defined_xlm_registrations=True,
             inspect_formula_defined_xlm_evaluations=True,
@@ -49050,11 +49247,12 @@ def _named_reference_maps(
     for component, dependencies in remaining_component_dependencies.items():
         for dependency in dependencies:
             component_dependents[dependency].add(component)
-    ready_components = sorted(
+    ready_components = [
         component
         for component, dependencies in remaining_component_dependencies.items()
         if not dependencies
-    )
+    ]
+    heapq.heapify(ready_components)
     component_external_action_functions: dict[int, tuple[str, ...]] = {}
     component_formula_dde_links: dict[int, tuple[str, ...]] = {}
     component_custom_function_candidates: dict[int, tuple[str, ...]] = {}
@@ -49075,7 +49273,7 @@ def _named_reference_maps(
         int, tuple[str, ...]
     ] = {}
     while ready_components:
-        component = ready_components.pop(0)
+        component = heapq.heappop(ready_components)
         component_external_action_functions[component] = (
             component_direct_external_action_functions[component]
             + tuple(
@@ -49185,8 +49383,7 @@ def _named_reference_maps(
         for dependent in sorted(component_dependents[component]):
             remaining_component_dependencies[dependent].remove(component)
             if not remaining_component_dependencies[dependent]:
-                ready_components.append(dependent)
-        ready_components.sort()
+                heapq.heappush(ready_components, dependent)
 
     custom_function_candidates_by_definition = {
         identity: component_custom_function_candidates[component]

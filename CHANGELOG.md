@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.172.0 — 2026-07-28
+
+- Make formula-defined-name resolution scale with the work actually inspected
+  instead of repeatedly materializing every visible workbook and worksheet-local
+  name catalog. FormulaFence now reuses compact live scope overlays for static
+  and resolved names, named-`LAMBDA` coverage, and all eleven sensitive-call
+  marker ledgers.
+- Preserve local-name shadowing, qualified-name visibility, unresolved-call
+  coverage, and deterministic propagated ledgers while replacing repeated
+  ready-component sorting with a priority queue. A structural regression holds
+  the reusable views in place, and public-profile compatibility fixtures remain
+  byte-identical to 0.171.0.
+
 ## 0.171.0 — 2026-07-28
 
 - Bound the static local dependency records retained while a workbook snapshot

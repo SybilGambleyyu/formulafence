@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Formula-defined-name catalog scaling — 2026-07-28
+
+Version 0.172.0 closes a reader-adjacent CPU amplification gap in the safe
+formula-defined-name resolver. FormulaFence permits up to 100,000 direct
+defined-name declarations in its bounded reader. Before this release, each formula-valued
+name rebuilt its complete visible reference catalog, its visible named-LAMBDA
+catalog, and eleven safety-marker catalogs. A compact workbook with many
+otherwise identical names therefore spent most of its time recreating lookup
+maps instead of inspecting the small formula body.
+
+The resolver now keeps live scope-aware overlays for the static and resolved
+name state and one name-to-definition-identity catalog shared by every marker
+ledger. Marker values are translated lazily at a lookup. This retains exact
+local-name shadowing and qualified-name behavior, keeps a known but unresolved
+named LAMBDA as the existing explicit coverage gap, and preserves the separate
+definition tokenization and dependency work. The propagated-ledger component
+schedule also uses a priority queue rather than repeatedly sorting all ready
+components.
+
+For a valid 15,318-byte `.xlsx` with 4,000 formula-defined names, the public
+0.171.0 wheel loaded a snapshot in 48.790797 seconds with a 58,504 KiB maximum
+resident set. The 0.172.0 candidate completed the same input in 2.673606
+seconds at 59,332 KiB. Doubling the fixture to 8,000 names (25,587 bytes)
+completed in 5.795377 seconds at 85,084 KiB. On independent semantic fixtures,
+the public 0.171.0 wheel and candidate emitted byte-identical JSON profiles for
+both a formula-defined reference (SHA-256
+`69de118d9e7b33d689ea146b0b73a6301a7951b35127197146786a3592c93992`) and a
+named LAMBDA (SHA-256
+`623545f0ae31edcbb55cd2ecc3abb0e9b92d5d55e8342d7b9adc159e4ca6028a`). The
+final source suite passed 1,283 tests in 211.86 seconds; focused regression
+coverage holds the reused reference and marker maps structurally rather than
+using a timing assertion.
+
 ## Dependency-graph edge budget — 2026-07-28
 
 Version 0.171.0 closes a retained-graph amplification gap after the bounded

@@ -75,6 +75,23 @@ def _named_formula_fanout_workbook(
     return path
 
 
+def _formula_defined_name_catalog_workbook(path: Path, *, count: int = 8) -> Path:
+    """Create formula-valued names without needing many worksheet cells."""
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["A1"] = 1
+    for index in range(count):
+        workbook.defined_names.add(
+            DefinedName(
+                f"FormulaName{index:05d}",
+                attr_text="=Model!$A$1",
+            )
+        )
+    workbook.save(path)
+    return path
+
+
 def _replace_member(path: Path, name: str, payload: bytes) -> None:
     """Replace one test package part without creating a duplicate ZIP entry."""
     staging = path.with_suffix(".replacement.xlsx")
@@ -2254,6 +2271,32 @@ def test_dependency_edge_budget_bounds_named_formula_fanout(
         match="max_dependency_edges must be at least 1",
     ):
         load_snapshot(workbook, max_dependency_edges=0)
+
+
+def test_formula_defined_name_resolution_reuses_visibility_maps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A name catalog should not rebuild one whole map for every definition."""
+    workbook = _formula_defined_name_catalog_workbook(tmp_path / "name-catalog.xlsx")
+    original_inspect_formula = workbook_module.inspect_formula
+    reference_views: list[object] = []
+    marker_views: list[object] = []
+
+    def observe_inspection(formula: str, **kwargs: object):
+        if kwargs.get("inspect_formula_defined_xlm_registrations"):
+            reference_views.append(kwargs["named_references"])
+            marker_views.append(kwargs["named_formula_external_action_functions"])
+        return original_inspect_formula(formula, **kwargs)
+
+    monkeypatch.setattr(workbook_module, "inspect_formula", observe_inspection)
+    snapshot = load_snapshot(workbook)
+
+    assert len(snapshot.defined_names) == 8
+    assert len(reference_views) == 8
+    assert len(marker_views) == 8
+    assert len({id(view) for view in reference_views}) == 1
+    assert len({id(view) for view in marker_views}) == 1
 
 
 def test_semantic_reader_preflight_rejects_excessive_row_dimensions_before_scanners(

@@ -5,6 +5,49 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Workbook XML structural bounds — 2026-07-26
+
+Version 0.150.0 closes the same compact-allocation path in the bootstrap
+`xl/workbook.xml` part. The Open XML SDK's
+[Workbook reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.workbook?view=openxml-3.0.1)
+lists `extLst` among the root's named children, and Microsoft's
+[XLSX workbook specification](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/e29966e2-5baa-4fcf-84c9-082025e1be13)
+documents that container's `ext` payloads. The ordinary workbook reader first
+reads this entire part into bytes and builds a complete package tree; FormulaFence
+also has raw workbook scanners for tab and legacy Custom View metadata. Neither
+path needs an unbounded extension payload or foreign root subtree to produce a
+profile.
+
+The semantic-reader preflight now streams the bootstrap workbook part before
+either reader begins. It allows 32,768 elements beneath every local-name
+`extLst` subtree, including lists nested in a workbook view or using an
+alternate namespace, and separately allows 32,768 elements beneath a foreign
+direct workbook-root child. The named Workbook controls retain their existing
+format-aware catalog limits, including 512 sheet declarations and 100,000
+defined names. A successfully parsed overage produces the stable
+safety-preflight error and CLI status 2 rather than a partial profile. These
+are CI allocation limits, not SpreadsheetML validity rules.
+
+Controlled raw-ZIP fixtures began with a normal 4,835-byte workbook. One
+appended a documented `extLst`/`ext` container with 500,000 foreign children to
+`xl/workbook.xml`; its package was 16,653 bytes and the workbook XML expanded
+to 6,000,749 bytes. A second appended a foreign direct root container with the
+same child count; its package was 16,591 bytes and workbook XML expanded to
+6,000,624 bytes. The exact released 0.149.0 wheel completed successful profiles
+for the normal, extension, and opaque-root fixtures in 0.396157 seconds /
+37,988 KiB, 28.430383 seconds / 139,648 KiB, and 28.208687 seconds /
+139,608 KiB RSS respectively. The 0.150.0 source rejects the extension fixture
+in 0.436918 seconds / 37,100 KiB and the opaque fixture in 0.426571 seconds /
+38,012 KiB before profile output; the normal workbook remains accepted in
+0.395590 seconds / 38,080 KiB. Direct/nested, nested-view, alternate-root and
+alternate-extension-namespace, exact/default-limit, normal-control, and
+fail-before-reader regressions accompany the fixtures. The archive-safety suite
+passed 244 tests, and the complete source suite passed 1,112 tests in 160.48
+seconds with zero failures or errors. `twine check` passed for the wheel and
+sdist. Fresh wheel and sdist installs each accepted the normal workbook and
+rejected both hostile fixtures before profile output with the stable
+workbook-XML safety-preflight error.
+
 ## Non-grid sheet structural bounds — 2026-07-26
 
 Version 0.149.0 closes the adjacent compact-allocation path in relationship-

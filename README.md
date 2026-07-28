@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.149.0/formulafence-0.149.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.150.0/formulafence-0.150.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.149.0
+  uses: SybilGambleyyu/formulafence@v0.150.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2724,6 +2724,15 @@ as a non-grid sheet: its complete XML tree allows 32,768 elements per part and
 65,536 across selected parts before raw control readers or the workbook reader
 can materialize it. This covers their documented `extLst` containers and opaque
 content while chart DrawingML remains under its dedicated structural boundary.
+The bootstrap `xl/workbook.xml` part is also read into a complete tree. Its
+documented [Workbook extension-list location](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.workbook?view=openxml-3.0.1)
+and every nested `extLst` subtree permit 32,768 XML elements before a raw or
+ordinary workbook reader starts; a foreign direct workbook-root subtree has the
+same separate budget. The check follows the reader's `workbook`/`extLst` local-
+name dispatch so alternate namespaces cannot bypass it. Named Workbook controls
+such as `sheets`, `definedNames`, and views remain on their existing
+format-aware catalog limits. These are CI allocation limits, not SpreadsheetML
+validity rules.
 The preflight also caps repeated known stylesheet containers and every
 reader-materialized number-format, font, fill, fill-child, gradient-stop,
 border, base-XF, named-style, differential-style, palette, table-style,

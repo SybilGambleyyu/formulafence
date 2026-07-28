@@ -159,7 +159,14 @@ financial correctness or replace model review.
   and 65,536 in aggregate before raw control scanners or the workbook reader
   can materialize them. This includes documented `extLst` content and opaque
   markup; chart DrawingML remains under its dedicated relationship-selected
-  structural bound. A row
+  structural bound. The bootstrap `xl/workbook.xml` reader likewise constructs
+  one complete package tree. Its documented
+  [Workbook `extLst` location](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.workbook?view=openxml-3.0.1)
+  and every nested local-name `extLst` subtree allow 32,768 elements; a foreign
+  direct workbook-root subtree has the same separate bound. The gate follows
+  the parser's local-name dispatch for `workbook` and `extLst`, covering
+  alternate namespaces without constraining named Workbook controls or their
+  established catalog limits. A row
   counts only when it has an unqualified attribute other than `r` or `spans`,
   the condition that makes `openpyxl` retain a `RowDimension`; namespaced
   extension attributes do not count. Every reader-visible `col` counts because
@@ -327,7 +334,11 @@ formula will produce.
   complete XML elements, with 65,536 across that non-grid-sheet inventory,
   before raw control scanners or the workbook reader can materialize them.
   Their documented `extLst` and opaque content share that boundary while chart
-  DrawingML remains separately relationship-bounded. A row
+  DrawingML remains separately relationship-bounded. The bootstrap
+  `xl/workbook.xml` part separately permits 32,768 elements in a foreign direct
+  root subtree and 32,768 in every local-name `extLst` subtree, including a
+  nested or alternate-namespace extension list; named Workbook controls retain
+  their existing catalog budgets. A row
   declaration counts only when it has an
   unqualified attribute other than `r` or `spans`, which is the `openpyxl`
   `RowDimension` allocation trigger; a namespace-qualified extension attribute

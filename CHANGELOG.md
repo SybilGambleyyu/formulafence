@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.150.0 — 2026-07-26
+
+- Bound compact reader-visible XML beneath the bootstrap `xl/workbook.xml`
+  part before FormulaFence's raw workbook scanners or the ordinary workbook
+  reader can materialize its complete tree. A documented `extLst` payload and
+  a foreign direct root subtree each allow 32,768 XML elements; the named
+  workbook controls retain their existing format-aware catalog limits.
+- Match the workbook parser's local-name dispatch for `workbook` and `extLst`,
+  so transitional, Strict, and alternate-namespace extension containers cannot
+  evade the allocation boundary. A successfully streamed overage becomes the
+  stable semantic-reader safety-preflight error and CLI status 2 rather than a
+  partial profile.
+- Add direct/nested, nested-workbook-view, alternate-root/extension-namespace,
+  exact/default-limit, normal-control, and fail-before-reader regressions.
+
 ## 0.149.0 — 2026-07-26
 
 - Bound every relationship-selected SpreadsheetML Chartsheet and Dialogsheet

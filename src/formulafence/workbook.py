@@ -296,6 +296,15 @@ _OOXML_READER_MAX_NON_GRID_SHEET_PART_XML_ELEMENT_COUNT = 32_768
 _OOXML_READER_MAX_NON_GRID_SHEET_XML_ELEMENT_COUNT = (
     2 * _OOXML_READER_MAX_NON_GRID_SHEET_PART_XML_ELEMENT_COUNT
 )
+# ``WorkbookParser`` reads the complete workbook part into bytes, builds an
+# XML tree, and then constructs its package catalogs. Large valid sheet and
+# defined-name catalogs have their own format-aware limits below, but an
+# extension list is an intentionally arbitrary payload and a foreign direct
+# root child is retained until that complete parse finishes. Bound each compact
+# tree before the ordinary reader or FormulaFence's raw workbook scanners can
+# allocate it. These are CI allocation limits, not OOXML validity limits.
+_OOXML_READER_MAX_WORKBOOK_OPAQUE_ROOT_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_WORKBOOK_EXTENSION_LIST_XML_ELEMENT_COUNT = 32_768
 _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
 _OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT = 100_000
 _OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
@@ -3846,6 +3855,8 @@ def _validate_ooxml_semantic_reader_resources(
     workbook_external_reference_count = 0
     workbook_pivot_cache_count = 0
     workbook_auxiliary_catalog_counts: dict[str, int] = {}
+    workbook_opaque_root_xml_element_count = 0
+    workbook_extension_list_xml_element_count = 0
     custom_sheet_view_count = 0
     custom_sheet_view_descendant_count = 0
     merged_cell_range_count = 0
@@ -3886,6 +3897,27 @@ def _validate_ooxml_semantic_reader_resources(
     inline_string_tags = _spreadsheetml_tags("is")
     shared_string_tags = _spreadsheetml_tags("si")
     shared_string_table_tags = _spreadsheetml_tags("sst")
+    workbook_standard_root_tags = _spreadsheetml_tags(
+        "fileVersion",
+        "fileSharing",
+        "workbookPr",
+        "workbookProtection",
+        "bookViews",
+        "sheets",
+        "functionGroups",
+        "externalReferences",
+        "definedNames",
+        "calcPr",
+        "oleSize",
+        "customWorkbookViews",
+        "pivotCaches",
+        "smartTagPr",
+        "smartTagTypes",
+        "webPublishing",
+        "fileRecoveryPr",
+        "webPublishObjects",
+        "extLst",
+    )
     worksheet_extension_list_tags = _spreadsheetml_tags("extLst")
     worksheet_standard_root_tags = _spreadsheetml_tags(
         "sheetPr",
@@ -3969,6 +4001,66 @@ def _validate_ooxml_semantic_reader_resources(
         if count > limit:
             raise _reader_preflight_error(message)
 
+    def workbook_opaque_root_end(
+        _element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        """Bound one complete unknown direct workbook-root subtree.
+
+        The published Workbook grammar names the ordinary package controls
+        below. Keep those controls and their independently bounded catalogs
+        outside this narrow counter, while treating compatibility and foreign
+        root content as opaque material that neither reader needs to retain as
+        ordinary workbook semantics.
+        """
+        nonlocal workbook_opaque_root_xml_element_count
+        if (
+            len(tags) < 2
+            or _xml_local_name(tags[0]) != "workbook"
+            or tags[1] in workbook_standard_root_tags
+            or _xml_local_name(tags[1]) == "extLst"
+        ):
+            return
+        workbook_opaque_root_xml_element_count += 1
+        if (
+            workbook_opaque_root_xml_element_count
+            > _OOXML_READER_MAX_WORKBOOK_OPAQUE_ROOT_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "workbook opaque root XML structure exceeds the semantic-reader "
+                "safety limit."
+            )
+
+    def workbook_extension_list_end(
+        _element: ElementTree.Element,
+        tags: list[str],
+    ) -> None:
+        """Bound every extension subtree selected under a Workbook root.
+
+        Extension lists are documented both as a direct Workbook child and on
+        nested workbook controls such as workbook views. ``openpyxl`` dispatches
+        those controls by local name, so an alternate-namespace ``extLst`` must
+        receive the same limit. Count a subtree only once even if an extension
+        payload contains another extension list: any matching ancestor makes
+        the completed element part of this allocation boundary.
+        """
+        nonlocal workbook_extension_list_xml_element_count
+        if (
+            len(tags) < 2
+            or _xml_local_name(tags[0]) != "workbook"
+            or not any(_xml_local_name(tag) == "extLst" for tag in tags[1:])
+        ):
+            return
+        workbook_extension_list_xml_element_count += 1
+        if (
+            workbook_extension_list_xml_element_count
+            > _OOXML_READER_MAX_WORKBOOK_EXTENSION_LIST_XML_ELEMENT_COUNT
+        ):
+            raise _reader_preflight_error(
+                "workbook extension-list XML structure exceeds the semantic-reader "
+                "safety limit."
+            )
+
     def workbook_end(
         element: ElementTree.Element,
         tags: list[str],
@@ -3977,6 +4069,8 @@ def _validate_ooxml_semantic_reader_resources(
         nonlocal workbook_external_reference_count
         nonlocal workbook_pivot_cache_count
         nonlocal workbook_sheet_count
+        workbook_extension_list_end(element, tags)
+        workbook_opaque_root_end(element, tags)
         # ``openpyxl``'s workbook package parser uses local XML names while
         # constructing these catalogs. A direct alternate-namespace
         # ``definedName`` is therefore still materialized, and nested-sequence

@@ -360,6 +360,17 @@ _OOXML_READER_MAX_SCENARIO_TARGET_RANGE_COUNT = 2 * _OOXML_ARCHIVE_MAX_ENTRY_COU
 # 500,000-cell CI boundary.
 _OOXML_READER_MAX_XML_ELEMENT_COUNT = 4_000_000
 _OOXML_READER_MAX_XML_NESTING_DEPTH = 256
+# ``ElementTree`` constructs an element's complete attribute mapping before it
+# emits a ``start`` event. A compact XML part can therefore place hundreds of
+# thousands of attributes on one otherwise ordinary element and allocate a
+# large dictionary before the existing element-count callbacks run. Bound the
+# physical opening-tag token first, using a lexical stream that does not build
+# attribute objects. This remains generous for OOXML metadata while protecting
+# every semantic-reader XML stream from that parser-frontier allocation.
+_OOXML_READER_MAX_XML_START_TAG_BYTES = 128 * 1024
+_OOXML_READER_XML_LEXICAL_CHUNK_BYTES = 64 * 1024
+_OOXML_READER_XML_START_TAG_DELIMITER_PATTERN = re.compile(br"""[>"']""")
+_OOXML_READER_XML_DECLARATION_DELIMITER_PATTERN = re.compile(br"""["'\[\]>]""")
 _OOXML_READER_MAX_SHARED_STRING_COUNT = 500_000
 # ``Stylesheet.from_tree`` dispatches its direct children by local name, then
 # eagerly builds lists for number formats, fonts, fills, borders, base/effective
@@ -3591,6 +3602,444 @@ def _spreadsheetml_tags(*local_names: str) -> frozenset[str]:
     )
 
 
+def _xml_ascii_start_tags_within_budget(
+    xml_stream,
+    initial: bytes,
+    initial_offset: int,
+    *,
+    maximum_start_tag_bytes: int,
+) -> bool:
+    """Bound ASCII-compatible XML start tags without visiting ordinary text.
+
+    Most OOXML uses UTF-8. Search its delimiter bytes in C and visit only the
+    handful of punctuation marks that can change lexical state; a Python
+    character-by-character pass would materially slow a large, ordinary
+    worksheet before any reader starts.
+    """
+    state = "text"
+    opening_offset = 0
+    quote: int | None = None
+    declaration_quote: int | None = None
+    declaration_bracket_depth = 0
+    bang_prefix = b""
+    processing_question = False
+    comment_tail = b""
+    cdata_tail = b""
+    data = initial
+    data_offset = initial_offset
+
+    while True:
+        position = 0
+        data_length = len(data)
+        while position < data_length:
+            if state == "text":
+                marker = data.find(b"<", position)
+                if marker < 0:
+                    position = data_length
+                    break
+                opening_offset = data_offset + marker
+                state = "opening"
+                position = marker + 1
+                continue
+
+            if state == "opening":
+                marker = data[position]
+                position += 1
+                if marker == ord("?"):
+                    state = "processing-instruction"
+                    processing_question = False
+                elif marker == ord("!"):
+                    state = "bang"
+                    bang_prefix = b""
+                elif marker == ord("/"):
+                    state = "closing"
+                else:
+                    state = "start"
+                    if data_offset + position - opening_offset > maximum_start_tag_bytes:
+                        return False
+                continue
+
+            if state == "start":
+                allowed_end = min(
+                    data_length,
+                    opening_offset + maximum_start_tag_bytes - data_offset,
+                )
+                if allowed_end <= position:
+                    return False
+                if quote is not None:
+                    quote_marker = b'"' if quote == ord('"') else b"'"
+                    marker = data.find(quote_marker, position, allowed_end)
+                    if marker < 0:
+                        if allowed_end < data_length:
+                            return False
+                        position = data_length
+                        break
+                    quote = None
+                    position = marker + 1
+                    continue
+                match = _OOXML_READER_XML_START_TAG_DELIMITER_PATTERN.search(
+                    data,
+                    position,
+                    allowed_end,
+                )
+                if match is None:
+                    if allowed_end < data_length:
+                        return False
+                    position = data_length
+                    break
+                marker = match.start()
+                character = data[marker]
+                position = marker + 1
+                if character == ord(">"):
+                    state = "text"
+                else:
+                    quote = character
+                continue
+
+            if state == "closing":
+                marker = data.find(b">", position)
+                if marker < 0:
+                    position = data_length
+                    break
+                state = "text"
+                position = marker + 1
+                continue
+
+            if state == "processing-instruction":
+                if processing_question and data[position : position + 1] == b">":
+                    processing_question = False
+                    state = "text"
+                    position += 1
+                    continue
+                processing_question = False
+                marker = data.find(b"?>", position)
+                if marker < 0:
+                    processing_question = data[position:].endswith(b"?")
+                    position = data_length
+                    break
+                state = "text"
+                position = marker + 2
+                continue
+
+            if state == "comment":
+                if comment_tail == b"--" and data[position : position + 1] == b">":
+                    comment_tail = b""
+                    state = "text"
+                    position += 1
+                    continue
+                if comment_tail.endswith(b"-") and data[
+                    position : position + 2
+                ] == b"->":
+                    comment_tail = b""
+                    state = "text"
+                    position += 2
+                    continue
+                marker = data.find(b"-->", position)
+                if marker < 0:
+                    comment_tail = (comment_tail + data[position:])[-2:]
+                    position = data_length
+                    break
+                comment_tail = b""
+                state = "text"
+                position = marker + 3
+                continue
+
+            if state == "cdata":
+                if cdata_tail == b"]]" and data[position : position + 1] == b">":
+                    cdata_tail = b""
+                    state = "text"
+                    position += 1
+                    continue
+                if cdata_tail.endswith(b"]") and data[position : position + 2] == b"]>":
+                    cdata_tail = b""
+                    state = "text"
+                    position += 2
+                    continue
+                marker = data.find(b"]]>", position)
+                if marker < 0:
+                    cdata_tail = (cdata_tail + data[position:])[-2:]
+                    position = data_length
+                    break
+                cdata_tail = b""
+                state = "text"
+                position = marker + 3
+                continue
+
+            if state == "bang":
+                bang_prefix += data[position : position + 1]
+                position += 1
+                if bang_prefix == b"--":
+                    state = "comment"
+                    comment_tail = bang_prefix
+                    continue
+                if bang_prefix == b"[CDATA[":
+                    state = "cdata"
+                    cdata_tail = bang_prefix[-2:]
+                    continue
+                if b"--".startswith(bang_prefix) or b"[CDATA[".startswith(
+                    bang_prefix
+                ):
+                    continue
+                state = "declaration"
+                declaration_quote = None
+                declaration_bracket_depth = 0
+                for character in bang_prefix:
+                    if character in {ord('"'), ord("'")}:
+                        declaration_quote = character
+                    elif character == ord("["):
+                        declaration_bracket_depth += 1
+                    elif character == ord("]") and declaration_bracket_depth:
+                        declaration_bracket_depth -= 1
+                    elif character == ord(">") and not declaration_bracket_depth:
+                        state = "text"
+                        break
+                continue
+
+            if declaration_quote is not None:
+                quote_marker = b'"' if declaration_quote == ord('"') else b"'"
+                marker = data.find(quote_marker, position)
+                if marker < 0:
+                    position = data_length
+                    break
+                declaration_quote = None
+                position = marker + 1
+                continue
+            match = _OOXML_READER_XML_DECLARATION_DELIMITER_PATTERN.search(
+                data,
+                position,
+            )
+            if match is None:
+                position = data_length
+                break
+            marker = match.start()
+            character = data[marker]
+            position = marker + 1
+            if character in {ord('"'), ord("'")}:
+                declaration_quote = character
+            elif character == ord("["):
+                declaration_bracket_depth += 1
+            elif character == ord("]") and declaration_bracket_depth:
+                declaration_bracket_depth -= 1
+            elif character == ord(">") and not declaration_bracket_depth:
+                state = "text"
+
+        data_offset += data_length
+        data = xml_stream.read(_OOXML_READER_XML_LEXICAL_CHUNK_BYTES)
+        if not data:
+            return True
+
+
+def _xml_start_tags_within_budget(
+    xml_stream,
+    *,
+    maximum_start_tag_bytes: int = _OOXML_READER_MAX_XML_START_TAG_BYTES,
+) -> bool:
+    """Lexically bound XML opening tags before an XML parser allocates attributes.
+
+    The scanner only needs XML punctuation, so it decodes fixed-width UTF-16
+    and UTF-32 code units when an OOXML part uses either encoding. UTF-8 and
+    ASCII-compatible encodings retain their byte-oriented punctuation. It
+    skips comments, CDATA, processing instructions, and declarations rather
+    than treating their contents as element markup.
+    """
+    prefix = xml_stream.read(4)
+    unit_width = 1
+    byte_order = "big"
+    prefix_skip = 0
+    if prefix.startswith(b"\x00\x00\xfe\xff"):
+        unit_width = 4
+        prefix_skip = 4
+    elif prefix.startswith(b"\xff\xfe\x00\x00"):
+        unit_width = 4
+        byte_order = "little"
+        prefix_skip = 4
+    elif prefix.startswith(b"\xfe\xff"):
+        unit_width = 2
+        prefix_skip = 2
+    elif prefix.startswith(b"\xff\xfe"):
+        unit_width = 2
+        byte_order = "little"
+        prefix_skip = 2
+    elif len(prefix) == 4 and prefix[:3] == b"\x00\x00\x00":
+        unit_width = 4
+    elif len(prefix) == 4 and prefix[1:] == b"\x00\x00\x00":
+        unit_width = 4
+        byte_order = "little"
+    elif len(prefix) == 4 and prefix[0] == 0 and prefix[2] == 0:
+        unit_width = 2
+    elif len(prefix) == 4 and prefix[1] == 0 and prefix[3] == 0:
+        unit_width = 2
+        byte_order = "little"
+    elif prefix.startswith(b"\xef\xbb\xbf"):
+        prefix_skip = 3
+
+    if unit_width == 1:
+        return _xml_ascii_start_tags_within_budget(
+            xml_stream,
+            prefix[prefix_skip:],
+            prefix_skip,
+            maximum_start_tag_bytes=maximum_start_tag_bytes,
+        )
+
+    text_state = "text"
+    state = text_state
+    opening_byte_size = 0
+    start_tag_byte_count = 0
+    quote: int | None = None
+    declaration_quote: int | None = None
+    declaration_bracket_depth = 0
+    bang_prefix: list[int] = []
+    delimiter_tail: tuple[int, ...] = ()
+
+    def consume_declaration_character(character: int) -> None:
+        nonlocal declaration_bracket_depth, declaration_quote, state
+        if declaration_quote is not None:
+            if character == declaration_quote:
+                declaration_quote = None
+            return
+        if character in {ord('"'), ord("'")}:
+            declaration_quote = character
+        elif character == ord("["):
+            declaration_bracket_depth += 1
+        elif character == ord("]") and declaration_bracket_depth:
+            declaration_bracket_depth -= 1
+        elif character == ord(">") and not declaration_bracket_depth:
+            state = text_state
+
+    def consume_character(character: int, byte_size: int) -> bool:
+        nonlocal bang_prefix, declaration_bracket_depth, declaration_quote
+        nonlocal delimiter_tail, opening_byte_size, quote, start_tag_byte_count
+        nonlocal state
+        if state == text_state:
+            if character == ord("<"):
+                state = "opening"
+                opening_byte_size = byte_size
+            return True
+
+        if state == "opening":
+            if character == ord("?"):
+                state = "processing-instruction"
+                delimiter_tail = (character,)
+            elif character == ord("!"):
+                state = "bang"
+                bang_prefix = []
+            elif character == ord("/"):
+                state = "closing"
+            else:
+                state = "start"
+                quote = character if character in {ord('"'), ord("'")} else None
+                start_tag_byte_count = opening_byte_size + byte_size
+                if start_tag_byte_count > maximum_start_tag_bytes:
+                    return False
+            return True
+
+        if state == "start":
+            start_tag_byte_count += byte_size
+            if start_tag_byte_count > maximum_start_tag_bytes:
+                return False
+            if quote is not None:
+                if character == quote:
+                    quote = None
+            elif character in {ord('"'), ord("'")}:
+                quote = character
+            elif character == ord(">"):
+                state = text_state
+            return True
+
+        if state == "closing":
+            if character == ord(">"):
+                state = text_state
+            return True
+
+        if state == "processing-instruction":
+            delimiter_tail = (*delimiter_tail[-1:], character)
+            if delimiter_tail == (ord("?"), ord(">")):
+                state = text_state
+            return True
+
+        if state == "comment":
+            delimiter_tail = (*delimiter_tail[-2:], character)
+            if delimiter_tail == (ord("-"), ord("-"), ord(">")):
+                state = text_state
+            return True
+
+        if state == "cdata":
+            delimiter_tail = (*delimiter_tail[-2:], character)
+            if delimiter_tail == (ord("]"), ord("]"), ord(">")):
+                state = text_state
+            return True
+
+        if state == "declaration":
+            consume_declaration_character(character)
+            return True
+
+        # The only remaining state is the prefix after "<!". Classify the
+        # two XML constructs that can contain element-looking text; any other
+        # declaration is skipped through its balanced closing delimiter.
+        bang_prefix.append(character)
+        comment_prefix = (ord("-"), ord("-"))
+        cdata_prefix = (
+            ord("["),
+            ord("C"),
+            ord("D"),
+            ord("A"),
+            ord("T"),
+            ord("A"),
+            ord("["),
+        )
+        prefix = tuple(bang_prefix)
+        if prefix == comment_prefix:
+            state = "comment"
+            delimiter_tail = prefix
+            return True
+        if prefix == cdata_prefix:
+            state = "cdata"
+            delimiter_tail = prefix[-2:]
+            return True
+        if comment_prefix[: len(prefix)] == prefix or cdata_prefix[: len(prefix)] == prefix:
+            return True
+        state = "declaration"
+        declaration_quote = None
+        declaration_bracket_depth = 0
+        for declaration_character in bang_prefix:
+            consume_declaration_character(declaration_character)
+            if state == text_state:
+                break
+        return True
+
+    pending = prefix[prefix_skip:]
+    stream_exhausted = False
+    while pending or not stream_exhausted:
+        if not stream_exhausted:
+            chunk = xml_stream.read(_OOXML_READER_XML_LEXICAL_CHUNK_BYTES)
+            if chunk:
+                pending += chunk
+            else:
+                stream_exhausted = True
+        usable_size = len(pending) - (len(pending) % unit_width)
+        for offset in range(0, usable_size, unit_width):
+            unit = pending[offset : offset + unit_width]
+            character = unit[0] if unit_width == 1 else int.from_bytes(unit, byte_order)
+            if not consume_character(character, unit_width):
+                return False
+        pending = pending[usable_size:]
+    return True
+
+
+def _ooxml_xml_start_tags_within_budget(
+    archive: ZipFile,
+    member: str,
+    *,
+    maximum_start_tag_bytes: int = _OOXML_READER_MAX_XML_START_TAG_BYTES,
+) -> bool:
+    """Check an OOXML part's lexical opening-tag budget without parsing it."""
+    with archive.open(member) as xml_stream:
+        return _xml_start_tags_within_budget(
+            xml_stream,
+            maximum_start_tag_bytes=maximum_start_tag_bytes,
+        )
+
+
 def _stream_ooxml_reader_xml(
     archive: ZipFile,
     member: str,
@@ -3601,6 +4050,10 @@ def _stream_ooxml_reader_xml(
     on_end: Callable[[ElementTree.Element, list[str]], None] | None = None,
 ) -> None:
     """Stream one reader-visible XML part under structural resource limits."""
+    if not _ooxml_xml_start_tags_within_budget(archive, member):
+        raise _reader_preflight_error(
+            "XML start tag exceeds the semantic-reader safety limit."
+        )
     depth = 0
     element_count = 0
     elements: list[ElementTree.Element] = []
@@ -3647,7 +4100,9 @@ def _ooxml_xml_structure_element_count_within_budget(
     maximum_element_count: int,
     maximum_nesting_depth: int = _OOXML_READER_MAX_XML_NESTING_DEPTH,
 ) -> int | None:
-    """Return a bounded raw XML element count without retaining its full tree."""
+    """Return a bounded XML count, or None for a structural/tag-budget overage."""
+    if not _ooxml_xml_start_tags_within_budget(archive, member):
+        return None
     depth = 0
     element_count = 0
     elements: list[ElementTree.Element] = []
@@ -3681,7 +4136,9 @@ def _xml_payload_structure_element_count_within_budget(
     maximum_element_count: int,
     maximum_nesting_depth: int = _OOXML_READER_MAX_XML_NESTING_DEPTH,
 ) -> int | None:
-    """Return a bounded count for an in-memory XML payload without a full tree."""
+    """Return a bounded payload count, or None for a structural/tag-budget overage."""
+    if not _xml_start_tags_within_budget(io.BytesIO(payload)):
+        return None
     depth = 0
     element_count = 0
     elements: list[ElementTree.Element] = []
@@ -5470,6 +5927,8 @@ def _xml_root_from_payload(payload: bytes) -> ElementTree.Element:
     """Parse untrusted XML payload without accepting document type declarations."""
     if b"<!DOCTYPE" in payload or b"<!ENTITY" in payload:
         raise ValueError("OOXML metadata contains a document type declaration")
+    if not _xml_start_tags_within_budget(io.BytesIO(payload)):
+        raise ValueError("OOXML metadata XML start tag exceeds the safety limit")
     return ElementTree.fromstring(payload)
 
 

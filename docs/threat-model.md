@@ -131,6 +131,13 @@ financial correctness or replace model review.
   XML/relationship part is capped at 64
   MiB and aggregate XML material at 256 MiB. Each streamed reader part is also
   capped at 4,000,000 elements and 256 nesting levels. The gate limits
+  every physical XML opening tag to 128 KiB before ElementTree receives its
+  first start callback and constructs a complete attribute map. The lexical
+  check is streaming, covers UTF-8/ASCII-compatible, UTF-16, and UTF-32
+  punctuation, and skips quoted delimiters, comments, CDATA, processing
+  instructions, and declarations. Bounded raw XML structure scans and
+  in-memory OOXML root reads use the same opening-tag check before tree
+  construction. It also limits
   populated SpreadsheetML cell records and shared-string entries to 500,000
   each, row-dimension declarations to 16,384 across selected ordinary
   worksheet parts, column-dimension declarations to 16,384, and direct
@@ -322,7 +329,9 @@ formula will produce.
 - After that ZIP-only pass, the semantic-reader limit is 64 MiB for each
   XML/relationship part, 256 MiB for aggregate XML material, 4,000,000 XML
   elements and 256 nesting levels for every reader-visible part it streams,
-  500,000 populated SpreadsheetML cell records, 16,384 reader-materialized
+  and a 128 KiB physical opening-tag limit before an XML parser can allocate
+  one complete attribute map. It then limits 500,000 populated SpreadsheetML
+  cell records, 16,384 reader-materialized
   row-dimension declarations across reader-selected ordinary worksheet parts,
   16,384 column-dimension declarations and 4,096 direct column-dimension
   containers across those parts, 500,000 shared-string entries, and 65,490

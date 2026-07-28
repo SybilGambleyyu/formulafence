@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.152.0 — 2026-07-26
+
+- Bound every XML opening tag at 128 KiB before ElementTree can construct an
+  element's complete attribute map. The shared lexical gate runs before
+  reader-visible streams and bounded raw XML scans; in-memory OOXML root reads
+  use the same check before tree construction.
+- Cover UTF-8/ASCII-compatible parts plus UTF-16 and UTF-32 fixed-width
+  encodings, while correctly skipping quoted delimiters, comments, CDATA,
+  processing instructions, and declarations. This keeps ordinary XML
+  punctuation scanning in native byte search rather than imposing a
+  character-by-character cost on large worksheets.
+- Reject compact root and nested-style attribute-map payloads through the
+  stable semantic-reader safety preflight and CLI status 2 before a parser
+  callback runs. Add exact-boundary, one-byte-chunk, non-element-markup,
+  fixed-width-encoding, root/nested attribute-map, and parser-entry
+  regressions.
+
 ## 0.151.0 — 2026-07-26
 
 - Bound compact reader-visible XML throughout `xl/styles.xml` before the

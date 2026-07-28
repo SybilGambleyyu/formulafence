@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import binascii
 import hashlib
+import io
 import stat
 import struct
 import zipfile
@@ -1562,6 +1563,32 @@ def _append_stylesheet_catalog_declarations(
         ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
     )
     return len(parent)
+
+
+def _append_stylesheet_start_tag_attributes(
+    path: Path,
+    count: int,
+    *,
+    marker: bytes,
+    after: bytes | None = None,
+    member_name: str = "xl/styles.xml",
+) -> int:
+    """Append distinct attributes to one raw style XML start tag."""
+    with ZipFile(path) as archive:
+        stylesheet = archive.read(member_name)
+    search_start = stylesheet.index(after) if after is not None else 0
+    start = stylesheet.index(marker, search_start)
+    end = stylesheet.index(b">", start)
+    insertion = end - 1 if stylesheet[end - 1 : end] == b"/" else end
+    attributes = b"".join(
+        f' ff{index:08x}="x"'.encode() for index in range(count)
+    )
+    _replace_member(
+        path,
+        member_name,
+        stylesheet[:insertion] + attributes + stylesheet[insertion:],
+    )
+    return end - start + len(attributes) + 1
 
 
 def _append_stylesheet_opaque_root_xml_elements(
@@ -5300,6 +5327,157 @@ def test_semantic_reader_preflight_rejects_excessive_xml_elements_before_scanner
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "XML element count" in message
+
+
+def test_xml_start_tag_budget_accepts_its_exact_physical_boundary() -> None:
+    payload = b'<root alpha="FormulaFence"/>'
+
+    assert workbook_module._xml_start_tags_within_budget(
+        io.BytesIO(payload),
+        maximum_start_tag_bytes=len(payload),
+    )
+    assert not workbook_module._xml_start_tags_within_budget(
+        io.BytesIO(payload),
+        maximum_start_tag_bytes=len(payload) - 1,
+    )
+
+
+def test_xml_start_tag_budget_skips_quoted_and_non_element_markup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Comments, CDATA, and PIs cannot impersonate oversized elements."""
+    fake_tag = b"<notAnElement " + (b'attribute="x" ' * 12) + b"/>"
+    actual_start_tag = b'<root note="a quoted > delimiter"/>'
+    payload = (
+        b"<!-- "
+        + fake_tag
+        + b" -->"
+        + b"<![CDATA[["
+        + fake_tag
+        + b"]]>"
+        + b"<?FormulaFence "
+        + fake_tag
+        + b"?>"
+        + b"<!DOCTYPE root [ <!ELEMENT root ANY> ]>"
+        + actual_start_tag
+    )
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_XML_LEXICAL_CHUNK_BYTES", 1)
+
+    assert workbook_module._xml_start_tags_within_budget(
+        io.BytesIO(payload),
+        maximum_start_tag_bytes=len(actual_start_tag),
+    )
+    assert not workbook_module._xml_start_tags_within_budget(
+        io.BytesIO(payload),
+        maximum_start_tag_bytes=len(actual_start_tag) - 1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("encoding", "bom"),
+    (
+        ("utf-16-le", b"\xff\xfe"),
+        ("utf-16-be", b"\xfe\xff"),
+        ("utf-32-le", b"\xff\xfe\x00\x00"),
+        ("utf-32-be", b"\x00\x00\xfe\xff"),
+        ("utf-16-le", b""),
+        ("utf-16-be", b""),
+        ("utf-32-le", b""),
+        ("utf-32-be", b""),
+    ),
+)
+def test_xml_start_tag_budget_covers_fixed_width_xml_encodings(
+    encoding: str,
+    bom: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start_tag = "<root alpha='FormulaFence'/>".encode(encoding)
+    payload = bom + start_tag
+    monkeypatch.setattr(workbook_module, "_OOXML_READER_XML_LEXICAL_CHUNK_BYTES", 1)
+
+    assert workbook_module._xml_start_tags_within_budget(
+        io.BytesIO(payload),
+        maximum_start_tag_bytes=len(start_tag),
+    )
+    assert not workbook_module._xml_start_tags_within_budget(
+        io.BytesIO(payload),
+        maximum_start_tag_bytes=len(start_tag) - 1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("marker", "after"),
+    (
+        (b"<styleSheet", None),
+        (b"<xf ", b"<cellXfs"),
+    ),
+)
+def test_semantic_reader_preflight_rejects_oversized_style_attribute_maps_before_readers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    marker: bytes,
+    after: bytes | None,
+) -> None:
+    workbook = make_model(tmp_path / f"oversized-style-attributes-{marker!r}.xlsx")
+    start_tag_size = _append_stylesheet_start_tag_attributes(
+        workbook,
+        10_000,
+        marker=marker,
+        after=after,
+    )
+    assert start_tag_size > workbook_module._OOXML_READER_MAX_XML_START_TAG_BYTES
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "XML start tag" in message
+
+
+def test_stream_reader_rejects_an_oversized_attribute_map_before_elementtree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "stream-start-tag-before-elementtree.xlsx")
+    _append_stylesheet_start_tag_attributes(
+        workbook,
+        10_000,
+        marker=b"<styleSheet",
+    )
+
+    def unexpected_iterparse(*args, **kwargs):
+        raise AssertionError("ElementTree started before the lexical start-tag budget")
+
+    monkeypatch.setattr(workbook_module.ElementTree, "iterparse", unexpected_iterparse)
+    with ZipFile(workbook) as archive:
+        with pytest.raises(WorkbookLoadError, match="XML start tag"):
+            workbook_module._stream_ooxml_reader_xml(archive, "xl/styles.xml")
+
+
+def test_in_memory_xml_readers_reject_an_oversized_attribute_map_before_elementtree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attributes = b"".join(
+        f' ff{index:08x}="x"'.encode() for index in range(10_000)
+    )
+    payload = b"<root" + attributes + b"/>"
+
+    def unexpected_iterparse(*args, **kwargs):
+        raise AssertionError("ElementTree started before the lexical start-tag budget")
+
+    monkeypatch.setattr(workbook_module.ElementTree, "iterparse", unexpected_iterparse)
+    assert (
+        workbook_module._xml_payload_structure_element_count_within_budget(
+            payload,
+            maximum_element_count=1,
+        )
+        is None
+    )
+
+    def unexpected_fromstring(*args, **kwargs):
+        raise AssertionError("ElementTree started before the lexical start-tag budget")
+
+    monkeypatch.setattr(workbook_module.ElementTree, "fromstring", unexpected_fromstring)
+    with pytest.raises(ValueError, match="XML start tag"):
+        workbook_module._xml_root_from_payload(payload)
 
 
 def test_semantic_reader_preflight_rejects_excessive_cell_styles_before_scanners(

@@ -5,6 +5,46 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## XML opening-tag attribute bounds — 2026-07-26
+
+Version 0.152.0 closes the parser-frontier allocation gap left by structural
+element counts. Python documents that an ElementTree iterparse start event has
+already seen the closing delimiter and has defined attributes; its
+[ElementTree documentation](https://docs.python.org/3/library/xml.etree.elementtree.html)
+and [pyexpat callback reference](https://docs.python.org/3/library/pyexpat.html)
+therefore place a complete attribute mapping on the parser side of a start
+callback. The existing defused XML parser blocks document-type and entity
+paths, but a compact ordinary element can still carry a very large number of
+distinct attributes before an element-count callback runs.
+
+Controlled raw-ZIP fixtures began with the normal 4,835-byte workbook used by
+the stylesheet audit. One placed 500,000 distinct attributes on the Styles
+root; another put them on one direct cell-format record. Each Styles part was
+6,502,631 bytes, while the compressed workbooks were 1,184,083 and 1,184,103
+bytes respectively. The exact released 0.151.0 wheel completed the root case
+in 7.326036 seconds at 212,576 KiB RSS. It reached the nested-record case in
+6.654143 seconds and 211,676 KiB RSS before the ordinary style constructor
+reported its unexpected attributes. A Python expat start callback with a
+post-callback attribute-count check still reached 126,628 KiB, confirming that
+the limit must be lexical and precede parser construction.
+
+The 0.152.0 source lexically streams each XML opening tag before ElementTree
+starts, allowing 128 KiB of physical tag bytes. It uses byte-search fast paths
+for UTF-8/ASCII-compatible parts and fixed-width handling for UTF-16/UTF-32;
+quoted delimiters, comments, CDATA, processing instructions, and declarations
+do not impersonate elements. A fresh process accepted the normal control in
+0.051743 seconds / 35,260 KiB RSS, compared with 0.043672 / 35,412 for the
+exact released 0.151.0 wheel. It rejected the root and nested-record fixtures
+before parser entry in 0.009795 seconds / 34,852 KiB and 0.009885 / 34,236 KiB
+respectively, with the stable XML start-tag safety-preflight error. Exact
+boundary, one-byte chunk, quoted/non-element-markup, UTF-16/UTF-32,
+root/nested-map, and fail-before-parser regressions cover the lexical gate. The
+archive-safety suite passed 279 tests in 13.10 seconds, and the complete source
+suite passed 1,147 tests in 189 seconds with zero failures or errors. Twine
+metadata checks passed for the 0.152.0 wheel and sdist. Fresh isolated wheel
+and sdist installs each accepted the normal control and rejected both
+500,000-attribute fixtures through the CLI with status 2 before report output.
+
 ## Stylesheet XML structural bounds — 2026-07-26
 
 Version 0.151.0 closes the remaining compact-allocation paths in

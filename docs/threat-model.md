@@ -285,6 +285,13 @@ financial correctness or replace model review.
   supports it. A post-inventory in-place rewrite, regular-file replacement, or
   symlink substitution produces redacted `FF078` evidence and a final incomplete
   exit status, while remaining paths are still reported.
+- Local `diff` / `check` impact analysis has a 100,000-state aggregate default
+  budget. A state is a changed source or one reachable local dependency state;
+  a portfolio shares one pool across every matched workbook. This prevents a
+  broad edit set from multiplying the per-source graph bound into impractical
+  CI CPU or retained evidence. The command stops with status 2 rather than
+  emitting a partial impact report, and reconstructs shortest paths only for
+  the fixed review sample instead of every reachable path prefix.
 - Cross-workbook portfolio impact evidence is candidate-only and local to the
   supplied inventory. FormulaFence retains raw external source spellings and
   package targets only as private parser state, then resolves a direct static

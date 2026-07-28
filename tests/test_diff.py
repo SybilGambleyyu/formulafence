@@ -11,7 +11,7 @@ from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 import pytest
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Protection
 from openpyxl.workbook.defined_name import DefinedName
@@ -19,6 +19,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 import formulafence.workbook as workbook_module
 from formulafence.diff import compare_snapshots
+from formulafence.models import FormulaFenceError
 from formulafence.output import (
     EXTERNAL_WORKBOOK_LINK_REDACTION,
     FORMULA_DEFINED_XLM_ACTION_REDACTION,
@@ -524,6 +525,49 @@ def test_formula_to_value_traces_cross_sheet_downstream_impact(tmp_path) -> None
     ]
     assert any(finding.rule_id == "FF001" for finding in report.findings)
     assert "`Model!B2` → `Model!C2` → `Dashboard!B12`" in report_to_markdown(report)
+
+
+def test_change_analysis_budget_is_exact_and_shared_across_changed_sources(tmp_path) -> None:
+    baseline = tmp_path / "baseline.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    for path, first, second in ((baseline, 1, 2), (candidate, 10, 20)):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Model"
+        worksheet["A1"] = first
+        worksheet["A2"] = second
+        worksheet["B1"] = "=A1"
+        worksheet["B2"] = "=A2"
+        workbook.save(path)
+
+    exact = compare_snapshots(
+        load_snapshot(baseline),
+        load_snapshot(candidate),
+        max_change_analysis_states=4,
+    )
+    assert [change.location for change in exact.changes] == [
+        ("Model", "A1"),
+        ("Model", "A2"),
+    ]
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_change_analysis_states=3",
+    ):
+        compare_snapshots(
+            load_snapshot(baseline),
+            load_snapshot(candidate),
+            max_change_analysis_states=3,
+        )
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_change_analysis_states must be at least 1",
+    ):
+        compare_snapshots(
+            load_snapshot(baseline),
+            load_snapshot(candidate),
+            max_change_analysis_states=0,
+        )
 
 
 def test_html_report_is_self_contained_filterable_and_escapes_evidence(tmp_path) -> None:

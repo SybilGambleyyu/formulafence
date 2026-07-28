@@ -14,6 +14,7 @@ from openpyxl.worksheet.table import Table
 
 import formulafence.portfolio as portfolio_module
 from formulafence.cli import build_parser, main
+from formulafence.diff import DEFAULT_MAX_CHANGE_ANALYSIS_STATES
 from formulafence.models import ExternalWorkbookStructuredReference
 from formulafence.output import as_json, portfolio_to_markdown, portfolio_to_sarif
 from formulafence.policy import parse_policy
@@ -2176,6 +2177,45 @@ def test_portfolio_snapshot_cell_budget_checks_the_candidate_before_later_reads(
     assert snapshot_reads == [baseline_source, candidate_source]
 
 
+def test_portfolio_change_analysis_budget_is_shared_across_matched_workbooks(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    for root, value in ((baseline, 1), (candidate, 2)):
+        for name in ("first.xlsx", "second.xlsx"):
+            _write_workbook(
+                root / name,
+                "Model",
+                {"A1": value, "B1": "=A1"},
+            )
+
+    exact = compare_portfolios(
+        baseline,
+        candidate,
+        max_change_analysis_states=4,
+    )
+    assert exact.incomplete is False
+    with pytest.raises(
+        PortfolioError,
+        match="Portfolio change analysis exceeds max_change_analysis_states=3",
+    ):
+        compare_portfolios(
+            baseline,
+            candidate,
+            max_change_analysis_states=3,
+        )
+    with pytest.raises(
+        PortfolioError,
+        match="max_change_analysis_states must be at least 1",
+    ):
+        compare_portfolios(
+            baseline,
+            candidate,
+            max_change_analysis_states=0,
+        )
+
+
 def test_portfolio_cli_passes_the_inventory_entry_limit(tmp_path: Path) -> None:
     baseline, candidate = _portfolio_pair(tmp_path)
     (baseline / "note.txt").write_text("ignored", encoding="utf-8")
@@ -2229,6 +2269,26 @@ def test_portfolio_cli_passes_the_snapshot_cell_limit(tmp_path: Path) -> None:
     )
 
 
+def test_portfolio_cli_passes_the_change_analysis_state_limit(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    _write_workbook(baseline / "model.xlsx", "Model", {"A1": 1, "B1": "=A1"})
+    _write_workbook(candidate / "model.xlsx", "Model", {"A1": 2, "B1": "=A1"})
+
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline),
+                str(candidate),
+                "--max-change-analysis-states",
+                "1",
+            ]
+        )
+        == 2
+    )
+
+
 def test_portfolio_cli_defaults_the_inventory_entry_limit() -> None:
     arguments = build_parser().parse_args(["portfolio", "before", "after"])
 
@@ -2245,6 +2305,12 @@ def test_portfolio_cli_defaults_the_snapshot_cell_limit() -> None:
     arguments = build_parser().parse_args(["portfolio", "before", "after"])
 
     assert arguments.max_portfolio_snapshot_cells == DEFAULT_MAX_PORTFOLIO_SNAPSHOT_CELLS
+
+
+def test_portfolio_cli_defaults_the_change_analysis_state_limit() -> None:
+    arguments = build_parser().parse_args(["portfolio", "before", "after"])
+
+    assert arguments.max_change_analysis_states == DEFAULT_MAX_CHANGE_ANALYSIS_STATES
 
 
 def test_portfolio_inventory_ignores_office_lock_files(tmp_path: Path) -> None:

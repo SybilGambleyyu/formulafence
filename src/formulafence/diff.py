@@ -41,6 +41,7 @@ from formulafence.models import (
     FormulaDefinedXlmRegistrationSnapshot,
     FormulaEnvironmentInformationSnapshot,
     FormulaExternalActionSnapshot,
+    FormulaFenceError,
     IgnoredErrorSnapshot,
     LegacyCommentSnapshot,
     NamedSheetViewSnapshot,
@@ -82,7 +83,34 @@ from formulafence.models import (
 )
 
 _IMPACT_SAMPLE_SIZE = 20
-_IMPACT_NODE_LIMIT = 100_000
+DEFAULT_MAX_CHANGE_ANALYSIS_STATES = 100_000
+_IMPACT_NODE_LIMIT = DEFAULT_MAX_CHANGE_ANALYSIS_STATES
+
+
+@dataclass
+class ChangeAnalysisBudget:
+    """One bounded pool for local dependency evidence in a comparison.
+
+    Each source cell and each reachable dependent that FormulaFence retains
+    while tracing a change consumes one state.  The budget is deliberately
+    shared by every local-impact query in a comparison: a wide edit set must
+    not multiply the existing per-source traversal bound into impractical CI
+    work or report memory.
+    """
+
+    max_states: int
+    scope: str
+    error_type: type[FormulaFenceError] = FormulaFenceError
+    state_count: int = 0
+
+    def consume(self) -> None:
+        """Record a source-to-reachable state or stop before overage work."""
+        if self.state_count >= self.max_states:
+            raise self.error_type(
+                f"{self.scope} change analysis exceeds "
+                f"max_change_analysis_states={self.max_states}."
+            )
+        self.state_count += 1
 
 
 @dataclass(frozen=True)
@@ -90,8 +118,38 @@ class ImpactAnalysis:
     """A deterministic, shortest-path view of explicit downstream dependencies."""
 
     impacted: frozenset[CellKey]
-    paths: dict[CellKey, tuple[CellKey, ...]]
+    paths: Mapping[CellKey, tuple[CellKey, ...]]
     truncated: bool
+
+
+@dataclass(frozen=True)
+class _ImpactPaths(Mapping[CellKey, tuple[CellKey, ...]]):
+    """Reconstruct only the impact paths that a caller actually renders.
+
+    A long formula chain can have many reachable nodes and therefore many
+    quadratic-length path prefixes. Review output deliberately serializes only
+    a small deterministic sample, so eagerly constructing every prefix would
+    turn a bounded graph walk into an avoidable allocation spike.
+    """
+
+    parents: Mapping[CellKey, CellKey | None]
+    targets: frozenset[CellKey]
+
+    def __getitem__(self, target: CellKey) -> tuple[CellKey, ...]:
+        if target not in self.targets:
+            raise KeyError(target)
+        path: list[CellKey] = []
+        current: CellKey | None = target
+        while current is not None:
+            path.append(current)
+            current = self.parents[current]
+        return tuple(reversed(path))
+
+    def __iter__(self):
+        return iter(self.targets)
+
+    def __len__(self) -> int:
+        return len(self.targets)
 
 
 def _cell_change_kind(
@@ -118,12 +176,15 @@ def analyze_downstream_impact(
     location: CellKey,
     *snapshots: WorkbookSnapshot,
     node_limit: int = _IMPACT_NODE_LIMIT,
+    state_budget: ChangeAnalysisBudget | None = None,
 ) -> ImpactAnalysis:
     """Find formula cells affected through explicit dependency paths.
 
     Range references are checked lazily instead of expanded, so a formula such as
     `SUM(A:A)` does not turn into a million in-memory graph edges.
     """
+    if state_budget is not None:
+        state_budget.consume()
     queue: deque[CellKey] = deque([location])
     visited: set[CellKey] = {location}
     impacted: set[CellKey] = set()
@@ -137,6 +198,8 @@ def analyze_downstream_impact(
         for dependent in sorted(dependents, key=_location_sort_key):
             if dependent in visited:
                 continue
+            if state_budget is not None:
+                state_budget.consume()
             visited.add(dependent)
             impacted.add(dependent)
             parents[dependent] = current
@@ -145,15 +208,12 @@ def analyze_downstream_impact(
                 queue.clear()
                 break
             queue.append(dependent)
-    paths: dict[CellKey, tuple[CellKey, ...]] = {}
-    for target in impacted:
-        path: list[CellKey] = []
-        current: CellKey | None = target
-        while current is not None:
-            path.append(current)
-            current = parents[current]
-        paths[target] = tuple(reversed(path))
-    return ImpactAnalysis(frozenset(impacted), paths, truncated)
+    impacted_nodes = frozenset(impacted)
+    return ImpactAnalysis(
+        impacted_nodes,
+        _ImpactPaths(parents, impacted_nodes),
+        truncated,
+    )
 
 
 def downstream_impact(
@@ -167,7 +227,8 @@ def downstream_impact(
 
 
 def _serialise_impact_paths(
-    targets: Iterable[CellKey], paths: dict[CellKey, tuple[CellKey, ...]]
+    targets: Iterable[CellKey],
+    paths: Mapping[CellKey, tuple[CellKey, ...]],
 ) -> list[dict[str, object]]:
     from formulafence.models import display_location
 
@@ -2014,7 +2075,10 @@ def _workbook_control_changes(
 
 
 def _array_formula_semantics_changes(
-    before: WorkbookSnapshot, after: WorkbookSnapshot
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+    *,
+    state_budget: ChangeAnalysisBudget,
 ) -> tuple[list[Change], list[Finding]]:
     """Report changes Excel would otherwise hide behind identical formula text.
 
@@ -2075,7 +2139,12 @@ def _array_formula_semantics_changes(
     def details_with_impact(location: CellKey, details: dict[str, object]) -> tuple[
         dict[str, object], int, tuple[CellKey, ...]
     ]:
-        impact_analysis = analyze_downstream_impact(location, before, after)
+        impact_analysis = analyze_downstream_impact(
+            location,
+            before,
+            after,
+            state_budget=state_budget,
+        )
         sampled_impacts = tuple(
             sorted(impact_analysis.impacted, key=_location_sort_key)[:_IMPACT_SAMPLE_SIZE]
         )
@@ -2162,7 +2231,10 @@ def _array_formula_semantics_changes(
 
 
 def _dynamic_array_output_reference_changes(
-    before: WorkbookSnapshot, after: WorkbookSnapshot
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+    *,
+    state_budget: ChangeAnalysisBudget,
 ) -> tuple[list[Change], list[Finding]]:
     """Report formulas newly intersecting an observed dynamic spill member.
 
@@ -2184,7 +2256,12 @@ def _dynamic_array_output_reference_changes(
         )
         if not new_references:
             continue
-        impact_analysis = analyze_downstream_impact(location, before, after)
+        impact_analysis = analyze_downstream_impact(
+            location,
+            before,
+            after,
+            state_budget=state_budget,
+        )
         sampled_impacts = tuple(
             sorted(impact_analysis.impacted, key=_location_sort_key)[:_IMPACT_SAMPLE_SIZE]
         )
@@ -2239,6 +2316,8 @@ def _formula_cached_result_changes(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
     semantic_cell_changes: Iterable[Change],
+    *,
+    state_budget: ChangeAnalysisBudget,
 ) -> tuple[list[Change], list[Finding]]:
     """Flag result-cache changes that static visible edits cannot explain.
 
@@ -2279,7 +2358,12 @@ def _formula_cached_result_changes(
     for change in changes_with_locations:
         if not unexplained_locations:
             break
-        impact = analyze_downstream_impact(change.location, before, after)
+        impact = analyze_downstream_impact(
+            change.location,
+            before,
+            after,
+            state_budget=state_budget,
+        )
         unexplained_locations.difference_update(impact.impacted)
 
     unrecognized_metadata_changed = (
@@ -3628,8 +3712,20 @@ def _worksheet_image_controls_changed(
     return [change], [finding]
 
 
-def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> DiffReport:
-    """Compare workbook semantics and attach local dependency impact to each edit."""
+def compare_snapshots(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+    *,
+    max_change_analysis_states: int = DEFAULT_MAX_CHANGE_ANALYSIS_STATES,
+    _state_budget: ChangeAnalysisBudget | None = None,
+) -> DiffReport:
+    """Compare workbook semantics and attach bounded local impact to each edit."""
+    if max_change_analysis_states < 1:
+        raise FormulaFenceError("max_change_analysis_states must be at least 1.")
+    state_budget = _state_budget or ChangeAnalysisBudget(
+        max_states=max_change_analysis_states,
+        scope="Workbook",
+    )
     changes: list[Change] = []
     findings: list[Finding] = []
     formula_changed_locations: set[CellKey] = set()
@@ -3703,7 +3799,12 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         if classified is None:
             continue
         kind, severity = classified
-        impact_analysis = analyze_downstream_impact(location, before, after)
+        impact_analysis = analyze_downstream_impact(
+            location,
+            before,
+            after,
+            state_budget=state_budget,
+        )
         impact = impact_analysis.impacted
         sampled_impacts = tuple(sorted(impact, key=_location_sort_key)[:_IMPACT_SAMPLE_SIZE])
         details: dict[str, object] = {}
@@ -3783,7 +3884,12 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
             )
 
     formula_cached_result_changes, formula_cached_result_findings = (
-        _formula_cached_result_changes(before, after, semantic_cell_changes)
+        _formula_cached_result_changes(
+            before,
+            after,
+            semantic_cell_changes,
+            state_budget=state_budget,
+        )
     )
     changes.extend(formula_cached_result_changes)
     findings.extend(formula_cached_result_findings)
@@ -4160,12 +4266,18 @@ def compare_snapshots(before: WorkbookSnapshot, after: WorkbookSnapshot) -> Diff
         )
 
     array_formula_changes, array_formula_findings = _array_formula_semantics_changes(
-        before, after
+        before,
+        after,
+        state_budget=state_budget,
     )
     changes.extend(array_formula_changes)
     findings.extend(array_formula_findings)
     dynamic_array_reference_changes, dynamic_array_reference_findings = (
-        _dynamic_array_output_reference_changes(before, after)
+        _dynamic_array_output_reference_changes(
+            before,
+            after,
+            state_budget=state_budget,
+        )
     )
     changes.extend(dynamic_array_reference_changes)
     findings.extend(dynamic_array_reference_findings)

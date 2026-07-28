@@ -1918,6 +1918,18 @@ then fails closed before it opens a later workbook if the newly retained state
 exceeds that side's budget. This is separate from the pre-read source-byte,
 raw-entry, and supported-workbook limits.
 
+`diff` and `check` also have a 100,000-state aggregate local impact-analysis
+budget by default (`--max-change-analysis-states`); one pool spans every matched
+workbook in a `portfolio` run. FormulaFence records each changed source and each
+reachable local dependency state while it prepares impact evidence, so many
+small edits cannot multiply the ordinary per-source walk into unbounded CI work
+or report state. A budget overage stops with status `2` before it emits a
+partial local-impact artifact. This operational boundary is separate from a
+policy's `max_downstream_impact` rule and from the candidate-only
+cross-workbook `--max-link-impact` graph budget. Shortest paths are reconstructed
+only for the fixed serialized sample rather than eagerly for every reachable
+node.
+
 Candidate-only portfolio analysis also builds a separate static dependency graph
 across a deliberately narrow subset of external A1 formulas and 3-D A1 spans,
 book-only external structured-table selectors, direct workbook-scoped or

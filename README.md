@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.166.0/formulafence-0.166.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.167.0/formulafence-0.167.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.166.0
+  uses: SybilGambleyyu/formulafence@v0.167.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -526,8 +526,9 @@ keeps paths relative in portfolio output, skips transient Office `~$` lock
 files, and fails closed for unsupported Excel formats, case-colliding paths,
 symlinked paths, over-limit inventories, or an unreadable workbook.
 The default bounds are 512 supported workbooks, 32,768 total filesystem entries,
-4 GiB of supported-workbook source bytes, and 2,000,000 populated retained
-snapshot cells per directory. The entry budget is enforced before FormulaFence
+4 GiB of supported-workbook source bytes, 2,000,000 populated retained snapshot
+cells per directory, and 100,000 aggregate local change-analysis states. The
+entry budget is enforced before FormulaFence
 retains or sorts paths, so non-workbook files, directories, lock files, and
 symlinks cannot make a broad CI directory consume an unbounded inventory. After
 supported regular files are inventoried, FormulaFence sums their observed source
@@ -536,8 +537,8 @@ private-copy and reader workload for each side independently. During comparison,
 FormulaFence then counts the actual cells in retained immutable snapshots and
 stops as soon as that side exceeds its snapshot-cell budget, before opening a
 later workbook. Tune the separate limits with `--max-workbooks`,
-`--max-inventory-entries`, `--max-portfolio-source-bytes`, and
-`--max-portfolio-snapshot-cells`.
+`--max-inventory-entries`, `--max-portfolio-source-bytes`,
+`--max-portfolio-snapshot-cells`, and `--max-change-analysis-states`.
 The recursive walk uses direct directory enumeration and treats any unreadable
 subdirectory as a fail-closed portfolio error; it never silently omits a branch
 from the reviewed directory coverage.
@@ -546,6 +547,14 @@ identity and state before comparison. Its later private snapshot read verifies
 that observation and refuses a late in-place rewrite, regular-file replacement,
 or symlink replacement as redacted `FF078` incomplete evidence rather than
 following a newly redirected path.
+Local impact analysis has its own 100,000-state budget, configurable with
+`--max-change-analysis-states`. It applies to `diff` and `check`, and one shared
+pool spans every matched workbook in `portfolio`: each changed source and each
+static local dependent it reaches consumes a state. This prevents a broad edit
+set from multiplying the per-source traversal limit into unbounded CI work or
+report data; an exhausted pool returns exit code `2` before a partial impact
+report can imply complete evidence. FormulaFence reconstructs only the bounded
+set of serialized shortest-path samples, not every reachable path prefix.
 Cross-workbook traversal has a separate global bound of 100,000 source-to-node
 graph states, configurable with `--max-link-impact`; an exhausted bound emits
 critical `FF080` and returns exit code `2` rather than claiming complete impact

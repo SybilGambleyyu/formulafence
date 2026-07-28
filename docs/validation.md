@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Aggregate local impact-analysis budget — 2026-07-28
+
+Version 0.167.0 closes an algorithmic multiplication gap in semantic diffing.
+FormulaFence already capped one changed cell's local downstream walk, but a
+workbook can contain many independently changed sources. Applying the same
+per-source ceiling to every edit could still multiply CPU and retained impact
+evidence into an impractical CI run, even when the workbook reader and each
+individual traversal stayed within their own limits.
+
+`diff` and `check` now share a 100,000-state local-analysis pool by default;
+`portfolio` shares one pool across every matched workbook. A changed source and
+each statically reachable local dependent consume one state. The
+`--max-change-analysis-states` / Action `max-change-analysis-states` control is
+positive-only, and an overage returns status 2 before a partial local-impact
+artifact can be written. The pre-existing per-source walk remains an independent
+coverage limit, and the candidate-only cross-workbook graph retains its separate
+`--max-link-impact` pool. Shortest paths are now reconstructed lazily only for
+the fixed serialized sample, avoiding eager quadratic materialization of every
+prefix in a long chain while retaining normal mapping access for callers that
+need a particular path.
+
+Direct regressions prove that two independent two-state source/dependent paths
+pass at an exact four-state bound and fail at three; a portfolio proves that its
+single budget is shared across separate matched workbooks. CLI/default and
+Action metadata, invalid-input, and propagation cases cover the public
+contract.
+
+For a compact fan-out control with 250 changed inputs and an 800-formula chain,
+the public 0.166.0 wheel completed all 200,250 source-to-reachable states,
+produced 250 changes in a 2,310,669-byte JSON report, and took 12.662560
+seconds. The 0.167.0 candidate with a 10,000-state budget failed closed in
+2.436415 seconds without publishing a report; its default 100,000-state budget
+also failed closed in 3.358328 seconds. Five no-change controls averaged
+2.379241 seconds in the public wheel and 2.455888 seconds in the candidate.
+The final source suite passed 1,260 tests in 382.03 seconds, with Ruff,
+bytecode compilation, Action-shell syntax, and whitespace checks clean.
+
 ## Aggregate portfolio snapshot-cell budget — 2026-07-28
 
 Version 0.166.0 closes the retained-semantic-state gap left after the source-byte

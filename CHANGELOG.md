@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.167.0 — 2026-07-28
+
+- Bound local semantic-change impact analysis across a complete comparison.
+  `diff` and `check` now use one 100,000-state pool by default, and a directory
+  portfolio shares one pool across every matched workbook. Each changed source
+  and each statically reachable local dependency consumes a state, so a broad
+  edit set cannot multiply the existing per-source traversal boundary into
+  impractical CI work or retained report evidence.
+- Expose the limit as `--max-change-analysis-states` and the matching public
+  GitHub Action input. The command fails closed with status 2 on overage rather
+  than emitting partial impact evidence; exact aggregate-boundary, direct CLI,
+  portfolio-sharing, and Action validation/propagation regressions cover it.
+- Reconstruct shortest paths lazily for the fixed serialized sample instead of
+  eagerly materializing every reachable path prefix, preserving full local API
+  access while avoiding quadratic evidence allocation on long dependency chains.
+
 ## 0.166.0 — 2026-07-28
 
 - Bound the aggregate semantic state retained by a directory portfolio. Each

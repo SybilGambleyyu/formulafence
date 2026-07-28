@@ -133,6 +133,26 @@ def test_profile_does_not_expose_cell_values(tmp_path) -> None:
     assert '"formula_cells"' in profile
 
 
+def test_diff_passes_the_change_analysis_state_limit(tmp_path, capsys) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+    rewrite(candidate, lambda workbook: setattr(workbook["Model"]["B2"], "value", 200))
+
+    assert (
+        main(
+            [
+                "diff",
+                str(baseline),
+                str(candidate),
+                "--max-change-analysis-states",
+                "1",
+            ]
+        )
+        == 2
+    )
+    assert "max_change_analysis_states=1" in capsys.readouterr().err
+
+
 def test_profile_output_swap_cannot_overwrite_the_workbook(tmp_path, monkeypatch) -> None:
     workbook = make_model(tmp_path / "model.xlsx")
     original_workbook = workbook.read_bytes()

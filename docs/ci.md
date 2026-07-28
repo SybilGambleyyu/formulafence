@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.166.0
+        uses: SybilGambleyyu/formulafence@v0.167.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -278,7 +278,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.166.0
+  uses: SybilGambleyyu/formulafence@v0.167.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -287,6 +287,7 @@ per workbook in the consolidated artifact.
     max-inventory-entries: '16384'
     max-portfolio-source-bytes: '2147483648'
     max-portfolio-snapshot-cells: '1000000'
+    max-change-analysis-states: '100000'
     max-link-impact: '100000'
     format: sarif
     output: reports/formulafence-portfolio.sarif
@@ -311,6 +312,13 @@ later workbook is opened when a new snapshot exceeds the budget; configure this
 with `max-portfolio-snapshot-cells`. The Action also passes `max-link-impact`
 to the candidate-only static cross-workbook graph; its default is 100,000
 source-to-node states across the portfolio.
+Independently, `max-change-analysis-states` defaults to 100,000 for both
+single-workbook and directory comparisons. It counts every changed source and
+every reachable local dependency state while FormulaFence prepares impact
+evidence; a directory run shares one pool across matched workbooks. On overage,
+the Action returns FormulaFence status 2 rather than emitting a partial local
+impact report. Serialized shortest-path evidence remains a fixed sample and is
+reconstructed lazily from the bounded walk.
 
 The recursive directory walk fails closed if any supplied subtree cannot be
 enumerated. It does not treat an operating-system scan error as an empty branch,
@@ -404,7 +412,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.166.0/formulafence-0.166.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.167.0/formulafence-0.167.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

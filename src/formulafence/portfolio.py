@@ -20,7 +20,11 @@ from typing import Any
 
 from openpyxl.utils.cell import coordinate_to_tuple
 
-from formulafence.diff import compare_snapshots
+from formulafence.diff import (
+    DEFAULT_MAX_CHANGE_ANALYSIS_STATES,
+    ChangeAnalysisBudget,
+    compare_snapshots,
+)
 from formulafence.formulas import (
     ParsedReference,
     StructuredTable,
@@ -1215,6 +1219,7 @@ def compare_portfolios(
     max_inventory_entries: int = DEFAULT_MAX_INVENTORY_ENTRIES,
     max_portfolio_source_bytes: int = DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES,
     max_portfolio_snapshot_cells: int = DEFAULT_MAX_PORTFOLIO_SNAPSHOT_CELLS,
+    max_change_analysis_states: int = DEFAULT_MAX_CHANGE_ANALYSIS_STATES,
     max_link_impact: int = DEFAULT_MAX_LINK_IMPACT,
 ) -> PortfolioReport:
     """Compare every workbook at the same relative path in two directories.
@@ -1228,6 +1233,8 @@ def compare_portfolios(
         raise PortfolioError("max_portfolio_source_bytes must be at least 1.")
     if max_portfolio_snapshot_cells < 1:
         raise PortfolioError("max_portfolio_snapshot_cells must be at least 1.")
+    if max_change_analysis_states < 1:
+        raise PortfolioError("max_change_analysis_states must be at least 1.")
     if max_link_impact < 1:
         raise PortfolioError("max_link_impact must be at least 1.")
     baseline = _discover_portfolio_workbook_sources(
@@ -1260,6 +1267,11 @@ def compare_portfolios(
     entries: list[PortfolioWorkbookReport] = []
     baseline_snapshot_cell_count = 0
     candidate_snapshot_cell_count = 0
+    change_analysis_budget = ChangeAnalysisBudget(
+        max_states=max_change_analysis_states,
+        scope="Portfolio",
+        error_type=PortfolioError,
+    )
     for path in sorted(set(baseline) | set(candidate), key=_path_sort_key):
         baseline_path = baseline.get(path)
         candidate_path = candidate.get(path)
@@ -1302,7 +1314,12 @@ def compare_portfolios(
             entries.append(_membership_entry(path, before=before, after=after, policy=policy))
             continue
 
-        report = compare_snapshots(before, after)
+        report = compare_snapshots(
+            before,
+            after,
+            max_change_analysis_states=max_change_analysis_states,
+            _state_budget=change_analysis_budget,
+        )
         policy_findings = tuple(evaluate_policy(report, policy)) if policy is not None else ()
         status = "changed" if report.changes or report.findings or policy_findings else "unchanged"
         entries.append(

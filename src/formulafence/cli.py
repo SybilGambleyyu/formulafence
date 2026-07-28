@@ -10,7 +10,11 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from formulafence import __version__
-from formulafence.diff import compare_snapshots, report_severities
+from formulafence.diff import (
+    DEFAULT_MAX_CHANGE_ANALYSIS_STATES,
+    compare_snapshots,
+    report_severities,
+)
 from formulafence.models import SEVERITY_ORDER, FormulaFenceError
 from formulafence.output import (
     as_json,
@@ -232,6 +236,18 @@ def _positive_integer(value: str) -> int:
     return parsed
 
 
+def _add_change_analysis_state_limit_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--max-change-analysis-states",
+        type=_positive_integer,
+        default=DEFAULT_MAX_CHANGE_ANALYSIS_STATES,
+        help=(
+            "Fail closed after this many aggregate changed-source and local dependency "
+            "states are analyzed"
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="formulafence",
@@ -249,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     diff = commands.add_parser("diff", help="Compare two workbooks semantically")
     diff.add_argument("before", type=Path, help="Approved or baseline workbook")
     diff.add_argument("after", type=Path, help="Candidate workbook")
+    _add_change_analysis_state_limit_argument(diff)
     _add_output_arguments(diff, ("json", "markdown", "html", "sarif"))
     _add_external_workbook_link_redaction_argument(diff)
     _add_formula_external_action_redaction_argument(diff)
@@ -273,6 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("before", type=Path, help="Approved or baseline workbook")
     check.add_argument("after", type=Path, help="Candidate workbook")
     check.add_argument("--policy", required=True, type=Path, help="Path to formulafence.yml")
+    _add_change_analysis_state_limit_argument(check)
     _add_output_arguments(check, ("json", "markdown", "html", "sarif"))
     _add_external_workbook_link_redaction_argument(check)
     _add_formula_external_action_redaction_argument(check)
@@ -337,6 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
             "workbook snapshot cells during comparison"
         ),
     )
+    _add_change_analysis_state_limit_argument(portfolio)
     portfolio.add_argument(
         "--max-link-impact",
         type=_positive_integer,
@@ -494,7 +513,11 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
         inputs.append(arguments.policy)
     _ensure_output_safe(arguments.output, *inputs)
     policy = load_policy(arguments.policy) if enforce_policy else None
-    report = compare_snapshots(load_snapshot(arguments.before), load_snapshot(arguments.after))
+    report = compare_snapshots(
+        load_snapshot(arguments.before),
+        load_snapshot(arguments.after),
+        max_change_analysis_states=arguments.max_change_analysis_states,
+    )
     policy_findings = []
     if policy is not None:
         policy_findings = evaluate_policy(report, policy)
@@ -664,6 +687,7 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
         max_inventory_entries=arguments.max_inventory_entries,
         max_portfolio_source_bytes=arguments.max_portfolio_source_bytes,
         max_portfolio_snapshot_cells=arguments.max_portfolio_snapshot_cells,
+        max_change_analysis_states=arguments.max_change_analysis_states,
         max_link_impact=arguments.max_link_impact,
     )
     if arguments.format == "json":

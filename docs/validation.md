@@ -5,6 +5,45 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Shared-string rich-text structural bounds — 2026-07-26
+
+Version 0.146.0 closes a compact-allocation path in the raw rich-text scanner
+and the ordinary shared-string reader. SpreadsheetML uses the
+[Shared String Table](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-shared-string-table)
+to hold ordinary values and rich-text runs in `si` items. A table may
+legitimately have many simple entries, but FormulaFence previously constructed
+the entire table before inspecting rich runs, while the standard reader could
+retain ignored direct root children until parsing completed. A compact foreign
+root subtree therefore had no shared-string-specific structural boundary.
+
+The semantic-reader preflight now streams every shared-string table selected by
+either the manifest-backed ordinary reader or the raw rich-text relationship
+before either reader starts. It limits each complete `si` item to 32,768 XML
+elements, complex/rich items to 65,536 in aggregate, and opaque direct `sst`
+children to 32,768 elements per table and 65,536 in aggregate. Simple values
+retain the established 500,000-entry allowance. The raw rich-text scanner now
+keeps only one direct `si` tree at a time and removes completed irrelevant root
+children; the generic structural stream likewise detaches completed elements
+instead of leaving cleared siblings attached to their parent. A successfully
+parsed overage returns the stable safety-preflight error and CLI status 2,
+rather than producing a partial profile. These are CI allocation limits, not a
+SpreadsheetML validity rule.
+
+A raw-ZIP fixture generated without FormulaFence retained one ordinary rich
+shared string and appended 500,000 ignored foreign direct children to
+`xl/sharedStrings.xml`. The workbook was 85,611 bytes; the shared-string XML
+expanded to 27,500,347 bytes. The exact released unguarded 0.145.0 wheel
+completed a successful profile in 2.928342 seconds at 110,200 KiB RSS, emitted
+no warning, and reported no failure. The 0.146.0 source rejects the same input
+before either reader starts in 0.424907 seconds at 38,000 KiB RSS, with the
+stable shared-string opaque-XML safety-preflight error and no profile JSON. A
+normal rich-string profile completed in 0.390174 seconds at 37,616 KiB RSS.
+Direct/nested opaque-root, manifest/relationship-selection, per-item,
+aggregate, exact/default-limit, fail-before-reader, and streamed-rich-text
+regressions accompany the fixture.
+The complete source suite passed 1,073 tests in 157.84 seconds with zero
+failures or errors.
+
 ## Table Definition XML semantic-preflight bounds — 2026-07-26
 
 Version 0.145.0 closes a compact-allocation path shared by the raw readers and

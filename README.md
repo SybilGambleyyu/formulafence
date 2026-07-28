@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.145.0/formulafence-0.145.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.146.0/formulafence-0.146.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.145.0
+  uses: SybilGambleyyu/formulafence@v0.146.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2701,6 +2701,14 @@ also follow the 8,192-character stored-formula ceiling. The catalog counters
 follow the reader's local-name behavior, so
 alternate-namespace entries cannot bypass a limit. The cell-text, formula, and
 effective-cell-style ceilings match [Excel's published limits](https://support.microsoft.com/en-US/Excel/excel-specifications-and-limits).
+Shared strings retain their broad 500,000-entry allowance for ordinary simple
+values, but each complete `si` item is limited to 32,768 XML elements; complex
+items share a 65,536-element budget, and ignored opaque direct `sst` children
+are limited to 32,768 elements per selected table and 65,536 in aggregate.
+The raw rich-text scanner streams one direct shared-string item at a time and
+releases unrelated root children as it goes, so a compact extension tree cannot
+first force either scanner to retain the full table. These are CI allocation
+limits, not SpreadsheetML validity rules.
 The preflight also caps repeated known stylesheet containers and every
 reader-materialized number-format, font, fill, fill-child, gradient-stop,
 border, base-XF, named-style, differential-style, palette, table-style,

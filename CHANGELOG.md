@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.146.0 — 2026-07-26
+
+- Stream the raw shared-string rich-text scan one direct SpreadsheetML `si`
+  item at a time instead of first constructing the complete `sst` tree. The
+  scanner releases ignored foreign root children as they complete, preserving
+  rich-run coverage without retaining unrelated shared-string XML.
+- Add semantic-reader structural limits for shared-string shapes that either
+  FormulaFence or the ordinary reader must retain: 32,768 XML elements per
+  complete `si` item, 65,536 across complex/rich items, 32,768 opaque direct
+  `sst`-child elements per selected table, and 65,536 in aggregate. Simple
+  shared strings keep the established 500,000-entry allowance.
+- Reject a successfully streamed overage with the stable semantic-reader
+  safety-preflight error before raw or ordinary workbook readers start. Add
+  direct/nested opaque-root, manifest/relationship-selection, per-item,
+  aggregate, exact/default-limit, and fail-before-reader regressions, plus a
+  streamed rich-text coverage test.
+
 ## 0.145.0 — 2026-07-26
 
 - Add a shared semantic-reader structural gate for Table Definition XML before

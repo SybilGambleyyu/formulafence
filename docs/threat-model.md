@@ -125,9 +125,10 @@ financial correctness or replace model review.
 - After the structural ZIP inventory, FormulaFence applies a separate
   semantic-reader resource preflight before it runs downstream raw OOXML
   scanners or starts `openpyxl`. It streams the reader-visible package
-  manifest, workbook metadata, canonical styles, first manifest-selected
-  shared-string table (or a sole relationship-selected/canonical fallback), and
-  workbook-selected sheet parts. Every XML/relationship part is capped at 64
+  manifest, workbook metadata, canonical styles, the manifest-selected
+  shared-string table plus any distinct raw rich-text relationship-selected
+  table (with their narrow fallbacks), and workbook-selected sheet parts. Every
+  XML/relationship part is capped at 64
   MiB and aggregate XML material at 256 MiB. Each streamed reader part is also
   capped at 4,000,000 elements and 256 nesting levels. The gate limits
   populated SpreadsheetML cell records and shared-string entries to 500,000
@@ -135,7 +136,14 @@ financial correctness or replace model review.
   worksheet parts, column-dimension declarations to 16,384, and direct
   column-dimension containers to 4,096 across those parts, effective `cellXfs`
   styles to 65,490, cell text to 32,767 characters, and stored
-  formula/defined-name text to 8,192 characters. A row
+  formula/defined-name text to 8,192 characters. Simple shared strings retain
+  that broad entry allowance, while each complete `si` item is capped at
+  32,768 XML elements; complex/rich items share a 65,536-element budget, and
+  ignored opaque direct `sst` children allow 32,768 elements per selected table
+  and 65,536 in aggregate. This protects both the ordinary reader, which must
+  retain an item it is interpreting, and FormulaFence's raw rich-text scanner.
+  That scanner processes one direct `si` item at a time and releases completed
+  unrelated root children. A row
   counts only when it has an unqualified attribute other than `r` or `spans`,
   the condition that makes `openpyxl` retain a `RowDimension`; namespaced
   extension attributes do not count. Every reader-visible `col` counts because
@@ -290,7 +298,11 @@ formula will produce.
   row-dimension declarations across reader-selected ordinary worksheet parts,
   16,384 column-dimension declarations and 4,096 direct column-dimension
   containers across those parts, 500,000 shared-string entries, and 65,490
-  effective `cellXfs` styles. A row declaration counts only when it has an
+  effective `cellXfs` styles. It separately allows 32,768 XML elements per
+  complete shared-string `si` item, 65,536 across complex/rich items, and
+  32,768 opaque direct `sst`-child elements per selected table with 65,536 in
+  aggregate; simple shared strings still use the 500,000-entry budget. A row
+  declaration counts only when it has an
   unqualified attribute other than `r` or `spans`, which is the `openpyxl`
   `RowDimension` allocation trigger; a namespace-qualified extension attribute
   does not count. Every reader-visible `col` counts because `openpyxl`
@@ -323,10 +335,11 @@ formula will produce.
   aggregate for each catalog, before `openpyxl` materializes a `CellRange` per
   target. Data-validation and conditional-formatting formula fields also share
   the 8,192-character stored-formula bound. FormulaFence
-  follows the bounded sheet relationships plus the ordinary reader's shared-string
-  manifest selection, and streams them with `defusedxml` before it creates the
-  complete workbook model. A valid workbook above those limits is intentionally
-  rejected rather than partially inspected; split high-volume data workbooks
+  follows the bounded sheet relationships plus the ordinary reader's
+  manifest-selected and raw rich-text relationship-selected shared strings, and
+  streams them with `defusedxml` before it creates the complete workbook model.
+  A valid workbook above those limits is intentionally rejected rather than
+  partially inspected; split high-volume data workbooks
   before sending them through this CI-oriented reader.
 - Portfolio mode intentionally does not support legacy `.xls`, `.xlsb`,
   templates, add-ins, or `.ods` files, infer a rename/content match across

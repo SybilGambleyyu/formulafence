@@ -22,6 +22,7 @@ from .helpers import (
     make_external_data_refresh_model,
     make_external_link_package_model,
     make_model,
+    make_rich_text_run_model,
     make_strict_custom_workbook_view_model,
     make_strict_worksheet_drawing_connector_model,
     make_strict_worksheet_print_layout_model,
@@ -167,6 +168,142 @@ def _table_definition_xml_element_count(path: Path, member_name: str) -> int:
     with ZipFile(path) as archive:
         root = ElementTree.fromstring(archive.read(member_name))
     return sum(1 for _ in root.iter())
+
+
+def _append_shared_string_root_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    nested: bool = False,
+    member_name: str = "xl/sharedStrings.xml",
+) -> None:
+    """Add ignored root children without constructing a shared-string tree."""
+    with ZipFile(path) as archive:
+        shared_strings = archive.read(member_name)
+    closing_offset = shared_strings.rfind(b"</")
+    if closing_offset < 0:
+        raise ValueError("shared-string fixture XML has no closing root tag")
+    namespace = b"urn:formulafence:archive-safety"
+    entries = b"<ff:opaque/>" * count
+    if nested:
+        inserted = (
+            b'<ff:container xmlns:ff="'
+            + namespace
+            + b'">'
+            + b"<ff:nested>"
+            + entries
+            + b"</ff:nested></ff:container>"
+        )
+    else:
+        inserted = (
+            b'<ff:container xmlns:ff="'
+            + namespace
+            + b'">'
+            + entries
+            + b"</ff:container>"
+        )
+    _replace_member(
+        path,
+        member_name,
+        shared_strings[:closing_offset] + inserted + shared_strings[closing_offset:],
+    )
+
+
+def _redirect_shared_string_relationship(path: Path, target: str) -> None:
+    """Point the transitional shared-string relationship at a safe test part."""
+    member_name = "xl/_rels/workbook.xml.rels"
+    relationship_tag = (
+        "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"
+    )
+    with ZipFile(path) as archive:
+        relationships = archive.read(member_name)
+    root = ElementTree.fromstring(relationships)
+    relationship = next(
+        (
+            candidate
+            for candidate in root.findall(relationship_tag)
+            if candidate.get("Type")
+            == workbook_module._OOXML_SHARED_STRINGS_RELATIONSHIP
+        ),
+        None,
+    )
+    if relationship is None:
+        raise ValueError("shared-string fixture has no workbook relationship")
+    relationship.set("Target", target)
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _append_shared_string_item_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    nested: bool = False,
+    member_name: str = "xl/sharedStrings.xml",
+) -> None:
+    """Add opaque descendants to the first shared string item."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member_name))
+    item_tag = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"
+    item = root.find(item_tag)
+    if item is None:
+        raise ValueError("shared-string fixture XML has no item")
+    namespace = "urn:formulafence:archive-safety"
+    parent = item
+    if nested:
+        parent = ElementTree.SubElement(parent, f"{{{namespace}}}container")
+        parent = ElementTree.SubElement(parent, f"{{{namespace}}}nested")
+    for _ in range(count):
+        ElementTree.SubElement(parent, f"{{{namespace}}}opaque")
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+
+def _shared_string_item_xml_element_count(path: Path, member_name: str) -> int:
+    """Count the first complete shared string item for exact-limit tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member_name))
+    item_tag = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"
+    item = root.find(item_tag)
+    if item is None:
+        raise ValueError("shared-string fixture XML has no item")
+    return sum(1 for _ in item.iter())
+
+
+def _complex_shared_string_xml_element_count(path: Path, member_name: str) -> int:
+    """Mirror the semantic preflight's complex shared-string-item accounting."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member_name))
+    item_tag = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"
+    text_tag = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t"
+    total = 0
+    for item in root.findall(item_tag):
+        descendants = tuple(item.iter())
+        if any(element.tag != text_tag for element in descendants[1:]):
+            total += len(descendants)
+    return total
+
+
+def _duplicate_first_shared_string_item(path: Path, member_name: str) -> None:
+    """Append one equivalent rich item to exercise the aggregate guard."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member_name))
+    item_tag = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"
+    item = root.find(item_tag)
+    if item is None:
+        raise ValueError("shared-string fixture XML has no item")
+    root.append(deepcopy(item))
+    _replace_member(
+        path,
+        member_name,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
 
 
 def _add_worksheet_table_relationship_target(
@@ -2574,6 +2711,209 @@ def test_semantic_reader_preflight_preserves_malformed_orphan_table_coverage(
 
     assert snapshot.file_type == "xlsx"
     assert any("Excel Table Style metadata" in warning for warning in snapshot.parser_warnings)
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_rich_text_shared_string_scan_streams_opaque_root_children(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    nested: bool,
+) -> None:
+    workbook = make_rich_text_run_model(
+        tmp_path / f"streamed-shared-string-root-{nested}.xlsx"
+    )
+    shared_member = "xl/sharedStrings.xml"
+    _append_shared_string_root_xml_elements(workbook, 1, nested=nested)
+    with ZipFile(workbook) as archive:
+        shared_xml = archive.read(shared_member)
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_shared_string_tree(payload: bytes) -> ElementTree.Element:
+        if payload == shared_xml:
+            raise AssertionError("the shared-string XML table was materialized")
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_xml_root_from_payload",
+        unexpected_shared_string_tree,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.rich_text_runs.shared_rich_text_run_count == 2
+
+
+def test_semantic_reader_preflight_rejects_opaque_shared_string_root_xml_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_rich_text_run_model(tmp_path / "opaque-shared-string-root.xlsx")
+    _append_shared_string_root_xml_elements(workbook, 1, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_SHARED_STRING_OPAQUE_PART_XML_ELEMENT_COUNT",
+        2,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "shared-string opaque XML structure" in message
+
+
+def test_semantic_reader_preflight_covers_raw_relationship_selected_shared_strings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_rich_text_run_model(
+        tmp_path / "relationship-selected-shared-string.xml.xlsx"
+    )
+    alternate_member = "xl/raw-rich-text-sharedStrings.xml"
+    with ZipFile(workbook) as archive:
+        canonical_shared_strings = archive.read("xl/sharedStrings.xml")
+    _append_member(workbook, alternate_member, canonical_shared_strings)
+    _redirect_shared_string_relationship(workbook, "raw-rich-text-sharedStrings.xml")
+    _append_shared_string_root_xml_elements(
+        workbook,
+        1,
+        nested=True,
+        member_name=alternate_member,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_SHARED_STRING_OPAQUE_PART_XML_ELEMENT_COUNT",
+        2,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "shared-string opaque XML structure" in message
+
+
+def test_semantic_reader_preflight_rejects_shared_string_item_xml_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_rich_text_run_model(tmp_path / "opaque-shared-string-item.xlsx")
+    shared_member = "xl/sharedStrings.xml"
+    _append_shared_string_item_xml_elements(workbook, 1)
+    with ZipFile(workbook) as archive:
+        shared_xml = archive.read(shared_member)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_SHARED_STRING_ITEM_XML_ELEMENT_COUNT",
+        _shared_string_item_xml_element_count(workbook, shared_member) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_shared_string_tree(payload: bytes) -> ElementTree.Element:
+        if payload == shared_xml:
+            raise AssertionError("the over-budget shared-string item was materialized")
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_xml_root_from_payload",
+        unexpected_shared_string_tree,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "shared-string item XML structure" in message
+
+
+def test_semantic_reader_preflight_counts_nested_shared_string_item_xml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_rich_text_run_model(tmp_path / "nested-shared-string-item.xlsx")
+    shared_member = "xl/sharedStrings.xml"
+    _append_shared_string_item_xml_elements(workbook, 1, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_SHARED_STRING_ITEM_XML_ELEMENT_COUNT",
+        _shared_string_item_xml_element_count(workbook, shared_member) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "shared-string item XML structure" in message
+
+
+def test_semantic_reader_preflight_aggregates_complex_shared_string_xml_items(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_rich_text_run_model(tmp_path / "aggregate-shared-string-items.xlsx")
+    shared_member = "xl/sharedStrings.xml"
+    _duplicate_first_shared_string_item(workbook, shared_member)
+    item_element_count = _shared_string_item_xml_element_count(workbook, shared_member)
+    complex_element_count = _complex_shared_string_xml_element_count(
+        workbook,
+        shared_member,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_SHARED_STRING_ITEM_XML_ELEMENT_COUNT",
+        item_element_count,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_COMPLEX_SHARED_STRING_XML_ELEMENT_COUNT",
+        complex_element_count - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "aggregate complex shared-string XML elements" in message
+
+
+def test_semantic_reader_preflight_accepts_shared_string_xml_at_exact_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_rich_text_run_model(tmp_path / "shared-string-at-limits.xlsx")
+    shared_member = "xl/sharedStrings.xml"
+    item_element_count = _shared_string_item_xml_element_count(workbook, shared_member)
+    complex_element_count = _complex_shared_string_xml_element_count(
+        workbook,
+        shared_member,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_SHARED_STRING_ITEM_XML_ELEMENT_COUNT",
+        item_element_count,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_COMPLEX_SHARED_STRING_XML_ELEMENT_COUNT",
+        complex_element_count,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.rich_text_runs.shared_rich_text_run_count == 2
+
+
+def test_semantic_reader_preflight_rejects_default_shared_string_item_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_rich_text_run_model(tmp_path / "default-shared-string-item-limit.xlsx")
+    shared_member = "xl/sharedStrings.xml"
+    existing_count = _shared_string_item_xml_element_count(workbook, shared_member)
+    _append_shared_string_item_xml_elements(
+        workbook,
+        (
+            workbook_module._OOXML_READER_MAX_SHARED_STRING_ITEM_XML_ELEMENT_COUNT
+            - existing_count
+            + 1
+        ),
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "shared-string item XML structure" in message
 
 
 def test_semantic_reader_preflight_rejects_excessive_workbook_sheet_declarations_before_scanners(

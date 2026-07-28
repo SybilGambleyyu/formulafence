@@ -250,6 +250,21 @@ _OOXML_READER_MAX_TABLE_DEFINITION_PART_XML_ELEMENT_COUNT = 32_768
 _OOXML_READER_MAX_TABLE_DEFINITION_XML_ELEMENT_COUNT = (
     2 * _OOXML_READER_MAX_TABLE_DEFINITION_PART_XML_ELEMENT_COUNT
 )
+# A shared-string table may legitimately hold hundreds of thousands of simple
+# ``si``/``t`` values, so its table-wide element count cannot use the compact
+# metadata ceiling. Rich or opaque content is different: FormulaFence and the
+# ordinary reader must materialize one complete ``si`` item, while an opaque
+# root child stays attached to the standard reader's root until its parse
+# completes. Bound each of those compact trees before either reader can
+# allocate it. This is a CI safety boundary, not an OOXML file-format limit.
+_OOXML_READER_MAX_SHARED_STRING_ITEM_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_COMPLEX_SHARED_STRING_XML_ELEMENT_COUNT = (
+    2 * _OOXML_READER_MAX_SHARED_STRING_ITEM_XML_ELEMENT_COUNT
+)
+_OOXML_READER_MAX_SHARED_STRING_OPAQUE_PART_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_SHARED_STRING_OPAQUE_XML_ELEMENT_COUNT = (
+    2 * _OOXML_READER_MAX_SHARED_STRING_OPAQUE_PART_XML_ELEMENT_COUNT
+)
 _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
 _OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT = 100_000
 _OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
@@ -335,6 +350,10 @@ _OOXML_READER_MAX_CELL_TEXT_CHARACTERS = 32_767
 _OOXML_READER_MAX_FORMULA_CHARACTERS = 8_192
 _OOXML_SHARED_STRINGS_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+)
+_OOXML_SHARED_STRINGS_RELATIONSHIP = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+    "sharedStrings"
 )
 _ZIP_LOCAL_FILE_HEADER_SIGNATURE = b"PK\x03\x04"
 _ZIP_CENTRAL_DIRECTORY_HEADER_SIGNATURE = b"PK\x01\x02"
@@ -3529,6 +3548,7 @@ def _stream_ooxml_reader_xml(
     """Stream one reader-visible XML part under structural resource limits."""
     depth = 0
     element_count = 0
+    elements: list[ElementTree.Element] = []
     tags: list[str] = []
     with archive.open(member) as xml_stream:
         for event, element in ElementTree.iterparse(
@@ -3547,13 +3567,18 @@ def _stream_ooxml_reader_xml(
                         "XML element count exceeds the semantic-reader safety limit."
                     )
                 tags.append(element.tag)
+                elements.append(element)
                 if on_start is not None:
                     on_start(element)
                 continue
 
             if on_end is not None:
                 on_end(element, tags)
+            parent = elements[-2] if len(elements) > 1 else None
+            if parent is not None:
+                parent.remove(element)
             element.clear()
+            elements.pop()
             tags.pop()
             depth -= 1
 
@@ -3568,6 +3593,7 @@ def _ooxml_xml_structure_element_count_within_budget(
     """Return a bounded raw XML element count without retaining its full tree."""
     depth = 0
     element_count = 0
+    elements: list[ElementTree.Element] = []
     with archive.open(member) as xml_stream:
         for event, element in ElementTree.iterparse(
             xml_stream,
@@ -3581,8 +3607,13 @@ def _ooxml_xml_structure_element_count_within_budget(
                     or element_count > maximum_element_count
                 ):
                     return None
+                elements.append(element)
                 continue
+            parent = elements[-2] if len(elements) > 1 else None
+            if parent is not None:
+                parent.remove(element)
             element.clear()
+            elements.pop()
             depth -= 1
     return element_count
 
@@ -3596,6 +3627,7 @@ def _xml_payload_structure_element_count_within_budget(
     """Return a bounded count for an in-memory XML payload without a full tree."""
     depth = 0
     element_count = 0
+    elements: list[ElementTree.Element] = []
     with io.BytesIO(payload) as xml_stream:
         for event, element in ElementTree.iterparse(
             xml_stream,
@@ -3609,8 +3641,13 @@ def _xml_payload_structure_element_count_within_budget(
                     or element_count > maximum_element_count
                 ):
                     return None
+                elements.append(element)
                 continue
+            parent = elements[-2] if len(elements) > 1 else None
+            if parent is not None:
+                parent.remove(element)
             element.clear()
+            elements.pop()
             depth -= 1
     return element_count
 
@@ -3639,24 +3676,53 @@ def _reader_shared_string_xml_paths(
     *,
     manifest_targets: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
-    """Find reader-visible shared-string parts without trusting a fixed path."""
+    """Find every shared-string part selected by a reader without fixed paths.
+
+    ``openpyxl`` follows the first shared-string manifest override, but the raw
+    rich-text scanner follows one exact transitional workbook relationship (or
+    its canonical fallback). A malformed package can make those two valid
+    selection rules point at different members. Stream their union so neither
+    reader reaches a compact, materializing shared-string tree first.
+    """
+    paths: list[str] = []
     if manifest_targets:
         # ``openpyxl`` reads the first matching manifest Override.
-        return (manifest_targets[0],)
-    relationship_targets = [
+        paths.append(manifest_targets[0])
+    relationships = _package_relationships(archive, "xl/workbook.xml")
+    reader_relationship_targets = [
         relationship.target
-        for relationship in _package_relationships(archive, "xl/workbook.xml")
+        for relationship in relationships
         if (
             relationship.target is not None
             and relationship.relationship_type.rsplit("/", maxsplit=1)[-1].casefold()
             == "sharedstrings"
         )
     ]
-    if len(relationship_targets) == 1:
-        return (relationship_targets[0],)
-    if not relationship_targets and "xl/sharedStrings.xml" in archive.namelist():
-        return ("xl/sharedStrings.xml",)
-    return ()
+    if not manifest_targets:
+        if len(reader_relationship_targets) == 1:
+            paths.append(reader_relationship_targets[0])
+        elif (
+            not reader_relationship_targets
+            and "xl/sharedStrings.xml" in archive.namelist()
+        ):
+            paths.append("xl/sharedStrings.xml")
+
+    raw_rich_text_targets = [
+        relationship.target
+        for relationship in relationships
+        if (
+            relationship.relationship_type == _OOXML_SHARED_STRINGS_RELATIONSHIP
+            and relationship.target is not None
+        )
+    ]
+    if len(raw_rich_text_targets) == 1:
+        raw_rich_text_target = raw_rich_text_targets[0]
+        if raw_rich_text_target in archive.namelist():
+            paths.append(raw_rich_text_target)
+    elif not raw_rich_text_targets and "xl/sharedStrings.xml" in archive.namelist():
+        paths.append("xl/sharedStrings.xml")
+
+    return tuple(dict.fromkeys(paths))
 
 
 def _validate_ooxml_semantic_reader_resources(
@@ -3769,6 +3835,11 @@ def _validate_ooxml_semantic_reader_resources(
     page_break_container_count = 0
     page_break_declaration_count = 0
     shared_string_count = 0
+    shared_string_item_xml_element_counts: list[int] = []
+    shared_string_item_is_complex: list[bool] = []
+    complex_shared_string_xml_element_count = 0
+    shared_string_opaque_part_xml_element_count = 0
+    shared_string_opaque_xml_element_count = 0
     cell_tags = _spreadsheetml_tags("c")
     row_tags = _spreadsheetml_tags("row")
     column_tags = _spreadsheetml_tags("col")
@@ -3779,6 +3850,7 @@ def _validate_ooxml_semantic_reader_resources(
     formula_tags = _spreadsheetml_tags("f")
     inline_string_tags = _spreadsheetml_tags("is")
     shared_string_tags = _spreadsheetml_tags("si")
+    shared_string_table_tags = _spreadsheetml_tags("sst")
     text_tags = _spreadsheetml_tags("t")
     value_tags = _spreadsheetml_tags("v")
     data_validation_container_tags = _spreadsheetml_tags("dataValidations")
@@ -4388,24 +4460,87 @@ def _validate_ooxml_semantic_reader_resources(
             inline_string_text_lengths.pop()
 
     def shared_string_start(element: ElementTree.Element) -> None:
+        # A raw rich-text reader and ``openpyxl`` must retain an individual
+        # shared-string item while interpreting its rich runs, phonetics, or
+        # unsupported XML. Count the whole item, not the overall table: a
+        # workbook can reasonably contain many simple ``si``/``t`` values, but
+        # a compact, expansive item must never reach a materializing parser.
+        for index in range(len(shared_string_item_xml_element_counts)):
+            shared_string_item_xml_element_counts[index] += 1
+            if (
+                shared_string_item_xml_element_counts[index]
+                > _OOXML_READER_MAX_SHARED_STRING_ITEM_XML_ELEMENT_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "shared-string item XML structure exceeds the semantic-reader "
+                    "safety limit."
+                )
+            if element.tag not in text_tags:
+                shared_string_item_is_complex[index] = True
         if element.tag in shared_string_tags:
             shared_string_text_lengths.append(0)
+            shared_string_item_xml_element_counts.append(1)
+            shared_string_item_is_complex.append(False)
 
     def shared_string_end(
         element: ElementTree.Element,
-        _tags: list[str],
+        tags: list[str],
     ) -> None:
+        nonlocal complex_shared_string_xml_element_count
         nonlocal shared_string_count
+        nonlocal shared_string_opaque_part_xml_element_count
+        nonlocal shared_string_opaque_xml_element_count
+        # ``openpyxl`` clears recognized ``si`` items incrementally but leaves
+        # each other direct ``sst`` child attached to the table root. The raw
+        # rich-text scanner used to materialize that root too. Count the full
+        # opaque root-child subtree before either path can retain a compact,
+        # repetitive extension or foreign catalog. Rich ``si`` descendants are
+        # covered separately by the item/complex-item limits below.
+        if (
+            len(tags) >= 2
+            and tags[0] in shared_string_table_tags
+            and tags[1] not in shared_string_tags
+        ):
+            shared_string_opaque_part_xml_element_count += 1
+            if (
+                shared_string_opaque_part_xml_element_count
+                > _OOXML_READER_MAX_SHARED_STRING_OPAQUE_PART_XML_ELEMENT_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "shared-string opaque XML structure exceeds the semantic-reader "
+                    "safety limit."
+                )
+            shared_string_opaque_xml_element_count += 1
+            if (
+                shared_string_opaque_xml_element_count
+                > _OOXML_READER_MAX_SHARED_STRING_OPAQUE_XML_ELEMENT_COUNT
+            ):
+                raise _reader_preflight_error(
+                    "aggregate shared-string opaque XML elements exceed the "
+                    "semantic-reader safety limit."
+                )
         if element.tag in text_tags and shared_string_text_lengths:
             shared_string_text_lengths[-1] += len(element.text or "")
             validate_cell_text_length(shared_string_text_lengths[-1])
         if element.tag in shared_string_tags:
             shared_string_text_lengths.pop()
+            item_element_count = shared_string_item_xml_element_counts.pop()
+            item_is_complex = shared_string_item_is_complex.pop()
             shared_string_count += 1
             if shared_string_count > _OOXML_READER_MAX_SHARED_STRING_COUNT:
                 raise _reader_preflight_error(
                     "shared-string table entries exceed the semantic-reader safety limit."
                 )
+            if item_is_complex:
+                complex_shared_string_xml_element_count += item_element_count
+                if (
+                    complex_shared_string_xml_element_count
+                    > _OOXML_READER_MAX_COMPLEX_SHARED_STRING_XML_ELEMENT_COUNT
+                ):
+                    raise _reader_preflight_error(
+                        "aggregate complex shared-string XML elements exceed the "
+                        "semantic-reader safety limit."
+                    )
 
     cell_style_count = 0
     stylesheet_container_count = 0
@@ -4774,6 +4909,7 @@ def _validate_ooxml_semantic_reader_resources(
                 )
             for member_name in shared_string_members:
                 reader_member(member_name)
+                shared_string_opaque_part_xml_element_count = 0
                 _stream_ooxml_reader_xml(
                     archive,
                     member_name,
@@ -32480,15 +32616,11 @@ def _rich_text_shared_string_member(
     archive: ZipFile,
 ) -> tuple[str | None, str | None]:
     """Find the shared-string part through its workbook relationship."""
-    relationship_type = (
-        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
-        "sharedStrings"
-    )
     relationships = _package_relationships(archive, "xl/workbook.xml")
     targets = [
         relationship.target
         for relationship in relationships
-        if relationship.relationship_type == relationship_type
+        if relationship.relationship_type == _OOXML_SHARED_STRINGS_RELATIONSHIP
         and relationship.target is not None
     ]
     if len(targets) > 1:
@@ -32501,6 +32633,69 @@ def _rich_text_shared_string_member(
     if "xl/sharedStrings.xml" in archive.namelist():
         return "xl/sharedStrings.xml", None
     return None, None
+
+
+def _rich_text_shared_string_items(
+    archive: ZipFile,
+    member: str,
+) -> tuple[list[_RichTextItem | None] | None, str | None]:
+    """Stream one shared-string table without retaining unrelated XML entries.
+
+    Only one ``si`` item's run tree is needed at a time for the private
+    rich-text signature. Retaining the whole ``sst`` tree first makes ignored
+    foreign entries and a large table of plain strings allocate before the
+    scanner can determine that they contain no presentation control. The
+    semantic-reader preflight has already bounded every materialized ``si``
+    item; remove every completed root child as this stream advances.
+    """
+    shared_table_tag = f"{{{_SPREADSHEETML_NS}}}sst"
+    shared_item_tag = f"{{{_SPREADSHEETML_NS}}}si"
+    root: ElementTree.Element | None = None
+    stack: list[ElementTree.Element] = []
+    items: list[_RichTextItem | None] = []
+
+    with archive.open(member) as xml_stream:
+        for event, element in ElementTree.iterparse(
+            xml_stream,
+            events=("start", "end"),
+        ):
+            if event == "start":
+                stack.append(element)
+                if len(stack) == 1:
+                    root = element
+                    if root.tag != shared_table_tag:
+                        return None, "invalid-shared-string-root"
+                continue
+
+            depth = len(stack)
+            parent = stack[-2] if depth > 1 else None
+            is_direct_shared_item = depth == 2 and element.tag == shared_item_tag
+            in_direct_shared_item = (
+                len(stack) > 1 and stack[1].tag == shared_item_tag
+            )
+            if is_direct_shared_item:
+                items.append(
+                    _rich_text_item(
+                        element,
+                        context=f"shared-string:{len(items)}",
+                    )
+                )
+                if root is not None:
+                    root.remove(element)
+                element.clear()
+            elif not in_direct_shared_item:
+                # A root-level foreign child used to stay attached to ``sst``
+                # until the whole table had parsed. Remove it (and its already
+                # completed descendants) immediately; FormulaFence's old
+                # ``findall(si)`` path ignored it as well.
+                if parent is not None:
+                    parent.remove(element)
+                element.clear()
+            stack.pop()
+
+    if root is None:
+        return None, "invalid-shared-string-root"
+    return items, None
 
 
 def _rich_text_run_metadata(path: Path) -> _RichTextRunMetadata:
@@ -32534,23 +32729,12 @@ def _rich_text_run_metadata(path: Path) -> _RichTextRunMetadata:
             shared_member, shared_member_issue = _rich_text_shared_string_member(archive)
             shared_items: list[_RichTextItem | None] | None = None
             if shared_member is not None:
-                shared_table = _xml_root(archive, shared_member)
-                if (
-                    _xml_namespace(shared_table.tag) != _SPREADSHEETML_NS
-                    or _xml_local_name(shared_table.tag) != "sst"
-                ):
-                    shared_member_issue = "invalid-shared-string-root"
-                else:
-                    shared_item_tag = f"{{{_SPREADSHEETML_NS}}}si"
-                    shared_items = [
-                        _rich_text_item(
-                            item,
-                            context=f"shared-string:{index}",
-                        )
-                        for index, item in enumerate(
-                            shared_table.findall(shared_item_tag)
-                        )
-                    ]
+                shared_items, shared_item_issue = _rich_text_shared_string_items(
+                    archive,
+                    shared_member,
+                )
+                if shared_item_issue is not None:
+                    shared_member_issue = shared_item_issue
 
             cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
             value_tag = f"{{{_SPREADSHEETML_NS}}}v"

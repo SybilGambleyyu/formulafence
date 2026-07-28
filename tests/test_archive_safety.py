@@ -92,6 +92,29 @@ def _formula_defined_name_catalog_workbook(path: Path, *, count: int = 8) -> Pat
     return path
 
 
+def _formula_defined_name_action_chain_workbook(
+    path: Path,
+    *,
+    count: int = 4,
+) -> Path:
+    """Create a compact chain that preserves every inherited action call."""
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    for index in range(count):
+        previous = f"+ActionName{index - 1:05d}" if index else ""
+        workbook.defined_names.add(
+            DefinedName(
+                f"ActionName{index:05d}",
+                attr_text=(
+                    '=HYPERLINK("https://example.invalid","x")' + previous
+                ),
+            )
+        )
+    workbook.save(path)
+    return path
+
+
 def _replace_member(path: Path, name: str, payload: bytes) -> None:
     """Replace one test package part without creating a duplicate ZIP entry."""
     staging = path.with_suffix(".replacement.xlsx")
@@ -2297,6 +2320,31 @@ def test_formula_defined_name_resolution_reuses_visibility_maps(
     assert len(marker_views) == 8
     assert len({id(view) for view in reference_views}) == 1
     assert len({id(view) for view in marker_views}) == 1
+
+
+def test_formula_defined_name_state_budget_bounds_action_propagation(
+    tmp_path: Path,
+) -> None:
+    workbook = _formula_defined_name_action_chain_workbook(
+        tmp_path / "action-chain.xlsx"
+    )
+
+    snapshot = load_snapshot(workbook, max_formula_defined_name_states=17)
+    assert len(snapshot.defined_names) == 4
+
+    with pytest.raises(
+        WorkbookLoadError,
+        match=(
+            r"formula-defined-name propagation exceeds "
+            r"max_formula_defined_name_states=16"
+        ),
+    ):
+        load_snapshot(workbook, max_formula_defined_name_states=16)
+    with pytest.raises(
+        WorkbookLoadError,
+        match="max_formula_defined_name_states must be at least 1",
+    ):
+        load_snapshot(workbook, max_formula_defined_name_states=0)
 
 
 def test_semantic_reader_preflight_rejects_excessive_row_dimensions_before_scanners(

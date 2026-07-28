@@ -49,7 +49,10 @@ from formulafence.policy import (
 )
 from formulafence.workbook import (
     DEFAULT_MAX_DEPENDENCY_EDGES,
+    DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES,
     DependencyEdgeBudget,
+    FormulaDefinedNameStateBudget,
+    FormulaDefinedNameStateLimitError,
     WorkbookDependencyEdgeLimitError,
     WorkbookSourceIdentity,
     load_snapshot,
@@ -1202,6 +1205,7 @@ def _unreadable_entry(
 def _load_portfolio_workbook(
     source: _PortfolioWorkbookSource | None,
     dependency_edge_budget: DependencyEdgeBudget,
+    formula_defined_name_state_budget: FormulaDefinedNameStateBudget,
 ) -> tuple[WorkbookSnapshot | None, bool]:
     if source is None:
         return None, False
@@ -1211,10 +1215,14 @@ def _load_portfolio_workbook(
                 source.path,
                 expected_source_identity=source.identity,
                 _dependency_edge_budget=dependency_edge_budget,
+                _formula_defined_name_state_budget=formula_defined_name_state_budget,
             ),
             False,
         )
-    except WorkbookDependencyEdgeLimitError as error:
+    except (
+        WorkbookDependencyEdgeLimitError,
+        FormulaDefinedNameStateLimitError,
+    ) as error:
         # This is a configured resource boundary, not an unreadable workbook.
         # Propagate it so the caller receives the exact limit and no later
         # portfolio source is opened.
@@ -1233,6 +1241,7 @@ def compare_portfolios(
     max_portfolio_source_bytes: int = DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES,
     max_portfolio_snapshot_cells: int = DEFAULT_MAX_PORTFOLIO_SNAPSHOT_CELLS,
     max_dependency_edges: int = DEFAULT_MAX_DEPENDENCY_EDGES,
+    max_formula_defined_name_states: int = DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES,
     max_change_analysis_states: int = DEFAULT_MAX_CHANGE_ANALYSIS_STATES,
     max_link_impact: int = DEFAULT_MAX_LINK_IMPACT,
 ) -> PortfolioReport:
@@ -1249,6 +1258,10 @@ def compare_portfolios(
         raise PortfolioError("max_portfolio_snapshot_cells must be at least 1.")
     if max_dependency_edges < 1:
         raise PortfolioError("max_dependency_edges must be at least 1.")
+    if max_formula_defined_name_states < 1:
+        raise PortfolioError(
+            "max_formula_defined_name_states must be at least 1."
+        )
     if max_change_analysis_states < 1:
         raise PortfolioError("max_change_analysis_states must be at least 1.")
     if max_link_impact < 1:
@@ -1291,6 +1304,14 @@ def compare_portfolios(
         max_edges=max_dependency_edges,
         scope="Candidate portfolio",
     )
+    baseline_formula_defined_name_state_budget = FormulaDefinedNameStateBudget(
+        max_states=max_formula_defined_name_states,
+        scope="Baseline portfolio",
+    )
+    candidate_formula_defined_name_state_budget = FormulaDefinedNameStateBudget(
+        max_states=max_formula_defined_name_states,
+        scope="Candidate portfolio",
+    )
     change_analysis_budget = ChangeAnalysisBudget(
         max_states=max_change_analysis_states,
         scope="Portfolio",
@@ -1302,6 +1323,7 @@ def compare_portfolios(
         before, before_unreadable = _load_portfolio_workbook(
             baseline_path,
             baseline_dependency_edge_budget,
+            baseline_formula_defined_name_state_budget,
         )
         baseline_snapshot_cell_count = _record_portfolio_snapshot_cells(
             before,
@@ -1312,6 +1334,7 @@ def compare_portfolios(
         after, after_unreadable = _load_portfolio_workbook(
             candidate_path,
             candidate_dependency_edge_budget,
+            candidate_formula_defined_name_state_budget,
         )
         candidate_snapshot_cell_count = _record_portfolio_snapshot_cells(
             after,

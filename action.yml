@@ -97,6 +97,10 @@ inputs:
     description: Maximum static local dependency-graph edges retained for each workbook input, or each directory portfolio side; fail closed above this semantic-state budget.
     required: false
     default: '2000000'
+  max-formula-defined-name-states:
+    description: Maximum formula-defined-name dependency and sensitive-call propagation states retained for each workbook input, or each directory portfolio side; fail closed above this working-state budget.
+    required: false
+    default: '1000000'
   max-change-analysis-states:
     description: Maximum aggregate changed-source and local dependency states analyzed by a workbook or directory portfolio comparison; fail closed above this budget.
     required: false
@@ -160,6 +164,7 @@ runs:
         INPUT_MAX_PORTFOLIO_SOURCE_BYTES: ${{ inputs.max-portfolio-source-bytes }}
         INPUT_MAX_PORTFOLIO_SNAPSHOT_CELLS: ${{ inputs.max-portfolio-snapshot-cells }}
         INPUT_MAX_DEPENDENCY_EDGES: ${{ inputs.max-dependency-edges }}
+        INPUT_MAX_FORMULA_DEFINED_NAME_STATES: ${{ inputs.max-formula-defined-name-states }}
         INPUT_MAX_CHANGE_ANALYSIS_STATES: ${{ inputs.max-change-analysis-states }}
         INPUT_MAX_REPORT_BYTES: ${{ inputs.max-report-bytes }}
         INPUT_MAX_LINK_IMPACT: ${{ inputs.max-link-impact }}

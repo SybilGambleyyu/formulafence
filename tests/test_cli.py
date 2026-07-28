@@ -11,7 +11,11 @@ import formulafence.policy as policy_module
 from formulafence.cli import main
 from formulafence.models import WorkbookSnapshot
 from formulafence.output import DEFAULT_MAX_REPORT_BYTES
-from formulafence.workbook import DEFAULT_MAX_DEPENDENCY_EDGES, DEFAULT_MAX_PROFILE_RECORDS
+from formulafence.workbook import (
+    DEFAULT_MAX_DEPENDENCY_EDGES,
+    DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES,
+    DEFAULT_MAX_PROFILE_RECORDS,
+)
 
 from .helpers import (
     change_formula_dde_link_input,
@@ -171,6 +175,44 @@ def test_profile_dependency_edge_limit_fails_before_writing_an_output(tmp_path, 
     assert "max_dependency_edges=11" in capsys.readouterr().err
 
 
+def test_profile_formula_defined_name_state_limit_fails_before_writing_an_output(
+    tmp_path,
+    capsys,
+) -> None:
+    workbook_path = tmp_path / "action-chain.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    for index in range(4):
+        previous = f"+ActionName{index - 1:05d}" if index else ""
+        workbook.defined_names.add(
+            DefinedName(
+                f"ActionName{index:05d}",
+                attr_text='=HYPERLINK("https://example.invalid","x")' + previous,
+            )
+        )
+    workbook.save(workbook_path)
+    output = tmp_path / "profile.json"
+
+    assert (
+        main(
+            [
+                "profile",
+                str(workbook_path),
+                "--max-formula-defined-name-states",
+                "16",
+                "--format",
+                "json",
+                "--output",
+                str(output),
+            ]
+        )
+        == 2
+    )
+    assert not output.exists()
+    assert "max_formula_defined_name_states=16" in capsys.readouterr().err
+
+
 def test_diff_passes_the_change_analysis_state_limit(tmp_path, capsys) -> None:
     baseline = make_model(tmp_path / "baseline.xlsx")
     candidate = make_model(tmp_path / "candidate.xlsx")
@@ -222,6 +264,10 @@ def test_diff_defaults_the_report_byte_limit() -> None:
 
     assert arguments.max_report_bytes == DEFAULT_MAX_REPORT_BYTES
     assert arguments.max_dependency_edges == DEFAULT_MAX_DEPENDENCY_EDGES
+    assert (
+        arguments.max_formula_defined_name_states
+        == DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES
+    )
 
 
 def test_profile_fails_before_writing_an_oversized_artifact(tmp_path, capsys) -> None:
@@ -254,6 +300,10 @@ def test_profile_defaults_the_report_byte_limit() -> None:
     assert arguments.max_report_bytes == DEFAULT_MAX_REPORT_BYTES
     assert arguments.max_profile_records == DEFAULT_MAX_PROFILE_RECORDS
     assert arguments.max_dependency_edges == DEFAULT_MAX_DEPENDENCY_EDGES
+    assert (
+        arguments.max_formula_defined_name_states
+        == DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES
+    )
 
 
 def test_profile_record_limit_fails_before_writing_an_output(tmp_path, monkeypatch, capsys) -> None:

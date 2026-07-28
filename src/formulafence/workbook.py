@@ -164,10 +164,19 @@ DEFAULT_MAX_PROFILE_RECORDS = 100_000
 # indexes retained for a snapshot.  Keep one explicit, configurable ceiling
 # around those semantic graph edges before they accumulate in memory.
 DEFAULT_MAX_DEPENDENCY_EDGES = 2_000_000
+# Formula-defined names form a second semantic graph while FormulaFence
+# propagates sensitive-call evidence. A compact workbook can keep the ordinary
+# cell graph empty while one long chain repeatedly inherits every stored call.
+# Bound that working state independently from static cell dependencies.
+DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES = 1_000_000
 
 
 class WorkbookDependencyEdgeLimitError(WorkbookLoadError):
     """A workbook exceeded the caller's retained dependency-graph budget."""
+
+
+class FormulaDefinedNameStateLimitError(WorkbookLoadError):
+    """A workbook exceeded the formula-defined-name propagation budget."""
 
 
 @dataclass
@@ -193,6 +202,33 @@ class DependencyEdgeBudget:
                 f"max_dependency_edges={self.max_edges}."
             )
         self.used += count
+
+
+@dataclass
+class FormulaDefinedNameStateBudget:
+    """Track formula-defined-name graph and propagated-ledger state.
+
+    A directory portfolio retains every successful snapshot for later nested
+    evidence, so callers can share this budget across one portfolio side just
+    as they share the ordinary dependency-edge budget.
+    """
+
+    max_states: int
+    scope: str = "Workbook"
+    used: int = 0
+
+    def consume(self, count: int = 1) -> None:
+        """Reserve derived name state before retaining it."""
+        if count < 0:  # pragma: no cover - internal callers only add records
+            raise ValueError("Formula-defined-name state count must not be negative.")
+        if self.used + count > self.max_states:
+            raise FormulaDefinedNameStateLimitError(
+                f"{self.scope} formula-defined-name propagation exceeds "
+                f"max_formula_defined_name_states={self.max_states}."
+            )
+        self.used += count
+
+
 # Every source workbook passes this bounded ZIP inventory before FormulaFence
 # opens any OOXML part or hands the package to openpyxl.  The values preserve
 # support for the existing 512 MiB Power Pivot data-part allowance while
@@ -48358,6 +48394,7 @@ def _named_reference_maps(
     workbook: object,
     structured_tables: Mapping[str, StructuredTable],
     sheet_order: tuple[str, ...],
+    formula_defined_name_state_budget: FormulaDefinedNameStateBudget,
 ) -> tuple[
     # References and named-LAMBDA references.
     dict[str, tuple[ParsedReference, ...]],
@@ -49019,62 +49056,62 @@ def _named_reference_maps(
             inspect_formula_defined_xlm_environment_information_calls=True,
         )
         identity = identity_for(definition)
-        direct_external_action_functions[identity] = tuple(
+        direct_external_actions = tuple(
             function
             for function in inspection.external_action_functions
             if function not in identities_by_marker
         )
-        direct_formula_dde_links[identity] = tuple(
+        direct_dde_links = tuple(
             marker
             for marker in inspection.formula_dde_link_markers
             if marker not in identities_by_marker
         )
-        direct_custom_function_candidates[identity] = tuple(
+        direct_custom_candidates = tuple(
             candidate
             for candidate in inspection.office_custom_function_candidates
             if candidate not in identities_by_marker
         )
-        direct_unqualified_runtime_function_candidates[identity] = tuple(
+        direct_unqualified_runtime_candidates = tuple(
             candidate
             for candidate in inspection.unqualified_runtime_function_candidates
             if candidate not in identities_by_marker
         )
-        direct_code_resource_registration_functions[identity] = tuple(
+        direct_code_resource_registrations = tuple(
             function
             for function in inspection.worksheet_code_resource_registration_functions
             if function not in identities_by_marker
         )
-        direct_formula_defined_xlm_registration_functions[identity] = tuple(
+        direct_xlm_registrations = tuple(
             function
             for function in inspection.formula_defined_xlm_registration_functions
             if function not in identities_by_marker
         )
-        direct_formula_defined_xlm_evaluation_functions[identity] = tuple(
+        direct_xlm_evaluations = tuple(
             function
             for function in inspection.formula_defined_xlm_evaluation_functions
             if function not in identities_by_marker
         )
-        direct_formula_defined_xlm_action_functions[identity] = tuple(
+        direct_xlm_actions = tuple(
             function
             for function in inspection.formula_defined_xlm_action_functions
             if function not in identities_by_marker
         )
-        direct_formula_defined_xlm_get_cell_functions[identity] = tuple(
+        direct_xlm_get_cell_calls = tuple(
             function
             for function in inspection.formula_defined_xlm_get_cell_functions
             if function not in identities_by_marker
         )
-        direct_formula_defined_xlm_environment_information_functions[identity] = tuple(
+        direct_xlm_environment_information_calls = tuple(
             function
             for function in inspection.formula_defined_xlm_environment_information_functions
             if function not in identities_by_marker
         )
-        direct_formula_environment_information_functions[identity] = tuple(
+        direct_environment_information_calls = tuple(
             signal
             for signal in inspection.formula_environment_information_signal_values
             if signal not in identities_by_marker
         )
-        definition_dependencies[identity] = tuple(
+        dependencies = tuple(
             dict.fromkeys(
                 identities_by_marker[marker]
                 for marker in (
@@ -49093,6 +49130,49 @@ def _named_reference_maps(
                 if marker in identities_by_marker
             )
         )
+        formula_defined_name_state_budget.consume(
+            len(dependencies)
+            + sum(
+                len(values)
+                for values in (
+                    direct_external_actions,
+                    direct_dde_links,
+                    direct_custom_candidates,
+                    direct_unqualified_runtime_candidates,
+                    direct_code_resource_registrations,
+                    direct_xlm_registrations,
+                    direct_xlm_evaluations,
+                    direct_xlm_actions,
+                    direct_xlm_get_cell_calls,
+                    direct_xlm_environment_information_calls,
+                    direct_environment_information_calls,
+                )
+            )
+        )
+        direct_external_action_functions[identity] = direct_external_actions
+        direct_formula_dde_links[identity] = direct_dde_links
+        direct_custom_function_candidates[identity] = direct_custom_candidates
+        direct_unqualified_runtime_function_candidates[identity] = (
+            direct_unqualified_runtime_candidates
+        )
+        direct_code_resource_registration_functions[identity] = (
+            direct_code_resource_registrations
+        )
+        direct_formula_defined_xlm_registration_functions[identity] = (
+            direct_xlm_registrations
+        )
+        direct_formula_defined_xlm_evaluation_functions[identity] = (
+            direct_xlm_evaluations
+        )
+        direct_formula_defined_xlm_action_functions[identity] = direct_xlm_actions
+        direct_formula_defined_xlm_get_cell_functions[identity] = direct_xlm_get_cell_calls
+        direct_formula_defined_xlm_environment_information_functions[identity] = (
+            direct_xlm_environment_information_calls
+        )
+        direct_formula_environment_information_functions[identity] = (
+            direct_environment_information_calls
+        )
+        definition_dependencies[identity] = dependencies
 
     # Collapse recursive definition groups before expanding their candidates.
     # That preserves repeated calls in ordinary acyclic definitions while a
@@ -49272,112 +49352,103 @@ def _named_reference_maps(
     component_formula_environment_information_functions: dict[
         int, tuple[str, ...]
     ] = {}
+
+    def propagated_component_entries(
+        direct_entries: tuple[str, ...],
+        dependencies: tuple[int, ...],
+        entries_by_component: Mapping[int, tuple[str, ...]],
+    ) -> tuple[str, ...]:
+        """Retain one component's inherited sensitive-call ledger safely.
+
+        Each entry remains distinct because separate formula-defined names can
+        represent separate runtime calls.  Reserve the full derived tuple
+        before constructing it, so a long acyclic chain fails closed rather
+        than transiently materializing an unbounded sequence of prefixes.
+        """
+        entry_count = len(direct_entries) + sum(
+            len(entries_by_component[dependency]) for dependency in dependencies
+        )
+        formula_defined_name_state_budget.consume(entry_count)
+        return direct_entries + tuple(
+            entry
+            for dependency in dependencies
+            for entry in entries_by_component[dependency]
+        )
+
     while ready_components:
         component = heapq.heappop(ready_components)
-        component_external_action_functions[component] = (
-            component_direct_external_action_functions[component]
-            + tuple(
-                function
-                for dependency in component_dependencies[component]
-                for function in component_external_action_functions[dependency]
-            )
+        dependencies = component_dependencies[component]
+        component_external_action_functions[component] = propagated_component_entries(
+            component_direct_external_action_functions[component],
+            dependencies,
+            component_external_action_functions,
         )
-        component_formula_dde_links[component] = (
-            component_direct_formula_dde_links[component]
-            + tuple(
-                marker
-                for dependency in component_dependencies[component]
-                for marker in component_formula_dde_links[dependency]
-            )
+        component_formula_dde_links[component] = propagated_component_entries(
+            component_direct_formula_dde_links[component],
+            dependencies,
+            component_formula_dde_links,
         )
-        component_custom_function_candidates[component] = (
-            component_direct_candidates[component]
-            + tuple(
-                candidate
-                for dependency in component_dependencies[component]
-                for candidate in component_custom_function_candidates[dependency]
-            )
+        component_custom_function_candidates[component] = propagated_component_entries(
+            component_direct_candidates[component],
+            dependencies,
+            component_custom_function_candidates,
         )
         component_unqualified_runtime_function_candidates[component] = (
-            component_direct_unqualified_runtime_function_candidates[component]
-            + tuple(
-                candidate
-                for dependency in component_dependencies[component]
-                for candidate in component_unqualified_runtime_function_candidates[
-                    dependency
-                ]
+            propagated_component_entries(
+                component_direct_unqualified_runtime_function_candidates[component],
+                dependencies,
+                component_unqualified_runtime_function_candidates,
             )
         )
         component_code_resource_registration_functions[component] = (
-            component_direct_code_resource_registration_functions[component]
-            + tuple(
-                function
-                for dependency in component_dependencies[component]
-                for function in component_code_resource_registration_functions[dependency]
+            propagated_component_entries(
+                component_direct_code_resource_registration_functions[component],
+                dependencies,
+                component_code_resource_registration_functions,
             )
         )
         component_formula_defined_xlm_registration_functions[component] = (
-            component_direct_formula_defined_xlm_registration_functions[component]
-            + tuple(
-                function
-                for dependency in component_dependencies[component]
-                for function in component_formula_defined_xlm_registration_functions[
-                    dependency
-                ]
+            propagated_component_entries(
+                component_direct_formula_defined_xlm_registration_functions[component],
+                dependencies,
+                component_formula_defined_xlm_registration_functions,
             )
         )
         component_formula_defined_xlm_evaluation_functions[component] = (
-            component_direct_formula_defined_xlm_evaluation_functions[component]
-            + tuple(
-                function
-                for dependency in component_dependencies[component]
-                for function in component_formula_defined_xlm_evaluation_functions[
-                    dependency
-                ]
+            propagated_component_entries(
+                component_direct_formula_defined_xlm_evaluation_functions[component],
+                dependencies,
+                component_formula_defined_xlm_evaluation_functions,
             )
         )
         component_formula_defined_xlm_action_functions[component] = (
-            component_direct_formula_defined_xlm_action_functions[component]
-            + tuple(
-                function
-                for dependency in component_dependencies[component]
-                for function in component_formula_defined_xlm_action_functions[
-                    dependency
-                ]
+            propagated_component_entries(
+                component_direct_formula_defined_xlm_action_functions[component],
+                dependencies,
+                component_formula_defined_xlm_action_functions,
             )
         )
         component_formula_defined_xlm_get_cell_functions[component] = (
-            component_direct_formula_defined_xlm_get_cell_functions[component]
-            + tuple(
-                function
-                for dependency in component_dependencies[component]
-                for function in component_formula_defined_xlm_get_cell_functions[
-                    dependency
-                ]
+            propagated_component_entries(
+                component_direct_formula_defined_xlm_get_cell_functions[component],
+                dependencies,
+                component_formula_defined_xlm_get_cell_functions,
             )
         )
         component_formula_defined_xlm_environment_information_functions[component] = (
-            component_direct_formula_defined_xlm_environment_information_functions[
-                component
-            ]
-            + tuple(
-                function
-                for dependency in component_dependencies[component]
-                for function in (
-                    component_formula_defined_xlm_environment_information_functions[
-                        dependency
-                    ]
-                )
+            propagated_component_entries(
+                component_direct_formula_defined_xlm_environment_information_functions[
+                    component
+                ],
+                dependencies,
+                component_formula_defined_xlm_environment_information_functions,
             )
         )
         component_formula_environment_information_functions[component] = (
-            component_direct_formula_environment_information_functions[component]
-            + tuple(
-                function
-                for dependency in component_dependencies[component]
-                for function in component_formula_environment_information_functions[
-                    dependency
-                ]
+            propagated_component_entries(
+                component_direct_formula_environment_information_functions[component],
+                dependencies,
+                component_formula_environment_information_functions,
             )
         )
         for dependent in sorted(component_dependents[component]):
@@ -51734,7 +51805,9 @@ def load_snapshot(
     *,
     expected_source_identity: WorkbookSourceIdentity | None = None,
     max_dependency_edges: int = DEFAULT_MAX_DEPENDENCY_EDGES,
+    max_formula_defined_name_states: int = DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES,
     _dependency_edge_budget: DependencyEdgeBudget | None = None,
+    _formula_defined_name_state_budget: FormulaDefinedNameStateBudget | None = None,
 ) -> WorkbookSnapshot:
     """Load one immutable workbook snapshot without evaluating its contents.
 
@@ -51745,8 +51818,16 @@ def load_snapshot(
     """
     if max_dependency_edges < 1:
         raise WorkbookLoadError("max_dependency_edges must be at least 1.")
+    if max_formula_defined_name_states < 1:
+        raise WorkbookLoadError(
+            "max_formula_defined_name_states must be at least 1."
+        )
     dependency_edge_budget = _dependency_edge_budget or DependencyEdgeBudget(
         max_edges=max_dependency_edges
+    )
+    formula_defined_name_state_budget = (
+        _formula_defined_name_state_budget
+        or FormulaDefinedNameStateBudget(max_states=max_formula_defined_name_states)
     )
 
     reported_source = Path(path)
@@ -51773,6 +51854,7 @@ def load_snapshot(
             source,
             reported_source,
             dependency_edge_budget=dependency_edge_budget,
+            formula_defined_name_state_budget=formula_defined_name_state_budget,
         )
     finally:
         _remove_stable_workbook_source(source)
@@ -51783,6 +51865,7 @@ def _load_snapshot_from_stable_source(
     reported_source: Path,
     *,
     dependency_edge_budget: DependencyEdgeBudget,
+    formula_defined_name_state_budget: FormulaDefinedNameStateBudget,
 ) -> WorkbookSnapshot:
     """Inspect only the private source copy materialized for one snapshot."""
 
@@ -52074,7 +52157,12 @@ def _load_snapshot_from_stable_source(
         global_named_function_formula_environment_information_functions,
         local_named_function_formula_environment_information_functions,
         formula_environment_information_definition_entries,
-    ) = _named_reference_maps(workbook, structured_tables, sheet_order)
+    ) = _named_reference_maps(
+        workbook,
+        structured_tables,
+        sheet_order,
+        formula_defined_name_state_budget,
+    )
     static_global_defined_name_references = _static_global_defined_name_references(
         global_named_references
     )

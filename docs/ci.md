@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.172.0
+        uses: SybilGambleyyu/formulafence@v0.173.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -279,7 +279,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.172.0
+  uses: SybilGambleyyu/formulafence@v0.173.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -289,6 +289,7 @@ per workbook in the consolidated artifact.
     max-portfolio-source-bytes: '2147483648'
     max-portfolio-snapshot-cells: '1000000'
     max-dependency-edges: '1000000'
+    max-formula-defined-name-states: '1000000'
     max-change-analysis-states: '100000'
     max-report-bytes: '33554432'
     max-link-impact: '100000'
@@ -322,6 +323,14 @@ legacy-CSE or observed dynamic-array output aliases while snapshots are built,
 so a compact formula-defined name cannot fan out across many caller cells into
 unbounded retained graph state. It does not expand a range into individual
 cells or replace the separate candidate-only cross-workbook graph budget.
+`max-formula-defined-name-states` independently defaults to 1,000,000
+temporary formula-defined-name propagation states per workbook input, or one
+shared pool per baseline and candidate portfolio side. It reserves direct
+sensitive-call entries, name-to-name marker dependencies, and inherited
+component ledgers before a long acyclic name chain can materialize every call
+prefix. It preserves separate runtime calls rather than deduplicating review
+evidence, and is independent from the ordinary dependency-edge and
+cross-workbook graph budgets.
 Independently, `max-change-analysis-states` defaults to 100,000 for both
 single-workbook and directory comparisons. It counts every changed source and
 every reachable local dependency state while FormulaFence prepares impact
@@ -428,7 +437,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.172.0/formulafence-0.172.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.173.0/formulafence-0.173.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

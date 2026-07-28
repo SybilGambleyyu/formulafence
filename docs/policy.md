@@ -1929,6 +1929,18 @@ An overage returns status `2` before FormulaFence emits a report. It is separate
 from the source, snapshot-cell, local-impact, rendered-artifact, and
 candidate-only cross-workbook graph limits.
 
+Formula-defined-name sensitive-call propagation has a separate 1,000,000-state
+budget by default (`--max-formula-defined-name-states`). Direct sensitive-ledger
+entries, direct name-marker dependencies, and each propagated component ledger
+reserve the budget before FormulaFence retains them. This prevents a compact
+acyclic name chain from repeatedly materializing action, DDE, custom-function,
+registration, XLM, or environment-information prefixes while preserving
+distinct runtime calls as distinct review evidence. One pool is shared across
+all successfully retained workbooks on each portfolio side; direct `diff`,
+`check`, and `profile` inputs each receive their own pool. An overage returns
+status `2` before FormulaFence emits a report, independently of the ordinary
+dependency-edge budget.
+
 `diff` and `check` also have a 100,000-state aggregate local impact-analysis
 budget by default (`--max-change-analysis-states`); one pool spans every matched
 workbook in a `portfolio` run. FormulaFence records each changed source and each

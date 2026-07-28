@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.172.0/formulafence-0.172.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.173.0/formulafence-0.173.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.172.0
+  uses: SybilGambleyyu/formulafence@v0.173.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -528,8 +528,9 @@ symlinked paths, over-limit inventories, or an unreadable workbook.
 The default bounds are 512 supported workbooks, 32,768 total filesystem entries,
 4 GiB of supported-workbook source bytes, 2,000,000 populated retained snapshot
 cells per directory, 2,000,000 static local dependency-graph edges per input
-(one shared pool for each portfolio side), 100,000 aggregate local
-change-analysis states, and 32 MiB of rendered artifact text. The
+(one shared pool for each portfolio side), 1,000,000 formula-defined-name
+propagation states per input (again one shared pool for each portfolio side),
+100,000 aggregate local change-analysis states, and 32 MiB of rendered artifact text. The
 entry budget is enforced before FormulaFence
 retains or sorts paths, so non-workbook files, directories, lock files, and
 symlinks cannot make a broad CI directory consume an unbounded inventory. After
@@ -546,6 +547,7 @@ FormulaFence treats a range as one compact record. Tune the separate limits with
 `--max-workbooks`,
 `--max-inventory-entries`, `--max-portfolio-source-bytes`,
 `--max-portfolio-snapshot-cells`, `--max-dependency-edges`,
+`--max-formula-defined-name-states`,
 `--max-change-analysis-states`, and
 `--max-report-bytes`.
 The recursive walk uses direct directory enumeration and treats any unreadable
@@ -2833,6 +2835,15 @@ dependency, and additional fixed-CSE or observed dynamic-array output alias
 consumes one record; it neither expands a range into cells nor constrains the
 separate candidate-only cross-workbook graph. An overage returns status `2`
 before a CLI report is rendered or published.
+Formula-defined names use a separate 1,000,000-state temporary propagation
+budget by default (`--max-formula-defined-name-states`). It reserves direct
+sensitive-call ledger entries, direct name-to-name marker dependencies, and
+each component's inherited ledger before FormulaFence retains it. That keeps a
+compact acyclic chain of action, DDE, custom-function, registration, XLM, or
+environment-information calls from repeatedly materializing every prefix. It
+does not deduplicate genuine separate runtime calls, alter normal dependency
+records, or replace the candidate-only cross-workbook graph limit. An overage
+returns status `2` before a CLI report is rendered or published.
 Formula-defined-name lookup itself reuses compact, scope-aware live overlays
 instead of rebuilding the complete visible name catalog for each definition.
 This preserves worksheet-local shadowing, qualified-name visibility, and the

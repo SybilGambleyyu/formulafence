@@ -294,6 +294,15 @@ financial correctness or replace model review.
   expanding a range into cells or changing the candidate-only cross-workbook
   graph boundary. An overage stops with status 2 before a partial artifact is
   published.
+- Formula-defined-name sensitive-call propagation has a separate 1,000,000-
+  state ceiling by default (`--max-formula-defined-name-states`). It reserves
+  direct ledger entries, direct name-marker dependencies, and inherited
+  component ledgers before retaining them; in a directory portfolio one
+  independent pool spans each baseline/candidate side. This prevents a compact
+  acyclic chain from repeatedly materializing action, DDE, custom-function,
+  registration, XLM, or environment-information prefixes while preserving
+  distinct runtime calls. An overage stops with status 2 before a partial
+  artifact is published.
 - Local `diff` / `check` impact analysis has a 100,000-state aggregate default
   budget. A state is a changed source or one reachable local dependency state;
   a portfolio shares one pool across every matched workbook. This prevents a

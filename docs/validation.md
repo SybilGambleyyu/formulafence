@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Formula-defined-name propagation budget — 2026-07-28
+
+Version 0.173.0 closes a temporary working-state amplification gap after
+formula-defined names have been safely parsed. FormulaFence intentionally
+preserves repeated action-bearing calls in an acyclic name chain: they can be
+distinct runtime calls and therefore distinct review evidence. Before this
+release, however, each component retained every inherited sensitive-call prefix
+with no separate ceiling. A tiny workbook could therefore create quadratic
+temporary tuples even when its ordinary cell dependency graph was empty.
+
+`profile`, `diff`, and `check` now give each workbook input a positive-only
+`--max-formula-defined-name-states` budget of 1,000,000 by default. `portfolio`
+uses one independent pool for all successfully retained baseline snapshots and
+another for candidate snapshots. The budget reserves direct sensitive-ledger
+entries, direct name-marker dependencies, and each derived component ledger
+before it is materialized. It is separate from retained local dependency edges,
+does not deduplicate genuine calls, and returns status 2 before an artifact can
+be rendered or published.
+
+For an independent 27,587-byte valid `.xlsx` with 4,000 action-bearing
+formula-defined names chained one to the next, the public 0.172.0 wheel wrote a
+131,806-byte JSON profile in 5.742741037 seconds. The chain requires exactly
+8,009,999 propagation states: 4,000 direct ledger entries, 3,999 direct
+name-marker dependencies, and 8,002,000 inherited entries. The 0.173.0
+candidate rejected the default 1,000,000-state budget in 3.171173740 seconds
+with exit 2 and no output path; it also rejected 8,009,998. At exactly
+8,009,999 it completed in 5.748717075 seconds and emitted byte-identical JSON
+(SHA-256 `3cba4b6f897379314a13a3a25e79513569e26419cd68349e3ae6d0eedba56149`).
+Focused regressions prove the four-name 17-state boundary, nonpositive API and
+Action-input rejection, CLI no-output behavior, shared portfolio-side accounting
+with stop-before-later-read behavior, and Action propagation.
+
 ## Formula-defined-name catalog scaling — 2026-07-28
 
 Version 0.172.0 closes a reader-adjacent CPU amplification gap in the safe

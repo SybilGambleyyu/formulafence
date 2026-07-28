@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.173.0 — 2026-07-28
+
+- Bound temporary sensitive-call propagation through formula-defined names.
+  A compact acyclic name chain can legitimately preserve every inherited action,
+  DDE, custom-function, registration, XLM, or environment-information call,
+  but repeatedly retaining those prefixes was not covered by source, cell, or
+  ordinary dependency-edge limits. FormulaFence now defaults to 1,000,000
+  formula-defined-name states per workbook input and to one independent shared
+  pool for each directory-portfolio side.
+- Add `--max-formula-defined-name-states` to `profile`, `diff`, `check`, and
+  `portfolio`, plus the matching `max-formula-defined-name-states` GitHub
+  Action input. The positive-only budget reserves direct sensitive-ledger
+  entries, direct name-marker dependencies, and each propagated component
+  ledger before it is materialized. An overage returns status 2 before a CLI
+  artifact is published; exact-boundary, no-output, portfolio-sharing, and
+  Action-propagation regressions cover the guard.
+
 ## 0.172.0 — 2026-07-28
 
 - Make formula-defined-name resolution scale with the work actually inspected

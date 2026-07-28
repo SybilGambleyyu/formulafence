@@ -36,6 +36,7 @@ from formulafence.portfolio import (
 )
 from formulafence.workbook import (
     DEFAULT_MAX_DEPENDENCY_EDGES,
+    DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES,
     load_snapshot,
     profile_snapshot,
 )
@@ -80,6 +81,24 @@ def _write_named_formula_fanout_workbook(path: Path) -> Path:
     )
     worksheet["B1"] = "=Fanout"
     worksheet["B2"] = "=Fanout"
+    workbook.save(path)
+    return path
+
+
+def _write_formula_defined_name_action_chain_workbook(path: Path) -> Path:
+    """Create four names whose action ledgers grow as 1 + 2 + 3 + 4."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    for index in range(4):
+        previous = f"+ActionName{index - 1:05d}" if index else ""
+        workbook.defined_names.add(
+            DefinedName(
+                f"ActionName{index:05d}",
+                attr_text='=HYPERLINK("https://example.invalid","x")' + previous,
+            )
+        )
     workbook.save(path)
     return path
 
@@ -2095,6 +2114,11 @@ def test_portfolio_source_byte_budget_rejects_a_nonpositive_limit(tmp_path: Path
         compare_portfolios(baseline, candidate, max_portfolio_snapshot_cells=0)
     with pytest.raises(PortfolioError, match="max_dependency_edges must be at least 1"):
         compare_portfolios(baseline, candidate, max_dependency_edges=0)
+    with pytest.raises(
+        PortfolioError,
+        match="max_formula_defined_name_states must be at least 1",
+    ):
+        compare_portfolios(baseline, candidate, max_formula_defined_name_states=0)
 
 
 def test_portfolio_source_byte_budget_checks_the_candidate_before_reads(
@@ -2239,6 +2263,50 @@ def test_portfolio_dependency_edge_budget_is_exact_and_stops_later_reads(
             baseline,
             candidate,
             max_dependency_edges=7,
+        )
+    assert snapshot_reads == [
+        baseline / "first.xlsx",
+        candidate / "first.xlsx",
+        baseline / "second.xlsx",
+    ]
+
+
+def test_portfolio_formula_defined_name_state_budget_is_shared_and_stops_later_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    for root in (baseline, candidate):
+        _write_formula_defined_name_action_chain_workbook(root / "first.xlsx")
+        _write_formula_defined_name_action_chain_workbook(root / "second.xlsx")
+
+    exact_report = compare_portfolios(
+        baseline,
+        candidate,
+        max_formula_defined_name_states=34,
+    )
+    assert exact_report.incomplete is False
+
+    original_load_snapshot = portfolio_module.load_snapshot
+    snapshot_reads: list[Path] = []
+
+    def record_load(path: Path, **kwargs: object):
+        snapshot_reads.append(Path(path))
+        return original_load_snapshot(path, **kwargs)
+
+    monkeypatch.setattr(portfolio_module, "load_snapshot", record_load)
+    with pytest.raises(
+        PortfolioError,
+        match=(
+            r"Baseline portfolio formula-defined-name propagation exceeds "
+            r"max_formula_defined_name_states=33"
+        ),
+    ):
+        compare_portfolios(
+            baseline,
+            candidate,
+            max_formula_defined_name_states=33,
         )
     assert snapshot_reads == [
         baseline / "first.xlsx",
@@ -2431,6 +2499,15 @@ def test_portfolio_cli_defaults_the_dependency_edge_limit() -> None:
     arguments = build_parser().parse_args(["portfolio", "before", "after"])
 
     assert arguments.max_dependency_edges == DEFAULT_MAX_DEPENDENCY_EDGES
+
+
+def test_portfolio_cli_defaults_the_formula_defined_name_state_limit() -> None:
+    arguments = build_parser().parse_args(["portfolio", "before", "after"])
+
+    assert (
+        arguments.max_formula_defined_name_states
+        == DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES
+    )
 
 
 def test_portfolio_cli_defaults_the_change_analysis_state_limit() -> None:

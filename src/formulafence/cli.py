@@ -60,6 +60,7 @@ from formulafence.portfolio import (
 )
 from formulafence.workbook import (
     DEFAULT_MAX_DEPENDENCY_EDGES,
+    DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES,
     DEFAULT_MAX_PROFILE_RECORDS,
     load_snapshot,
     profile_snapshot,
@@ -266,6 +267,20 @@ def _add_dependency_edge_limit_argument(parser: argparse.ArgumentParser) -> None
     )
 
 
+def _add_formula_defined_name_state_limit_argument(
+    parser: argparse.ArgumentParser,
+) -> None:
+    parser.add_argument(
+        "--max-formula-defined-name-states",
+        type=_positive_integer,
+        default=DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES,
+        help=(
+            "Fail closed before FormulaFence retains more than this many "
+            "formula-defined-name propagation states"
+        ),
+    )
+
+
 def _add_report_byte_limit_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-report-bytes",
@@ -303,6 +318,7 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument("workbook", type=Path)
     _add_profile_record_limit_argument(profile)
     _add_dependency_edge_limit_argument(profile)
+    _add_formula_defined_name_state_limit_argument(profile)
     _add_report_byte_limit_argument(profile)
     _add_output_arguments(profile, ("json", "markdown"))
 
@@ -310,6 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("before", type=Path, help="Approved or baseline workbook")
     diff.add_argument("after", type=Path, help="Candidate workbook")
     _add_dependency_edge_limit_argument(diff)
+    _add_formula_defined_name_state_limit_argument(diff)
     _add_change_analysis_state_limit_argument(diff)
     _add_report_byte_limit_argument(diff)
     _add_output_arguments(diff, ("json", "markdown", "html", "sarif"))
@@ -337,6 +354,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("after", type=Path, help="Candidate workbook")
     check.add_argument("--policy", required=True, type=Path, help="Path to formulafence.yml")
     _add_dependency_edge_limit_argument(check)
+    _add_formula_defined_name_state_limit_argument(check)
     _add_change_analysis_state_limit_argument(check)
     _add_report_byte_limit_argument(check)
     _add_output_arguments(check, ("json", "markdown", "html", "sarif"))
@@ -404,6 +422,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_dependency_edge_limit_argument(portfolio)
+    _add_formula_defined_name_state_limit_argument(portfolio)
     _add_change_analysis_state_limit_argument(portfolio)
     _add_report_byte_limit_argument(portfolio)
     portfolio.add_argument(
@@ -555,6 +574,9 @@ def _run_profile(arguments: argparse.Namespace) -> int:
         load_snapshot(
             arguments.workbook,
             max_dependency_edges=arguments.max_dependency_edges,
+            max_formula_defined_name_states=(
+                arguments.max_formula_defined_name_states
+            ),
         ),
         max_profile_records=arguments.max_profile_records,
     )
@@ -577,10 +599,16 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
         load_snapshot(
             arguments.before,
             max_dependency_edges=arguments.max_dependency_edges,
+            max_formula_defined_name_states=(
+                arguments.max_formula_defined_name_states
+            ),
         ),
         load_snapshot(
             arguments.after,
             max_dependency_edges=arguments.max_dependency_edges,
+            max_formula_defined_name_states=(
+                arguments.max_formula_defined_name_states
+            ),
         ),
         max_change_analysis_states=arguments.max_change_analysis_states,
     )
@@ -757,6 +785,7 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
         max_portfolio_source_bytes=arguments.max_portfolio_source_bytes,
         max_portfolio_snapshot_cells=arguments.max_portfolio_snapshot_cells,
         max_dependency_edges=arguments.max_dependency_edges,
+        max_formula_defined_name_states=arguments.max_formula_defined_name_states,
         max_change_analysis_states=arguments.max_change_analysis_states,
         max_link_impact=arguments.max_link_impact,
     )

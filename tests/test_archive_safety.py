@@ -6070,6 +6070,123 @@ def test_in_memory_xml_parser_accepts_inert_document_type_spelling(payload: byte
     assert workbook_module._xml_root_from_payload(payload).tag == "root"
 
 
+def test_snapshot_xml_root_cache_reuses_validated_payloads_in_reader_isolation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "root-cache.zip"
+    member = "parts/root.xml"
+    payload = b"<root>alpha</root>"
+    with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(member, payload)
+    unrelated_package = tmp_path / "unrelated-root-cache.zip"
+    unrelated_payload = b"<root>bravo</root>"
+    with ZipFile(unrelated_package, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(member, unrelated_payload)
+
+    cache = workbook_module._OoxmlXmlRootCache(source_filename=str(package))
+    cache_token = workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.set(cache)
+    parse_calls: list[bytes] = []
+    original_parse = workbook_module._xml_root_from_payload
+
+    def count_initial_parse(candidate: bytes) -> ElementTree.Element:
+        parse_calls.append(candidate)
+        return original_parse(candidate)
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_xml_root_from_payload",
+        count_initial_parse,
+    )
+    try:
+        with ZipFile(package) as archive:
+            first = workbook_module._xml_root(archive, member)
+        first.set("reader-local", "changed")
+        with ZipFile(package) as archive:
+            second = workbook_module._xml_root(archive, member)
+        assert second.get("reader-local") is None
+        assert parse_calls == [payload]
+        assert cache.payloads == {member: payload}
+
+        with ZipFile(unrelated_package) as archive:
+            assert workbook_module._xml_root(archive, member).text == "bravo"
+        assert parse_calls == [payload, unrelated_payload]
+        assert cache.payloads == {member: payload}
+
+        monkeypatch.setattr(
+            workbook_module,
+            "_OOXML_READER_MAX_XML_CHARACTER_DATA_CHARACTERS",
+            len(b"alpha") - 1,
+        )
+        with ZipFile(package) as archive:
+            with pytest.raises(ValueError, match="XML character data"):
+                workbook_module._xml_root(archive, member)
+    finally:
+        workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.reset(cache_token)
+
+
+def test_snapshot_xml_root_cache_leaves_over_budget_payloads_uncached(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "over-budget-root-cache.zip"
+    member = "parts/root.xml"
+    payload = b"<root>alpha</root>"
+    with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(member, payload)
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_XML_ROOT_CACHE_MAX_MEMBER_BYTES",
+        len(payload) - 1,
+    )
+    cache = workbook_module._OoxmlXmlRootCache(source_filename=str(package))
+    cache_token = workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.set(cache)
+    parse_calls: list[bytes] = []
+    original_parse = workbook_module._xml_root_from_payload
+
+    def count_parse(candidate: bytes) -> ElementTree.Element:
+        parse_calls.append(candidate)
+        return original_parse(candidate)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", count_parse)
+    try:
+        for _ in range(2):
+            with ZipFile(package) as archive:
+                assert workbook_module._xml_root(archive, member).tag == "root"
+    finally:
+        workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.reset(cache_token)
+
+    assert parse_calls == [payload, payload]
+    assert cache.payloads == {}
+
+
+def test_load_snapshot_activates_a_private_xml_payload_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "root-cache-model.xlsx")
+    created_caches: list[workbook_module._OoxmlXmlRootCache] = []
+    original_cache = workbook_module._OoxmlXmlRootCache
+
+    def record_cache(*args, **kwargs) -> workbook_module._OoxmlXmlRootCache:
+        cache = original_cache(*args, **kwargs)
+        created_caches.append(cache)
+        return cache
+
+    monkeypatch.setattr(workbook_module, "_OoxmlXmlRootCache", record_cache)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.cells
+    assert len(created_caches) == 1
+    assert "xl/worksheets/sheet1.xml" in created_caches[0].payloads
+    assert (
+        created_caches[0].cached_bytes
+        <= workbook_module._OOXML_XML_ROOT_CACHE_MAX_TOTAL_BYTES
+    )
+
+
 def test_xml_start_tag_budget_accepts_its_exact_physical_boundary() -> None:
     payload = b'<root alpha="FormulaFence"/>'
 

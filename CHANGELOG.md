@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.179.0 — 2026-07-28
+
+- Reuse small, lexically validated OOXML payloads for the duration of one
+  private workbook snapshot. Raw metadata readers still receive fresh parsed
+  XML trees with the character-data guard, while repeated ZIP reads and lexical
+  scans of the same worksheet, workbook, style, and relationship parts are
+  avoided.
+- Bind the cache to the materialized stable source and cap it at 128 KiB per
+  payload and 4 MiB in total. Malformed, oversized, and unrelated archive
+  parts are never retained. Structural coverage proves reader isolation,
+  renewed character-data enforcement on cache hits, and no caching over the
+  configured budget.
+
 ## 0.178.0 — 2026-07-28
 
 - Skip five more full 16,384-column style-state expansions when a worksheet

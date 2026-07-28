@@ -5,6 +5,37 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Snapshot-local OOXML payload reuse — 2026-07-28
+
+Version 0.179.0 removes repeated safe parsing of the same raw XML parts while
+one workbook snapshot is assembled. Independent metadata readers can all need
+the workbook catalog, relationship catalog, style catalog, and every worksheet
+root. FormulaFence now retains only a small payload after it has passed the
+existing lexical markup gate. A cache hit reparses that immutable payload with
+the character-data guard, so each reader receives an independent tree rather
+than shared mutable XML state.
+
+The cache is scoped to the materialized private source of one `load_snapshot`
+call, not the caller pathname or the process. It accepts at most 128 KiB for
+one part and 4 MiB in total; malformed, oversized, or unrelated archive parts
+never enter it. Targeted coverage mutates one reader's root and proves the next
+reader is isolated, lowers the character-data budget after the first parse to
+prove the cache hit reruns it, rejects over-budget cache entries, and confirms
+that a normal snapshot creates one private cache.
+
+For the controlled valid 232,295-byte, 512-sheet `.xlsx` used for 0.177.0 and
+0.178.0, with one `=1` formula in each worksheet and no column declarations,
+the public 0.178.0 wheel emitted a 122,090-byte JSON profile (SHA-256
+`27a6737a6f3ba3c2f9e3c70f94326da2cccd78f42900e459e70e1001adb81361`) in
+4.097332, 4.014589, and 3.976603 seconds. The 0.179.0 candidate emitted the
+same bytes and digest in 2.754363, 2.785996, and 2.777051 seconds. The median
+fell from 4.014589 to 2.777051 seconds: 1.237538 seconds, or about 30.8%,
+less elapsed time. Fresh one-process measurements reported 44,544 KiB peak
+resident memory for the public wheel and 44,740 KiB for the candidate.
+The final source suite passed 1,296 tests in 125.20 seconds with no failures,
+errors, or skips; the 335-test archive-safety suite, bytecode compilation,
+Ruff, and whitespace checks were also clean.
+
 ## Columnless style-control state views — 2026-07-28
 
 Version 0.178.0 removes the next repeated whole-column scan from the raw

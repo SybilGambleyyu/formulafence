@@ -18,6 +18,7 @@ import tempfile
 import warnings
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -460,6 +461,13 @@ _OOXML_READER_XML_LEXICAL_CHUNK_BYTES = 64 * 1024
 _OOXML_READER_XML_START_TAG_DELIMITER_PATTERN = re.compile(br"""[>"']""")
 _OOXML_READER_XML_DECLARATION_DELIMITER_PATTERN = re.compile(br"""["'\[\]>]""")
 _OOXML_READER_XML_TEXT_MARKER_PATTERN = re.compile(br"""[<&]""")
+# A snapshot can consult the same safe worksheet, workbook, style, and
+# relationship XML parts through many independent raw-control readers. Retain
+# only small payloads for that one snapshot. Later readers reparse the exact
+# payload with the character-data guard, preserving independent XML trees
+# without trading repeated safety scans for unbounded resident trees.
+_OOXML_XML_ROOT_CACHE_MAX_MEMBER_BYTES = 128 * 1024
+_OOXML_XML_ROOT_CACHE_MAX_TOTAL_BYTES = 4 * 1024 * 1024
 # ElementTree gives its target character data incrementally, but its ordinary
 # tree builder accumulates all chunks for one text node until the next XML
 # boundary. Keep that parser-side buffer small before an end-event callback can
@@ -6267,8 +6275,48 @@ def _vba_hash(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+@dataclass
+class _OoxmlXmlRootCache:
+    """Bounded, snapshot-local validated XML payloads for raw readers."""
+
+    source_filename: str
+    payloads: dict[str, bytes] = field(default_factory=dict)
+    cached_bytes: int = 0
+
+    def matches(self, archive: ZipFile) -> bool:
+        """Keep a cache tied to its private stable workbook source only."""
+        return archive.filename == self.source_filename
+
+    def root(self, archive: ZipFile, member: str) -> ElementTree.Element:
+        """Return an isolated root, memoizing only validated payloads in bounds."""
+        cached = self.payloads.get(member)
+        if cached is not None:
+            return _xml_root_from_lexically_validated_payload(cached)
+
+        payload = archive.read(member)
+        root = _xml_root_from_payload(payload)
+        payload_bytes = len(payload)
+        if (
+            payload_bytes <= _OOXML_XML_ROOT_CACHE_MAX_MEMBER_BYTES
+            and self.cached_bytes + payload_bytes
+            <= _OOXML_XML_ROOT_CACHE_MAX_TOTAL_BYTES
+        ):
+            self.payloads[member] = payload
+            self.cached_bytes += payload_bytes
+        return root
+
+
+_ACTIVE_OOXML_XML_ROOT_CACHE: ContextVar[_OoxmlXmlRootCache | None] = ContextVar(
+    "active_ooxml_xml_root_cache",
+    default=None,
+)
+
+
 def _xml_root(archive: ZipFile, member: str) -> ElementTree.Element:
     """Read one OOXML part without accepting document type declarations."""
+    cache = _ACTIVE_OOXML_XML_ROOT_CACHE.get()
+    if cache is not None and cache.matches(archive):
+        return cache.root(archive, member)
     return _xml_root_from_payload(archive.read(member))
 
 
@@ -6281,6 +6329,13 @@ def _xml_root_from_payload(payload: bytes) -> ElementTree.Element:
         raise ValueError(
             "OOXML metadata XML non-character-data markup exceeds the safety limit"
         )
+    return _xml_root_from_lexically_validated_payload(payload)
+
+
+def _xml_root_from_lexically_validated_payload(
+    payload: bytes,
+) -> ElementTree.Element:
+    """Parse one already-scanned immutable payload with the data-size guard."""
     parser = _ooxml_xml_parser_with_character_data_budget()
     try:
         for offset in range(0, len(payload), _OOXML_READER_XML_LEXICAL_CHUNK_BYTES):
@@ -51246,6 +51301,9 @@ def load_snapshot(
             reported_source,
             expected_source_identity=expected_source_identity,
         )
+    cache_token = _ACTIVE_OOXML_XML_ROOT_CACHE.set(
+        _OoxmlXmlRootCache(source_filename=str(source))
+    )
     try:
         return _load_snapshot_from_stable_source(
             source,
@@ -51254,6 +51312,7 @@ def load_snapshot(
             formula_defined_name_state_budget=formula_defined_name_state_budget,
         )
     finally:
+        _ACTIVE_OOXML_XML_ROOT_CACHE.reset(cache_token)
         _remove_stable_workbook_source(source)
 
 

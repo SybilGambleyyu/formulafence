@@ -2053,6 +2053,27 @@ def test_portfolio_inventory_refuses_symlinked_paths(tmp_path: Path) -> None:
         discover_workbooks(baseline, label="baseline")
 
 
+def test_portfolio_inventory_fails_closed_when_a_subdirectory_cannot_be_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline, candidate = _portfolio_pair(tmp_path)
+    blocked = baseline / "blocked"
+    blocked.mkdir()
+    original_scandir = portfolio_module.os.scandir
+
+    def refuse_blocked_directory(path: str | Path):
+        if Path(path) == blocked:
+            raise PermissionError("controlled unreadable directory")
+        return original_scandir(path)
+
+    monkeypatch.setattr(portfolio_module.os, "scandir", refuse_blocked_directory)
+
+    with pytest.raises(PortfolioError, match="Could not inventory baseline portfolio"):
+        discover_workbooks(baseline, label="baseline")
+    assert main(["portfolio", str(baseline), str(candidate)]) == 2
+
+
 @pytest.mark.parametrize(
     "replacement_mode",
     ("in-place", "regular", "symlink"),

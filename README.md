@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.163.0/formulafence-0.163.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.164.0/formulafence-0.164.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.163.0
+  uses: SybilGambleyyu/formulafence@v0.164.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -530,6 +530,9 @@ entries per directory. The entry budget is enforced before FormulaFence retains
 or sorts paths, so non-workbook files, directories, lock files, and symlinks
 cannot make a broad CI directory consume an unbounded inventory. Tune the
 separate limits with `--max-workbooks` and `--max-inventory-entries`.
+The recursive walk uses direct directory enumeration and treats any unreadable
+subdirectory as a fail-closed portfolio error; it never silently omits a branch
+from the reviewed directory coverage.
 For every retained workbook, FormulaFence also records the observed regular-file
 identity and state before comparison. Its later private snapshot read verifies
 that observation and refuses a late in-place rewrite, regular-file replacement,

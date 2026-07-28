@@ -10,6 +10,7 @@ portfolio report.
 
 from __future__ import annotations
 
+import os
 import stat
 from collections import Counter, defaultdict, deque
 from collections.abc import Iterable
@@ -165,6 +166,37 @@ def _resolve_directory(path: str | Path, label: str) -> Path:
     return resolved
 
 
+def _bounded_portfolio_candidates(
+    root: Path,
+    *,
+    label: str,
+    max_inventory_entries: int,
+) -> list[Path]:
+    """Inventory every directory entry without suppressing scan failures."""
+    candidates: list[Path] = []
+    pending_directories = [root]
+    while pending_directories:
+        directory = pending_directories.pop()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if len(candidates) >= max_inventory_entries:
+                        raise PortfolioError(
+                            f"{label.capitalize()} portfolio contains more than "
+                            f"{max_inventory_entries} filesystem entries, exceeding "
+                            f"max_inventory_entries={max_inventory_entries}."
+                        )
+                    candidate = Path(entry.path)
+                    candidates.append(candidate)
+                    if entry.is_dir(follow_symlinks=False):
+                        pending_directories.append(candidate)
+        except OSError as error:
+            raise PortfolioError(
+                f"Could not inventory {label} portfolio directory."
+            ) from error
+    return candidates
+
+
 def _discover_portfolio_workbook_sources(
     root: str | Path,
     *,
@@ -184,18 +216,11 @@ def _discover_portfolio_workbook_sources(
         raise PortfolioError("max_inventory_entries must be at least 1.")
 
     resolved_root = _resolve_directory(root, label)
-    try:
-        candidates: list[Path] = []
-        for candidate in resolved_root.rglob("*"):
-            if len(candidates) >= max_inventory_entries:
-                raise PortfolioError(
-                    f"{label.capitalize()} portfolio contains more than "
-                    f"{max_inventory_entries} filesystem entries, exceeding "
-                    f"max_inventory_entries={max_inventory_entries}."
-                )
-            candidates.append(candidate)
-    except OSError as error:
-        raise PortfolioError(f"Could not inventory {label} portfolio directory.") from error
+    candidates = _bounded_portfolio_candidates(
+        resolved_root,
+        label=label,
+        max_inventory_entries=max_inventory_entries,
+    )
     candidates.sort(key=lambda item: _path_sort_key(item.as_posix()))
 
     workbooks: dict[str, _PortfolioWorkbookSource] = {}

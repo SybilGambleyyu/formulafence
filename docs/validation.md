@@ -5,6 +5,32 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Fail-closed portfolio traversal — 2026-07-28
+
+Version 0.164.0 closes a coverage gap in recursive directory portfolios. The
+previous implementation relied on `Path.rglob("*")`; contemporary Python glob
+implementations can suppress an `OSError` raised while scanning a descendant,
+turning an unreadable subtree into an apparent empty branch. That makes an
+otherwise successful review artifact falsely imply complete directory coverage.
+
+Portfolio discovery now uses an iterative, bounded `scandir` walk. It counts
+every entry before retaining or sorting it, does not recurse through symlinked
+directories, and converts any directory-read or entry-type error into a
+redacted portfolio failure before workbook comparison. The existing 32,768 raw
+entry ceiling, supported-workbook ceiling, and later source-identity check are
+unchanged.
+
+With a controlled `PermissionError` on a nested directory, the public 0.163.0
+wheel returned success and retained `model.xlsx`; the candidate returned
+`Could not inventory baseline portfolio directory.` and CLI exit code 2. Five
+ordinary 10,000-entry inventories took 0.827227 seconds at 43,780 KiB RSS in
+0.163 and 0.820001 seconds at 46,476 KiB in 0.164. The final source suite
+passed 1,239 tests in 203.75 seconds, with Ruff, bytecode compilation,
+Action-shell syntax, and whitespace checks clean. The final wheel and source
+distribution passed `twine check`. Fresh isolated installs of both passed
+`pip check`, version, normal/hostile-policy, exact/overflow-inventory, and
+blocked-subtree controls.
+
 ## Portfolio source-identity binding — 2026-07-28
 
 Version 0.163.0 closes the remaining inventory-to-read path window in directory

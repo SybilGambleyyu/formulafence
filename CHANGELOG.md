@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.164.0 — 2026-07-28
+
+- Replace recursive globbing in portfolio discovery with a bounded direct
+  `scandir` walk that propagates directory-enumeration errors instead of
+  accepting a runtime globber's suppressed `OSError` as an empty subtree.
+- Keep the existing raw-entry, symlink, case-collision, and file-identity
+  boundaries intact; an unreadable descendant now fails the command before any
+  workbook comparison can claim complete directory coverage.
+- Add deterministic direct-inventory and CLI regressions for a controlled
+  unreadable subdirectory, plus public-release comparison evidence.
+
 ## 0.163.0 — 2026-07-28
 
 - Bind every later portfolio workbook read to the regular-file identity and

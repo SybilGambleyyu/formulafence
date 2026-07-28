@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.163.0
+        uses: SybilGambleyyu/formulafence@v0.164.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -278,7 +278,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.163.0
+  uses: SybilGambleyyu/formulafence@v0.164.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -303,6 +303,11 @@ the entry count is enforced before paths are retained or sorted, including
 ordinary non-workbook entries. The Action also passes `max-link-impact` to the
 candidate-only static cross-workbook graph; its default is 100,000
 source-to-node states across the portfolio.
+
+The recursive directory walk fails closed if any supplied subtree cannot be
+enumerated. It does not treat an operating-system scan error as an empty branch,
+so every successful portfolio artifact has complete traversal coverage within
+its configured entry limit.
 
 Each supported workbook is coupled to the regular-file identity and state
 observed during that inventory. Before its private snapshot is made, the Action
@@ -391,7 +396,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.163.0/formulafence-0.163.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.164.0/formulafence-0.164.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

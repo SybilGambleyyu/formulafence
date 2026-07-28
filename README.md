@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.144.0/formulafence-0.144.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.145.0/formulafence-0.145.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.144.0
+  uses: SybilGambleyyu/formulafence@v0.145.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2716,6 +2716,16 @@ returns the stable safety-preflight error rather than a partial metadata report;
 missing, malformed, or non-XML optional targets keep their existing coverage
 diagnostics, and orphan DrawingML parts remain outside this relationship-based
 boundary. These are CI allocation limits, not Excel workbook-validity limits.
+Before raw filter, Named Sheet View, external-data, XML Mapping, Table Style, or
+ordinary workbook readers can materialize a Table Definition tree, the
+preflight streams every canonical `xl/tables/*.xml` part (including an orphan
+part that the Table Style scanner inventories) and every safe direct internal
+worksheet `table` relationship target, including Strict relationships and
+noncanonical targets. Those table-definition targets allow 32,768 XML elements
+per part and 65,536 in aggregate. A successfully parsed overage returns the
+stable safety-preflight error rather than a partial report; malformed, missing,
+or non-XML optional targets retain their downstream coverage diagnostics.
+These are CI allocation limits, not Excel workbook-validity limits.
 Valid workbooks above FormulaFence's separate CI-oriented cardinality bounds
 are deliberately rejected rather than partially inspected. FormulaFence
 requires `defusedxml` for its XML parser, which also enables `openpyxl`'s

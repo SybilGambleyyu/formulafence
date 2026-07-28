@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Table Definition XML semantic-preflight bounds — 2026-07-26
+
+Version 0.145.0 closes a compact-allocation path shared by the raw readers and
+ordinary workbook reader that can reach an Excel Table Definition part. A
+worksheet's [`tableParts`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.tableparts?view=openxml-3.0.1)
+declaration identifies each table through a relationship ID. FormulaFence's
+raw filter, Named Sheet View, external-data, XML Mapping, and Table Style
+scanners can inspect the same definition before or alongside `openpyxl`; the
+generic semantic-reader XML ceiling was intentionally too high to protect a
+small, repetitive table tree.
+
+The semantic-reader preflight now streams every canonical `xl/tables/*.xml`
+part and every safe direct internal worksheet `table` relationship target before
+any of those readers can construct it. Canonical orphan parts are included
+because the Table Style scanner inventories them; standard transitional and
+Strict relationships plus noncanonical safe targets are included because the
+other readers and ordinary workbook reader can follow them. Each target allows
+32,768 elements and the complete Table Definition inventory allows 65,536. A
+successfully parsed overage returns the stable safety-preflight error and CLI
+status 2 rather than a partial profile. Missing, malformed, and non-XML
+optional targets keep their existing downstream coverage diagnostics. These are
+CI allocation limits, not an OOXML validity rule.
+
+A raw-ZIP fixture generated without FormulaFence retained one ordinary table
+and added 1,000,000 ignored foreign direct children to
+`xl/tables/table1.xml`. The workbook was 26,997 bytes; its Table Definition
+part was 11,000,385 bytes expanded and 21,613 bytes compressed. The exact
+released unguarded 0.144.0 wheel completed a profile in 5.727898 seconds at
+261,232 KiB RSS, reported one table, and emitted no warning. The 0.145.0 source
+rejects the same input before any workbook reader starts in 0.059982 seconds at
+37,540 KiB RSS, with the stable table-definition safety-preflight error and no
+profile JSON. A normal baseline profile completed in 0.047602 seconds at
+35,152 KiB RSS. Direct/nested opaque, Strict relationship, canonical-orphan
+aggregate, exact/default-capacity, fail-before-reader, and malformed-orphan
+regressions accompany the fixture. The complete source suite passed 1,065
+tests in 157.507 seconds with zero failures or errors.
+
 ## Dynamic-array metadata XML structural bounds — 2026-07-26
 
 Version 0.144.0 closes a compact-allocation path in the raw

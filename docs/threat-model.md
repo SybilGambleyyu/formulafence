@@ -164,9 +164,20 @@ financial correctness or replace model review.
   elements per part and 65,536 in aggregate. A successfully parsed structural
   overage is rejected by the stable safety preflight; malformed, missing, or
   non-XML optional targets retain their downstream coverage behavior, and
-  orphan DrawingML parts are not selected. The catalog counters follow the
-  reader's local-name behavior so alternate-namespace entries cannot evade a
-  safety boundary. FormulaFence requires
+  orphan DrawingML parts are not selected. It also streams every canonical
+  `xl/tables/*.xml` Table Definition part, because the raw Table Style scanner
+  inventories canonical table parts even when they are orphaned, and every safe
+  direct internal worksheet `table` relationship target, because raw filter,
+  Named Sheet View, external-data, XML Mapping, and ordinary workbook readers
+  can materialize it. The standard transitional and Strict relationship forms
+  plus noncanonical safe package targets are covered. Those shared Table
+  Definition XML targets allow 32,768 elements per part and 65,536 in
+  aggregate. A successfully parsed structural overage is rejected by the
+  stable safety preflight; malformed, missing, and non-XML optional targets
+  preserve their downstream coverage behavior. These are CI allocation limits
+  rather than OOXML validity limits. The catalog counters follow the reader's
+  local-name behavior so alternate-namespace entries cannot evade a safety
+  boundary. FormulaFence requires
   `defusedxml` for its XML parser,
   which also enables `openpyxl`'s defused XML path in the supported
   installation. This prevents valid-but-impractical documents from allocating

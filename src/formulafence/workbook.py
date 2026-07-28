@@ -240,6 +240,16 @@ _OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT = 32_768
 _OOXML_READER_MAX_WORKSHEET_DRAWING_XML_ELEMENT_COUNT = (
     2 * _OOXML_READER_MAX_WORKSHEET_DRAWING_PART_XML_ELEMENT_COUNT
 )
+# Table definitions are independently materialized by the ordinary workbook
+# reader and by raw filter, Named Sheet View, external-data, XML Mapping, and
+# Table Style scanners. A generic reader XML ceiling is too high to protect
+# those compact, repetitive trees, so stream every canonical or
+# relationship-selected table source before any of those readers construct it.
+# This is a CI safety boundary, not an OOXML file-format limit.
+_OOXML_READER_MAX_TABLE_DEFINITION_PART_XML_ELEMENT_COUNT = 32_768
+_OOXML_READER_MAX_TABLE_DEFINITION_XML_ELEMENT_COUNT = (
+    2 * _OOXML_READER_MAX_TABLE_DEFINITION_PART_XML_ELEMENT_COUNT
+)
 _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT = 512
 _OOXML_READER_MAX_WORKBOOK_DEFINED_NAME_COUNT = 100_000
 _OOXML_READER_MAX_WORKBOOK_EXTERNAL_REFERENCE_COUNT = _OOXML_ARCHIVE_MAX_ENTRY_COUNT
@@ -4630,12 +4640,22 @@ def _validate_ooxml_semantic_reader_resources(
             )
             package_relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
             worksheet_drawing_members: set[str] = set()
+            # The Table Style scanner inventories canonical ``xl/tables``
+            # parts even when they are orphaned, while other raw readers and
+            # ``openpyxl`` follow a worksheet table relationship to a target
+            # at any safe package path. Cover both routes before either can
+            # materialize a repetitive definition tree.
+            table_definition_members = {
+                member.name
+                for member in xml_members
+                if _XML_MAPPING_TABLE_PART_PATTERN.fullmatch(member.name)
+            }
             for worksheet_member in worksheet_members:
                 relationship_member_name = _relationship_part_path(worksheet_member)
                 if relationship_member_name not in member_by_name:
                     continue
 
-                def worksheet_drawing_relationship_end(
+                def worksheet_related_part_end(
                     element: ElementTree.Element,
                     tags: list[str],
                     *,
@@ -4644,8 +4664,6 @@ def _validate_ooxml_semantic_reader_resources(
                     if (
                         len(tags) != 2
                         or element.tag != package_relationship_tag
-                        or element.get("Type", "").casefold()
-                        not in drawing_relationship_types
                         or element.get("TargetMode", "Internal").casefold()
                         != "internal"
                     ):
@@ -4654,14 +4672,19 @@ def _validate_ooxml_semantic_reader_resources(
                     if raw_target is None:
                         return
                     target = _normalise_part_target(source_member, raw_target)
-                    if target is not None and target in member_by_name:
+                    if target is None or target not in member_by_name:
+                        return
+                    relationship_type = element.get("Type", "").casefold()
+                    if relationship_type in drawing_relationship_types:
                         worksheet_drawing_members.add(target)
+                    if relationship_type.rsplit("/", maxsplit=1)[-1] == "table":
+                        table_definition_members.add(target)
 
                 try:
                     _stream_ooxml_reader_xml(
                         archive,
                         relationship_member_name,
-                        on_end=worksheet_drawing_relationship_end,
+                        on_end=worksheet_related_part_end,
                     )
                 except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
                     # Raw metadata boundaries retain their established warning
@@ -4700,6 +4723,40 @@ def _validate_ooxml_semantic_reader_resources(
                 ):
                     raise _reader_preflight_error(
                         "aggregate worksheet DrawingML XML elements exceed the "
+                        "semantic-reader safety limit."
+                    )
+
+            table_definition_xml_element_count = 0
+            for table_member in sorted(table_definition_members, key=str.casefold):
+                if table_member not in member_by_name:
+                    continue
+                reader_member(table_member)
+                try:
+                    element_count = _ooxml_xml_structure_element_count_within_budget(
+                        archive,
+                        table_member,
+                        maximum_element_count=(
+                            _OOXML_READER_MAX_TABLE_DEFINITION_PART_XML_ELEMENT_COUNT
+                        ),
+                    )
+                except (ElementTree.ParseError, OSError, RuntimeError, ValueError):
+                    # Preserve the existing metadata readers' coverage warning
+                    # or ordinary parser diagnostic for malformed optional
+                    # table parts. Only a successfully streamed overage must
+                    # stop the readers before an XML tree is allocated.
+                    continue
+                if element_count is None:
+                    raise _reader_preflight_error(
+                        "table-definition XML structure exceeds the "
+                        "semantic-reader safety limit."
+                    )
+                table_definition_xml_element_count += element_count
+                if (
+                    table_definition_xml_element_count
+                    > _OOXML_READER_MAX_TABLE_DEFINITION_XML_ELEMENT_COUNT
+                ):
+                    raise _reader_preflight_error(
+                        "aggregate table-definition XML elements exceed the "
                         "semantic-reader safety limit."
                     )
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.145.0 — 2026-07-26
+
+- Add a shared semantic-reader structural gate for Table Definition XML before
+  raw filter, Named Sheet View, external-data, XML Mapping, Table Style, or
+  ordinary workbook readers can materialize a compact, repetitive table tree.
+  Every canonical `xl/tables/*.xml` part and every safe direct internal
+  worksheet `table` relationship target, including Strict and noncanonical
+  targets, allows 32,768 XML elements per part and 65,536 in aggregate.
+- Reject a successfully streamed table-definition structural overage through
+  the stable semantic-reader safety preflight instead of emitting a partial
+  report. Malformed, missing, and non-XML optional targets retain their
+  established downstream coverage diagnostics; canonical orphan table parts
+  stay bounded because the Table Style scanner inventories them.
+- Add direct/nested opaque, Strict relationship, canonical-orphan aggregate,
+  exact/default limit, fail-before-reader, and malformed-orphan regressions.
+
 ## 0.144.0 — 2026-07-26
 
 - Bound the canonical raw `xl/metadata.xml` reader that identifies OOXML

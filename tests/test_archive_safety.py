@@ -25,6 +25,7 @@ from .helpers import (
     make_strict_custom_workbook_view_model,
     make_strict_worksheet_drawing_connector_model,
     make_strict_worksheet_print_layout_model,
+    make_table_model,
     make_worksheet_drawing_shape_model,
 )
 
@@ -120,6 +121,85 @@ def _worksheet_drawing_xml_element_count(path: Path, member_name: str) -> int:
     with ZipFile(path) as archive:
         root = ElementTree.fromstring(archive.read(member_name))
     return sum(1 for _ in root.iter())
+
+
+def _append_table_definition_xml_elements(
+    path: Path,
+    count: int,
+    *,
+    nested: bool = False,
+    member_name: str = "xl/tables/table1.xml",
+) -> None:
+    """Add opaque table-definition descendants without a workbook reader."""
+    with ZipFile(path) as archive:
+        table = archive.read(member_name)
+    closing = b"</table>"
+    if not table.endswith(closing):
+        raise ValueError("table fixture XML has no closing table tag")
+    namespace = b"urn:formulafence:archive-safety"
+    entries = b"<ff:opaque/>" * count
+    if nested:
+        inserted = (
+            b'<ff:container xmlns:ff="'
+            + namespace
+            + b'">'
+            + b"<ff:nested>"
+            + entries
+            + b"</ff:nested></ff:container>"
+        )
+    else:
+        inserted = (
+            b'<ff:container xmlns:ff="'
+            + namespace
+            + b'">'
+            + entries
+            + b"</ff:container>"
+        )
+    _replace_member(
+        path,
+        member_name,
+        table[: -len(closing)] + inserted + closing,
+    )
+
+
+def _table_definition_xml_element_count(path: Path, member_name: str) -> int:
+    """Count the complete tree of one table definition for exact-limit tests."""
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(member_name))
+    return sum(1 for _ in root.iter())
+
+
+def _add_worksheet_table_relationship_target(
+    path: Path,
+    *,
+    source_member: str = "xl/tables/table1.xml",
+    target_member: str = "xl/private/table-definition.xml",
+) -> None:
+    """Add a noncanonical table target to the ordinary worksheet relationships."""
+    relationship_member = "xl/worksheets/_rels/sheet1.xml.rels"
+    with ZipFile(path) as archive:
+        table = archive.read(source_member)
+        relationships = archive.read(relationship_member)
+    _append_member(path, target_member, table)
+    root = ElementTree.fromstring(relationships)
+    namespace = root.tag.partition("}")[0].removeprefix("{")
+    ElementTree.SubElement(
+        root,
+        f"{{{namespace}}}Relationship",
+        {
+            "Id": "rIdFormulaFenceTableDefinition",
+            "Type": (
+                "http://schemas.openxmlformats.org/officeDocument/2006/"
+                "relationships/table"
+            ),
+            "Target": "../private/table-definition.xml",
+        },
+    )
+    _replace_member(
+        path,
+        relationship_member,
+        ElementTree.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
 
 
 def _add_worksheet_drawing_relationship_target(
@@ -2325,6 +2405,175 @@ def test_semantic_reader_preflight_ignores_orphan_worksheet_drawing_xml(
     snapshot = load_snapshot(workbook)
 
     assert snapshot.file_type == "xlsx"
+
+
+def test_semantic_reader_preflight_rejects_opaque_table_definition_xml_before_scanners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_table_model(tmp_path / "opaque-table-definition.xml.xlsx")
+    table_member = "xl/tables/table1.xml"
+    _append_table_definition_xml_elements(workbook, 1)
+    with ZipFile(workbook) as archive:
+        table_xml = archive.read(table_member)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_TABLE_DEFINITION_PART_XML_ELEMENT_COUNT",
+        _table_definition_xml_element_count(workbook, table_member) - 1,
+    )
+    original_tree_parse = workbook_module._xml_root_from_payload
+
+    def unexpected_table_tree(payload: bytes) -> ElementTree.Element:
+        if payload == table_xml:
+            raise AssertionError("the over-budget table definition XML tree was materialized")
+        return original_tree_parse(payload)
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_xml_root_from_payload",
+        unexpected_table_tree,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "table-definition XML structure" in message
+
+
+def test_semantic_reader_preflight_counts_nested_opaque_table_definition_xml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_table_model(tmp_path / "nested-table-definition.xml.xlsx")
+    table_member = "xl/tables/table1.xml"
+    _append_table_definition_xml_elements(workbook, 1, nested=True)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_TABLE_DEFINITION_PART_XML_ELEMENT_COUNT",
+        _table_definition_xml_element_count(workbook, table_member) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "table-definition XML structure" in message
+
+
+def test_semantic_reader_preflight_follows_strict_noncanonical_table_relationships(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_table_model(tmp_path / "strict-table-definition-target.xlsx")
+    table_member = "xl/private/table-definition.xml"
+    relationship_member = "xl/worksheets/_rels/sheet1.xml.rels"
+    _add_worksheet_table_relationship_target(workbook, target_member=table_member)
+    _append_table_definition_xml_elements(workbook, 1, member_name=table_member)
+    with ZipFile(workbook) as archive:
+        relationships = archive.read(relationship_member)
+    _replace_member(
+        workbook,
+        relationship_member,
+        relationships.replace(
+            b"http://schemas.openxmlformats.org/officeDocument/2006/relationships/table",
+            b"http://purl.oclc.org/ooxml/officeDocument/relationships/table",
+        ),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_TABLE_DEFINITION_PART_XML_ELEMENT_COUNT",
+        _table_definition_xml_element_count(workbook, table_member) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "table-definition XML structure" in message
+
+
+def test_semantic_reader_preflight_aggregates_table_definition_xml_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_table_model(tmp_path / "aggregate-table-definitions.xlsx")
+    first_member = "xl/tables/table1.xml"
+    second_member = "xl/tables/table2.xml"
+    with ZipFile(workbook) as archive:
+        table = archive.read(first_member)
+    _append_member(workbook, second_member, table)
+    element_counts = (
+        _table_definition_xml_element_count(workbook, first_member),
+        _table_definition_xml_element_count(workbook, second_member),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_TABLE_DEFINITION_PART_XML_ELEMENT_COUNT",
+        max(element_counts),
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_TABLE_DEFINITION_XML_ELEMENT_COUNT",
+        sum(element_counts) - 1,
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "aggregate table-definition XML elements" in message
+
+
+def test_semantic_reader_preflight_accepts_table_definition_xml_at_exact_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_table_model(tmp_path / "table-definition-at-limits.xlsx")
+    table_member = "xl/tables/table1.xml"
+    element_count = _table_definition_xml_element_count(workbook, table_member)
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_TABLE_DEFINITION_PART_XML_ELEMENT_COUNT",
+        element_count,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_READER_MAX_TABLE_DEFINITION_XML_ELEMENT_COUNT",
+        element_count,
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert set(snapshot.tables) == {"Sales"}
+
+
+def test_semantic_reader_preflight_rejects_default_table_definition_xml_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_table_model(tmp_path / "default-table-definition-limit.xlsx")
+    table_member = "xl/tables/table1.xml"
+    existing_count = _table_definition_xml_element_count(workbook, table_member)
+    _append_table_definition_xml_elements(
+        workbook,
+        (
+            workbook_module._OOXML_READER_MAX_TABLE_DEFINITION_PART_XML_ELEMENT_COUNT
+            - existing_count
+        ),
+    )
+
+    message = _reject_before_workbook_readers(monkeypatch, workbook)
+
+    assert "table-definition XML structure" in message
+
+
+def test_semantic_reader_preflight_preserves_malformed_orphan_table_coverage(
+    tmp_path: Path,
+) -> None:
+    workbook = make_model(tmp_path / "malformed-orphan-table.xml.xlsx")
+    _append_member(
+        workbook,
+        "xl/tables/orphan.xml",
+        b'<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.file_type == "xlsx"
+    assert any("Excel Table Style metadata" in warning for warning in snapshot.parser_warnings)
 
 
 def test_semantic_reader_preflight_rejects_excessive_workbook_sheet_declarations_before_scanners(

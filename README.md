@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.161.0/formulafence-0.161.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.162.0/formulafence-0.162.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.161.0
+  uses: SybilGambleyyu/formulafence@v0.162.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -525,11 +525,15 @@ The command applies an optional policy independently to every matched workbook,
 keeps paths relative in portfolio output, skips transient Office `~$` lock
 files, and fails closed for unsupported Excel formats, case-colliding paths,
 symlinked paths, over-limit inventories, or an unreadable workbook.
-The default bound is 512 supported workbooks per directory and can be changed
-with `--max-workbooks`. Cross-workbook traversal has a separate global bound of
-100,000 source-to-node graph states, configurable with `--max-link-impact`; an
-exhausted bound emits critical `FF080` and returns exit code `2` rather than
-claiming complete impact evidence. An unreadable workbook still receives a redacted
+The default bounds are 512 supported workbooks and 32,768 total filesystem
+entries per directory. The entry budget is enforced before FormulaFence retains
+or sorts paths, so non-workbook files, directories, lock files, and symlinks
+cannot make a broad CI directory consume an unbounded inventory. Tune the
+separate limits with `--max-workbooks` and `--max-inventory-entries`.
+Cross-workbook traversal has a separate global bound of 100,000 source-to-node
+graph states, configurable with `--max-link-impact`; an exhausted bound emits
+critical `FF080` and returns exit code `2` rather than claiming complete impact
+evidence. An unreadable workbook still receives a redacted
 `FF078` report entry, then returns exit code `2` because the comparison is
 incomplete. A newly added or removed unreadable workbook also retains its
 known `FF077` / `FFP077` membership evidence. New or removed workbook contents

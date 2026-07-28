@@ -81,6 +81,10 @@ inputs:
     description: Maximum supported .xlsx/.xlsm workbooks per directory portfolio before the action fails closed.
     required: false
     default: '512'
+  max-inventory-entries:
+    description: Maximum filesystem entries per directory portfolio before workbook filtering; fail closed above this inventory budget.
+    required: false
+    default: '32768'
   max-link-impact:
     description: Maximum static cross-workbook dependency graph states for a directory portfolio before the action fails closed.
     required: false
@@ -132,6 +136,7 @@ runs:
         INPUT_REDACT_FORMULA_ENVIRONMENT_INFORMATION: ${{ inputs.redact-formula-environment-information }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_MAX_WORKBOOKS: ${{ inputs.max-workbooks }}
+        INPUT_MAX_INVENTORY_ENTRIES: ${{ inputs.max-inventory-entries }}
         INPUT_MAX_LINK_IMPACT: ${{ inputs.max-link-impact }}
         INPUT_INSTALL: ${{ inputs.install }}
         INPUT_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}

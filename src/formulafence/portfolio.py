@@ -48,6 +48,7 @@ _UNSUPPORTED_EXCEL_SUFFIXES = frozenset(
     {".xls", ".xlsb", ".xlt", ".xltx", ".xltm", ".xlam", ".ods"}
 )
 _DEFAULT_MAX_WORKBOOKS = 512
+DEFAULT_MAX_INVENTORY_ENTRIES = 32_768
 DEFAULT_MAX_LINK_IMPACT = 100_000
 _LINK_IMPACT_SAMPLE_LIMIT = 10
 
@@ -160,6 +161,7 @@ def discover_workbooks(
     *,
     label: str,
     max_workbooks: int = _DEFAULT_MAX_WORKBOOKS,
+    max_inventory_entries: int = DEFAULT_MAX_INVENTORY_ENTRIES,
 ) -> dict[str, Path]:
     """Return supported workbook files keyed by a stable relative path.
 
@@ -169,14 +171,23 @@ def discover_workbooks(
     """
     if max_workbooks < 1:
         raise PortfolioError("max_workbooks must be at least 1.")
+    if max_inventory_entries < 1:
+        raise PortfolioError("max_inventory_entries must be at least 1.")
 
     resolved_root = _resolve_directory(root, label)
     try:
-        candidates = sorted(
-            resolved_root.rglob("*"), key=lambda item: _path_sort_key(item.as_posix())
-        )
+        candidates: list[Path] = []
+        for candidate in resolved_root.rglob("*"):
+            if len(candidates) >= max_inventory_entries:
+                raise PortfolioError(
+                    f"{label.capitalize()} portfolio contains more than "
+                    f"{max_inventory_entries} filesystem entries, exceeding "
+                    f"max_inventory_entries={max_inventory_entries}."
+                )
+            candidates.append(candidate)
     except OSError as error:
         raise PortfolioError(f"Could not inventory {label} portfolio directory.") from error
+    candidates.sort(key=lambda item: _path_sort_key(item.as_posix()))
 
     workbooks: dict[str, Path] = {}
     casefolded_paths: dict[str, str] = {}
@@ -1077,6 +1088,7 @@ def compare_portfolios(
     *,
     policy: Policy | None = None,
     max_workbooks: int = _DEFAULT_MAX_WORKBOOKS,
+    max_inventory_entries: int = DEFAULT_MAX_INVENTORY_ENTRIES,
     max_link_impact: int = DEFAULT_MAX_LINK_IMPACT,
 ) -> PortfolioReport:
     """Compare every workbook at the same relative path in two directories.
@@ -1089,10 +1101,16 @@ def compare_portfolios(
     if max_link_impact < 1:
         raise PortfolioError("max_link_impact must be at least 1.")
     baseline = discover_workbooks(
-        baseline_directory, label="baseline", max_workbooks=max_workbooks
+        baseline_directory,
+        label="baseline",
+        max_workbooks=max_workbooks,
+        max_inventory_entries=max_inventory_entries,
     )
     candidate = discover_workbooks(
-        candidate_directory, label="candidate", max_workbooks=max_workbooks
+        candidate_directory,
+        label="candidate",
+        max_workbooks=max_workbooks,
+        max_inventory_entries=max_inventory_entries,
     )
     if not baseline and not candidate:
         raise PortfolioError(

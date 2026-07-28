@@ -1901,7 +1901,11 @@ that entry. If that file is also newly added or removed, its known `FF077` /
 `FFP077` membership evidence remains present. The report still records the
 remaining files. Office `~$` lock
 files are ignored; legacy `.xls`, `.xlsb`, templates, add-ins, and `.ods` files
-cause an explicit unsupported-format error rather than being omitted.
+cause an explicit unsupported-format error rather than being omitted. Before
+the supported-file filter, each recursive directory inventory is capped at
+32,768 filesystem entries by default (`--max-inventory-entries`); the bound
+includes ordinary non-workbook files and directories, is enforced before paths
+are retained or sorted, and is separate from `--max-workbooks`.
 
 Candidate-only portfolio analysis also builds a separate static dependency graph
 across a deliberately narrow subset of external A1 formulas and 3-D A1 spans,

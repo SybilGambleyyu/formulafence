@@ -29,6 +29,7 @@ redact_formula_defined_xlm_environment_information_calls=${INPUT_REDACT_FORMULA_
 redact_formula_environment_information=${INPUT_REDACT_FORMULA_ENVIRONMENT_INFORMATION:-false}
 fail_on=${INPUT_FAIL_ON:-none}
 max_workbooks=${INPUT_MAX_WORKBOOKS:-512}
+max_inventory_entries=${INPUT_MAX_INVENTORY_ENTRIES:-32768}
 max_link_impact=${INPUT_MAX_LINK_IMPACT:-100000}
 install=${INPUT_INSTALL:-true}
 upload_artifact=${INPUT_UPLOAD_ARTIFACT:-true}
@@ -113,6 +114,9 @@ esac
 if ! [[ "$max_workbooks" =~ ^[1-9][0-9]*$ ]]; then
   fail 'max-workbooks must be a positive integer.'
 fi
+if ! [[ "$max_inventory_entries" =~ ^[1-9][0-9]*$ ]]; then
+  fail 'max-inventory-entries must be a positive integer.'
+fi
 if ! [[ "$max_link_impact" =~ ^[1-9][0-9]*$ ]]; then
   fail 'max-link-impact must be a positive integer.'
 fi
@@ -196,6 +200,7 @@ if [[ "$comparison_mode" == portfolio ]]; then
   command+=(
     portfolio "$baseline" "$candidate"
     --max-workbooks "$max_workbooks"
+    --max-inventory-entries "$max_inventory_entries"
     --max-link-impact "$max_link_impact"
   )
   if [[ -n "$policy" ]]; then

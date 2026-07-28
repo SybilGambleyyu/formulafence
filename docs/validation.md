@@ -5,6 +5,32 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Bounded portfolio filesystem inventories — 2026-07-28
+
+Version 0.162.0 closes a portfolio discovery allocation gap. The prior
+supported-workbook ceiling did not constrain arbitrary directory entries:
+FormulaFence recursively collected and sorted every path before it decided
+whether the path was a supported workbook. A broad CI directory full of source
+files, generated assets, or other ordinary non-workbook material could therefore
+consume unbounded inventory memory and sorting time even when it contained no
+workbook at all.
+
+Each baseline and candidate directory now has a separate 32,768-entry default
+budget, configurable with `--max-inventory-entries` and the matching Action
+input. The count applies before filtering, retaining, or sorting paths, so it
+includes non-workbook files, directories, transient lock files, and symlinks.
+Exact-boundary, overflow, zero-limit, CLI, Action validation, and Action
+propagation controls cover the fail-closed behavior without changing the
+existing supported-workbook or cross-workbook-impact budgets.
+
+A directory containing 10,000 ordinary `.txt` entries and no workbook took
+0.203777 seconds at 41,620 KiB RSS for the public 0.161.0 inventory path. The
+candidate rejected the same directory at a deliberately reduced 128-entry
+budget in 0.004794 seconds at 38,636 KiB RSS, before collecting the remaining
+paths for sorting. The final source suite passed 1,234 tests in 203.63 seconds,
+with Ruff, bytecode compilation, Action-shell syntax, and whitespace checks
+clean.
+
 ## Atomic no-clobber starter-policy publication — 2026-07-28
 
 Version 0.161.0 closes the remaining `init` no-overwrite time-of-check/time-of-use

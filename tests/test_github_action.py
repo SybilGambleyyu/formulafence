@@ -45,6 +45,7 @@ def _run_action_script(
     redact_formula_defined_xlm_environment_information_calls: str = "false",
     redact_formula_environment_information: str = "false",
     max_workbooks: str = "512",
+    max_inventory_entries: str = "32768",
     max_link_impact: str = "100000",
     upload_artifact: str = "true",
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
@@ -99,6 +100,7 @@ def _run_action_script(
             ),
             "INPUT_FAIL_ON": "none",
             "INPUT_MAX_WORKBOOKS": max_workbooks,
+            "INPUT_MAX_INVENTORY_ENTRIES": max_inventory_entries,
             "INPUT_MAX_LINK_IMPACT": max_link_impact,
             "INPUT_INSTALL": "false",
             "INPUT_UPLOAD_ARTIFACT": upload_artifact,
@@ -140,8 +142,10 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
         "redact-formula-defined-xlm-environment-information-calls",
         "redact-formula-environment-information",
         "max-workbooks",
+        "max-inventory-entries",
         "max-link-impact",
     } <= set(action["inputs"])
+    assert action["inputs"]["max-inventory-entries"]["default"] == "32768"
     assert {"report-path", "exit-code"} <= set(action["outputs"])
     steps = action["runs"]["steps"]
     upload_index = next(
@@ -1026,6 +1030,47 @@ def test_action_rejects_an_invalid_portfolio_limit(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "max-workbooks must be a positive integer" in result.stderr
+
+
+def test_action_rejects_an_invalid_portfolio_inventory_limit(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    baseline.mkdir()
+    candidate.mkdir()
+    _workbook(baseline / "model.xlsx", "=1+1")
+    _workbook(candidate / "model.xlsx", "=1+1")
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        max_inventory_entries="0",
+    )
+
+    assert result.returncode == 2
+    assert "max-inventory-entries must be a positive integer" in result.stderr
+
+
+def test_action_applies_the_portfolio_inventory_entry_limit(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    baseline.mkdir()
+    candidate.mkdir()
+    _workbook(baseline / "model.xlsx", "=1+1")
+    _workbook(candidate / "model.xlsx", "=1+1")
+    (baseline / "notes.txt").write_text("ignored", encoding="utf-8")
+    (candidate / "notes.txt").write_text("ignored", encoding="utf-8")
+
+    result, outputs, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        max_inventory_entries="1",
+    )
+
+    assert result.returncode == 0
+    assert "exit-code=2" in outputs.read_text(encoding="utf-8")
+    assert "max_inventory_entries=1" in result.stderr
 
 
 def test_action_rejects_an_invalid_cross_workbook_impact_limit(tmp_path: Path) -> None:

@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.161.0
+        uses: SybilGambleyyu/formulafence@v0.162.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -278,12 +278,13 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.161.0
+  uses: SybilGambleyyu/formulafence@v0.162.0
   with:
     baseline: models/approved
     candidate: build/models
     policy: models/formulafence.yml
     max-workbooks: '200'
+    max-inventory-entries: '16384'
     max-link-impact: '100000'
     format: sarif
     output: reports/formulafence-portfolio.sarif
@@ -295,9 +296,11 @@ removed relative path from `FF077` into `FFP077`; this is useful for a
 controlled model inventory. A move is deliberately represented as a removal
 plus an addition, not guessed from a name or content similarity. Transient
 Office `~$` lock files are ignored. Unsupported Excel formats, files that
-differ only by case, symlinked paths, and inventories above
-`max-workbooks` fail before comparison. The default bound is 512 supported
-workbooks per directory. The Action also passes `max-link-impact` to the
+differ only by case, symlinked paths, and inventories above either
+`max-workbooks` or `max-inventory-entries` fail before comparison. The default
+bounds are 512 supported workbooks and 32,768 filesystem entries per directory;
+the entry count is enforced before paths are retained or sorted, including
+ordinary non-workbook entries. The Action also passes `max-link-impact` to the
 candidate-only static cross-workbook graph; its default is 100,000
 source-to-node states across the portfolio.
 
@@ -382,7 +385,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.161.0/formulafence-0.161.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.162.0/formulafence-0.162.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

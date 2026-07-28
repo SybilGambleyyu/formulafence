@@ -46,7 +46,11 @@ from formulafence.output import (
     report_to_sarif,
 )
 from formulafence.policy import DEFAULT_POLICY, evaluate_policy, load_policy
-from formulafence.portfolio import DEFAULT_MAX_LINK_IMPACT, compare_portfolios
+from formulafence.portfolio import (
+    DEFAULT_MAX_INVENTORY_ENTRIES,
+    DEFAULT_MAX_LINK_IMPACT,
+    compare_portfolios,
+)
 from formulafence.workbook import load_snapshot, profile_snapshot
 
 _FAIL_LEVELS = ("none", "low", "medium", "high", "critical")
@@ -303,6 +307,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_integer,
         default=512,
         help="Fail when either portfolio contains more than this many supported workbooks",
+    )
+    portfolio.add_argument(
+        "--max-inventory-entries",
+        type=_positive_integer,
+        default=DEFAULT_MAX_INVENTORY_ENTRIES,
+        help=(
+            "Fail when either portfolio contains more than this many filesystem "
+            "entries before workbook filtering"
+        ),
     )
     portfolio.add_argument(
         "--max-link-impact",
@@ -628,6 +641,7 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
         arguments.after,
         policy=policy,
         max_workbooks=arguments.max_workbooks,
+        max_inventory_entries=arguments.max_inventory_entries,
         max_link_impact=arguments.max_link_impact,
     )
     if arguments.format == "json":

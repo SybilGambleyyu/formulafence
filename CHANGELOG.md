@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.162.0 — 2026-07-28
+
+- Bound every recursive portfolio directory inventory before FormulaFence
+  retains or sorts paths. The new default ceiling is 32,768 filesystem entries
+  per supplied directory, covering ordinary non-workbook files, directories,
+  Office lock files, and symlinks as well as supported workbooks.
+- Add `--max-inventory-entries` to the CLI and the public GitHub Action, keeping
+  this raw-entry budget independent of the existing supported-workbook and
+  cross-workbook-impact limits.
+- Add exact/default-limit, non-workbook, CLI, Action validation, and Action
+  propagation regressions for fail-closed portfolio discovery.
+
 ## 0.161.0 — 2026-07-28
 
 - Make ordinary `init` an atomic no-clobber publication: after writing its

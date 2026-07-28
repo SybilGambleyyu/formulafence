@@ -273,10 +273,13 @@ financial correctness or replace model review.
   under each supplied directory, identifies a workbook solely by its relative
   path, and reports additions/removals rather than guessing renames. It keeps
   roots and absolute worker paths out of portfolio output, ignores transient
-  Office `~$` lock files, rejects symlinked paths and paths that
-  differ only by case, and bounds each directory to 512 supported workbooks by
-  default. A malformed supported file produces redacted `FF078` evidence and a
-  final incomplete exit status, while remaining paths are still reported.
+  Office `~$` lock files, rejects symlinked paths and paths that differ only by
+  case, and bounds each directory to 512 supported workbooks plus 32,768 raw
+  filesystem entries by default. The raw-entry budget is applied before paths
+  are retained or sorted, so arbitrary non-workbook files and directories cannot
+  create an unbounded inventory; both limits are caller-configurable. A malformed
+  supported file produces redacted `FF078` evidence and a final incomplete exit
+  status, while remaining paths are still reported.
 - Cross-workbook portfolio impact evidence is candidate-only and local to the
   supplied inventory. FormulaFence retains raw external source spellings and
   package targets only as private parser state, then resolves a direct static

@@ -12,11 +12,12 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.table import Table
 
-from formulafence.cli import main
+from formulafence.cli import build_parser, main
 from formulafence.models import ExternalWorkbookStructuredReference
 from formulafence.output import as_json, portfolio_to_markdown, portfolio_to_sarif
 from formulafence.policy import parse_policy
 from formulafence.portfolio import (
+    DEFAULT_MAX_INVENTORY_ENTRIES,
     PortfolioError,
     _canonical_external_table_references,
     _canonical_three_d_sheet_span,
@@ -1992,6 +1993,48 @@ def test_portfolio_inventory_fails_closed_for_limits_and_unsupported_formats(
     (baseline / "legacy.xlsb").write_bytes(b"unsupported")
     with pytest.raises(PortfolioError, match="unsupported spreadsheet files"):
         discover_workbooks(baseline, label="baseline")
+
+
+def test_portfolio_inventory_bounds_all_filesystem_entries_before_filtering(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "portfolio"
+    root.mkdir()
+    for index in range(3):
+        (root / f"note-{index}.txt").write_text("ignored", encoding="utf-8")
+
+    assert discover_workbooks(root, label="baseline", max_inventory_entries=3) == {}
+
+    (root / "note-3.txt").write_text("over budget", encoding="utf-8")
+    with pytest.raises(PortfolioError, match="max_inventory_entries=3"):
+        discover_workbooks(root, label="baseline", max_inventory_entries=3)
+    with pytest.raises(PortfolioError, match="max_inventory_entries must be at least 1"):
+        discover_workbooks(root, label="baseline", max_inventory_entries=0)
+
+
+def test_portfolio_cli_passes_the_inventory_entry_limit(tmp_path: Path) -> None:
+    baseline, candidate = _portfolio_pair(tmp_path)
+    (baseline / "note.txt").write_text("ignored", encoding="utf-8")
+    (candidate / "note.txt").write_text("ignored", encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "portfolio",
+                str(baseline),
+                str(candidate),
+                "--max-inventory-entries",
+                "2",
+            ]
+        )
+        == 2
+    )
+
+
+def test_portfolio_cli_defaults_the_inventory_entry_limit() -> None:
+    arguments = build_parser().parse_args(["portfolio", "before", "after"])
+
+    assert arguments.max_inventory_entries == DEFAULT_MAX_INVENTORY_ENTRIES
 
 
 def test_portfolio_inventory_ignores_office_lock_files(tmp_path: Path) -> None:

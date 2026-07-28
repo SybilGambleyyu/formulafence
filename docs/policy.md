@@ -1918,6 +1918,17 @@ then fails closed before it opens a later workbook if the newly retained state
 exceeds that side's budget. This is separate from the pre-read source-byte,
 raw-entry, and supported-workbook limits.
 
+Snapshot construction independently caps retained static local dependency-graph
+records at 2,000,000 by default (`--max-dependency-edges`). A direct local
+dependency, a compact local range dependency, and every additional fixed-CSE or
+observed dynamic-array output alias consumes one record. This closes the
+formula-defined-name fanout gap without expanding ranges into cells; one pool
+is shared across all successfully retained workbooks on each portfolio side,
+while direct `diff`, `check`, and `profile` inputs each receive their own pool.
+An overage returns status `2` before FormulaFence emits a report. It is separate
+from the source, snapshot-cell, local-impact, rendered-artifact, and
+candidate-only cross-workbook graph limits.
+
 `diff` and `check` also have a 100,000-state aggregate local impact-analysis
 budget by default (`--max-change-analysis-states`); one pool spans every matched
 workbook in a `portfolio` run. FormulaFence records each changed source and each

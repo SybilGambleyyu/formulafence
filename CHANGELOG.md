@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.171.0 — 2026-07-28
+
+- Bound the static local dependency records retained while a workbook snapshot
+  is built. A compact formula-defined name can resolve to many local inputs at
+  each caller, so source-byte and populated-cell limits alone did not cap the
+  reverse/range dependency indexes used for impact review. FormulaFence now
+  defaults to 2,000,000 retained local dependency-graph edges per workbook
+  input, and to one independent shared pool for each side of a directory
+  portfolio.
+- Add `--max-dependency-edges` to `profile`, `diff`, `check`, and `portfolio`,
+  plus the matching `max-dependency-edges` GitHub Action input. Every retained
+  direct or range dependency and every additional legacy-CSE or observed
+  dynamic-array output alias consumes the positive-only budget. An overage
+  returns status 2 before a CLI artifact is published; exact-boundary,
+  named-formula fanout, array-alias, portfolio-sharing, and Action propagation
+  regressions cover the guard.
+
 ## 0.170.0 — 2026-07-28
 
 - Bound `profile`'s public inventory construction before rendering. The CLI now

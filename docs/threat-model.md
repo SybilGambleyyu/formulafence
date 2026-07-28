@@ -285,6 +285,15 @@ financial correctness or replace model review.
   supports it. A post-inventory in-place rewrite, regular-file replacement, or
   symlink substitution produces redacted `FF078` evidence and a final incomplete
   exit status, while remaining paths are still reported.
+- Snapshot construction has a separate 2,000,000-edge static local
+  dependency-graph ceiling by default (`--max-dependency-edges`). It counts
+  retained direct/range dependencies and additional fixed-CSE or observed
+  dynamic-array output aliases; in a directory portfolio one independent pool
+  spans each baseline/candidate side. This prevents a compact formula-defined
+  name from multiplying retained local graph state at many callers, without
+  expanding a range into cells or changing the candidate-only cross-workbook
+  graph boundary. An overage stops with status 2 before a partial artifact is
+  published.
 - Local `diff` / `check` impact analysis has a 100,000-state aggregate default
   budget. A state is a changed source or one reachable local dependency state;
   a portfolio shares one pool across every matched workbook. This prevents a

@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Dependency-graph edge budget — 2026-07-28
+
+Version 0.171.0 closes a retained-graph amplification gap after the bounded
+reader has finished. FormulaFence stores compact local direct and range
+dependency indexes for downstream impact review. A source can remain small and
+stay within the populated-cell ceiling while one formula-defined name resolves
+to many local inputs at every caller, multiplying those retained indexes.
+
+`profile`, `diff`, and `check` now give each workbook input a positive-only
+`--max-dependency-edges` budget of 2,000,000 by default. `portfolio` uses one
+independent pool for all successfully retained baseline snapshots and another
+for candidate snapshots. A direct local dependency, a compact local range
+dependency, and each additional fixed-CSE or observed dynamic-array output
+alias consumes one record. The boundary intentionally does not expand a range
+into cells and does not replace the candidate-only cross-workbook graph or
+local impact-analysis limits. An overage returns status 2 before a CLI artifact
+can be rendered or published.
+
+For an independent compact stress input, a 57,243-byte valid `.xlsx` defined
+`Fanout` as a 100-input local `SUM` name and used `=Fanout` in 10,000 caller
+cells. This creates exactly 1,000,000 retained reverse-dependency edges without
+any range or array-alias records. The public 0.170.0 wheel wrote its normal
+39,844-byte JSON profile in 6.081 seconds. The 0.171.0 candidate rejected a
+999,999 edge budget in 6.334 seconds with exit 2 and no output path. At exactly
+1,000,000 it completed in 6.254 seconds and produced byte-identical JSON
+(SHA-256 `9ceade979ecbf37a36d17a4b18693fc0daa988da1b5dfcbb6bbef2454a8abdc6`).
+Focused regressions also prove the 12-edge named-formula boundary, direct CLI
+no-output behavior, legacy-CSE and dynamic-array alias accounting, independent
+portfolio-side sharing with stop-before-later-read behavior, nonpositive API
+and Action-input rejection, and Action propagation. The final source suite
+passed 1,282 tests in 211.56 seconds; Ruff, bytecode compilation,
+Action-shell syntax, and whitespace checks were clean.
+
 ## Profile inventory-record budget — 2026-07-28
 
 Version 0.170.0 closes the retained-profile-state gap left by the artifact byte

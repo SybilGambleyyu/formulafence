@@ -48,6 +48,7 @@ def _run_action_script(
     max_inventory_entries: str = "32768",
     max_portfolio_source_bytes: str = "4294967296",
     max_portfolio_snapshot_cells: str = "2000000",
+    max_dependency_edges: str = "2000000",
     max_change_analysis_states: str = "100000",
     max_report_bytes: str = "33554432",
     max_link_impact: str = "100000",
@@ -107,6 +108,7 @@ def _run_action_script(
             "INPUT_MAX_INVENTORY_ENTRIES": max_inventory_entries,
             "INPUT_MAX_PORTFOLIO_SOURCE_BYTES": max_portfolio_source_bytes,
             "INPUT_MAX_PORTFOLIO_SNAPSHOT_CELLS": max_portfolio_snapshot_cells,
+            "INPUT_MAX_DEPENDENCY_EDGES": max_dependency_edges,
             "INPUT_MAX_CHANGE_ANALYSIS_STATES": max_change_analysis_states,
             "INPUT_MAX_REPORT_BYTES": max_report_bytes,
             "INPUT_MAX_LINK_IMPACT": max_link_impact,
@@ -153,6 +155,7 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
         "max-inventory-entries",
         "max-portfolio-source-bytes",
         "max-portfolio-snapshot-cells",
+        "max-dependency-edges",
         "max-change-analysis-states",
         "max-report-bytes",
         "max-link-impact",
@@ -160,6 +163,7 @@ def test_action_metadata_exposes_policy_report_contract() -> None:
     assert action["inputs"]["max-inventory-entries"]["default"] == "32768"
     assert action["inputs"]["max-portfolio-source-bytes"]["default"] == "4294967296"
     assert action["inputs"]["max-portfolio-snapshot-cells"]["default"] == "2000000"
+    assert action["inputs"]["max-dependency-edges"]["default"] == "2000000"
     assert action["inputs"]["max-change-analysis-states"]["default"] == "100000"
     assert action["inputs"]["max-report-bytes"]["default"] == "33554432"
     assert {"report-path", "exit-code"} <= set(action["outputs"])
@@ -1167,6 +1171,47 @@ def test_action_applies_the_portfolio_snapshot_cell_limit(tmp_path: Path) -> Non
     assert result.returncode == 0
     assert "exit-code=2" in outputs.read_text(encoding="utf-8")
     assert "max_portfolio_snapshot_cells=1" in result.stderr
+
+
+def test_action_rejects_an_invalid_dependency_edge_limit(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    _workbook(baseline, 1)
+    _workbook(candidate, 2)
+
+    result, _, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        max_dependency_edges="0",
+    )
+
+    assert result.returncode == 2
+    assert "max-dependency-edges must be a positive integer" in result.stderr
+
+
+def test_action_applies_the_dependency_edge_limit(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.xlsx"
+    candidate = tmp_path / "candidate.xlsx"
+    for path in (baseline, candidate):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Model"
+        worksheet["A1"] = 1
+        worksheet["A2"] = 2
+        worksheet["B1"] = "=A1+A2"
+        workbook.save(path)
+
+    result, outputs, _ = _run_action_script(
+        tmp_path,
+        baseline=baseline,
+        candidate=candidate,
+        max_dependency_edges="1",
+    )
+
+    assert result.returncode == 0
+    assert "exit-code=2" in outputs.read_text(encoding="utf-8")
+    assert "max_dependency_edges=1" in result.stderr
 
 
 def test_action_rejects_an_invalid_change_analysis_state_limit(tmp_path: Path) -> None:

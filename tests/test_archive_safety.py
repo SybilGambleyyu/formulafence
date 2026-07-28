@@ -13,6 +13,8 @@ from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 import pytest
+from openpyxl import Workbook
+from openpyxl.workbook.defined_name import DefinedName
 
 import formulafence.workbook as workbook_module
 from formulafence.cli import main
@@ -43,6 +45,34 @@ def _append_member(
 ) -> None:
     with ZipFile(path, "a", compression=compression) as archive:
         archive.writestr(name, payload)
+
+
+def _named_formula_fanout_workbook(
+    path: Path,
+    *,
+    input_count: int = 3,
+    caller_count: int = 4,
+) -> Path:
+    """Create a compact model whose one name expands at every caller cell."""
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    for row in range(1, input_count + 1):
+        worksheet.cell(row=row, column=1, value=row)
+    workbook.defined_names.add(
+        DefinedName(
+            "Fanout",
+            attr_text=(
+                "=SUM("
+                + ",".join(f"Model!$A${row}" for row in range(1, input_count + 1))
+                + ")"
+            ),
+        )
+    )
+    for row in range(1, caller_count + 1):
+        worksheet.cell(row=row, column=2, value="=Fanout")
+    workbook.save(path)
+    return path
 
 
 def _replace_member(path: Path, name: str, payload: bytes) -> None:
@@ -2203,6 +2233,27 @@ def test_semantic_reader_preflight_rejects_excessive_cells_before_scanners(
     message = _reject_before_workbook_readers(monkeypatch, workbook)
 
     assert "populated worksheet cells" in message
+
+
+def test_dependency_edge_budget_bounds_named_formula_fanout(
+    tmp_path: Path,
+) -> None:
+    workbook = _named_formula_fanout_workbook(tmp_path / "named-fanout.xlsx")
+
+    snapshot = load_snapshot(workbook, max_dependency_edges=12)
+    assert sum(len(values) for values in snapshot.reverse_dependencies.values()) == 12
+    assert snapshot.range_dependencies == []
+
+    with pytest.raises(
+        WorkbookLoadError,
+        match=r"dependency graph exceeds max_dependency_edges=11",
+    ):
+        load_snapshot(workbook, max_dependency_edges=11)
+    with pytest.raises(
+        WorkbookLoadError,
+        match="max_dependency_edges must be at least 1",
+    ):
+        load_snapshot(workbook, max_dependency_edges=0)
 
 
 def test_semantic_reader_preflight_rejects_excessive_row_dimensions_before_scanners(

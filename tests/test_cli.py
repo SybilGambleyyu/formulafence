@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from openpyxl import Workbook
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -10,7 +11,7 @@ import formulafence.policy as policy_module
 from formulafence.cli import main
 from formulafence.models import WorkbookSnapshot
 from formulafence.output import DEFAULT_MAX_REPORT_BYTES
-from formulafence.workbook import DEFAULT_MAX_PROFILE_RECORDS
+from formulafence.workbook import DEFAULT_MAX_DEPENDENCY_EDGES, DEFAULT_MAX_PROFILE_RECORDS
 
 from .helpers import (
     change_formula_dde_link_input,
@@ -136,6 +137,40 @@ def test_profile_does_not_expose_cell_values(tmp_path) -> None:
     assert '"formula_cells"' in profile
 
 
+def test_profile_dependency_edge_limit_fails_before_writing_an_output(tmp_path, capsys) -> None:
+    workbook_path = tmp_path / "named-fanout.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    for row in range(1, 4):
+        worksheet.cell(row=row, column=1, value=row)
+    workbook.defined_names.add(
+        DefinedName("Fanout", attr_text="=SUM(Model!$A$1,Model!$A$2,Model!$A$3)")
+    )
+    for row in range(1, 5):
+        worksheet.cell(row=row, column=2, value="=Fanout")
+    workbook.save(workbook_path)
+    output = tmp_path / "profile.json"
+
+    assert (
+        main(
+            [
+                "profile",
+                str(workbook_path),
+                "--max-dependency-edges",
+                "11",
+                "--format",
+                "json",
+                "--output",
+                str(output),
+            ]
+        )
+        == 2
+    )
+    assert not output.exists()
+    assert "max_dependency_edges=11" in capsys.readouterr().err
+
+
 def test_diff_passes_the_change_analysis_state_limit(tmp_path, capsys) -> None:
     baseline = make_model(tmp_path / "baseline.xlsx")
     candidate = make_model(tmp_path / "candidate.xlsx")
@@ -186,6 +221,7 @@ def test_diff_defaults_the_report_byte_limit() -> None:
     arguments = cli_module.build_parser().parse_args(["diff", "before.xlsx", "after.xlsx"])
 
     assert arguments.max_report_bytes == DEFAULT_MAX_REPORT_BYTES
+    assert arguments.max_dependency_edges == DEFAULT_MAX_DEPENDENCY_EDGES
 
 
 def test_profile_fails_before_writing_an_oversized_artifact(tmp_path, capsys) -> None:
@@ -217,6 +253,7 @@ def test_profile_defaults_the_report_byte_limit() -> None:
 
     assert arguments.max_report_bytes == DEFAULT_MAX_REPORT_BYTES
     assert arguments.max_profile_records == DEFAULT_MAX_PROFILE_RECORDS
+    assert arguments.max_dependency_edges == DEFAULT_MAX_DEPENDENCY_EDGES
 
 
 def test_profile_record_limit_fails_before_writing_an_output(tmp_path, monkeypatch, capsys) -> None:
@@ -244,7 +281,7 @@ def test_profile_record_limit_fails_before_writing_an_output(tmp_path, monkeypat
         dynamic_reference_functions=OversizedDynamicInventory(),
     )
     output = tmp_path / "profile.json"
-    monkeypatch.setattr(cli_module, "load_snapshot", lambda path: snapshot)
+    monkeypatch.setattr(cli_module, "load_snapshot", lambda path, **kwargs: snapshot)
 
     assert (
         main(

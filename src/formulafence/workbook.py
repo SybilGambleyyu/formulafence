@@ -157,6 +157,41 @@ _SUPPORTED_SUFFIXES = {".xlsx", ".xlsm"}
 # CLI default independent from reader and rendered-artifact limits so callers
 # can deliberately opt up when a complete large inventory is required.
 DEFAULT_MAX_PROFILE_RECORDS = 100_000
+# A formula cell can be tiny while a statically resolvable named formula it
+# invokes expands into a broad local dependency graph.  Counting worksheet
+# cells or source XML bytes alone therefore cannot bound the reverse/range
+# indexes retained for a snapshot.  Keep one explicit, configurable ceiling
+# around those semantic graph edges before they accumulate in memory.
+DEFAULT_MAX_DEPENDENCY_EDGES = 2_000_000
+
+
+class WorkbookDependencyEdgeLimitError(WorkbookLoadError):
+    """A workbook exceeded the caller's retained dependency-graph budget."""
+
+
+@dataclass
+class DependencyEdgeBudget:
+    """Track local semantic graph edges retained across one or more snapshots.
+
+    The budget is deliberately shared by portfolio sides: FormulaFence retains
+    every successful snapshot for nested evidence and cross-workbook analysis,
+    so a per-workbook ceiling alone would leave aggregate graph state open.
+    """
+
+    max_edges: int
+    scope: str = "Workbook"
+    used: int = 0
+
+    def consume(self, count: int = 1) -> None:
+        """Reserve graph records before mutating a retained dependency index."""
+        if count < 0:  # pragma: no cover - internal callers only add records
+            raise ValueError("Dependency edge count must not be negative.")
+        if self.used + count > self.max_edges:
+            raise WorkbookDependencyEdgeLimitError(
+                f"{self.scope} dependency graph exceeds "
+                f"max_dependency_edges={self.max_edges}."
+            )
+        self.used += count
 # Every source workbook passes this bounded ZIP inventory before FormulaFence
 # opens any OOXML part or hands the package to openpyxl.  The values preserve
 # support for the existing 512 MiB Power Pivot data-part allowance while
@@ -47962,6 +47997,7 @@ def _array_formula_output_dependents(
     legacy_ranges: tuple[ArrayFormulaRange, ...],
     reverse_dependencies: Mapping[CellKey, set[CellKey]],
     range_dependencies: list[RangeDependency],
+    dependency_edge_budget: DependencyEdgeBudget,
 ) -> dict[CellKey, set[CellKey]]:
     """Link a CSE anchor to formulas that read any fixed result member.
 
@@ -47978,11 +48014,18 @@ def _array_formula_output_dependents(
     for source, formula_cells in reverse_dependencies.items():
         for array_range in ranges_by_sheet.get(source[0], ()):
             if array_range.contains(source):
-                dependents[array_range.location].update(formula_cells)
+                array_dependents = dependents[array_range.location]
+                for dependent in formula_cells:
+                    if dependent not in array_dependents:
+                        dependency_edge_budget.consume()
+                        array_dependents.add(dependent)
     for dependency in range_dependencies:
         for array_range in ranges_by_sheet.get(dependency.source_sheet, ()):
             if dependency.intersects(array_range):
-                dependents[array_range.location].add(dependency.dependent)
+                array_dependents = dependents[array_range.location]
+                if dependency.dependent not in array_dependents:
+                    dependency_edge_budget.consume()
+                    array_dependents.add(dependency.dependent)
     return {anchor: cells for anchor, cells in dependents.items() if cells}
 
 
@@ -47990,6 +48033,7 @@ def _dynamic_array_output_dependents(
     dynamic_ranges: tuple[ArrayFormulaRange, ...],
     reverse_dependencies: Mapping[CellKey, set[CellKey]],
     range_dependencies: list[RangeDependency],
+    dependency_edge_budget: DependencyEdgeBudget,
 ) -> tuple[
     dict[CellKey, set[CellKey]],
     dict[CellKey, tuple[DynamicArrayOutputReference, ...]],
@@ -48011,7 +48055,10 @@ def _dynamic_array_output_dependents(
     def add_reference(array_range: ArrayFormulaRange, dependent: CellKey) -> None:
         if dependent == array_range.location:
             return
-        dependents[array_range.location].add(dependent)
+        array_dependents = dependents[array_range.location]
+        if dependent not in array_dependents:
+            dependency_edge_budget.consume()
+            array_dependents.add(dependent)
         references[dependent].add(
             DynamicArrayOutputReference(
                 anchor=array_range.location,
@@ -51489,6 +51536,8 @@ def load_snapshot(
     path: str | Path,
     *,
     expected_source_identity: WorkbookSourceIdentity | None = None,
+    max_dependency_edges: int = DEFAULT_MAX_DEPENDENCY_EDGES,
+    _dependency_edge_budget: DependencyEdgeBudget | None = None,
 ) -> WorkbookSnapshot:
     """Load one immutable workbook snapshot without evaluating its contents.
 
@@ -51497,6 +51546,12 @@ def load_snapshot(
     same file state, preventing a later pathname replacement or in-place
     mutation from widening the portfolio's inspected scope.
     """
+    if max_dependency_edges < 1:
+        raise WorkbookLoadError("max_dependency_edges must be at least 1.")
+    dependency_edge_budget = _dependency_edge_budget or DependencyEdgeBudget(
+        max_edges=max_dependency_edges
+    )
+
     reported_source = Path(path)
     if not reported_source.exists() or not reported_source.is_file():
         raise WorkbookLoadError(
@@ -51517,7 +51572,11 @@ def load_snapshot(
             expected_source_identity=expected_source_identity,
         )
     try:
-        return _load_snapshot_from_stable_source(source, reported_source)
+        return _load_snapshot_from_stable_source(
+            source,
+            reported_source,
+            dependency_edge_budget=dependency_edge_budget,
+        )
     finally:
         _remove_stable_workbook_source(source)
 
@@ -51525,6 +51584,8 @@ def load_snapshot(
 def _load_snapshot_from_stable_source(
     source: Path,
     reported_source: Path,
+    *,
+    dependency_edge_budget: DependencyEdgeBudget,
 ) -> WorkbookSnapshot:
     """Inspect only the private source copy materialized for one snapshot."""
 
@@ -52490,6 +52551,7 @@ def _load_snapshot_from_stable_source(
                     continue
                 source_sheet = reference.sheet or worksheet.title
                 if reference.is_range:
+                    dependency_edge_budget.consume()
                     range_dependencies.append(
                         RangeDependency(
                             source_sheet=source_sheet,
@@ -52504,7 +52566,11 @@ def _load_snapshot_from_stable_source(
                     source_coordinate = (
                         f"{get_column_letter(reference.min_column)}{reference.min_row}"
                     )
-                    reverse_dependencies[(source_sheet, source_coordinate)].add(snapshot.location)
+                    source_location = (source_sheet, source_coordinate)
+                    source_dependents = reverse_dependencies[source_location]
+                    if snapshot.location not in source_dependents:
+                        dependency_edge_budget.consume()
+                        source_dependents.add(snapshot.location)
 
         sheets[worksheet.title] = SheetSnapshot(
             title=worksheet.title,
@@ -52519,6 +52585,7 @@ def _load_snapshot_from_stable_source(
         array_formula_classification.legacy_ranges,
         reverse_dependencies,
         range_dependencies,
+        dependency_edge_budget,
     )
     (
         dynamic_array_formula_output_dependents,
@@ -52527,6 +52594,7 @@ def _load_snapshot_from_stable_source(
         array_formula_classification.dynamic_ranges,
         reverse_dependencies,
         range_dependencies,
+        dependency_edge_budget,
     )
     array_formula_output_dependents = {
         anchor: set(legacy_array_formula_output_dependents.get(anchor, set()))

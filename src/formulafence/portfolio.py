@@ -47,7 +47,13 @@ from formulafence.policy import (
     evaluate_portfolio_link_policy,
     evaluate_portfolio_membership_policy,
 )
-from formulafence.workbook import WorkbookSourceIdentity, load_snapshot
+from formulafence.workbook import (
+    DEFAULT_MAX_DEPENDENCY_EDGES,
+    DependencyEdgeBudget,
+    WorkbookDependencyEdgeLimitError,
+    WorkbookSourceIdentity,
+    load_snapshot,
+)
 
 _SUPPORTED_SUFFIXES = frozenset({".xlsx", ".xlsm"})
 _UNSUPPORTED_EXCEL_SUFFIXES = frozenset(
@@ -1195,6 +1201,7 @@ def _unreadable_entry(
 
 def _load_portfolio_workbook(
     source: _PortfolioWorkbookSource | None,
+    dependency_edge_budget: DependencyEdgeBudget,
 ) -> tuple[WorkbookSnapshot | None, bool]:
     if source is None:
         return None, False
@@ -1203,9 +1210,15 @@ def _load_portfolio_workbook(
             load_snapshot(
                 source.path,
                 expected_source_identity=source.identity,
+                _dependency_edge_budget=dependency_edge_budget,
             ),
             False,
         )
+    except WorkbookDependencyEdgeLimitError as error:
+        # This is a configured resource boundary, not an unreadable workbook.
+        # Propagate it so the caller receives the exact limit and no later
+        # portfolio source is opened.
+        raise PortfolioError(str(error)) from error
     except Exception:  # noqa: BLE001 - malformed workbooks must not erase portfolio evidence
         return None, True
 
@@ -1219,6 +1232,7 @@ def compare_portfolios(
     max_inventory_entries: int = DEFAULT_MAX_INVENTORY_ENTRIES,
     max_portfolio_source_bytes: int = DEFAULT_MAX_PORTFOLIO_SOURCE_BYTES,
     max_portfolio_snapshot_cells: int = DEFAULT_MAX_PORTFOLIO_SNAPSHOT_CELLS,
+    max_dependency_edges: int = DEFAULT_MAX_DEPENDENCY_EDGES,
     max_change_analysis_states: int = DEFAULT_MAX_CHANGE_ANALYSIS_STATES,
     max_link_impact: int = DEFAULT_MAX_LINK_IMPACT,
 ) -> PortfolioReport:
@@ -1233,6 +1247,8 @@ def compare_portfolios(
         raise PortfolioError("max_portfolio_source_bytes must be at least 1.")
     if max_portfolio_snapshot_cells < 1:
         raise PortfolioError("max_portfolio_snapshot_cells must be at least 1.")
+    if max_dependency_edges < 1:
+        raise PortfolioError("max_dependency_edges must be at least 1.")
     if max_change_analysis_states < 1:
         raise PortfolioError("max_change_analysis_states must be at least 1.")
     if max_link_impact < 1:
@@ -1267,6 +1283,14 @@ def compare_portfolios(
     entries: list[PortfolioWorkbookReport] = []
     baseline_snapshot_cell_count = 0
     candidate_snapshot_cell_count = 0
+    baseline_dependency_edge_budget = DependencyEdgeBudget(
+        max_edges=max_dependency_edges,
+        scope="Baseline portfolio",
+    )
+    candidate_dependency_edge_budget = DependencyEdgeBudget(
+        max_edges=max_dependency_edges,
+        scope="Candidate portfolio",
+    )
     change_analysis_budget = ChangeAnalysisBudget(
         max_states=max_change_analysis_states,
         scope="Portfolio",
@@ -1275,14 +1299,20 @@ def compare_portfolios(
     for path in sorted(set(baseline) | set(candidate), key=_path_sort_key):
         baseline_path = baseline.get(path)
         candidate_path = candidate.get(path)
-        before, before_unreadable = _load_portfolio_workbook(baseline_path)
+        before, before_unreadable = _load_portfolio_workbook(
+            baseline_path,
+            baseline_dependency_edge_budget,
+        )
         baseline_snapshot_cell_count = _record_portfolio_snapshot_cells(
             before,
             label="baseline",
             snapshot_cell_count=baseline_snapshot_cell_count,
             max_portfolio_snapshot_cells=max_portfolio_snapshot_cells,
         )
-        after, after_unreadable = _load_portfolio_workbook(candidate_path)
+        after, after_unreadable = _load_portfolio_workbook(
+            candidate_path,
+            candidate_dependency_edge_budget,
+        )
         candidate_snapshot_cell_count = _record_portfolio_snapshot_cells(
             after,
             label="candidate",

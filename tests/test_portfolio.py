@@ -34,7 +34,11 @@ from formulafence.portfolio import (
     compare_portfolios,
     discover_workbooks,
 )
-from formulafence.workbook import load_snapshot, profile_snapshot
+from formulafence.workbook import (
+    DEFAULT_MAX_DEPENDENCY_EDGES,
+    load_snapshot,
+    profile_snapshot,
+)
 
 from .helpers import (
     duplicate_external_link_definition,
@@ -59,6 +63,23 @@ def _write_workbook(path: Path, sheet_name: str, cells: dict[str, object]) -> Pa
     worksheet.title = sheet_name
     for coordinate, value in cells.items():
         worksheet[coordinate] = value
+    workbook.save(path)
+    return path
+
+
+def _write_named_formula_fanout_workbook(path: Path) -> Path:
+    """Create four retained local graph edges from a compact named formula."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["A1"] = 1
+    worksheet["A2"] = 2
+    workbook.defined_names.add(
+        DefinedName("Fanout", attr_text="=SUM(Model!$A$1,Model!$A$2)")
+    )
+    worksheet["B1"] = "=Fanout"
+    worksheet["B2"] = "=Fanout"
     workbook.save(path)
     return path
 
@@ -2072,6 +2093,8 @@ def test_portfolio_source_byte_budget_rejects_a_nonpositive_limit(tmp_path: Path
         PortfolioError, match="max_portfolio_snapshot_cells must be at least 1"
     ):
         compare_portfolios(baseline, candidate, max_portfolio_snapshot_cells=0)
+    with pytest.raises(PortfolioError, match="max_dependency_edges must be at least 1"):
+        compare_portfolios(baseline, candidate, max_dependency_edges=0)
 
 
 def test_portfolio_source_byte_budget_checks_the_candidate_before_reads(
@@ -2181,6 +2204,47 @@ def test_portfolio_snapshot_cell_budget_checks_the_candidate_before_later_reads(
             max_portfolio_snapshot_cells=baseline_snapshot_cells,
         )
     assert snapshot_reads == [baseline_source, candidate_source]
+
+
+def test_portfolio_dependency_edge_budget_is_exact_and_stops_later_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    for root in (baseline, candidate):
+        _write_named_formula_fanout_workbook(root / "first.xlsx")
+        _write_named_formula_fanout_workbook(root / "second.xlsx")
+
+    exact_report = compare_portfolios(
+        baseline,
+        candidate,
+        max_dependency_edges=8,
+    )
+    assert exact_report.incomplete is False
+
+    original_load_snapshot = portfolio_module.load_snapshot
+    snapshot_reads: list[Path] = []
+
+    def record_load(path: Path, **kwargs: object):
+        snapshot_reads.append(Path(path))
+        return original_load_snapshot(path, **kwargs)
+
+    monkeypatch.setattr(portfolio_module, "load_snapshot", record_load)
+    with pytest.raises(
+        PortfolioError,
+        match=r"Baseline portfolio dependency graph exceeds max_dependency_edges=7",
+    ):
+        compare_portfolios(
+            baseline,
+            candidate,
+            max_dependency_edges=7,
+        )
+    assert snapshot_reads == [
+        baseline / "first.xlsx",
+        candidate / "first.xlsx",
+        baseline / "second.xlsx",
+    ]
 
 
 def test_portfolio_change_analysis_budget_is_shared_across_matched_workbooks(
@@ -2361,6 +2425,12 @@ def test_portfolio_cli_defaults_the_snapshot_cell_limit() -> None:
     arguments = build_parser().parse_args(["portfolio", "before", "after"])
 
     assert arguments.max_portfolio_snapshot_cells == DEFAULT_MAX_PORTFOLIO_SNAPSHOT_CELLS
+
+
+def test_portfolio_cli_defaults_the_dependency_edge_limit() -> None:
+    arguments = build_parser().parse_args(["portfolio", "before", "after"])
+
+    assert arguments.max_dependency_edges == DEFAULT_MAX_DEPENDENCY_EDGES
 
 
 def test_portfolio_cli_defaults_the_change_analysis_state_limit() -> None:

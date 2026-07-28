@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.170.0/formulafence-0.170.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.171.0/formulafence-0.171.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -75,7 +75,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.170.0
+  uses: SybilGambleyyu/formulafence@v0.171.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -527,8 +527,9 @@ files, and fails closed for unsupported Excel formats, case-colliding paths,
 symlinked paths, over-limit inventories, or an unreadable workbook.
 The default bounds are 512 supported workbooks, 32,768 total filesystem entries,
 4 GiB of supported-workbook source bytes, 2,000,000 populated retained snapshot
-cells per directory, 100,000 aggregate local change-analysis states, and 32 MiB
-of rendered artifact text. The
+cells per directory, 2,000,000 static local dependency-graph edges per input
+(one shared pool for each portfolio side), 100,000 aggregate local
+change-analysis states, and 32 MiB of rendered artifact text. The
 entry budget is enforced before FormulaFence
 retains or sorts paths, so non-workbook files, directories, lock files, and
 symlinks cannot make a broad CI directory consume an unbounded inventory. After
@@ -537,9 +538,15 @@ sizes before opening any snapshot; the source-byte budget bounds the aggregate
 private-copy and reader workload for each side independently. During comparison,
 FormulaFence then counts the actual cells in retained immutable snapshots and
 stops as soon as that side exceeds its snapshot-cell budget, before opening a
-later workbook. Tune the separate limits with `--max-workbooks`,
+later workbook. Snapshot construction also caps retained static local
+dependency-graph records: direct and range dependencies plus additional
+legacy-CSE or observed dynamic-array output aliases. This prevents a compact
+formula-defined name from fanning out across many callers without changing how
+FormulaFence treats a range as one compact record. Tune the separate limits with
+`--max-workbooks`,
 `--max-inventory-entries`, `--max-portfolio-source-bytes`,
-`--max-portfolio-snapshot-cells`, `--max-change-analysis-states`, and
+`--max-portfolio-snapshot-cells`, `--max-dependency-edges`,
+`--max-change-analysis-states`, and
 `--max-report-bytes`.
 The recursive walk uses direct directory enumeration and treats any unreadable
 subdirectory as a fail-closed portfolio error; it never silently omits a branch
@@ -2817,6 +2824,15 @@ The raw rich-text scanner streams one direct shared-string item at a time and
 releases unrelated root children as it goes, so a compact extension tree cannot
 first force either scanner to retain the full table. These are CI allocation
 limits, not SpreadsheetML validity rules.
+The reader ceilings count input structure, but a static formula-derived graph can
+still fan out after that reader phase: one compact formula-defined name may
+resolve to many local references at each caller. FormulaFence therefore also
+caps the retained local dependency records with `--max-dependency-edges`
+(2,000,000 by default). Each direct local dependency, compact local range
+dependency, and additional fixed-CSE or observed dynamic-array output alias
+consumes one record; it neither expands a range into cells nor constrains the
+separate candidate-only cross-workbook graph. An overage returns status `2`
+before a CLI report is rendered or published.
 For reader-selected transitional or Strict worksheets, the preflight also
 matches the published base Worksheet root-child grammar. A direct root subtree
 outside that grammar is limited to 32,768 XML elements per worksheet and

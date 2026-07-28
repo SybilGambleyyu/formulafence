@@ -32,6 +32,7 @@ max_workbooks=${INPUT_MAX_WORKBOOKS:-512}
 max_inventory_entries=${INPUT_MAX_INVENTORY_ENTRIES:-32768}
 max_portfolio_source_bytes=${INPUT_MAX_PORTFOLIO_SOURCE_BYTES:-4294967296}
 max_portfolio_snapshot_cells=${INPUT_MAX_PORTFOLIO_SNAPSHOT_CELLS:-2000000}
+max_dependency_edges=${INPUT_MAX_DEPENDENCY_EDGES:-2000000}
 max_change_analysis_states=${INPUT_MAX_CHANGE_ANALYSIS_STATES:-100000}
 max_report_bytes=${INPUT_MAX_REPORT_BYTES:-33554432}
 max_link_impact=${INPUT_MAX_LINK_IMPACT:-100000}
@@ -126,6 +127,9 @@ if ! [[ "$max_portfolio_source_bytes" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if ! [[ "$max_portfolio_snapshot_cells" =~ ^[1-9][0-9]*$ ]]; then
   fail 'max-portfolio-snapshot-cells must be a positive integer.'
+fi
+if ! [[ "$max_dependency_edges" =~ ^[1-9][0-9]*$ ]]; then
+  fail 'max-dependency-edges must be a positive integer.'
 fi
 if ! [[ "$max_change_analysis_states" =~ ^[1-9][0-9]*$ ]]; then
   fail 'max-change-analysis-states must be a positive integer.'
@@ -229,6 +233,7 @@ elif [[ -n "$policy" ]]; then
 else
   command+=(diff "$baseline" "$candidate")
 fi
+command+=(--max-dependency-edges "$max_dependency_edges")
 command+=(--max-change-analysis-states "$max_change_analysis_states")
 command+=(--max-report-bytes "$max_report_bytes")
 command+=(--format "$format" --output "$report_path" --fail-on "$fail_on")

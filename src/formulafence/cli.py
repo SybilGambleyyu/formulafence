@@ -59,6 +59,7 @@ from formulafence.portfolio import (
     compare_portfolios,
 )
 from formulafence.workbook import (
+    DEFAULT_MAX_DEPENDENCY_EDGES,
     DEFAULT_MAX_PROFILE_RECORDS,
     load_snapshot,
     profile_snapshot,
@@ -253,6 +254,18 @@ def _add_change_analysis_state_limit_argument(parser: argparse.ArgumentParser) -
     )
 
 
+def _add_dependency_edge_limit_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--max-dependency-edges",
+        type=_positive_integer,
+        default=DEFAULT_MAX_DEPENDENCY_EDGES,
+        help=(
+            "Fail closed before FormulaFence retains more than this many static "
+            "local dependency-graph edges"
+        ),
+    )
+
+
 def _add_report_byte_limit_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-report-bytes",
@@ -289,12 +302,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     profile.add_argument("workbook", type=Path)
     _add_profile_record_limit_argument(profile)
+    _add_dependency_edge_limit_argument(profile)
     _add_report_byte_limit_argument(profile)
     _add_output_arguments(profile, ("json", "markdown"))
 
     diff = commands.add_parser("diff", help="Compare two workbooks semantically")
     diff.add_argument("before", type=Path, help="Approved or baseline workbook")
     diff.add_argument("after", type=Path, help="Candidate workbook")
+    _add_dependency_edge_limit_argument(diff)
     _add_change_analysis_state_limit_argument(diff)
     _add_report_byte_limit_argument(diff)
     _add_output_arguments(diff, ("json", "markdown", "html", "sarif"))
@@ -321,6 +336,7 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("before", type=Path, help="Approved or baseline workbook")
     check.add_argument("after", type=Path, help="Candidate workbook")
     check.add_argument("--policy", required=True, type=Path, help="Path to formulafence.yml")
+    _add_dependency_edge_limit_argument(check)
     _add_change_analysis_state_limit_argument(check)
     _add_report_byte_limit_argument(check)
     _add_output_arguments(check, ("json", "markdown", "html", "sarif"))
@@ -387,6 +403,7 @@ def build_parser() -> argparse.ArgumentParser:
             "workbook snapshot cells during comparison"
         ),
     )
+    _add_dependency_edge_limit_argument(portfolio)
     _add_change_analysis_state_limit_argument(portfolio)
     _add_report_byte_limit_argument(portfolio)
     portfolio.add_argument(
@@ -535,7 +552,10 @@ def _threshold_failed(severities: Sequence[str], fail_on: str) -> bool:
 def _run_profile(arguments: argparse.Namespace) -> int:
     _ensure_output_safe(arguments.output, arguments.workbook)
     profile = profile_snapshot(
-        load_snapshot(arguments.workbook),
+        load_snapshot(
+            arguments.workbook,
+            max_dependency_edges=arguments.max_dependency_edges,
+        ),
         max_profile_records=arguments.max_profile_records,
     )
     content = (
@@ -554,8 +574,14 @@ def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
     _ensure_output_safe(arguments.output, *inputs)
     policy = load_policy(arguments.policy) if enforce_policy else None
     report = compare_snapshots(
-        load_snapshot(arguments.before),
-        load_snapshot(arguments.after),
+        load_snapshot(
+            arguments.before,
+            max_dependency_edges=arguments.max_dependency_edges,
+        ),
+        load_snapshot(
+            arguments.after,
+            max_dependency_edges=arguments.max_dependency_edges,
+        ),
         max_change_analysis_states=arguments.max_change_analysis_states,
     )
     policy_findings = []
@@ -730,6 +756,7 @@ def _run_portfolio(arguments: argparse.Namespace) -> int:
         max_inventory_entries=arguments.max_inventory_entries,
         max_portfolio_source_bytes=arguments.max_portfolio_source_bytes,
         max_portfolio_snapshot_cells=arguments.max_portfolio_snapshot_cells,
+        max_dependency_edges=arguments.max_dependency_edges,
         max_change_analysis_states=arguments.max_change_analysis_states,
         max_link_impact=arguments.max_link_impact,
     )

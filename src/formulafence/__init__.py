@@ -1,3 +1,3 @@
 """FormulaFence: local-first spreadsheet change assurance."""
 
-__version__ = "0.170.0"
+__version__ = "0.171.0"

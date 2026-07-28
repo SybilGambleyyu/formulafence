@@ -989,6 +989,26 @@ def test_legacy_cse_array_outputs_connect_input_changes_to_result_consumers(tmp_
     ]
 
 
+@pytest.mark.parametrize("dynamic", (False, True), ids=("legacy-cse", "dynamic"))
+def test_dependency_edge_budget_counts_array_output_aliases(tmp_path, dynamic: bool) -> None:
+    """Array aliases are retained graph edges, even though their ranges stay compact."""
+    workbook = make_legacy_array_model(tmp_path / "array-budget.xlsx")
+    if dynamic:
+        mark_array_formula_dynamic(workbook)
+
+    snapshot = load_snapshot(workbook, max_dependency_edges=5)
+
+    assert sum(len(values) for values in snapshot.reverse_dependencies.values()) == 1
+    assert len(snapshot.range_dependencies) == 2
+    assert sum(len(values) for values in snapshot.array_formula_output_dependents.values()) == 2
+
+    with pytest.raises(
+        FormulaFenceError,
+        match=r"dependency graph exceeds max_dependency_edges=4",
+    ):
+        load_snapshot(workbook, max_dependency_edges=4)
+
+
 def test_legacy_cse_output_aliases_do_not_expand_a_declared_huge_range(tmp_path) -> None:
     workbook = make_legacy_array_model(tmp_path / "large-cse.xlsx", "B1:XFD1048576")
 

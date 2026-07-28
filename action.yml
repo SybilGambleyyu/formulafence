@@ -93,6 +93,10 @@ inputs:
     description: Maximum populated cells retained across workbook snapshots in each directory portfolio; fail closed above this semantic-state budget.
     required: false
     default: '2000000'
+  max-dependency-edges:
+    description: Maximum static local dependency-graph edges retained for each workbook input, or each directory portfolio side; fail closed above this semantic-state budget.
+    required: false
+    default: '2000000'
   max-change-analysis-states:
     description: Maximum aggregate changed-source and local dependency states analyzed by a workbook or directory portfolio comparison; fail closed above this budget.
     required: false
@@ -155,6 +159,7 @@ runs:
         INPUT_MAX_INVENTORY_ENTRIES: ${{ inputs.max-inventory-entries }}
         INPUT_MAX_PORTFOLIO_SOURCE_BYTES: ${{ inputs.max-portfolio-source-bytes }}
         INPUT_MAX_PORTFOLIO_SNAPSHOT_CELLS: ${{ inputs.max-portfolio-snapshot-cells }}
+        INPUT_MAX_DEPENDENCY_EDGES: ${{ inputs.max-dependency-edges }}
         INPUT_MAX_CHANGE_ANALYSIS_STATES: ${{ inputs.max-change-analysis-states }}
         INPUT_MAX_REPORT_BYTES: ${{ inputs.max-report-bytes }}
         INPUT_MAX_LINK_IMPACT: ${{ inputs.max-link-impact }}

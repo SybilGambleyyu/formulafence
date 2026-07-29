@@ -6465,6 +6465,25 @@ def lint_to_markdown(
                     ),
                 )
             )
+    sumproduct_range_shape_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF094"
+    ]
+    if sumproduct_range_shape_evidence:
+        lines.extend(["## SUMPRODUCT range-shape evidence", ""])
+        for location, evidence in sumproduct_range_shape_evidence:
+            lines.append(
+                "- {location}: {array_count} direct static array arguments across "
+                "{call_count} SUMPRODUCT calls have different shapes."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    array_count=_markdown_escape(
+                        evidence["mismatched_direct_array_argument_count"]
+                    ),
+                    call_count=_markdown_escape(evidence["sumproduct_call_count"]),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6543,6 +6562,7 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF093": (
             "A conditional aggregate uses direct static ranges with different shapes."
         ),
+        "FF094": "A SUMPRODUCT call uses direct static ranges with different shapes.",
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

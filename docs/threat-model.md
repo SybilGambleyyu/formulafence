@@ -50,6 +50,15 @@ financial correctness or replace model review.
   broken references, and all array territory stay outside the boundary. It
   emits only a location plus aggregate call and mismatched-range counts;
   formulas, range spellings, and Table identities remain private.
+  Its `SUMPRODUCT` range-shape signal accepts only the unqualified native
+  spelling (optionally with `@`) with at least two comma-separated arguments,
+  each one bounded, internal direct A1 cell/range or whole-column reference.
+  It compares dimensions without calculation. Names, Tables,
+  external/3-D/full-row/union references, computed or dynamic expressions,
+  spills, implicit intersection, malformed formulas, explicit broken
+  references, and all array territory stay outside the boundary. It emits only
+  a location plus aggregate call and mismatched-array counts; formulas, range
+  spellings, and source sheets remain private.
   Its direct
   circular-reference signal accepts only an ordinary formula with a resolved
   scalar static dependency directly back to itself while workbook `iterate` is
@@ -63,10 +72,11 @@ financial correctness or replace model review.
   evidence contains only locations, peer coordinates where copied-pattern
   evidence needs them, static range coordinates, the two calculation-status
   flags, aggregate error-checking suppression counts, Table exception kinds,
-  conditional-aggregate mismatch counts, direct- or multi-cell-static scope,
-  and a multi-cell component size, never formula text, cell values, cached
-  results, ignored-error target ranges, direct conditional-aggregate ranges,
-  Table identities, or Table master formulas.
+  conditional-aggregate and `SUMPRODUCT` mismatch counts, direct- or
+  multi-cell-static scope, and a multi-cell component size, never formula text,
+  cell values, cached results, ignored-error target ranges, direct
+  conditional-aggregate or `SUMPRODUCT` ranges, Table identities, or Table
+  master formulas.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not

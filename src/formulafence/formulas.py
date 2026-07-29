@@ -2076,6 +2076,23 @@ def _function_name(token: object) -> str:
     return value.rsplit(".", 1)[-1].lstrip("@")
 
 
+def _unqualified_native_function_name(token: object) -> str | None:
+    """Return an exact native function spelling without folding namespaces.
+
+    ``_function_name`` intentionally folds namespace prefixes for broad
+    inspection. Static function contracts must not do that: a custom
+    ``Vendor.SUMPRODUCT`` call can have unrelated argument semantics. This
+    helper recognizes only an unqualified spelling, optionally preceded by
+    Excel's display-only ``@`` operator.
+    """
+    if not (
+        getattr(token, "type", None) == "FUNC"
+        and getattr(token, "subtype", None) == "OPEN"
+    ):
+        return None
+    return str(getattr(token, "value", "")).rstrip("(").strip().upper().removeprefix("@")
+
+
 def _native_conditional_aggregate_function_name(token: object) -> str | None:
     """Return one exact native conditional-aggregate spelling, if present.
 
@@ -2085,13 +2102,9 @@ def _native_conditional_aggregate_function_name(token: object) -> str | None:
     spelling, optionally preceded by the display-only ``@`` operator, plus the
     exact OOXML future-function serializations for ``MAXIFS`` and ``MINIFS``.
     """
-    if not (
-        getattr(token, "type", None) == "FUNC"
-        and getattr(token, "subtype", None) == "OPEN"
-    ):
+    function_name = _unqualified_native_function_name(token)
+    if function_name is None:
         return None
-    value = str(getattr(token, "value", "")).rstrip("(").strip().upper()
-    function_name = value.removeprefix("@")
     if function_name in _CONDITIONAL_AGGREGATE_RANGE_SHAPE_FUNCTIONS:
         return function_name
     return _OOXML_FUTURE_CONDITIONAL_AGGREGATE_FUNCTION_NAMES.get(function_name)
@@ -2204,6 +2217,59 @@ def conditional_aggregate_range_shape_mismatches(
             )
             if mismatched_range_argument_count:
                 mismatches.append((function_name, mismatched_range_argument_count))
+    return tuple(mismatches)
+
+
+def sumproduct_range_shape_mismatches(formula: str) -> tuple[int, ...]:
+    """Find direct static range-shape mismatches in native ``SUMPRODUCT`` calls.
+
+    Each returned integer is the number of direct array arguments whose
+    dimensions differ from that call's first array argument. This scans formula
+    tokens only; it does not resolve names, inspect table identities, calculate
+    a formula, or infer values. A call is deliberately ignored unless it has at
+    least two arguments and every argument is one direct, bounded, internal A1
+    cell/range or whole-column reference. It accepts only Excel's unqualified
+    native ``SUMPRODUCT`` spelling, optionally preceded by ``@``. All dynamic
+    and otherwise ambiguous formulas remain outside the finding boundary.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return ()
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return ()
+
+    mismatches: list[int] = []
+    for position, token in enumerate(tokens):
+        if _unqualified_native_function_name(token) != "SUMPRODUCT":
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if len(arguments) < 2:
+            continue
+
+        shapes: list[tuple[int, int]] = []
+        for start, end in arguments:
+            shape = _direct_static_a1_range_shape(tokens, start, end)
+            if shape is None:
+                break
+            shapes.append(shape)
+        else:
+            mismatched_argument_count = sum(
+                shape != shapes[0]
+                for shape in shapes[1:]
+            )
+            if mismatched_argument_count:
+                mismatches.append(mismatched_argument_count)
     return tuple(mismatches)
 
 

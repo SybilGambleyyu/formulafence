@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.195.0
+        uses: SybilGambleyyu/formulafence@v0.196.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -90,8 +90,9 @@ The composite Action intentionally compares a baseline and candidate. In a job
 where FormulaFence is already installed, run the single-workbook lint directly
 to catch conservative copied-formula, aggregate-range, protection,
 calculation-freshness, error-checking-suppression, Table calculated-column,
-static-circular-reference, explicit-broken-reference, and saved-result risks
-before or after the normal change review:
+static-circular-reference, conditional-aggregate and `SUMPRODUCT` range-shape,
+explicit-broken-reference, and saved-result risks before or after the normal
+change review:
 
 ```yaml
 - name: Lint copied formulas
@@ -121,7 +122,9 @@ error-checking suppressions, so review prompts may be hidden. `FF092` is a
 medium-severity interior Table data cell that differs from its declared
 calculated-column formula while immediate adjacent cells match it. `FF093` is
 a high-severity native `SUMIFS`/`COUNTIFS`/`AVERAGEIFS`/`MAXIFS`/`MINIFS` call
-whose direct static range arguments have different dimensions. The
+whose direct static range arguments have different dimensions. `FF094` is a
+high-severity native `SUMPRODUCT` call whose direct static array arguments have
+different dimensions. The
 copied-formula signal requires two matching immediate formula peers and a third
 contiguous supporting peer. `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
@@ -143,7 +146,13 @@ serializations whose relevant range arguments are individually direct bounded
 internal A1 cell/range or whole-column references. Names, Tables, external/3-D,
 full-row, union, computed/dynamic, spill, implicit-intersection, malformed,
 explicit-broken-reference, and array territory are outside its boundary. It
-emits only a location and aggregate call/range-mismatch counts. `FF090` accepts only a component of at least two
+emits only a location and aggregate call/range-mismatch counts. `FF094` accepts
+only unqualified native `SUMPRODUCT` (optionally with `@`) with at least two
+comma-separated arguments that are each a direct bounded internal A1
+cell/range or whole-column reference. Names, Tables, external/3-D, full-row,
+union, computed/dynamic, spill, implicit-intersection, malformed,
+explicit-broken-reference, and array territory remain outside that boundary.
+It emits only a location and aggregate call/array-mismatch counts. `FF090` accepts only a component of at least two
 eligible ordinary formula cells connected by resolved scalar static
 dependencies; it never expands ranges or evaluates a workbook. Both stay quiet
 when `iterate=true`; `FF090` also excludes dynamic-reference, 3-D, spill,
@@ -153,9 +162,10 @@ worksheet names, and tokenization failures stay quiet. JSON, Markdown, and
 SARIF evidence contains locations, static range coordinates, limited
 calculation-status metadata, direct- or multi-cell-static scope, a multi-cell
 component size, saved-result facts, aggregate error-checking suppression
-counts, Table exception kinds, and conditional-aggregate mismatch counts, not
-formula text, cached values, ignored-error target ranges, direct conditional-
-aggregate ranges, Table identities, or Table master formulas.
+counts, Table exception kinds, conditional-aggregate mismatch counts, and
+`SUMPRODUCT` mismatch counts, not formula text, cached values, ignored-error
+target ranges, direct conditional-aggregate or `SUMPRODUCT` ranges, Table
+identities, or Table master formulas.
 `FF089` accepts only an exact saved `#REF!` formula result, skips a location
 already covered by `FF088`, and is a last-saved display fact rather than proof
 of a current calculation result. Other saved error kinds and missing or
@@ -362,7 +372,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.195.0
+  uses: SybilGambleyyu/formulafence@v0.196.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -520,7 +530,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.195.0/formulafence-0.195.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.196.0/formulafence-0.196.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

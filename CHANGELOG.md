@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.196.0 — 2026-07-28
+
+- Add high-severity `FF094` to `formulafence lint`: it reports an unqualified
+  native `SUMPRODUCT` call only when at least two direct static internal A1
+  cell/range or whole-column arguments have provably different dimensions.
+- Keep the rule deliberately narrow and private: computed arrays, names,
+  Tables, external or 3-D references, full rows, unions, dynamic/spill/implicit
+  forms, malformed calls, explicit broken references, array territory, and
+  arbitrary namespaces stay quiet. Output retains only aggregate call and
+  mismatched-array-argument counts.
+
 ## 0.195.0 — 2026-07-28
 
 - Extend high-severity `FF093` from `SUMIFS`/`COUNTIFS` to direct static

@@ -5,6 +5,64 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct-static `SUMPRODUCT` shape lint — 2026-07-28
+
+Microsoft's [SUMPRODUCT `#VALUE!` guidance](https://support.microsoft.com/en-US/Excel/how-to-correct-a-value-error-in-the-sumproduct-function)
+states that every array argument must have the same dimensions and gives a
+different-length range pair as a direct `#VALUE!` example. Its
+[corresponding-values guide](https://support.microsoft.com/en-us/excel/use-sumproduct-to-sum-the-product-of-corresponding-values-in-one-or-more-arrays)
+also requires equal array length. FormulaFence therefore adds high-severity
+`FF094` for a native `SUMPRODUCT` call only when the mismatch is statically
+provable without evaluating a formula.
+
+`FF094` accepts unqualified `SUMPRODUCT`, optionally preceded by Excel's
+display-only `@`, with at least two comma-separated arguments. Every argument
+must be one direct bounded internal A1 cell/range or whole-column reference;
+the detector compares each shape to the first argument and retains only an
+aggregate call count and mismatched-array-argument count. Names, Tables,
+external and 3-D references, full rows, unions, arithmetic or nested computed
+arrays, dynamic references, spills, implicit intersection, malformed calls,
+explicit broken references, array territory, and arbitrary namespaces remain
+quiet. Controlled fixtures cover same-size ranges, cells versus ranges,
+same-cell-count but different two-dimensional shapes, whole-column shapes,
+multiple and nested calls, `@`, custom and `_xlfn` namespaces, malformed
+arity, names, Tables, external references, `OFFSET`, spills, implicit
+intersection, full rows, and high-versus-critical CLI behavior. They also
+prove shared-cap behavior, generic-outlier replacement, and JSON/Markdown/SARIF
+redaction.
+
+The full-lint replay of 12 public
+[ExceLint fixtures](https://github.com/ExceLint/ExceLint/tree/e8a8efd252a090945be8683ed42cfd714e8bb4b1),
+69 public [Calamine test workbooks](https://github.com/tafia/calamine/tree/f059beb13f733923f229c2977cb469443d3ddf07/tests),
+384 public [ClosedXML workbook resources](https://github.com/ClosedXML/ClosedXML/tree/6762b849342809be95467cdfbe426a64ad11d2bd/ClosedXML.Tests/Resource),
+and four public [DataAnalystPortfolioProjects workbooks](https://github.com/PriyankaJhaTheDeveloper/DataAnalystPortfolioProjects/tree/7e69f79079f2655878387deb6a15e86d85d60d39)
+saw 469 workbooks, loaded 454, rejected 15 at existing safety boundaries, and
+inspected 60,823 formula cells. It found no native `SUMPRODUCT` calls and
+emitted zero `FF094` findings, a regression and false-positive boundary check
+rather than proof the corpus has no calculation defects.
+
+Three independently maintained public teaching workbooks then exercised real
+uses: [Excel Easy's SUMPRODUCT sample](https://www.excel-easy.com/examples/sumproduct.html)
+loaded seven formula cells with four native calls, including one call whose
+complete argument list met the direct-static grammar; it emitted zero `FF094`
+findings. Highline College's
+[BI348 Chapter 07 finished workbook](https://people.highline.edu/mgirvin/AllClasses/348/Content/Chapter07/BI348Chapter07Finished.xlsm)
+loaded 973 formula cells with one native call, and its
+[many-to-many relationship workbook](https://people.highline.edu/mgirvin/AllClasses/348/MSPTDA/Content/DataModeling/MSPTDA-27-ManyToManyRelationship.xlsx)
+loaded 22 formula cells with three native calls. Both emitted zero `FF094`
+findings. The three files had normal XLSX/XLSM ZIP signatures and were loaded
+through FormulaFence's regular reader; this is a compatibility and
+false-positive check, not a claim about every unreported formula.
+
+The release-versioned 0.196.0 source tree passed **1,400 tests in 95.55
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment with declared dependencies, reporting `FormulaFence 0.196.0`.
+Both reproduced two redacted `FF094` findings—one qualified bounded-range call
+and one `@` whole-column call: the critical gate returned `0`, the high gate
+returned `1`, and SARIF contained neither source-sheet nor source-range
+spellings.
+
 ## Conditional `IFS` aggregate expansion — 2026-07-28
 
 Microsoft's [AVERAGEIFS reference](https://support.microsoft.com/en-us/excel/functions/averageifs-function)

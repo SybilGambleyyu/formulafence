@@ -15,6 +15,7 @@ from formulafence.formulas import (
     MAX_EXCEL_ROW,
     conditional_aggregate_range_shape_mismatches,
     parse_reference_token,
+    sumproduct_range_shape_mismatches,
 )
 from formulafence.models import (
     ArrayFormulaRange,
@@ -314,6 +315,53 @@ def _conditional_aggregate_range_shape_candidates(
                 location,
                 len(mismatches),
                 sum(mismatched_range_count for _, mismatched_range_count in mismatches),
+            )
+        )
+    return tuple(candidates)
+
+
+def _sumproduct_range_shape_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int, int], ...]:
+    """Return formula cells with an unambiguous ``SUMPRODUCT`` range mismatch.
+
+    The formula helper accepts only native ``SUMPRODUCT`` calls (optionally
+    preceded by ``@``) with at least two direct, bounded internal A1 range
+    arguments. This layer adds workbook context: ordinary inspectable formula
+    cells only, no array territory, and no explicit broken-reference operand.
+    Findings retain only aggregate counts, never formula text, range spellings,
+    or source sheet identity.
+    """
+    candidates: list[tuple[CellKey, int, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        mismatches = sumproduct_range_shape_mismatches(formula)
+        if not mismatches:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append(
+            (
+                location,
+                len(mismatches),
+                sum(mismatches),
             )
         )
     return tuple(candidates)
@@ -809,11 +857,11 @@ def lint_snapshot(
     an explicitly unlocked formula on a protected sheet, an explicit incomplete
     manual-calculation state for a formula workbook, stored error-checking
     suppressions, isolated interior Excel Table calculated-column exceptions,
-    direct static conditional-aggregate range-shape mismatches, direct and
-    multi-cell static circular references while iteration is disabled, an
-    explicit broken reference operand, and a saved broken-reference result. It
-    never evaluates formulas, and rejects incomplete array metadata before
-    claiming ordinary-cell coverage.
+    direct static conditional-aggregate and ``SUMPRODUCT`` range-shape
+    mismatches, direct and multi-cell static circular references while
+    iteration is disabled, an explicit broken reference operand, and a saved
+    broken-reference result. It never evaluates formulas, and rejects
+    incomplete array metadata before claiming ordinary-cell coverage.
     """
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
@@ -833,10 +881,17 @@ def lint_snapshot(
         array_ranges_by_sheet,
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
-    conditional_aggregate_locations = {
+    sumproduct_candidates = _sumproduct_range_shape_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=len(conditional_aggregate_candidates),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
+    range_shape_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
     }
+    range_shape_locations.update(location for location, _, _ in sumproduct_candidates)
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
     for preceding_location in sorted(snapshot.cells, key=_location_sort_key):
@@ -866,7 +921,7 @@ def lint_snapshot(
                 continue
             if _is_array_member(snapshot, target_location, array_ranges_by_sheet):
                 continue
-            if target_location in conditional_aggregate_locations:
+            if target_location in range_shape_locations:
                 continue
 
             target = snapshot.cells.get(target_location)
@@ -913,7 +968,9 @@ def lint_snapshot(
             candidate = candidates.get(target_location)
             if candidate is None:
                 if (
-                    len(candidates) + len(conditional_aggregate_candidates)
+                    len(candidates)
+                    + len(conditional_aggregate_candidates)
+                    + len(sumproduct_candidates)
                     >= max_formula_pattern_findings
                 ):
                     raise FormulaFenceError(
@@ -986,6 +1043,32 @@ def lint_snapshot(
                         mismatched_direct_range_argument_count
                     ),
                     "evidence_scope": "conditional_aggregate_direct_a1_ranges",
+                },
+            )
+        )
+
+    for (
+        location,
+        sumproduct_call_count,
+        mismatched_direct_array_argument_count,
+    ) in sumproduct_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF094",
+                severity="high",
+                message="A SUMPRODUCT call uses direct static ranges with different shapes.",
+                location=location,
+                details={
+                    "sumproduct_call_count": sumproduct_call_count,
+                    "mismatched_direct_array_argument_count": (
+                        mismatched_direct_array_argument_count
+                    ),
+                    "evidence_scope": "sumproduct_direct_a1_ranges",
                 },
             )
         )

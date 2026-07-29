@@ -689,6 +689,113 @@ def test_lint_conditional_aggregate_range_shape_candidates_share_the_finding_cap
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_reports_direct_sumproduct_range_shape_mismatches(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": (
+                "=IFERROR(SUMPRODUCT(C2:C10,A2:A12)"
+                "+SUMPRODUCT(B2:C4,D2:E3),0)"
+            ),
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF094", "high", ("Model", "E2"))]
+    assert report.findings[0].details == {
+        "sumproduct_call_count": 2,
+        "mismatched_direct_array_argument_count": 2,
+        "evidence_scope": "sumproduct_direct_a1_ranges",
+    }
+
+
+def test_lint_sumproduct_range_shape_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=SUMPRODUCT(C2:C10,A2:A10)",
+            "A3": "=SUMPRODUCT(C2:C10,NamedRange)",
+            "A4": "=SUMPRODUCT(Table1[Price],Table1[Quantity])",
+            "A5": "=SUMPRODUCT(C2:C10,OFFSET(A2,0,0,11,1))",
+            "A6": "=SUMPRODUCT(C2:C10,A2#)",
+            "A7": "=SUMPRODUCT(C2:C10,[Inputs.xlsx]Data!A2:A12)",
+            "A8": "=SUMPRODUCT(C2:C10,A2:A10,#REF!)",
+            "A9": "=SUMPRODUCT((C2:C10=A2:A12)*B2:B10)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert "FF094" not in {finding.rule_id for finding in report.findings}
+
+
+def test_lint_sumproduct_range_shape_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=SUMPRODUCT(C2:C10,A2:A10)",
+            "B3": "=SUMPRODUCT(C3:C11,A3:A13)",
+            "B4": "=SUMPRODUCT(C4:C12,A4:A12)",
+            "B5": "=SUMPRODUCT(C5:C13,A5:A13)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF094", "high", ("Model", "B3"))]
+
+
+def test_lint_sumproduct_range_shape_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=SUMPRODUCT(C2:C10,A2:A12)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
+def test_lint_range_shape_rules_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=SUMIFS(C2:C10,A2:A12,A14)",
+            "A3": "=SUMPRODUCT(C2:C10,A2:A12)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -1565,6 +1672,49 @@ def test_lint_conditional_aggregate_range_shape_renderers_keep_ranges_private(
                     "A conditional aggregate uses direct static ranges with different "
                     "shapes."
                 )
+            },
+        }
+    ]
+
+
+def test_lint_sumproduct_range_shape_renderers_keep_ranges_private(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": (
+                "=SUMPRODUCT('Private Inputs'!$C$2:$C$10,"
+                "'Private Inputs'!$A$2:$A$12)"
+            ),
+        },
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2:$C$10" not in rendered
+        assert "$A$2:$A$12" not in rendered
+        assert "FF094" in rendered
+    assert "## SUMPRODUCT range-shape evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "sumproduct_call_count": 1,
+        "mismatched_direct_array_argument_count": 1,
+        "evidence_scope": "sumproduct_direct_a1_ranges",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF094",
+            "name": "FF094",
+            "shortDescription": {
+                "text": "A SUMPRODUCT call uses direct static ranges with different shapes."
             },
         }
     ]

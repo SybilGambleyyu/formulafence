@@ -21,6 +21,7 @@ from formulafence.formulas import (
     parse_external_workbook_structured_reference,
     parse_external_workbook_three_d_reference,
     parse_workbook_defined_name_alias,
+    sumproduct_range_shape_mismatches,
 )
 from formulafence.models import (
     ExternalWorkbookReference,
@@ -115,6 +116,49 @@ def test_conditional_aggregate_range_shape_mismatches_keep_ambiguous_forms_quiet
 
     for formula in quiet_formulas:
         assert conditional_aggregate_range_shape_mismatches(formula) == ()
+
+
+def test_sumproduct_range_shape_mismatches_find_direct_native_calls() -> None:
+    assert sumproduct_range_shape_mismatches(
+        "=SUMPRODUCT(C2:C10,A2:A12,B2:B8)"
+    ) == (2,)
+    assert sumproduct_range_shape_mismatches(
+        "=SUMPRODUCT(A2:A5,B2:C3)"
+    ) == (1,)
+    assert sumproduct_range_shape_mismatches(
+        "=SUMPRODUCT($A:$A,$B:$C)"
+    ) == (1,)
+    assert sumproduct_range_shape_mismatches(
+        "=IFERROR(SUMPRODUCT('Input Sheet'!$C$2:$C$10,"
+        "'Input Sheet'!$A$2:$A$12)+@SUMPRODUCT(B2:C4,D2:E3),0)"
+    ) == (1, 1)
+
+
+def test_sumproduct_range_shape_mismatches_keep_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=SUMPRODUCT(C2:C10,A2:A10,B2:B10)",
+        "=SUMPRODUCT($A:$A,$B:$B)",
+        "=SUMPRODUCT(C2:C10)",
+        "=SUMPRODUCT((C2:C10=A2:A10)*B2:B10)",
+        "=SUMPRODUCT({1,2},{3,4})",
+        "=SUMPRODUCT(Table1[Price],Table1[Quantity])",
+        "=SUMPRODUCT(C2:C10,NamedRange)",
+        "=SUMPRODUCT(C2:C10,OFFSET(A2,0,0,11,1))",
+        "=SUMPRODUCT(C2:C10,A2#)",
+        "=SUMPRODUCT(C2:C10,@A2:A12)",
+        "=SUMPRODUCT(C2:C10,[Inputs.xlsx]Data!A2:A12)",
+        "=SUMPRODUCT(C2:C10,2:12)",
+        "=SUMPRODUCT(XFE2:XFE10,A2:A12)",
+        "=SUMPRODUCT(C10:C2,A2:A12)",
+        "=SUMPRODUCT(C1048577:C1048578,A2:A3)",
+        "=SUMPRODUCT(C2:C10,A2:A10,)",
+        "=Vendor.SUMPRODUCT(C2:C10,A2:A12)",
+        "=_xlfn.SUMPRODUCT(C2:C10,A2:A12)",
+        "=SUMPRODUCT(C2:C10,A2:A10,#REF!)",
+    )
+
+    for formula in quiet_formulas:
+        assert sumproduct_range_shape_mismatches(formula) == ()
 
 
 def test_extract_references_keeps_external_workbooks_separate() -> None:

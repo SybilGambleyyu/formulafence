@@ -6161,6 +6161,160 @@ def test_snapshot_xml_root_cache_leaves_over_budget_payloads_uncached(
     assert cache.payloads == {}
 
 
+def test_snapshot_xml_catalog_cache_reuses_bounded_immutable_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workbook = make_model(tmp_path / "catalog-cache-model.xlsx")
+    unrelated_workbook = make_model(tmp_path / "unrelated-catalog-cache-model.xlsx")
+    cache = workbook_module._OoxmlXmlRootCache(source_filename=str(workbook))
+    cache_token = workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.set(cache)
+    root_members: list[str] = []
+    original_root = workbook_module._xml_root
+
+    def record_root(archive: ZipFile, member: str) -> ElementTree.Element:
+        root_members.append(member)
+        return original_root(archive, member)
+
+    monkeypatch.setattr(workbook_module, "_xml_root", record_root)
+    try:
+        with ZipFile(workbook) as archive:
+            first_relationships = workbook_module._package_relationships(
+                archive,
+                "xl/workbook.xml",
+            )
+            assert (
+                workbook_module._package_relationships(archive, "xl/workbook.xml")
+                is first_relationships
+            )
+
+            first_sheet_parts = workbook_module._sheet_xml_parts(archive)
+            expected_sheet_parts = dict(first_sheet_parts)
+            first_sheet_parts["reader-local"] = ("xl/private.xml", "worksheet")
+            assert workbook_module._sheet_xml_parts(archive) == expected_sheet_parts
+
+            first_display_members = workbook_module._worksheet_display_xml_paths(
+                archive
+            )
+            assert (
+                workbook_module._worksheet_display_xml_paths(archive)
+                is first_display_members
+            )
+
+            first_visual_members = workbook_module._visual_worksheet_xml_paths(
+                archive
+            )
+            expected_visual_members = dict(first_visual_members)
+            first_visual_members["reader-local"] = "xl/private.xml"
+            assert (
+                workbook_module._visual_worksheet_xml_paths(archive)
+                == expected_visual_members
+            )
+
+        with ZipFile(unrelated_workbook) as archive:
+            unrelated_relationships = workbook_module._package_relationships(
+                archive,
+                "xl/workbook.xml",
+            )
+    finally:
+        workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.reset(cache_token)
+
+    relationship_member = "xl/_rels/workbook.xml.rels"
+    assert unrelated_relationships is not first_relationships
+    assert root_members.count(relationship_member) == 2
+    assert root_members.count("xl/workbook.xml") == 3
+    assert cache.relationship_catalogs["xl/workbook.xml"] is first_relationships
+    assert cache.cached_relationship_records == len(first_relationships)
+    assert cache.sheet_part_catalog == tuple(expected_sheet_parts.items())
+    assert cache.worksheet_display_catalog == first_display_members
+    assert cache.visual_worksheet_catalog == tuple(expected_visual_members.items())
+    assert cache.xlm_macro_sheet_target_catalog == frozenset()
+
+
+def test_snapshot_xml_catalog_cache_revalidates_character_data_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "catalog-character-data.zip"
+    relationship_member = "xl/_rels/workbook.xml.rels"
+    payload = (
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b"alpha"
+        b'<Relationship Id="rId1" Type="urn:relationship" Target="sheet1.xml"/>'
+        b"</Relationships>"
+    )
+    with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(relationship_member, payload)
+
+    cache = workbook_module._OoxmlXmlRootCache(source_filename=str(package))
+    cache_token = workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.set(cache)
+    try:
+        with ZipFile(package) as archive:
+            assert workbook_module._package_relationships(
+                archive,
+                "xl/workbook.xml",
+            )
+        assert cache.relationship_catalogs
+
+        monkeypatch.setattr(
+            workbook_module,
+            "_OOXML_READER_MAX_XML_CHARACTER_DATA_CHARACTERS",
+            len(b"alpha") - 1,
+        )
+        with ZipFile(package) as archive:
+            with pytest.raises(ValueError, match="XML character data"):
+                workbook_module._package_relationships(archive, "xl/workbook.xml")
+    finally:
+        workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.reset(cache_token)
+
+    assert cache.relationship_catalogs == {}
+    assert cache.cached_relationship_records == 0
+
+
+def test_snapshot_xml_catalog_cache_leaves_over_record_budget_uncached(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "catalog-record-budget.zip"
+    relationship_member = "xl/_rels/workbook.xml.rels"
+    payload = (
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b'<Relationship Id="rId1" Type="urn:relationship" Target="sheet1.xml"/>'
+        b"</Relationships>"
+    )
+    with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(relationship_member, payload)
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_XML_ROOT_CACHE_MAX_RELATIONSHIP_RECORDS",
+        0,
+    )
+    cache = workbook_module._OoxmlXmlRootCache(source_filename=str(package))
+    cache_token = workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.set(cache)
+    root_members: list[str] = []
+    original_root = workbook_module._xml_root
+
+    def record_root(archive: ZipFile, member: str) -> ElementTree.Element:
+        root_members.append(member)
+        return original_root(archive, member)
+
+    monkeypatch.setattr(workbook_module, "_xml_root", record_root)
+    try:
+        for _ in range(2):
+            with ZipFile(package) as archive:
+                assert workbook_module._package_relationships(
+                    archive,
+                    "xl/workbook.xml",
+                )
+    finally:
+        workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.reset(cache_token)
+
+    assert root_members == [relationship_member, relationship_member]
+    assert cache.relationship_catalogs == {}
+    assert cache.cached_relationship_records == 0
+
+
 def test_load_snapshot_activates_a_private_xml_payload_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

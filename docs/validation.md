@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Snapshot-local OOXML metadata catalogs — 2026-07-28
+
+Version 0.181.0 removes repeated raw catalog construction left after 0.179.0
+reused XML payload bytes. Independent metadata readers repeatedly need the
+same workbook relationship catalog and the same standard, visual, or display
+worksheet-part selection. FormulaFence now retains only frozen relationship
+records and tuples of selected sheet members for one private stable source.
+Readers that historically receive a mutable sheet map receive a fresh dict on
+every call; parsed XML roots remain independent and continue to reparse the
+cached payload with the character-data guard.
+
+Derived catalogs are eligible only when every source payload already fits the
+existing 128 KiB-per-member / 4 MiB-total cache. Retained relationship records
+are capped at 2,048, sheet records at the established 512-workbook-sheet
+limit, and a changed character-data limit clears every derived catalog before
+reuse. Targeted coverage proves source isolation, mutable-map isolation,
+record-budget fallback, and renewed guard enforcement after a limit change.
+
+For the controlled valid 232,295-byte, 512-sheet `.xlsx` used for the prior
+columnless releases (SHA-256
+`224811129cb243b3494fc61f330583ee898103bb1c2dca1ca5a01f7445293881`), with
+one `=1` formula in each worksheet and no column declarations, the public
+0.180.0 wheel emitted a 122,090-byte JSON profile (SHA-256
+`27a6737a6f3ba3c2f9e3c70f94326da2cccd78f42900e459e70e1001adb81361`) in
+1.950299, 1.942771, 1.942789, 1.950572, and 1.934016 seconds. The 0.181.0
+candidate emitted the same bytes and digest in 1.699841, 1.692732, 1.672625,
+1.679583, and 1.696927 seconds. The medians fell from 1.942789 to 1.692732
+seconds: 0.250057 seconds, or about 12.9%, less elapsed time. Fresh one-process
+measurements reported 45,416 KiB peak resident memory for the public wheel and
+44,692 KiB for the candidate. The final source suite passed 1,300 tests in
+108.47 seconds with no failures, errors, or skips; bytecode compilation, Ruff,
+and whitespace checks were also clean.
+
 ## Columnless worksheet-dimension state view — 2026-07-28
 
 Version 0.180.0 removes one remaining fixed whole-column scan from the raw

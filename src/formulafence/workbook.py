@@ -465,9 +465,13 @@ _OOXML_READER_XML_TEXT_MARKER_PATTERN = re.compile(br"""[<&]""")
 # relationship XML parts through many independent raw-control readers. Retain
 # only small payloads for that one snapshot. Later readers reparse the exact
 # payload with the character-data guard, preserving independent XML trees
-# without trading repeated safety scans for unbounded resident trees.
+# without trading repeated safety scans for unbounded resident trees. Small
+# derived relationship and sheet catalogs can reuse those validated payloads,
+# but have their own tight record bounds below.
 _OOXML_XML_ROOT_CACHE_MAX_MEMBER_BYTES = 128 * 1024
 _OOXML_XML_ROOT_CACHE_MAX_TOTAL_BYTES = 4 * 1024 * 1024
+_OOXML_XML_ROOT_CACHE_MAX_RELATIONSHIP_RECORDS = 2_048
+_OOXML_XML_ROOT_CACHE_MAX_SHEET_PARTS = _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT
 # ElementTree gives its target character data incrementally, but its ordinary
 # tree builder accumulates all chunks for one text node until the next XML
 # boundary. Keep that parser-side buffer small before an end-event callback can
@@ -6277,11 +6281,20 @@ def _vba_hash(path: Path) -> str | None:
 
 @dataclass
 class _OoxmlXmlRootCache:
-    """Bounded, snapshot-local validated XML payloads for raw readers."""
+    """Bounded, snapshot-local XML payloads and immutable raw catalogs."""
 
     source_filename: str
     payloads: dict[str, bytes] = field(default_factory=dict)
     cached_bytes: int = 0
+    relationship_catalogs: dict[str, tuple[_PackageRelationship, ...]] = field(
+        default_factory=dict
+    )
+    cached_relationship_records: int = 0
+    sheet_part_catalog: tuple[tuple[str, tuple[str, str]], ...] | None = None
+    worksheet_display_catalog: tuple[str, ...] | None = None
+    visual_worksheet_catalog: tuple[tuple[str, str], ...] | None = None
+    xlm_macro_sheet_target_catalog: frozenset[str] | None = None
+    catalog_character_data_limit: int | None = None
 
     def matches(self, archive: ZipFile) -> bool:
         """Keep a cache tied to its private stable workbook source only."""
@@ -6305,6 +6318,40 @@ class _OoxmlXmlRootCache:
             self.cached_bytes += payload_bytes
         return root
 
+    def catalog_cache_eligible(self, archive: ZipFile, *members: str) -> bool:
+        """Return whether small derived catalogs can reuse cached XML safely."""
+        if not self.matches(archive) or any(member not in self.payloads for member in members):
+            return False
+        character_data_limit = _OOXML_READER_MAX_XML_CHARACTER_DATA_CHARACTERS
+        if self.catalog_character_data_limit != character_data_limit:
+            # Payload cache hits always rerun this guard. Derived primitive
+            # catalogs do not parse a tree, so discard them if the active
+            # parser limit changes before another reader uses them.
+            self.relationship_catalogs.clear()
+            self.cached_relationship_records = 0
+            self.sheet_part_catalog = None
+            self.worksheet_display_catalog = None
+            self.visual_worksheet_catalog = None
+            self.xlm_macro_sheet_target_catalog = None
+            self.catalog_character_data_limit = character_data_limit
+        return True
+
+    def remember_relationship_catalog(
+        self,
+        source_member: str,
+        relationships: tuple[_PackageRelationship, ...],
+    ) -> None:
+        """Retain a bounded immutable relationship catalog for this snapshot."""
+        relationship_count = len(relationships)
+        if (
+            relationship_count > _OOXML_XML_ROOT_CACHE_MAX_RELATIONSHIP_RECORDS
+            or self.cached_relationship_records + relationship_count
+            > _OOXML_XML_ROOT_CACHE_MAX_RELATIONSHIP_RECORDS
+        ):
+            return
+        self.relationship_catalogs[source_member] = relationships
+        self.cached_relationship_records += relationship_count
+
 
 _ACTIVE_OOXML_XML_ROOT_CACHE: ContextVar[_OoxmlXmlRootCache | None] = ContextVar(
     "active_ooxml_xml_root_cache",
@@ -6312,10 +6359,15 @@ _ACTIVE_OOXML_XML_ROOT_CACHE: ContextVar[_OoxmlXmlRootCache | None] = ContextVar
 )
 
 
+def _active_ooxml_xml_root_cache(archive: ZipFile) -> _OoxmlXmlRootCache | None:
+    """Return the private snapshot cache only for its materialized source."""
+    cache = _ACTIVE_OOXML_XML_ROOT_CACHE.get()
+    return cache if cache is not None and cache.matches(archive) else None
+
+
 def _xml_root(archive: ZipFile, member: str) -> ElementTree.Element:
     """Read one OOXML part without accepting document type declarations."""
-    cache = _ACTIVE_OOXML_XML_ROOT_CACHE.get()
-    if cache is not None and cache.matches(archive):
+    if cache := _active_ooxml_xml_root_cache(archive):
         return cache.root(archive, member)
     return _xml_root_from_payload(archive.read(member))
 
@@ -6379,7 +6431,16 @@ def _package_relationships(
     source_member: str,
 ) -> tuple[_PackageRelationship, ...]:
     """Read package relationships without following external targets."""
-    relationships = _xml_root(archive, _relationship_part_path(source_member))
+    relationship_member = _relationship_part_path(source_member)
+    cache = _active_ooxml_xml_root_cache(archive)
+    if cache is not None and cache.catalog_cache_eligible(
+        archive,
+        relationship_member,
+    ):
+        if (cached := cache.relationship_catalogs.get(source_member)) is not None:
+            return cached
+
+    relationships = _xml_root(archive, relationship_member)
     relationship_tag = f"{{{_PACKAGE_RELATIONSHIP_NS}}}Relationship"
     parsed: list[_PackageRelationship] = []
     for relationship in relationships.findall(relationship_tag):
@@ -6398,7 +6459,10 @@ def _package_relationships(
                 raw_target=target,
             )
         )
-    return tuple(parsed)
+    result = tuple(parsed)
+    if cache is not None and cache.catalog_cache_eligible(archive, relationship_member):
+        cache.remember_relationship_catalog(source_member, result)
+    return result
 
 
 def _xlm_macro_sheet_target_members(archive: ZipFile) -> frozenset[str]:
@@ -6408,7 +6472,16 @@ def _xlm_macro_sheet_target_members(archive: ZipFile) -> frozenset[str]:
     same target. Secondary worksheet metadata readers must still leave that
     executable XML to the dedicated bounded XLM scanner.
     """
-    return frozenset(
+    relationship_member = _relationship_part_path("xl/workbook.xml")
+    cache = _active_ooxml_xml_root_cache(archive)
+    if cache is not None and cache.catalog_cache_eligible(
+        archive,
+        relationship_member,
+    ):
+        if cache.xlm_macro_sheet_target_catalog is not None:
+            return cache.xlm_macro_sheet_target_catalog
+
+    targets = frozenset(
         relationship.target
         for relationship in _package_relationships(archive, "xl/workbook.xml")
         if (
@@ -6416,11 +6489,31 @@ def _xlm_macro_sheet_target_members(archive: ZipFile) -> frozenset[str]:
             and relationship.relationship_type in _XLM_MACRO_SHEET_RELATIONSHIPS
         )
     )
+    if (
+        cache is not None
+        and len(targets) <= _OOXML_XML_ROOT_CACHE_MAX_SHEET_PARTS
+        and cache.catalog_cache_eligible(archive, relationship_member)
+    ):
+        cache.xlm_macro_sheet_target_catalog = targets
+    return targets
 
 
 def _sheet_xml_parts(archive: ZipFile) -> dict[str, tuple[str, str]]:
     """Map workbook sheet titles to safe OOXML parts and their sheet kind."""
-    workbook = _xml_root(archive, "xl/workbook.xml")
+    workbook_member = "xl/workbook.xml"
+    relationship_member = _relationship_part_path(workbook_member)
+    cache = _active_ooxml_xml_root_cache(archive)
+    if cache is not None and cache.catalog_cache_eligible(
+        archive,
+        workbook_member,
+        relationship_member,
+    ):
+        if cache.sheet_part_catalog is not None:
+            # Callers historically receive a mutable dict. Rebuild it so a
+            # reader-local mutation cannot leak across metadata boundaries.
+            return dict(cache.sheet_part_catalog)
+
+    workbook = _xml_root(archive, workbook_member)
     xlm_macro_targets = _xlm_macro_sheet_target_members(archive)
     relationship_targets: dict[str, tuple[str, str]] = {}
     for relationship in _package_relationships(archive, "xl/workbook.xml"):
@@ -6447,6 +6540,16 @@ def _sheet_xml_parts(archive: ZipFile) -> dict[str, tuple[str, str]]:
             continue
         if part := relationship_targets.get(relationship_id):
             sheet_parts[title] = part
+    if (
+        cache is not None
+        and len(sheet_parts) <= _OOXML_XML_ROOT_CACHE_MAX_SHEET_PARTS
+        and cache.catalog_cache_eligible(
+            archive,
+            workbook_member,
+            relationship_member,
+        )
+    ):
+        cache.sheet_part_catalog = tuple(sheet_parts.items())
     return sheet_parts
 
 
@@ -6617,7 +6720,18 @@ def _worksheet_display_xml_paths(archive: ZipFile) -> tuple[str, ...]:
     :func:`_worksheet_xml_paths` so it does not broaden the behavior of the
     workbook/cell reader or unrelated raw-control boundaries.
     """
-    workbook = _xml_root(archive, "xl/workbook.xml")
+    workbook_member = "xl/workbook.xml"
+    relationship_member = _relationship_part_path(workbook_member)
+    cache = _active_ooxml_xml_root_cache(archive)
+    if cache is not None and cache.catalog_cache_eligible(
+        archive,
+        workbook_member,
+        relationship_member,
+    ):
+        if cache.worksheet_display_catalog is not None:
+            return cache.worksheet_display_catalog
+
+    workbook = _xml_root(archive, workbook_member)
     xlm_macro_targets = _xlm_macro_sheet_target_members(archive)
     relationship_targets = {
         relationship.relationship_id: relationship.target
@@ -6643,7 +6757,18 @@ def _worksheet_display_xml_paths(archive: ZipFile) -> tuple[str, ...]:
             relationship_id = sheet.get(f"{{{_STRICT_DOCUMENT_RELATIONSHIP_NS}}}id")
         if relationship_id and (member := relationship_targets.get(relationship_id)):
             members.append(member)
-    return tuple(members)
+    result = tuple(members)
+    if (
+        cache is not None
+        and len(result) <= _OOXML_XML_ROOT_CACHE_MAX_SHEET_PARTS
+        and cache.catalog_cache_eligible(
+            archive,
+            workbook_member,
+            relationship_member,
+        )
+    ):
+        cache.worksheet_display_catalog = result
+    return result
 
 
 def _visual_worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
@@ -6653,7 +6778,18 @@ def _visual_worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
     the ordinary cell reader deliberately limits itself to transitional
     SpreadsheetML.
     """
-    workbook = _xml_root(archive, "xl/workbook.xml")
+    workbook_member = "xl/workbook.xml"
+    relationship_member = _relationship_part_path(workbook_member)
+    cache = _active_ooxml_xml_root_cache(archive)
+    if cache is not None and cache.catalog_cache_eligible(
+        archive,
+        workbook_member,
+        relationship_member,
+    ):
+        if cache.visual_worksheet_catalog is not None:
+            return dict(cache.visual_worksheet_catalog)
+
+    workbook = _xml_root(archive, workbook_member)
     xlm_macro_targets = _xlm_macro_sheet_target_members(archive)
     relationship_targets = {
         relationship.relationship_id: relationship.target
@@ -6682,6 +6818,16 @@ def _visual_worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
             member := relationship_targets.get(relationship_id)
         ):
             members[title] = member
+    if (
+        cache is not None
+        and len(members) <= _OOXML_XML_ROOT_CACHE_MAX_SHEET_PARTS
+        and cache.catalog_cache_eligible(
+            archive,
+            workbook_member,
+            relationship_member,
+        )
+    ):
+        cache.visual_worksheet_catalog = tuple(members.items())
     return members
 
 

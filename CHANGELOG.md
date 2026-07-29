@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.181.0 — 2026-07-28
+
+- Reuse bounded, immutable OOXML relationship and worksheet-part catalogs for
+  one private workbook snapshot. Raw readers no longer repeatedly parse the
+  same workbook relationship catalog and reconstruct the same standard,
+  visual, and display worksheet maps.
+- Keep the catalog cache tied to the existing validated-payload limits, cap
+  retained relationship records at 2,048 and sheet records at 512, return fresh
+  mutable maps to readers, and discard derived entries if the character-data
+  parser limit changes. Source-isolation, record-budget, mutation-isolation,
+  and guard-renewal regressions cover the boundary.
+
 ## 0.180.0 — 2026-07-28
 
 - Keep worksheet-dimension column state implicit when a visual worksheet has

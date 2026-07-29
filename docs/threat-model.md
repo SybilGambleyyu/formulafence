@@ -107,6 +107,17 @@ financial correctness or replace model review.
   array territory, stay outside the boundary. It emits only a location plus
   aggregate call and unsupported-literal-function-code counts; formulas,
   function-code values, references, and source sheets remain private.
+  Its `INDEX` literal-position signal accepts only the unqualified native
+  spelling (optionally with `@`) with two or three nonempty arguments, one
+  bounded internal direct A1 cell/range or whole-column array, and direct bare
+  nonnegative decimal row and optional column literals. It reports only when a
+  positive row literal exceeds the array height or a positive column literal
+  exceeds the array width. Zero preserves Excel's documented whole-row or
+  whole-column array behavior and stays quiet. Computed, signed, decimal,
+  array, malformed, explicit-broken-reference, and namespaced forms, plus all
+  array territory, stay outside the boundary. It emits only a location plus
+  aggregate call and out-of-range-literal-index counts; formulas, position
+  values, array range spellings, and source sheets remain private.
   Its direct
   circular-reference signal accepts only an ordinary formula with a resolved
   scalar static dependency directly back to itself while workbook `iterate` is
@@ -124,11 +135,13 @@ financial correctness or replace model review.
   incompatible-matrix-pair counts, legacy-lookup out-of-range-literal-index
   counts, `CHOOSE` out-of-range-literal-index counts, `RANDBETWEEN`
   inverted-literal-bound counts, `SUBTOTAL` unsupported-literal-function-code
-  counts, direct- or multi-cell-static scope, and a multi-cell component size,
-  never formula text, cell values, cached results, ignored-error target ranges,
-  direct conditional-aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup ranges,
-  `CHOOSE` values, `RANDBETWEEN` literal values, `SUBTOTAL` function-code or
-  reference material, Table identities, or Table master formulas.
+  counts, `INDEX` out-of-range-literal-index counts, direct- or multi-cell-
+  static scope, and a multi-cell component size, never formula text, cell
+  values, cached results, ignored-error target ranges, direct conditional-
+  aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup ranges, `CHOOSE` values,
+  `RANDBETWEEN` literal values, `SUBTOTAL` function-code or reference material,
+  `INDEX` position values or direct array ranges, Table identities, or Table
+  master formulas.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not

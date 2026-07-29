@@ -15,6 +15,7 @@ from formulafence.formulas import (
     MAX_EXCEL_ROW,
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
+    index_literal_position_mismatch_count,
     lookup_return_index_mismatches,
     mmult_dimension_mismatch_count,
     parse_reference_token,
@@ -579,6 +580,48 @@ def _subtotal_literal_function_num_candidates(
     return tuple(candidates)
 
 
+def _index_literal_position_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int], ...]:
+    """Return cells with provable literal ``INDEX`` position errors.
+
+    The formula helper accepts only native ``INDEX`` calls (optionally preceded
+    by ``@``), two or three nonempty arguments, a direct bounded internal A1
+    array, and direct bare nonnegative decimal row and optional column
+    literals. This layer adds workbook context: ordinary inspectable formula
+    cells only, no array territory, and no explicit broken-reference operand.
+    Findings retain only aggregate counts, never formula text, position values,
+    array range spellings, or source sheet identity.
+    """
+    candidates: list[tuple[CellKey, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        mismatch_count = index_literal_position_mismatch_count(formula)
+        if not mismatch_count:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append((location, mismatch_count))
+    return tuple(candidates)
+
+
 def _range_intersects_array_territory(
     snapshot: WorkbookSnapshot,
     *,
@@ -1073,8 +1116,9 @@ def lint_snapshot(
     mismatches, direct static ``MMULT`` matrix-dimension mismatches, direct
     static legacy-lookup return-index mismatches, direct static ``CHOOSE``
     literal-index mismatches, direct literal ``RANDBETWEEN`` bound mismatches,
-    direct literal ``SUBTOTAL`` function-code mismatches, direct and multi-cell
-    static circular references while iteration is disabled, an explicit broken
+    direct literal ``SUBTOTAL`` function-code mismatches, direct literal
+    ``INDEX`` row/column-position mismatches, direct and multi-cell static
+    circular references while iteration is disabled, an explicit broken
     reference operand, and a saved broken-reference result. It never evaluates
     formulas, and rejects incomplete array metadata before claiming ordinary-
     cell coverage.
@@ -1157,6 +1201,20 @@ def lint_snapshot(
         ),
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
+    index_candidates = _index_literal_position_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=(
+            len(conditional_aggregate_candidates)
+            + len(sumproduct_candidates)
+            + len(mmult_candidates)
+            + len(lookup_candidates)
+            + len(choose_candidates)
+            + len(randbetween_candidates)
+            + len(subtotal_candidates)
+        ),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
     structural_formula_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
@@ -1173,6 +1231,7 @@ def lint_snapshot(
     structural_formula_locations.update(
         location for location, _ in subtotal_candidates
     )
+    structural_formula_locations.update(location for location, _ in index_candidates)
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
     for preceding_location in sorted(snapshot.cells, key=_location_sort_key):
@@ -1470,6 +1529,29 @@ def lint_snapshot(
                     "subtotal_call_count": subtotal_call_count,
                     "unsupported_literal_function_num_count": subtotal_call_count,
                     "evidence_scope": "subtotal_literal_function_num",
+                },
+            )
+        )
+
+    for location, index_call_count in index_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF100",
+                severity="high",
+                message=(
+                    "An INDEX call uses a literal row or column number outside "
+                    "its direct static array."
+                ),
+                location=location,
+                details={
+                    "index_call_count": index_call_count,
+                    "out_of_range_literal_index_count": index_call_count,
+                    "evidence_scope": "index_direct_a1_array_literal_indices",
                 },
             )
         )

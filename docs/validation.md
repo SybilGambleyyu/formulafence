@@ -5,6 +5,56 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct-literal `INDEX` bounds lint — 2026-07-28
+
+Microsoft's [INDEX reference](https://support.microsoft.com/en-us/excel/functions/index-function)
+states that `row_num` and `column_num` must point within the array or `INDEX`
+returns `#REF!`; it separately documents zero as the whole-column or whole-row
+array form. FormulaFence adds high-severity `FF100` only when a positive
+literal position outside a direct static array is provable without calculating
+the formula or inferring any array values.
+
+`FF100` accepts unqualified native `INDEX`, optionally preceded by Excel's
+display-only `@`, with two or three nonempty arguments: one direct bounded
+internal A1 cell/range or whole-column array, one direct bare nonnegative
+decimal row literal, and an optional direct bare nonnegative decimal column
+literal. It reports only when a positive row literal exceeds the array height
+or a positive column literal exceeds its width. Zero remains quiet to preserve
+the documented whole-row/whole-column array behavior. It does not inspect
+array cells or calculate a result. Computed, signed, decimal, array, dynamic,
+malformed, omitted-argument, explicit broken-reference, array-territory, and
+arbitrary namespace forms remain quiet. Controlled fixtures cover row and
+column overflow, nested calls, `@`, leading zeros, whole-column bounds,
+arbitrarily long literals, valid positions, zero, computed/signed/decimal/
+array arguments, omitted and malformed arguments, explicit broken references,
+custom and `_xlfn` namespaces, array territory, high-versus-critical CLI
+behavior, shared-cap behavior, generic-outlier replacement, and JSON/Markdown/
+SARIF redaction.
+
+The full-lint replay of 12 public
+[ExceLint fixtures](https://github.com/ExceLint/ExceLint/tree/e8a8efd252a090945be8683ed42cfd714e8bb4b1),
+69 public [Calamine test workbooks](https://github.com/tafia/calamine/tree/f059beb13f733923f229c2977cb469443d3ddf07/tests),
+384 public [ClosedXML workbook resources](https://github.com/ClosedXML/ClosedXML/tree/6762b849342809be95467cdfbe426a64ad11d2bd/ClosedXML.Tests/Resource),
+and four public [DataAnalystPortfolioProjects workbooks](https://github.com/PriyankaJhaTheDeveloper/DataAnalystPortfolioProjects/tree/7e69f79079f2655878387deb6a15e86d85d60d39)
+saw 469 workbooks, loaded 454, rejected 15 at existing safety boundaries, and
+inspected 60,823 formula cells. A prospective helper survey observed 31 native
+`INDEX` calls; all 31 used non-direct arrays, so zero met the direct-static/
+literal boundary. The full replay emitted zero `FF100` findings. This is a
+compatibility and false-positive boundary check, not a claim about every
+unreported formula.
+
+A focused helper/lint/CLI/output run passed **8 tests in 0.78 seconds**. It
+exercises the structural rule without calculating a workbook or exposing source
+formulas, position values, or array references in rendered evidence.
+
+The release-versioned 0.202.0 source tree passed **1,448 tests in 97.44
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment with declared dependencies, reporting `FormulaFence 0.202.0`.
+Both reproduced one redacted `FF100` finding aggregating two out-of-range
+literal positions: the critical gate returned `0`, the high gate returned `1`,
+and SARIF contained neither source formula nor position/reference spellings.
+
 ## Direct-literal `SUBTOTAL` function-code lint — 2026-07-28
 
 Microsoft's [SUBTOTAL reference](https://support.microsoft.com/en-us/excel/subtotal-function)

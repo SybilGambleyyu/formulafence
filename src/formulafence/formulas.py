@@ -2503,6 +2503,77 @@ def lookup_return_index_mismatches(formula: str) -> tuple[str, ...]:
     return tuple(mismatches)
 
 
+def index_literal_position_mismatch_count(formula: str) -> int:
+    """Count provable literal-position bounds errors in native ``INDEX`` calls.
+
+    This scans formula tokens only; it does not resolve names, inspect array
+    values, calculate a formula, or infer a result shape. A call is deliberately
+    ignored unless it is an unqualified native ``INDEX`` (optionally preceded
+    by ``@``), has two or three nonempty arguments, uses one direct bounded
+    internal A1 cell/range or whole-column array argument, and supplies direct
+    bare nonnegative decimal row and optional column literals. A finding is
+    returned only when a positive row literal exceeds the array height or a
+    positive column literal exceeds the array width. Zero retains Excel's
+    documented whole-row or whole-column array behavior and stays outside this
+    scalar bounds check. All dynamic and otherwise ambiguous formulas remain
+    outside the finding boundary.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return 0
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return 0
+
+    mismatch_count = 0
+    for position, token in enumerate(tokens):
+        if _unqualified_native_function_name(token) != "INDEX":
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if len(arguments) not in {2, 3} or any(
+            not any(
+                not _is_whitespace(tokens[argument_position])
+                for argument_position in range(start, end)
+            )
+            for start, end in arguments
+        ):
+            continue
+        array_shape = _direct_static_a1_range_shape(tokens, *arguments[0])
+        row_num = _direct_nonnegative_integer_literal(tokens, *arguments[1])
+        column_num = (
+            _direct_nonnegative_integer_literal(tokens, *arguments[2])
+            if len(arguments) == 3
+            else None
+        )
+        if array_shape is None or row_num is None or (
+            len(arguments) == 3 and column_num is None
+        ):
+            continue
+        array_width, array_height = array_shape
+        row_out_of_range = row_num != "0" and _positive_integer_literal_exceeds(
+            row_num,
+            array_height,
+        )
+        column_out_of_range = (
+            column_num is not None
+            and column_num != "0"
+            and _positive_integer_literal_exceeds(column_num, array_width)
+        )
+        if row_out_of_range or column_out_of_range:
+            mismatch_count += 1
+    return mismatch_count
+
+
 def choose_literal_index_mismatch_count(formula: str) -> int:
     """Count provable literal-index bounds errors in native ``CHOOSE`` calls.
 

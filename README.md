@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.201.0/formulafence-0.201.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.202.0/formulafence-0.202.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -69,8 +69,9 @@ check for copy-paste, aggregate-range, protection, calculation-freshness,
 error-checking-suppression, Excel Table calculated-column, static-circular-reference,
 conditional-aggregate and `SUMPRODUCT` range-shape, `MMULT` matrix-dimension,
 legacy-lookup return-index, `RANDBETWEEN` literal-bound, `SUBTOTAL`
-function-code, explicit-broken-reference, and saved-result risks
-that a version diff cannot see. It reports a copied-formula interruption only
+function-code, `INDEX` literal-position, explicit-broken-reference, and
+saved-result risks that a version diff cannot see. It reports a copied-formula
+interruption only
 when the immediately preceding and following formulas have the same
 relative-copy fingerprint and a third contiguous peer repeats that fingerprint.
 It also recognizes narrow aggregate-range, formula-protection,
@@ -78,9 +79,10 @@ calculation-freshness, stored error-checking suppression, interior Table
 calculated-column exception, direct and multi-cell static circular-reference,
 direct conditional-aggregate and `SUMPRODUCT` range-shape, direct static
 `MMULT` matrix-dimension, direct static legacy-lookup return-index, direct
-literal `RANDBETWEEN` bounds, direct literal `SUBTOTAL` function codes,
-explicit-broken-reference, and saved broken-reference-result signals. Together
-these produce eighteen reviewable findings:
+literal `RANDBETWEEN` bounds, direct literal `SUBTOTAL` function codes, direct
+literal `INDEX` row/column positions, explicit-broken-reference, and saved
+broken-reference-result signals. Together these produce nineteen reviewable
+findings:
 
 - `FF082`: a non-formula interruption. Blanks and stored error values are high;
   numeric/manual values are medium; textual markers are low.
@@ -119,6 +121,8 @@ these produce eighteen reviewable findings:
   the bottom above the top.
 - `FF099` (high): a native `SUBTOTAL` call uses a literal function number
   outside Excel's supported codes.
+- `FF100` (high): a native `INDEX` call uses a literal row or column number
+  outside its direct static array.
 
 Use `--fail-on critical` to gate explicit broken-reference operands, or
 `--fail-on high` to also gate blank/error interruptions and direct static
@@ -126,8 +130,8 @@ self-references, multi-cell static cycles, direct conditional-aggregate or
 `SUMPRODUCT` range-shape mismatches, direct static `MMULT` matrix-dimension
 mismatches, direct static legacy-lookup return-index mismatches, direct static
 `CHOOSE` literal-index mismatches, direct literal `RANDBETWEEN` bound
-mismatches, direct literal `SUBTOTAL` function-code mismatches, and saved
-broken-reference results.
+mismatches, direct literal `SUBTOTAL` function-code mismatches, direct literal
+`INDEX` row/column-position mismatches, and saved broken-reference results.
 Use `--fail-on medium` to additionally require review of manual-value,
 formula-outlier, aggregate-range, explicit formula-protection,
 incomplete-manual-calculation, error-checking-suppression, and Table
@@ -218,6 +222,17 @@ broken-reference operands, array-formula territory, and arbitrary namespaces
 stay quiet. Its evidence retains only the affected location, number of
 qualifying calls, and number of unsupported literal function codes—never a
 formula, function-code value, reference, or source sheet identity.
+`FF100` accepts only native `INDEX` calls (optionally with `@`) with two or
+three nonempty arguments, one direct bounded internal A1 cell/range or
+whole-column array, and direct bare nonnegative decimal row and optional
+column literals. It reports only when a positive row literal exceeds the array
+height or a positive column literal exceeds the array width. Zero preserves
+Excel's documented whole-row or whole-column array behavior and stays quiet.
+Computed, signed, decimal, array, malformed, explicit-broken-reference, and
+namespaced forms, plus array-formula territory, remain outside the boundary.
+Its evidence retains only the affected location, number of qualifying calls,
+and number of out-of-range literal positions—never a formula, position value,
+array range spelling, or source sheet identity.
 `FF090`
 uses only a strongly connected component of
 resolved scalar static dependencies with at least two eligible ordinary formula
@@ -232,10 +247,11 @@ multi-cell component size, saved-result facts, aggregate error-checking
 suppression counts, Table exception kinds, conditional-aggregate mismatch
 counts, `SUMPRODUCT` mismatch counts, and `MMULT` incompatible-matrix-pair
 counts, legacy-lookup out-of-range-literal-index counts, and `RANDBETWEEN`
-inverted-literal-bound counts, and `SUBTOTAL` unsupported-literal-function-code
-counts—never formula text, cached values, ignored-error target ranges, direct
+inverted-literal-bound counts, `SUBTOTAL` unsupported-literal-function-code
+counts, and `INDEX` out-of-range-literal-index counts—never formula text,
+cached values, ignored-error target ranges, direct
 conditional-aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup range spellings,
-or Table master formulas. `FF089` accepts
+`INDEX` position values or direct array ranges, or Table master formulas. `FF089` accepts
 only a valid saved formula-result cache whose exact
 error is `#REF!`; other saved errors, missing or malformed cache records, and
 locations already covered by `FF088` stay quiet. It is a high-severity record
@@ -265,7 +281,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.201.0
+  uses: SybilGambleyyu/formulafence@v0.202.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx

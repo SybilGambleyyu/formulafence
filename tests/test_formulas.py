@@ -9,6 +9,7 @@ from formulafence.formulas import (
     extract_references,
     formula_fingerprint,
     has_broken_reference,
+    index_literal_position_mismatch_count,
     inspect_formula,
     lambda_parameter_count,
     lookup_return_index_mismatches,
@@ -253,6 +254,52 @@ def test_lookup_return_index_mismatches_keep_ambiguous_forms_quiet() -> None:
 
     for formula in quiet_formulas:
         assert lookup_return_index_mismatches(formula) == ()
+
+
+def test_index_literal_position_mismatch_count_finds_direct_native_calls() -> None:
+    assert index_literal_position_mismatch_count("=INDEX(A2:B4,4)") == 1
+    assert index_literal_position_mismatch_count("=@INDEX(A2:B4,1,3)") == 1
+    assert index_literal_position_mismatch_count("=INDEX($C:$D,1,3)") == 1
+    assert index_literal_position_mismatch_count(
+        "=INDEX(A2:B4,9999999999999999999999999999)"
+    ) == 1
+    assert index_literal_position_mismatch_count(
+        "=IFERROR(INDEX('Input Sheet'!$A$2:$B$4,4)+INDEX(C2:D4,2,3),0)"
+    ) == 2
+
+
+def test_index_literal_position_mismatch_count_keeps_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=INDEX(A2:B4,3)",
+        "=INDEX(A2:B4,3,2)",
+        "=INDEX(A2:B4,0)",
+        "=INDEX(A2:B4,0,2)",
+        "=INDEX(A2:B4,3,0)",
+        "=INDEX(A2:B4,0,0)",
+        "=INDEX($C:$D,1048576,2)",
+        "=INDEX(A2:B4,A5)",
+        "=INDEX(A2:B4,1+3)",
+        "=INDEX(A2:B4,+4)",
+        "=INDEX(A2:B4,-1)",
+        "=INDEX(A2:B4,4.0)",
+        "=INDEX(A2:B4,4E0)",
+        "=INDEX({1,2;3,4},3)",
+        "=INDEX(NamedArray,3)",
+        "=INDEX(Table1[One],3)",
+        "=INDEX(A2#,3)",
+        "=INDEX([Inputs.xlsx]Data!A2:B4,3)",
+        "=INDEX(2:4,3)",
+        "=INDEX(A2:B4)",
+        "=INDEX(A2:B4,3,)",
+        "=INDEX(A2:B4,,3)",
+        "=INDEX(A2:B4,3,3,1)",
+        "=INDEX(A2:B4,3,#REF!)",
+        "=Vendor.INDEX(A2:B4,3)",
+        "=_xlfn.INDEX(A2:B4,3)",
+    )
+
+    for formula in quiet_formulas:
+        assert index_literal_position_mismatch_count(formula) == 0
 
 
 def test_choose_literal_index_mismatch_count_finds_direct_native_calls() -> None:

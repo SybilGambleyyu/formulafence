@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.201.0
+        uses: SybilGambleyyu/formulafence@v0.202.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -92,8 +92,9 @@ to catch conservative copied-formula, aggregate-range, protection,
 calculation-freshness, error-checking-suppression, Table calculated-column,
 static-circular-reference, conditional-aggregate and `SUMPRODUCT` range-shape,
 `MMULT` matrix-dimension, legacy-lookup return-index, `RANDBETWEEN`
-literal-bound, `SUBTOTAL` function-code, explicit-broken-reference, and
-saved-result risks before or after the normal change review:
+literal-bound, `SUBTOTAL` function-code, `INDEX` literal-position,
+explicit-broken-reference, and saved-result risks before or after the normal
+change review:
 
 ```yaml
 - name: Lint copied formulas
@@ -132,9 +133,11 @@ outside its direct static table range. `FF097` is a high-severity native
 `CHOOSE` call whose literal index is outside its available value arguments.
 `FF098` is a high-severity native `RANDBETWEEN` call whose direct literal bounds
 have the bottom above the top. `FF099` is a high-severity native `SUBTOTAL`
-call whose literal function number is outside Excel's supported codes. The
-copied-formula signal requires two matching immediate formula peers and a third
-contiguous supporting peer. `FF084` accepts only a pure
+call whose literal function number is outside Excel's supported codes. `FF100`
+is a high-severity native `INDEX` call whose literal row or column
+number is outside its direct static array. The copied-formula signal requires
+two matching immediate formula peers and a third contiguous supporting peer.
+`FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
 range, ignores array territory and nonnumeric or one-cell gaps, and never
 calculates a workbook. `FF085` does not guess at row, column, default-style, or
@@ -200,6 +203,15 @@ calculating a subtotal. Computed, signed, decimal, array, malformed,
 explicit-broken-reference, and namespaced forms remain outside that boundary.
 It emits only a location and aggregate call/unsupported-literal-function-code
 counts.
+`FF100` accepts only unqualified native `INDEX` (optionally with `@`) with two
+or three nonempty arguments, one direct bounded internal A1 cell/range or
+whole-column array, and direct bare nonnegative decimal row and optional
+column literals. It reports only when a positive row literal exceeds the array
+height or a positive column literal exceeds the array width. Zero preserves
+Excel's documented whole-row or whole-column array behavior and stays quiet.
+Computed, signed, decimal, array, malformed, explicit-broken-reference, and
+namespaced forms remain outside that boundary. It emits only a location and
+aggregate call/out-of-range-literal-index counts.
 `FF090` accepts only a component of at least two
 eligible ordinary formula cells connected by resolved scalar static
 dependencies; it never expands ranges or evaluates a workbook. Both stay quiet
@@ -214,11 +226,12 @@ counts, Table exception kinds, conditional-aggregate mismatch counts,
 `SUMPRODUCT` mismatch counts, `MMULT` incompatible-matrix-pair counts,
 legacy-lookup out-of-range-literal-index counts, `CHOOSE`
 out-of-range-literal-index counts, and `RANDBETWEEN` inverted-literal-bound
-counts, and `SUBTOTAL` unsupported-literal-function-code counts, not formula
-text, cached values, ignored-error target ranges, direct conditional-aggregate,
-`SUMPRODUCT`, `MMULT`, legacy-lookup ranges, `CHOOSE` value arguments,
-`RANDBETWEEN` literal values, or `SUBTOTAL` function-code/reference material,
-Table identities, or Table master formulas.
+counts, `SUBTOTAL` unsupported-literal-function-code counts, and `INDEX`
+out-of-range-literal-index counts, not formula text, cached values,
+ignored-error target ranges, direct conditional-aggregate, `SUMPRODUCT`,
+`MMULT`, legacy-lookup ranges, `CHOOSE` value arguments, `RANDBETWEEN` literal
+values, `SUBTOTAL` function-code/reference material, `INDEX` position values
+or direct array ranges, Table identities, or Table master formulas.
 `FF089` accepts only an exact saved `#REF!` formula result, skips a location
 already covered by `FF088`, and is a last-saved display fact rather than proof
 of a current calculation result. Other saved error kinds and missing or
@@ -425,7 +438,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.201.0
+  uses: SybilGambleyyu/formulafence@v0.202.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -583,7 +596,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.201.0/formulafence-0.201.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.202.0/formulafence-0.202.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

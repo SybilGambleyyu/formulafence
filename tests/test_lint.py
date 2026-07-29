@@ -791,14 +791,15 @@ def test_lint_structural_formula_rules_share_the_finding_cap(
             "A6": "=CHOOSE(0,A2)",
             "A7": "=RANDBETWEEN(2,1)",
             "A8": "=SUBTOTAL(12,A2)",
+            "A9": "=INDEX(A2:B4,4)",
         },
     )
 
     with pytest.raises(
         FormulaFenceError,
-        match="max_formula_pattern_findings=6",
+        match="max_formula_pattern_findings=7",
     ):
-        lint_snapshot(snapshot, max_formula_pattern_findings=6)
+        lint_snapshot(snapshot, max_formula_pattern_findings=7)
 
 
 def test_lint_reports_direct_mmult_dimension_mismatches(
@@ -1304,6 +1305,120 @@ def test_lint_subtotal_literal_function_num_candidates_share_the_finding_cap(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_reports_direct_index_literal_position_mismatches(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": (
+                "=IFERROR(INDEX('Input Sheet'!$C$2:$D$4,4)"
+                "+@INDEX(G2:H4,1,3),0)"
+            ),
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF100", "high", ("Model", "E2"))]
+    assert report.findings[0].details == {
+        "index_call_count": 2,
+        "out_of_range_literal_index_count": 2,
+        "evidence_scope": "index_direct_a1_array_literal_indices",
+    }
+
+
+def test_lint_index_literal_position_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=INDEX(C2:D4,3,2)",
+            "A3": "=INDEX(C2:D4,0)",
+            "A4": "=INDEX(C2:D4,0,2)",
+            "A5": "=INDEX(C2:D4,3,0)",
+            "A6": "=INDEX(C2:D4,E6)",
+            "A7": "=INDEX(C2:D4,1+3)",
+            "A8": "=INDEX(C2:D4,+4)",
+            "A9": "=INDEX(C2:D4,-1)",
+            "A10": "=INDEX(C2:D4,4.0)",
+            "A11": "=INDEX({1,2;3,4},3)",
+            "A12": "=INDEX(C2#,4)",
+            "A13": "=INDEX(C2:D4,4,)",
+            "A14": "=INDEX(C2:D4,,3)",
+            "A15": "=INDEX(C2:D4,4,3,1)",
+            "A16": "=INDEX(C2:D4,4,#REF!)",
+            "A17": "=Vendor.INDEX(C2:D4,4)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert "FF100" not in {finding.rule_id for finding in report.findings}
+
+    array_territory = _snapshot(tmp_path, {"B2": "=INDEX(C2:D4,4)"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF100" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_index_literal_position_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=INDEX(C2:D4,1,2)",
+            "B3": "=INDEX(C3:D5,4,1)",
+            "B4": "=INDEX(C4:D6,1,2)",
+            "B5": "=INDEX(C5:D7,1,2)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF100", "high", ("Model", "B3"))]
+
+
+def test_lint_index_literal_position_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=INDEX(C2:D4,4)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -1496,7 +1611,7 @@ def test_lint_reports_a_saved_broken_reference_formula_result(tmp_path: Path) ->
     snapshot = load_snapshot(
         make_formula_cached_result_model(
             tmp_path / "saved-reference-error.xlsx",
-            error_formula="=INDEX(Inputs!A1:A1,2)",
+            error_formula="=SUM(Inputs!A1:A1)",
             error_result="#REF!",
         )
     )
@@ -2014,7 +2129,7 @@ def test_lint_saved_broken_reference_renderers_keep_cache_data_out(
     snapshot = load_snapshot(
         make_formula_cached_result_model(
             tmp_path / "saved-reference-error.xlsx",
-            error_formula="=INDEX(Inputs!A1:A1,2)",
+            error_formula="=SUM(Inputs!A1:A1)",
             error_result="#REF!",
         )
     )
@@ -2025,7 +2140,7 @@ def test_lint_saved_broken_reference_renderers_keep_cache_data_out(
     rendered_sarif = lint_to_sarif(report)
 
     for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
-        assert "=INDEX(Inputs!A1:A1,2)" not in rendered
+        assert "=SUM(Inputs!A1:A1)" not in rendered
         assert "#REF!" not in rendered
         assert "FF089" in rendered
     assert "## Saved broken-reference evidence" in rendered_markdown
@@ -2440,6 +2555,50 @@ def test_lint_subtotal_literal_function_num_renderers_keep_values_private(
                 "text": (
                     "A SUBTOTAL call uses a literal function number outside Excel's "
                     "supported codes."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_index_literal_position_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=INDEX('Private Inputs'!$C$2:$D$4,4)+N('confidential')",
+        },
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2:$D$4" not in rendered
+        assert "confidential" not in rendered
+        assert "INDEX('Private Inputs'" not in rendered
+        assert "FF100" in rendered
+    assert "## INDEX literal-position evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "index_call_count": 1,
+        "out_of_range_literal_index_count": 1,
+        "evidence_scope": "index_direct_a1_array_literal_indices",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF100",
+            "name": "FF100",
+            "shortDescription": {
+                "text": (
+                    "An INDEX call uses a literal row or column number outside "
+                    "its direct static array."
                 )
             },
         }

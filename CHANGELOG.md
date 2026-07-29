@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.202.0 — 2026-07-28
+
+- Add high-severity `FF100` to `formulafence lint`: it reports an unqualified
+  native `INDEX` call only when a direct bare decimal row or column literal is
+  provably outside a direct static A1 array's bounds.
+- Keep the rule deliberately narrow and private: zero, computed, signed,
+  decimal, array, malformed, explicit-broken-reference, and namespaced forms
+  stay quiet; findings retain only the cell location and aggregate counts.
+
 ## 0.201.0 — 2026-07-28
 
 - Add high-severity `FF099` to `formulafence lint`: it reports an unqualified

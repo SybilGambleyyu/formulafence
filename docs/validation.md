@@ -5,6 +5,76 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Saved numeric-error result lint — 2026-07-28
+
+Microsoft's [#NUM! guidance](https://support.microsoft.com/en-US/Excel/how-to-correct-a-num-error)
+states that Excel displays the error for invalid numeric values and can also
+show it when iterative functions such as `IRR` or `RATE` cannot find a result.
+`FF107` reports only an exact saved `#NUM!` result attached to a well-formed
+formula cell. It is a record of the last saved display state, not a formula
+evaluation, a diagnosis of the numeric cause, or a claim that the current result
+is unchanged.
+
+The rule reuses FormulaFence's private formula-cache reader. It accepts only a
+valid SpreadsheetML formula cache classified as this exact error, retains no
+formula text or cached value, and emits only a cell location plus a
+`saved_formula_result` scope. Other saved error kinds, missing or malformed
+cache records, and locations where `FF098` or `FF103` already provide a direct
+static numeric cause stay quiet.
+
+An aggregate raw OOXML survey of the public verified
+[SpreadsheetBench](https://github.com/RUCKBReasoning/SpreadsheetBench) release
+loaded all 800 workbook artifacts. It observed 68,770 formula cells, 3,433
+saved formula errors, and 137 saved numeric errors across seven artifacts. The
+same survey over the full 5,464-artifact SpreadsheetBench v0.1 release
+observed 1,264,371 formula cells, 31,119 saved formula errors, and 639 saved
+numeric errors across 36 artifacts. The full-corpus maximum was 63 numeric
+errors in one artifact, rather than a single extremely large error cluster.
+The benchmark is built from real-world spreadsheet scenarios, but these are
+public evaluation artifacts; the counts are saved visible error states, not a
+claim that every one is an unintended production defect.
+
+A separate public compatibility survey loaded 463 of 469 OOXML-readable
+workbooks, observed 60,866 formula cells and 1,322 saved formula errors, and
+found four saved numeric errors across three artifacts. That population is
+reported as a compatibility signal, not an independent prevalence estimate.
+
+The exact FormulaFence production cache reader replayed all 5,464 full
+SpreadsheetBench artifacts with zero parser warnings or exceptions. It saw the
+same 1,264,371 formula cells and 31,119 cached errors, and classified all 639
+numeric-error entries as FF107 candidates without retaining their formulas,
+locations, or cached values. The same reader replayed all 800 verified artifacts
+with zero warnings or exceptions and classified 137 candidates.
+
+The full production lint replay over verified SpreadsheetBench loaded 796
+workbooks, rejected four at established safety boundaries, inspected 68,497
+formula cells, emitted 137 `FF107` findings and zero `FF098` or `FF103`
+findings, and had zero lint rejections. The independent compatibility replay
+loaded 454 workbooks, rejected 15 at established safety boundaries, inspected
+60,823 formula cells, emitted four `FF107` findings and zero `FF098` or
+`FF103` findings, and had zero lint rejections. The rule's static-suppression
+fixtures independently confirm that a direct inverted `RANDBETWEEN` bound or
+invalid direct `LARGE` rank retains the more specific existing finding only.
+
+A focused saved-result lint/CLI/output selection passed **9 tests**. It covers
+exact saved numeric-error recognition, quiet non-target errors, suppression
+when an existing numeric rule already provides a direct cause, high-severity
+CLI gates, and JSON/Markdown/SARIF redaction of formula and cached-result
+material.
+
+The release-versioned 0.209.0 source tree passed **1,494 tests in 98.59
+seconds**. `git diff --check`, `ruff check src tests`, and
+`python -m compileall -q src tests` also completed cleanly.
+
+Fresh virtual environments installed both the wheel and source distribution,
+reported `FormulaFence 0.209.0`, and linted a generated saved-numeric-error
+workbook as one high-severity `FF107` finding. The JSON and SARIF output checks
+confirmed that neither the formula nor the cached `#NUM!` value was emitted.
+`twine check` passed for both artifacts. SHA-256: wheel
+`8d3a4a5ede39c9ba09307fe3efca22ba3292c9967c6c95edfb4c9af9f747b97a`;
+source distribution
+`3b782fbe744c2b9e2e4a73a66d2187084bd8552048bcd36ca293545abe55112b`.
+
 ## Saved division-by-zero result lint — 2026-07-28
 
 Microsoft's [#DIV/0! guidance](https://support.microsoft.com/en-US/Excel/how-to-correct-a-div-0-error)

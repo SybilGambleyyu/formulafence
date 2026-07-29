@@ -2236,6 +2236,24 @@ def test_lint_reports_a_saved_divide_by_zero_formula_result(tmp_path: Path) -> N
     assert report.findings[0].details == {"evidence_scope": "saved_formula_result"}
 
 
+def test_lint_reports_a_saved_numeric_error_formula_result(tmp_path: Path) -> None:
+    snapshot = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "saved-numeric-error.xlsx",
+            error_formula="=IRR(Inputs!A1:A2)",
+            error_result="#NUM!",
+        )
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF107", "high", ("Report", "B5"))]
+    assert report.findings[0].details == {"evidence_scope": "saved_formula_result"}
+
+
 def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
     tmp_path: Path,
 ) -> None:
@@ -2260,6 +2278,20 @@ def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
             error_result="#DIV/0!",
         )
     )
+    inverted_randbetween = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "inverted-randbetween.xlsx",
+            error_formula="=RANDBETWEEN(2,1)",
+            error_result="#NUM!",
+        )
+    )
+    invalid_large_rank = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "invalid-large-rank.xlsx",
+            error_formula="=LARGE(Inputs!A1:A1,2)",
+            error_result="#NUM!",
+        )
+    )
 
     assert lint_snapshot(other_error).findings == []
     assert [
@@ -2270,6 +2302,14 @@ def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
         (finding.rule_id, finding.severity, finding.location)
         for finding in lint_snapshot(direct_zero_divisor).findings
     ] == [("FF105", "high", ("Report", "B5"))]
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in lint_snapshot(inverted_randbetween).findings
+    ] == [("FF098", "high", ("Report", "B5"))]
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in lint_snapshot(invalid_large_rank).findings
+    ] == [("FF103", "high", ("Report", "B5"))]
 
 
 def test_lint_keeps_short_or_non_numeric_aggregate_gaps_quiet(tmp_path: Path) -> None:
@@ -2818,6 +2858,44 @@ def test_lint_saved_divide_by_zero_renderers_keep_cache_data_out(
             "name": "FF106",
             "shortDescription": {
                 "text": "A formula's saved result is a division-by-zero error."
+            },
+        }
+    ]
+
+
+def test_lint_saved_numeric_error_renderers_keep_cache_data_out(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "saved-numeric-error.xlsx",
+            error_formula="=IRR(Inputs!A1:A2)",
+            error_result="#NUM!",
+        )
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "=IRR(Inputs!A1:A2)" not in rendered
+        assert "#NUM!" not in rendered
+        assert "FF107" in rendered
+    assert "## Saved numeric-error evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Report!B5"
+    assert result["properties"] == {
+        "severity": "high",
+        "evidence_scope": "saved_formula_result",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF107",
+            "name": "FF107",
+            "shortDescription": {
+                "text": "A formula's saved result is a numeric error."
             },
         }
     ]

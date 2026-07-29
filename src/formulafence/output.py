@@ -6286,22 +6286,23 @@ def lint_to_markdown(
     *,
     max_bytes: int | None = None,
 ) -> str:
-    """Render a bounded, formula-free local copy-pattern lint review."""
+    """Render a bounded, formula-free local formula-lint review."""
     payload = report.to_dict()
     workbook = payload["workbook"]
     summary = payload["summary"]
     lines = _BoundedLines(
         [
-            "# FormulaFence formula-pattern lint",
+            "# FormulaFence formula lint",
             "",
             f"- **Workbook:** {_markdown_code(workbook['path'])}",
             f"- **Formula cells:** {workbook['formula_cells']}",
             f"- **Findings:** {summary['finding_count']}",
             f"- **Highest severity:** `{summary['highest_severity']}`",
             "",
-            "The lint reports only an interrupted copy pattern with two matching immediate "
-            "peers and a third contiguous supporting peer. It does not evaluate formulas "
-            "or expose formula text.",
+            "The lint reports an interrupted copy pattern only with two matching immediate "
+            "peers and a third contiguous supporting peer. It also reports a pure local "
+            "numeric aggregate only when it stops before a short contiguous numeric run. "
+            "It does not evaluate formulas or expose formula text.",
             "",
             "## Findings",
             "",
@@ -6311,7 +6312,7 @@ def lint_to_markdown(
         max_bytes=max_bytes,
     )
     if not payload["findings"]:
-        lines.append("| note | — | — | No high-confidence copied-formula interruptions found. |")
+        lines.append("| note | — | — | No conservative formula-lint findings found. |")
     else:
         for finding in payload["findings"]:
             lines.append(
@@ -6342,14 +6343,33 @@ def lint_to_markdown(
                     supporting=_markdown_code(evidence["supporting_formula"]),
                 )
             )
+    aggregate_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF084"
+    ]
+    if aggregate_evidence:
+        lines.extend(["## Aggregate range evidence", ""])
+        for location, evidence in aggregate_evidence:
+            lines.append(
+                "- {location}: `{function}` references {referenced_range} and stops before "
+                "adjacent numeric cells {omitted_range} ({count}).".format(
+                    location=_markdown_code(location or "workbook"),
+                    function=_markdown_escape(evidence["aggregate_function"]),
+                    referenced_range=_markdown_code(evidence["referenced_range"]),
+                    omitted_range=_markdown_code(evidence["omitted_range"]),
+                    count=_markdown_escape(evidence["omitted_cell_count"]),
+                )
+            )
     return lines.render()
 
 
 def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
-    """Return single-workbook formula-pattern findings in SARIF 2.1.0."""
+    """Return single-workbook formula-lint findings in SARIF 2.1.0."""
     descriptions = {
         "FF082": "A blank or non-formula cell interrupts a stable copied-formula pattern.",
         "FF083": "A formula differs from a stable copied-formula pattern.",
+        "FF084": "A simple numeric aggregate stops before adjacent numeric cells.",
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [
@@ -6357,7 +6377,7 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
             "id": rule_id,
             "name": rule_id,
             "shortDescription": {
-                "text": descriptions.get(rule_id, "FormulaFence formula-pattern lint finding")
+                "text": descriptions.get(rule_id, "FormulaFence formula lint finding")
             },
         }
         for rule_id in rule_ids

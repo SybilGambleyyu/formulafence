@@ -1,4 +1,4 @@
-"""Tests for conservative single-workbook formula-pattern linting."""
+"""Tests for conservative single-workbook formula linting."""
 
 from __future__ import annotations
 
@@ -200,6 +200,134 @@ def test_lint_skips_complete_copy_block(tmp_path: Path) -> None:
     assert lint_snapshot(snapshot).findings == []
 
 
+def test_lint_reports_omitted_numeric_column_run_after_simple_aggregate(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": 10,
+            "B3": 20,
+            "B4": 30,
+            "B5": 40,
+            "B6": 50,
+            "B7": 60,
+            "B8": "=SUM($B$2:$B$4)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF084", "medium", ("Model", "B8"))]
+    assert report.findings[0].details == {
+        "aggregate_function": "SUM",
+        "orientation": "column",
+        "referenced_range": "Model!B2:B4",
+        "omitted_range": "Model!B5:B7",
+        "omitted_cell_count": 3,
+    }
+
+
+def test_lint_handles_a_local_aggregate_in_excel_last_column(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "XFD2": 10,
+            "XFD3": 20,
+            "XFD4": 30,
+            "XFD5": 40,
+            "XFD6": 50,
+            "XFD7": 60,
+            "XFD8": "=SUM(XFD2:XFD4)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [(finding.rule_id, finding.location) for finding in report.findings] == [
+        ("FF084", ("Model", "XFD8"))
+    ]
+
+
+def test_lint_reports_omitted_numeric_row_run_after_simple_aggregate(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": 10,
+            "C2": 20,
+            "D2": 30,
+            "E2": 40,
+            "F2": 50,
+            "G2": "=AVERAGE(Model!B2:D2)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.location) for finding in report.findings
+    ] == [("FF084", ("Model", "G2"))]
+    assert report.findings[0].details == {
+        "aggregate_function": "AVERAGE",
+        "orientation": "row",
+        "referenced_range": "Model!B2:D2",
+        "omitted_range": "Model!E2:F2",
+        "omitted_cell_count": 2,
+    }
+
+
+def test_lint_keeps_short_or_non_numeric_aggregate_gaps_quiet(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": 10,
+            "B3": 20,
+            "B4": 30,
+            "B5": "=SUM(B2:B3)",
+            "D2": 10,
+            "D3": 20,
+            "D4": "intentional marker",
+            "D5": 30,
+            "D6": "=SUM(D2:D3)",
+            "F2": 10,
+            "F3": 20,
+            "F4": 30,
+            "F5": 40,
+            "F6": "=SUM(F2:F3)+0",
+        },
+    )
+
+    assert lint_snapshot(snapshot).findings == []
+
+
+def test_lint_skips_array_territory_and_bounds_aggregate_gap_inspection(
+    tmp_path: Path,
+) -> None:
+    cells = {f"B{row}": row for row in range(2, 132)}
+    cells["B132"] = "=MAX(B2:B4)"
+    snapshot = _snapshot(tmp_path, cells)
+    snapshot.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B5",
+            ref="B5:B6",
+            min_column=2,
+            min_row=5,
+            max_column=2,
+            max_row=6,
+        ),
+    )
+
+    assert lint_snapshot(snapshot).findings == []
+    snapshot.dynamic_array_formula_ranges = ()
+    assert lint_snapshot(snapshot, max_aggregate_omission_gap_cells=64).findings == []
+    with pytest.raises(FormulaFenceError, match="max_aggregate_omission_gap_cells"):
+        lint_snapshot(snapshot, max_aggregate_omission_gap_cells=1)
+
+
 def test_lint_deduplicates_crossing_copy_patterns_with_all_evidence(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -298,6 +426,27 @@ def test_lint_bounds_distinct_pattern_targets(tmp_path: Path) -> None:
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_shares_its_finding_cap_with_aggregate_omissions(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": 1,
+            "B2": "=A2*2",
+            "D2": "=C2*2",
+            "E2": "=D2*2",
+            "G2": 10,
+            "G3": 20,
+            "G4": 30,
+            "G5": 40,
+            "G6": 50,
+            "G7": "=SUM(G2:G4)",
+        },
+    )
+
+    with pytest.raises(FormulaFenceError, match="max_formula_pattern_findings=1"):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_renderers_keep_formula_text_out_of_review_artifacts(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -322,3 +471,40 @@ def test_lint_renderers_keep_formula_text_out_of_review_artifacts(tmp_path: Path
     assert result["properties"]["pattern_kind"] == "blank_gap"
     with pytest.raises(FormulaFenceError, match="max_report_bytes=1"):
         lint_to_markdown(report, max_bytes=1)
+
+
+def test_lint_aggregate_renderers_keep_formula_text_out_of_review_artifacts(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": 10,
+            "B3": 20,
+            "B4": 30,
+            "B5": 40,
+            "B6": 50,
+            "B7": "=SUM(B2:B4)",
+        },
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "=SUM(B2:B4)" not in rendered
+        assert "FF084" in rendered
+    assert "## Aggregate range evidence" in rendered_markdown
+    assert "`Model!B2:B4`" in rendered_markdown
+    assert rendered_sarif["runs"][0]["results"][0]["ruleId"] == "FF084"
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF084",
+            "name": "FF084",
+            "shortDescription": {
+                "text": "A simple numeric aggregate stops before adjacent numeric cells."
+            },
+        }
+    ]

@@ -14,13 +14,19 @@ financial correctness or replace model review.
   evidence rather than executable page content. The report still reflects the
   sharing boundary selected by the caller; HTML is not a general secret scrubber.
 - It loads formulas as text with `data_only=False`; it does not calculate them.
-- The single-workbook formula-pattern lint compares only already-loaded relative
-  formula fingerprints. It reports an interruption only after two matching
-  immediate peers plus a third contiguous peer support the same copied pattern;
-  it intentionally ignores short/ambiguous runs and all declared or unclassified
-  array-formula territory. Incomplete array metadata makes the command fail
-  closed. Its JSON, Markdown, and SARIF evidence contains locations and peer
-  coordinates, never formula text.
+- The single-workbook formula lint is static. Its copied-formula signal compares
+  only already-loaded relative formula fingerprints and reports an interruption
+  only after two matching immediate peers plus a third contiguous peer support
+  the same copied pattern. Its aggregate-range signal accepts only a pure
+  `SUM`, `AVERAGE`, `MIN`, `MAX`, or `COUNT` with one direct same-sheet,
+  one-dimensional A1 range, followed on that row or column by a bounded run of
+  at least two literal numeric cells before the aggregate formula. It ignores
+  short/ambiguous patterns, computed/multi-range/named/external/3-D aggregate
+  expressions, nonnumeric gaps, tokenizer failures, and all declared or
+  unclassified array-formula territory. Incomplete array metadata makes the
+  command fail closed. Its JSON, Markdown, and SARIF evidence contains only
+  locations, peer coordinates, and static range coordinates, never formula
+  text or cell values.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not
@@ -396,8 +402,10 @@ recalculate correctly in Excel. FormulaFence also emits deterministic shortest
 path samples from the changed cell to sampled downstream formulas. These paths
 are explicit static dependencies, not proof of runtime evaluation. A
 formula-pattern finding means both immediate peers have the same relative
-formula fingerprint while the changed middle cell does not; it is a focused
-review prompt, not proof of an error.
+formula fingerprint while the changed middle cell does not. An aggregate-range
+finding means an accepted static aggregate range ends before a short contiguous
+run of numeric literals. Either is a focused review prompt, not proof that a
+formula should change or an error will occur at calculation time.
 
 For a portfolio `FF079`, the same distinction applies across candidate
 workbooks: it records that a changed source cell can reach a formula through a

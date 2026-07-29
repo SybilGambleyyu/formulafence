@@ -15,7 +15,11 @@ from formulafence.diff import (
     compare_snapshots,
     report_severities,
 )
-from formulafence.lint import DEFAULT_MAX_FORMULA_PATTERN_FINDINGS, lint_snapshot
+from formulafence.lint import (
+    DEFAULT_MAX_AGGREGATE_OMISSION_GAP_CELLS,
+    DEFAULT_MAX_FORMULA_PATTERN_FINDINGS,
+    lint_snapshot,
+)
 from formulafence.models import SEVERITY_ORDER, FormulaFenceError
 from formulafence.output import (
     DEFAULT_MAX_REPORT_BYTES,
@@ -246,6 +250,13 @@ def _positive_integer(value: str) -> int:
     return parsed
 
 
+def _at_least_two_integer(value: str) -> int:
+    parsed = _positive_integer(value)
+    if parsed < 2:
+        raise argparse.ArgumentTypeError("must be an integer of at least 2")
+    return parsed
+
+
 def _add_change_analysis_state_limit_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-change-analysis-states",
@@ -313,8 +324,20 @@ def _add_formula_pattern_finding_limit_argument(parser: argparse.ArgumentParser)
         type=_positive_integer,
         default=DEFAULT_MAX_FORMULA_PATTERN_FINDINGS,
         help=(
-            "Fail closed before formula-pattern lint retains more than this many "
-            "high-confidence target cells"
+            "Fail closed before formula lint retains more than this many "
+            "review findings"
+        ),
+    )
+
+
+def _add_aggregate_omission_gap_limit_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--max-aggregate-omission-gap-cells",
+        type=_at_least_two_integer,
+        default=DEFAULT_MAX_AGGREGATE_OMISSION_GAP_CELLS,
+        help=(
+            "Inspect at most this many contiguous cells between a local aggregate "
+            "range and its formula"
         ),
     )
 
@@ -339,19 +362,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     lint = commands.add_parser(
         "lint",
-        help="Find high-confidence interruptions in copied formula patterns",
+        help="Find conservative copied-formula and aggregate-range interruptions",
     )
     lint.add_argument("workbook", type=Path)
     _add_dependency_edge_limit_argument(lint)
     _add_formula_defined_name_state_limit_argument(lint)
     _add_formula_pattern_finding_limit_argument(lint)
+    _add_aggregate_omission_gap_limit_argument(lint)
     _add_report_byte_limit_argument(lint)
     _add_output_arguments(lint, ("json", "markdown", "sarif"))
     lint.add_argument(
         "--fail-on",
         choices=_FAIL_LEVELS,
         default="none",
-        help="Exit 1 when a formula-pattern finding reaches this severity",
+        help="Exit 1 when a formula-lint finding reaches this severity",
     )
 
     diff = commands.add_parser("diff", help="Compare two workbooks semantically")
@@ -632,6 +656,9 @@ def _run_lint(arguments: argparse.Namespace) -> int:
             ),
         ),
         max_formula_pattern_findings=arguments.max_formula_pattern_findings,
+        max_aggregate_omission_gap_cells=(
+            arguments.max_aggregate_omission_gap_cells
+        ),
     )
     if arguments.format == "json":
         content = as_json(report.to_dict(), max_bytes=arguments.max_report_bytes)

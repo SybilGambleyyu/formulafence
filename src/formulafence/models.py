@@ -5254,11 +5254,12 @@ class DiffReport:
 
 @dataclass
 class FormulaLintReport:
-    """One conservative, single-workbook formula-pattern review result.
+    """One conservative, single-workbook formula-lint review result.
 
     This report intentionally keeps a lint separate from a two-workbook
-    semantic diff. Its findings identify only strong local copy-pattern
-    evidence; they do not assert that a workbook calculates correctly.
+    semantic diff. Its findings identify only strong local copy-pattern or
+    aggregate-range evidence; they do not assert that a workbook calculates
+    correctly.
     """
 
     workbook: WorkbookSnapshot

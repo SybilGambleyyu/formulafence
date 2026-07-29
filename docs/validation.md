@@ -5,6 +5,51 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Bounded aggregate-range omission lint — 2026-07-28
+
+`FF084` follows the narrow class behind Excel's documented formula-error check
+for a formula that omits cells in a region: Microsoft illustrates a `SUM` whose
+range ends before adjacent nonblank data. FormulaFence deliberately narrows
+that prompt further. It accepts only a pure local `SUM`, `AVERAGE`, `MIN`,
+`MAX`, or `COUNT` over one direct one-dimensional A1 range, with the aggregate
+formula after that range on the same row or column and a two-or-more-cell,
+fully populated literal-numeric gap in between. It does not infer a replacement
+formula or calculate values. Its reference point is Microsoft's
+[Detect formula errors in Excel](https://support.microsoft.com/en-US/Excel/detect-formula-errors-in-excel)
+guidance; the implementation rejects broader expressions rather than trying to
+replicate Excel's heuristic.
+
+Controlled coverage includes vertical and horizontal ranges, absolute and
+explicit same-sheet references, the Excel last-column boundary, output
+redaction, one-cell/non-numeric gaps, computed expressions, array territory,
+the shared finding cap, and both API and CLI bounds. The candidate skips a
+gap longer than the caller-selected maximum (128 cells by default), and the
+CLI rejects a bound smaller than the minimum two cells.
+
+Before implementation, a broad direct scan found no such two-cell candidate in
+425 safely readable local FormulaFence fixtures (11 contained an exactly shaped
+simple local aggregate). The final implementation then ran all ten workbooks
+from [ExceLint's public test data](https://github.com/ExceLint/ExceLint/tree/master/ExceLintTests/TestData),
+the 820-formula finance ledger compatibility fixture, and the 10-formula
+`ref2-56737.xlsx` compatibility file. It produced no `FF084` finding. The
+48,037-formula public-debt workbook retained its existing 50 copied-pattern
+findings only (44 low and six medium). This does not claim those workbooks are
+free of missed ranges: it demonstrates that the rule is not a broad
+spreadsheet-smell report.
+
+After full snapshot construction, five public-debt lint runs took 0.486,
+0.474, 0.473, 0.470, and 0.473 seconds (median **0.473 seconds**) while
+returning the same 50 findings and zero `FF084` candidates. The bounded gap
+inspection adds no workbook evaluation and does not render formulas or cell
+values in JSON, Markdown, or SARIF.
+
+The release-versioned 0.185.0 source tree passed **1,331 tests in 91.63
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check`, installed into separate fresh
+environments with declared dependencies, reported `FormulaFence 0.185.0`, and
+reproduced a controlled `FF084` finding without rendering its formula text. A
+medium gate returned exit `1`; the high-only gate returned `0`.
+
 ## Conservative formula-pattern lint — 2026-07-28
 
 The new single-workbook `lint` command uses FormulaFence's existing

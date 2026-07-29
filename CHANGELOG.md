@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.185.0 — 2026-07-28
+
+- Add `FF084`, a static, single-workbook review signal for a pure local
+  `SUM`, `AVERAGE`, `MIN`, `MAX`, or `COUNT` whose direct one-dimensional A1
+  range stops before a bounded run of at least two literal numeric cells on the
+  same row or column. The finding is medium severity and retains only the
+  aggregate function, orientation, and range coordinates.
+- Keep the detector intentionally quiet for named, table, external, 3-D,
+  multiple-range, computed, array-territory, nonnumeric-gap, one-cell-gap, and
+  tokenizer-failure cases. Add a 128-cell default inspection bound configurable
+  with `--max-aggregate-omission-gap-cells`; the existing 10,000 total
+  formula-lint finding cap remains fail closed.
+
 ## 0.184.0 — 2026-07-28
 
 - Add `formulafence lint WORKBOOK`, a conservative single-workbook audit for

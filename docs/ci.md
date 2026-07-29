@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.184.0
+        uses: SybilGambleyyu/formulafence@v0.185.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -88,8 +88,8 @@ boundary.
 
 The composite Action intentionally compares a baseline and candidate. In a job
 where FormulaFence is already installed, run the single-workbook lint directly
-to catch high-confidence interruptions in copied formula blocks before or after
-the normal change review:
+to catch conservative copied-formula and aggregate-range interruptions before
+or after the normal change review:
 
 ```yaml
 - name: Lint copied formulas
@@ -101,14 +101,20 @@ the normal change review:
 ```
 
 `FF082` is high for blank/stored-error interruptions, medium for numeric/manual
-values, and low for text markers; `FF083` is a medium-severity formula outlier.
-The command reports only when two matching immediate formula peers and a third
-contiguous supporting peer establish the same relative-copy pattern. It never
-recalculates a workbook or exposes formula text in its JSON, Markdown, or SARIF
-evidence. Use `--fail-on medium` only when intentional formula exceptions have
-an established review path. The default 10,000-target cap is a fail-closed
-bound; adjust it only with an explicit positive
-`--max-formula-pattern-findings` value.
+values, and low for text markers; `FF083` is a medium-severity formula outlier;
+and `FF084` is a medium-severity simple numeric aggregate whose direct local
+one-dimensional range stops before two or more contiguous literal numeric
+cells. The copied-formula signal requires two matching immediate formula peers
+and a third contiguous supporting peer. `FF084` accepts only a pure
+`SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
+range, ignores array territory and nonnumeric or one-cell gaps, and never
+calculates a workbook. JSON, Markdown, and SARIF evidence contains locations
+and static range coordinates, not formula text. Use `--fail-on medium` only
+when intentional exceptions have an established review path. The default
+10,000-finding cap is fail closed; adjust it only with an explicit positive
+`--max-formula-pattern-findings` value. `FF084` examines at most 128 gap cells
+by default; use an explicit `--max-aggregate-omission-gap-cells` value of at
+least two to select another bounded window.
 
 ## Shared external-workbook-link, formula-action, Python-in-Excel, custom-function, runtime, registration, XLM-evaluation, XLM-action, XLM-GET.CELL, XLM-environment-information, and native environment-information artifacts
 
@@ -305,7 +311,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.184.0
+  uses: SybilGambleyyu/formulafence@v0.185.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -463,7 +469,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.184.0/formulafence-0.184.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.185.0/formulafence-0.185.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

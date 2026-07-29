@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from openpyxl import Workbook
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -9,7 +10,10 @@ from openpyxl.worksheet.datavalidation import DataValidation
 import formulafence.cli as cli_module
 import formulafence.policy as policy_module
 from formulafence.cli import main
-from formulafence.lint import DEFAULT_MAX_FORMULA_PATTERN_FINDINGS
+from formulafence.lint import (
+    DEFAULT_MAX_AGGREGATE_OMISSION_GAP_CELLS,
+    DEFAULT_MAX_FORMULA_PATTERN_FINDINGS,
+)
 from formulafence.models import WorkbookSnapshot
 from formulafence.output import DEFAULT_MAX_REPORT_BYTES
 from formulafence.workbook import (
@@ -193,11 +197,52 @@ def test_lint_high_threshold_leaves_manual_numeric_value_for_review(tmp_path) ->
     assert main(["lint", str(workbook_path), "--fail-on", "medium"]) == 1
 
 
+def test_lint_aggregate_omission_is_medium_and_uses_its_gap_bound(tmp_path) -> None:
+    workbook_path = tmp_path / "model.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    for row, value in enumerate((10, 20, 30, 40, 50, 60), start=2):
+        worksheet.cell(row=row, column=2, value=value)
+    worksheet["B8"] = "=SUM(B2:B4)"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "medium"]) == 1
+    assert (
+        main(
+            [
+                "lint",
+                str(workbook_path),
+                "--max-aggregate-omission-gap-cells",
+                "2",
+            ]
+        )
+        == 0
+    )
+
+
 def test_lint_defaults_its_bounded_finding_limit() -> None:
     arguments = cli_module.build_parser().parse_args(["lint", "model.xlsx"])
 
     assert arguments.max_formula_pattern_findings == DEFAULT_MAX_FORMULA_PATTERN_FINDINGS
+    assert (
+        arguments.max_aggregate_omission_gap_cells
+        == DEFAULT_MAX_AGGREGATE_OMISSION_GAP_CELLS
+    )
     assert arguments.max_report_bytes == DEFAULT_MAX_REPORT_BYTES
+
+
+def test_lint_rejects_an_impossible_one_cell_aggregate_omission_bound() -> None:
+    with pytest.raises(SystemExit):
+        cli_module.build_parser().parse_args(
+            [
+                "lint",
+                "model.xlsx",
+                "--max-aggregate-omission-gap-cells",
+                "1",
+            ]
+        )
 
 
 def test_profile_dependency_edge_limit_fails_before_writing_an_output(tmp_path, capsys) -> None:

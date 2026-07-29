@@ -6304,7 +6304,9 @@ def lint_to_markdown(
             "numeric aggregate only when it stops before a short contiguous numeric run. "
             "It reports a formula as unlocked only for an explicit direct cell assignment "
             "on a protected worksheet, and reports explicitly incomplete manual calculation "
-            "for a formula workbook. It does not evaluate formulas or expose formula text.",
+            "for a formula workbook. It also reports stored error-checking suppressions "
+            "as aggregate structural evidence. It does not evaluate formulas or expose "
+            "formula text.",
             "",
             "## Findings",
             "",
@@ -6389,6 +6391,31 @@ def lint_to_markdown(
                     mode=_markdown_escape(evidence["calculation_mode"])
                 )
             )
+    error_checking_suppression_evidence = [
+        finding["details"]
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF091"
+    ]
+    if error_checking_suppression_evidence:
+        lines.extend(["## Excel error-checking suppression evidence", ""])
+        for evidence in error_checking_suppression_evidence:
+            categories = ", ".join(
+                "{name} ({count})".format(
+                    name=_markdown_code(name.replace("_", " ")),
+                    count=_markdown_escape(count),
+                )
+                for name, count in evidence["suppressed_warning_counts"].items()
+            )
+            lines.append(
+                "- Workbook: {rules} suppressed warning rules across {targets} target "
+                "ranges: {categories}.".format(
+                    rules=_markdown_escape(evidence["suppressed_warning_rule_count"]),
+                    targets=_markdown_escape(
+                        evidence["suppressed_warning_target_range_count"]
+                    ),
+                    categories=categories,
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6455,6 +6482,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF090": (
             "A formula participates in a static multi-cell circular reference while "
             "calculation iteration is disabled."
+        ),
+        "FF091": (
+            "Workbook suppresses Excel error-checking prompts; review warnings may be "
+            "hidden."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

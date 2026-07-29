@@ -17,7 +17,7 @@ from formulafence.models import (
 from formulafence.output import as_json, lint_to_markdown, lint_to_sarif
 from formulafence.workbook import load_snapshot
 
-from .helpers import make_formula_cached_result_model
+from .helpers import make_formula_cached_result_model, make_ignored_error_model
 
 
 def _snapshot(
@@ -405,6 +405,32 @@ def test_lint_reports_direct_static_self_reference_when_iteration_is_disabled(
     assert report.findings[0].details == {
         "calculation_iteration_enabled": False,
         "reference_scope": "direct_static",
+    }
+
+
+def test_lint_reports_excel_error_checking_suppressions(tmp_path: Path) -> None:
+    snapshot = load_snapshot(make_ignored_error_model(tmp_path / "ignored-errors.xlsx"))
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF091", "medium", None)]
+    assert report.findings[0].details == {
+        "suppressed_warning_counts": {
+            "evaluation_error": 2,
+            "inconsistent_formula": 2,
+            "formula_range_omission": 1,
+            "unlocked_formula": 1,
+            "empty_cell_reference": 1,
+            "list_data_validation": 1,
+            "calculated_column": 1,
+            "number_stored_as_text": 1,
+            "two_digit_text_year": 1,
+        },
+        "suppressed_warning_rule_count": 11,
+        "suppressed_warning_target_range_count": 5,
     }
 
 
@@ -861,6 +887,17 @@ def test_lint_shares_its_finding_cap_with_multi_cell_static_cycles(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_shares_its_finding_cap_with_error_checking_suppressions(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(make_ignored_error_model(tmp_path / "ignored-errors.xlsx"))
+    snapshot.calculation_settings["calcMode"] = "manual"
+    snapshot.calculation_settings["calcCompleted"] = False
+
+    with pytest.raises(FormulaFenceError, match="max_formula_pattern_findings=1"):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_shares_its_finding_cap_with_broken_references(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -1131,6 +1168,56 @@ def test_lint_saved_broken_reference_renderers_keep_cache_data_out(
             "name": "FF089",
             "shortDescription": {
                 "text": "A formula's saved result is a broken-reference error."
+            },
+        }
+    ]
+
+
+def test_lint_error_checking_suppression_renderers_keep_targets_private(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(make_ignored_error_model(tmp_path / "ignored-errors.xlsx"))
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Error Review!B2" not in rendered
+        assert "B2 B3" not in rendered
+        assert "C2:C3" not in rendered
+        assert "=1/0" not in rendered
+        assert "FF091" in rendered
+    assert "## Excel error-checking suppression evidence" in rendered_markdown
+    assert "11 suppressed warning rules across 5 target ranges" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert "locations" not in result
+    assert result["properties"] == {
+        "severity": "medium",
+        "suppressed_warning_counts": {
+            "evaluation_error": 2,
+            "inconsistent_formula": 2,
+            "formula_range_omission": 1,
+            "unlocked_formula": 1,
+            "empty_cell_reference": 1,
+            "list_data_validation": 1,
+            "calculated_column": 1,
+            "number_stored_as_text": 1,
+            "two_digit_text_year": 1,
+        },
+        "suppressed_warning_rule_count": 11,
+        "suppressed_warning_target_range_count": 5,
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF091",
+            "name": "FF091",
+            "shortDescription": {
+                "text": (
+                    "Workbook suppresses Excel error-checking prompts; review warnings may "
+                    "be hidden."
+                )
             },
         }
     ]

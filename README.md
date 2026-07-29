@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.191.0/formulafence-0.191.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.192.0/formulafence-0.192.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -65,15 +65,16 @@ for the current version.
 ### Formula lint
 
 `formulafence lint WORKBOOK` is a deliberately conservative, single-workbook
-check for copy-paste, aggregate-range, protection, calculation-freshness, and
-static-circular-reference, explicit-broken-reference, and saved-result risks
-that a version diff cannot see. It reports a copied-formula interruption only
-when the immediately preceding and following formulas have the same
-relative-copy fingerprint and a third contiguous peer repeats that fingerprint.
-It also recognizes narrow aggregate-range, formula-protection,
-calculation-freshness, direct and multi-cell static circular-reference,
-explicit broken-reference, and saved broken-reference-result signals. Together
-these produce nine reviewable findings:
+check for copy-paste, aggregate-range, protection, calculation-freshness,
+error-checking-suppression, static-circular-reference, explicit-broken-reference,
+and saved-result risks that a version diff cannot see. It reports a
+copied-formula interruption only when the immediately preceding and following
+formulas have the same relative-copy fingerprint and a third contiguous peer
+repeats that fingerprint. It also recognizes narrow aggregate-range,
+formula-protection, calculation-freshness, stored error-checking suppression,
+direct and multi-cell static circular-reference, explicit broken-reference, and
+saved broken-reference-result signals. Together these produce ten reviewable
+findings:
 
 - `FF082`: a non-formula interruption. Blanks and stored error values are high;
   numeric/manual values are medium; textual markers are low.
@@ -94,13 +95,15 @@ these produce nine reviewable findings:
   error from its last recorded calculation.
 - `FF090` (high): an ordinary formula participates in a multi-cell static
   circular-reference component while workbook calculation iteration is disabled.
+- `FF091` (medium): the workbook has recognized stored Excel error-checking
+  suppressions, so review prompts may be hidden.
 
 Use `--fail-on critical` to gate explicit broken-reference operands, or
 `--fail-on high` to also gate blank/error interruptions and direct static
 self-references, multi-cell static cycles, and saved broken-reference results.
 Use `--fail-on medium` to additionally require review of manual-value,
-formula-outlier, aggregate-range, and explicit formula-protection and
-incomplete-manual-calculation exceptions.
+formula-outlier, aggregate-range, explicit formula-protection,
+incomplete-manual-calculation, and error-checking-suppression exceptions.
 `FF084` intentionally ignores
 named/table/external/3-D references, multi-range or computed expressions, a
 formula before or beside its range, one-cell gaps, nonnumeric gaps, tokenizer
@@ -109,23 +112,27 @@ row-, column-, default-style, or allowed-edit-range protection state. `FF086`
 requires both stored calculation flags and a formula; manual mode alone,
 automatic calculation, a completed save, and an omitted completion marker stay
 quiet. It is a configuration prompt, not a claim that a particular cached
-result is wrong. `FF087` remains the direct self-reference signal. `FF090`
-uses only a strongly connected component of resolved scalar static dependencies
-with at least two eligible ordinary formula cells; it never expands a range or
-evaluates a formula. Both circular-reference signals stay quiet when
-`iterate=true`; `FF090` also leaves dynamic-reference, 3-D, spill,
-explicit-intersection, array, and tokenizer-failure territory outside its
-boundary. `FF088` requires a tokenizer `#REF!` error operand: a matching text
-literal, quoted worksheet name, or tokenization failure stays quiet. JSON,
-Markdown, and SARIF output
-show only locations, static range coordinates, calculation-status flags,
-direct- or multi-cell-static scope, a multi-cell component size, and the
-saved-result fact, never formula text or cached values. `FF089` accepts only a valid saved
-formula-result cache whose exact error is `#REF!`; other saved errors, missing
-or malformed cache records, and locations already covered by `FF088` stay
-quiet. It is a high-severity record of the last saved display state, not proof
-of the formula's current result. The lint does not calculate formulas and fails
-closed if array metadata is incomplete.
+result is wrong. `FF091` accepts only recognized stored per-range Excel
+error-checking suppressions and emits aggregate warning categories and counts,
+never target ranges. It does not decide whether a suppressed prompt would
+apply, or whether its suppression was intentional. `FF087` remains the direct
+self-reference signal. `FF090` uses only a strongly connected component of
+resolved scalar static dependencies with at least two eligible ordinary formula
+cells; it never expands a range or evaluates a formula. Both circular-reference
+signals stay quiet when `iterate=true`; `FF090` also leaves dynamic-reference,
+3-D, spill, explicit-intersection, array, and tokenizer-failure territory
+outside its boundary. `FF088` requires a tokenizer `#REF!` error operand: a
+matching text literal, quoted worksheet name, or tokenization failure stays
+quiet. JSON, Markdown, and SARIF output show only locations, static range
+coordinates, calculation-status flags, direct- or multi-cell-static scope, a
+multi-cell component size, saved-result facts, and aggregate error-checking
+suppression counts—never formula text, cached values, or ignored-error target
+ranges. `FF089` accepts only a valid saved formula-result cache whose exact
+error is `#REF!`; other saved errors, missing or malformed cache records, and
+locations already covered by `FF088` stay quiet. It is a high-severity record
+of the last saved display state, not proof of the formula's current result. The
+lint does not calculate formulas and fails closed if array metadata is
+incomplete.
 
 It retains at most 10,000 total formula-lint findings by default; use
 `--max-formula-pattern-findings` to choose another positive reviewed bound.
@@ -149,7 +156,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.191.0
+  uses: SybilGambleyyu/formulafence@v0.192.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx

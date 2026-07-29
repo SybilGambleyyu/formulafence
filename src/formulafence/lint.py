@@ -40,6 +40,18 @@ _PATTERN_ORIENTATIONS = (
     ("column", 1, 0),
 )
 
+_IGNORED_ERROR_SUPPRESSION_FIELDS = (
+    ("evaluation_error", "evaluation_error_count"),
+    ("inconsistent_formula", "inconsistent_formula_count"),
+    ("formula_range_omission", "formula_range_omission_count"),
+    ("unlocked_formula", "unlocked_formula_count"),
+    ("empty_cell_reference", "empty_cell_reference_count"),
+    ("list_data_validation", "list_data_validation_count"),
+    ("calculated_column", "calculated_column_count"),
+    ("number_stored_as_text", "number_stored_as_text_count"),
+    ("two_digit_text_year", "two_digit_text_year_count"),
+)
+
 
 @dataclass(frozen=True)
 class _FormulaPatternEvidence:
@@ -353,6 +365,32 @@ def _has_incomplete_manual_calculation(snapshot: WorkbookSnapshot) -> bool:
     )
 
 
+def _ignored_error_suppression_details(
+    snapshot: WorkbookSnapshot,
+) -> dict[str, object] | None:
+    """Return safe evidence for recognized Excel error-checking suppressions.
+
+    FormulaFence's raw OOXML reader retains target ranges only in a private
+    signature because they can identify sensitive model locations. This lint
+    reports only recognized warning categories and their aggregate counts; it
+    does not decide whether a suppressed Excel prompt was correct or evaluate
+    a formula.
+    """
+    controls = snapshot.ignored_error_controls
+    suppressed_warning_counts = {
+        name: count
+        for name, field in _IGNORED_ERROR_SUPPRESSION_FIELDS
+        if (count := getattr(controls, field))
+    }
+    if not suppressed_warning_counts:
+        return None
+    return {
+        "suppressed_warning_counts": suppressed_warning_counts,
+        "suppressed_warning_rule_count": controls.ignored_error_rule_count,
+        "suppressed_warning_target_range_count": controls.target_range_count,
+    }
+
+
 def _direct_self_reference_locations(
     snapshot: WorkbookSnapshot,
     array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
@@ -597,11 +635,11 @@ def lint_snapshot(
     a pure local numeric aggregate is reported only when it stops before a
     short, contiguous numeric run on the same row or column. It also reports
     an explicitly unlocked formula on a protected sheet, an explicit incomplete
-    manual-calculation state for a formula workbook, direct and multi-cell
-    static circular references while iteration is disabled, an explicit broken
-    reference operand, and a saved broken-reference result. It never evaluates
-    formulas, and rejects incomplete array metadata before claiming ordinary-
-    cell coverage.
+    manual-calculation state for a formula workbook, stored error-checking
+    suppressions, direct and multi-cell static circular references while
+    iteration is disabled, an explicit broken reference operand, and a saved
+    broken-reference result. It never evaluates formulas, and rejects
+    incomplete array metadata before claiming ordinary-cell coverage.
     """
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
@@ -806,6 +844,23 @@ def lint_snapshot(
                     "calculation_mode": "manual",
                     "calculation_completed_before_save": False,
                 },
+            )
+        )
+    if details := _ignored_error_suppression_details(snapshot):
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF091",
+                severity="medium",
+                message=(
+                    "Workbook suppresses Excel error-checking prompts; review warnings "
+                    "may be hidden."
+                ),
+                details=details,
             )
         )
     direct_self_reference_locations = _direct_self_reference_locations(

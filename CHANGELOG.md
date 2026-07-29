@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.192.0 — 2026-07-28
+
+- Add medium-severity `FF091` to `formulafence lint`: it reports recognized
+  stored Excel error-checking suppressions whose review prompts may be hidden.
+- Reuse FormulaFence's hardened ignored-error inventory and retain only
+  aggregate warning categories, suppression-rule counts, and target-range
+  counts. Individual ranges, formulas, and values remain private; malformed or
+  unsupported material remains parser coverage evidence rather than being
+  exposed as `FF091` detail.
+
 ## 0.191.0 — 2026-07-28
 
 - Add high-severity `FF090` to `formulafence lint`: it reports an ordinary

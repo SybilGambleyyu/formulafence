@@ -5,6 +5,46 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel error-checking suppression lint — 2026-07-28
+
+Microsoft's [formula-error guidance](https://support.microsoft.com/en-US/Excel/detect-formula-errors-in-excel)
+explains that an ignored error no longer appears in later error checks until a
+user resets ignored errors. It also documents the formula, range-omission,
+unlocked-formula, empty-reference, validation, calculated-column, text-number,
+and two-digit-year prompt classes. SpreadsheetML's
+[`ignoredError`](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_ignoredError_topic_ID0EVK24.html)
+and Office 2010 [`ignoredErrors`](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/0d164d85-23bf-4d43-87c5-9fcde148aabe)
+records persist those per-range decisions. `FF091` therefore reports recognized
+stored suppressions as a medium-severity review prompt; it does not determine
+whether Excel would show a prompt or whether the suppression was justified.
+
+The detector reuses FormulaFence's hardened raw-OOXML ignored-error inventory.
+It emits only aggregate warning-category counts, total suppression-rule count,
+and total target-range count. Individual ranges, worksheet names, formulas,
+cell values, and cached values remain private. Malformed, unsupported, or
+otherwise unrecognized control material remains an existing parser coverage
+warning; `FF091` does not expose or claim to interpret that material.
+
+The controlled fixture covers all nine recognized suppression categories across
+both standard and Office 2010 declarations. Regression tests prove the shared
+finding cap, JSON/Markdown/SARIF redaction, a location-free SARIF result, and
+medium-versus-high CLI gates.
+
+The independent scan ran the full lint over the ten public ExceLint workbooks,
+the 820-formula finance ledger, and the 10-formula compatibility workbook: 12
+workbooks and 50,367 formula cells. It contained zero recognized ignored-error
+rules and emitted zero `FF091` findings. This is a prevalence check, not proof
+that the corpus contains no formula defects or that a workbook without stored
+suppression declarations has shown every possible Excel prompt.
+
+The release-versioned 0.192.0 source tree passed **1,369 tests in 94.45
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check`, installed into separate fresh
+environments with declared dependencies, and reported `FormulaFence 0.192.0`.
+Each reproduced one location-free `FF091` finding without rendering a formula,
+worksheet name, or ignored-error target: the high gate returned `0`, the medium
+gate returned `1`, and the aggregate rule and target-range counts remained.
+
 ## Multi-cell static circular-reference lint — 2026-07-28
 
 Microsoft's [circular-reference guidance](https://support.microsoft.com/en-US/Excel/remove-or-allow-a-circular-reference-in-excel)

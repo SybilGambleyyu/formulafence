@@ -54,6 +54,7 @@ from .helpers import (
     make_formula_defined_xlm_registration_model,
     make_formula_environment_information_model,
     make_formula_external_action_model,
+    make_ignored_error_model,
     make_model,
     make_office_custom_function_model,
     make_python_in_excel_model,
@@ -249,6 +250,13 @@ def test_lint_incomplete_manual_formula_calculation_is_medium(tmp_path) -> None:
     workbook.calculation.calcMode = "manual"
     workbook.calculation.calcCompleted = False
     workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "medium"]) == 1
+
+
+def test_lint_error_checking_suppression_is_medium(tmp_path) -> None:
+    workbook_path = make_ignored_error_model(tmp_path / "ignored-errors.xlsx")
 
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 0
     assert main(["lint", str(workbook_path), "--fail-on", "medium"]) == 1

@@ -4,6 +4,7 @@ from formulafence.formulas import (
     _EXCEL_UNQUALIFIED_NATIVE_FUNCTIONS,
     ParsedReference,
     StructuredTable,
+    approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
     extract_references,
@@ -254,6 +255,42 @@ def test_lookup_return_index_mismatches_keep_ambiguous_forms_quiet() -> None:
 
     for formula in quiet_formulas:
         assert lookup_return_index_mismatches(formula) == ()
+
+
+def test_approximate_lookup_direct_table_references_find_narrow_native_calls() -> None:
+    references = approximate_lookup_direct_table_references(
+        "=IFERROR(VLOOKUP(A2,'Input Sheet'!$B$2:$C$4,2)"
+        "+@HLOOKUP(D2,E2:G4,3,TRUE),0)"
+    )
+
+    assert [(function_name, reference.raw) for function_name, reference in references] == [
+        ("VLOOKUP", "'Input Sheet'!$B$2:$C$4"),
+        ("HLOOKUP", "E2:G4"),
+    ]
+
+
+def test_approximate_lookup_direct_table_references_keep_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=VLOOKUP(A2,B2:C4,2,FALSE)",
+        "=HLOOKUP(A2,B2:D4,2,0)",
+        "=VLOOKUP(A2,B2:C4,2,1)",
+        "=HLOOKUP(A2,B2:D4,2,TRUE())",
+        "=VLOOKUP(A2,B:B,2)",
+        "=HLOOKUP(A2,2:4,2,TRUE)",
+        "=VLOOKUP(A2,Table1[#All],2)",
+        "=HLOOKUP(A2,NamedTable,2,TRUE)",
+        "=VLOOKUP(A2,OFFSET(B2,0,0,3,2),2)",
+        "=HLOOKUP(A2,B2#,2,TRUE)",
+        "=VLOOKUP(A2,[Inputs.xlsx]Data!B2:C4,2)",
+        "=VLOOKUP(A2,B2:C4,2,)",
+        "=HLOOKUP(A2,B2:D4,2,TRUE,1)",
+        "=VLOOKUP(A2,B2:C4,2,#REF!)",
+        "=Vendor.VLOOKUP(A2,B2:C4,2)",
+        "=_xlfn.HLOOKUP(A2,B2:D4,2,TRUE)",
+    )
+
+    for formula in quiet_formulas:
+        assert approximate_lookup_direct_table_references(formula) == ()
 
 
 def test_index_literal_position_mismatch_count_finds_direct_native_calls() -> None:

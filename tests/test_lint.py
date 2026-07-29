@@ -1419,6 +1419,175 @@ def test_lint_index_literal_position_candidates_share_the_finding_cap(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_reports_approximate_lookup_unsorted_direct_numeric_vectors(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "C2": 1,
+            "D2": 10,
+            "C3": 3,
+            "D3": 30,
+            "C4": 2,
+            "D4": 20,
+            "E2": (
+                "=IFERROR(VLOOKUP(A2,C2:D4,2)"
+                "+@HLOOKUP(A2,F2:H3,2,TRUE),0)"
+            ),
+            "F2": 2,
+            "G2": 1,
+            "H2": 3,
+            "F3": 20,
+            "G3": 10,
+            "H3": 30,
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF101", "high", ("Model", "E2"))]
+    assert report.findings[0].details == {
+        "approximate_lookup_call_count": 2,
+        "unsorted_direct_numeric_lookup_vector_count": 2,
+        "evidence_scope": "approximate_lookup_direct_numeric_a1_vectors",
+    }
+
+
+def test_lint_approximate_lookup_sort_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=VLOOKUP(B2,C2:D4,2)",
+            "A3": "=HLOOKUP(B3,F2:H3,2,TRUE)",
+            "A4": "=VLOOKUP(B4,J2:K4,2,FALSE)",
+            "A5": "=VLOOKUP(B5,J2:K4,2,1)",
+            "A6": "=VLOOKUP(B6,N2:O4,2)",
+            "A7": "=VLOOKUP(B7,P:P,2)",
+            "A8": "=HLOOKUP(B8,2:4,2,TRUE)",
+            "A9": "=VLOOKUP(B9,Table1[#All],2)",
+            "A10": "=HLOOKUP(B10,NamedTable,2,TRUE)",
+            "A11": "=VLOOKUP(B11,[Inputs.xlsx]Data!C2:D4,2)",
+            "A12": "=Vendor.VLOOKUP(B12,C2:D4,2)",
+            "A13": "=VLOOKUP(B13,C2:D4,2,#REF!)",
+            "C2": 1,
+            "D2": 10,
+            "C3": 2,
+            "D3": 20,
+            "C4": 3,
+            "D4": 30,
+            "F2": 1,
+            "G2": 2,
+            "H2": 3,
+            "F3": 10,
+            "G3": 20,
+            "H3": 30,
+            "J2": 3,
+            "K2": 30,
+            "J3": 1,
+            "K3": 10,
+            "J4": 2,
+            "K4": 20,
+            "N2": "text",
+            "O2": 10,
+            "N3": "another",
+            "O3": 20,
+            "N4": "value",
+            "O4": 30,
+        },
+    )
+
+    assert "FF101" not in {finding.rule_id for finding in lint_snapshot(snapshot).findings}
+
+    array_territory = _snapshot(
+        tmp_path,
+        {
+            "B2": "=VLOOKUP(A2,C2:D4,2)",
+            "C2": 1,
+            "D2": 10,
+            "C3": 3,
+            "D3": 30,
+            "C4": 2,
+            "D4": 20,
+        },
+    )
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF101" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_approximate_lookup_sort_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=VLOOKUP(A2,C2:D4,2,FALSE)",
+            "B3": "=VLOOKUP(A3,C3:D5,2)",
+            "B4": "=VLOOKUP(A4,C4:D6,2,FALSE)",
+            "B5": "=VLOOKUP(A5,C5:D7,2,FALSE)",
+            "C2": 1,
+            "D2": 10,
+            "C3": 3,
+            "D3": 30,
+            "C4": 2,
+            "D4": 20,
+            "C5": 4,
+            "D5": 40,
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF101", "high", ("Model", "B3"))]
+
+
+def test_lint_approximate_lookup_sort_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=VLOOKUP(A2,C2:D4,2)",
+            "C2": 1,
+            "D2": 10,
+            "C3": 3,
+            "D3": 30,
+            "C4": 2,
+            "D4": 20,
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -2599,6 +2768,56 @@ def test_lint_index_literal_position_renderers_keep_values_private(
                 "text": (
                     "An INDEX call uses a literal row or column number outside "
                     "its direct static array."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_approximate_lookup_sort_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Private Inputs"
+    for row, value in enumerate((1, 3, 2), start=2):
+        inputs.cell(row=row, column=3, value=value)
+        inputs.cell(row=row, column=4, value=value * 10)
+    model = workbook.create_sheet("Model")
+    model["B2"] = (
+        "=VLOOKUP(A2,'Private Inputs'!$C$2:$D$4,2)+N(\"confidential\")"
+    )
+    path = tmp_path / "private-approximate-lookup.xlsx"
+    workbook.save(path)
+
+    report = lint_snapshot(load_snapshot(path))
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2:$D$4" not in rendered
+        assert "confidential" not in rendered
+        assert "VLOOKUP(A2" not in rendered
+        assert "FF101" in rendered
+    assert "## Approximate lookup sort evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "approximate_lookup_call_count": 1,
+        "unsorted_direct_numeric_lookup_vector_count": 1,
+        "evidence_scope": "approximate_lookup_direct_numeric_a1_vectors",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF101",
+            "name": "FF101",
+            "shortDescription": {
+                "text": (
+                    "An approximate VLOOKUP or HLOOKUP call uses a direct static "
+                    "numeric lookup vector that is not sorted ascending."
                 )
             },
         }

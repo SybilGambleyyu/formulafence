@@ -6599,6 +6599,28 @@ def lint_to_markdown(
                     call_count=_markdown_escape(evidence["index_call_count"]),
                 )
             )
+    approximate_lookup_sort_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF101"
+    ]
+    if approximate_lookup_sort_evidence:
+        lines.extend(["## Approximate lookup sort evidence", ""])
+        for location, evidence in approximate_lookup_sort_evidence:
+            lines.append(
+                "- {location}: {vector_count} direct static numeric lookup vectors "
+                "across {call_count} approximate VLOOKUP or HLOOKUP calls are not "
+                "sorted ascending."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    vector_count=_markdown_escape(
+                        evidence["unsorted_direct_numeric_lookup_vector_count"]
+                    ),
+                    call_count=_markdown_escape(
+                        evidence["approximate_lookup_call_count"]
+                    ),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6699,6 +6721,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF100": (
             "An INDEX call uses a literal row or column number outside its "
             "direct static array."
+        ),
+        "FF101": (
+            "An approximate VLOOKUP or HLOOKUP call uses a direct static numeric "
+            "lookup vector that is not sorted ascending."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

@@ -369,6 +369,21 @@ def test_lint_index_literal_position_mismatch_is_high(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
 
 
+def test_lint_approximate_lookup_unsorted_vector_is_high(tmp_path) -> None:
+    workbook_path = tmp_path / "approximate-lookup-unsorted.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    for row, value in enumerate((1, 3, 2), start=2):
+        worksheet.cell(row=row, column=3, value=value)
+        worksheet.cell(row=row, column=4, value=value * 10)
+    worksheet["B2"] = "=VLOOKUP(A2,C2:D4,2)"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
+
+
 def test_lint_direct_self_reference_is_high(tmp_path) -> None:
     workbook_path = tmp_path / "direct-self-reference.xlsx"
     workbook = Workbook()

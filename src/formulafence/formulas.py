@@ -350,6 +350,18 @@ _DIRECT_STATIC_A1_RANGE_ARGUMENT = re.compile(
     r"|\$?[A-Z]{1,3}:\$?[A-Z]{1,3})$",
     re.IGNORECASE,
 )
+# The approximate-lookup sort check must inspect every key in the referenced
+# vector. Whole-column references could span Excel's full grid and would turn a
+# deliberately local, static proof into unbounded work. Keep this companion
+# grammar to direct, bounded cell/range arguments only; full rows, whole
+# columns, names, structured references, external references, and computed
+# references stay outside that check.
+_DIRECT_STATIC_BOUNDED_A1_RANGE_ARGUMENT = re.compile(
+    r"^(?:(?:'(?:[^']|'')*'|[A-Z0-9_.]+)!)?"
+    r"\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}"
+    r"(?::\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6})?$",
+    re.IGNORECASE,
+)
 _CONDITIONAL_AGGREGATE_RANGE_SHAPE_FUNCTIONS = frozenset(
     {"SUMIFS", "COUNTIFS", "AVERAGEIFS", "MAXIFS", "MINIFS"}
 )
@@ -2110,10 +2122,19 @@ def _native_conditional_aggregate_function_name(token: object) -> str | None:
     return _OOXML_FUTURE_CONDITIONAL_AGGREGATE_FUNCTION_NAMES.get(function_name)
 
 
-def _direct_static_a1_range_shape(
-    tokens: Sequence[object], start: int, end: int
-) -> tuple[int, int] | None:
-    """Return one bounded direct A1 range's ``(width, height)``, if exact."""
+def _direct_static_a1_range_reference(
+    tokens: Sequence[object],
+    start: int,
+    end: int,
+    *,
+    allow_whole_columns: bool = True,
+) -> ParsedReference | None:
+    """Return one exact direct internal A1 range reference, if present.
+
+    ``allow_whole_columns`` is reserved for callers that only need a compact
+    structural shape. Callers that must inspect every referenced cell can turn
+    it off and retain a bounded traversal cost.
+    """
     meaningful = [
         position
         for position in range(start, end)
@@ -2128,7 +2149,12 @@ def _direct_static_a1_range_shape(
     ):
         return None
     value = str(getattr(token, "value", "")).strip()
-    if _DIRECT_STATIC_A1_RANGE_ARGUMENT.fullmatch(value) is None:
+    grammar = (
+        _DIRECT_STATIC_A1_RANGE_ARGUMENT
+        if allow_whole_columns
+        else _DIRECT_STATIC_BOUNDED_A1_RANGE_ARGUMENT
+    )
+    if grammar.fullmatch(value) is None:
         return None
     reference = parse_reference_token(value)
     if (
@@ -2150,6 +2176,20 @@ def _direct_static_a1_range_shape(
         )
     ):
         return None
+    return reference
+
+
+def _direct_static_a1_range_shape(
+    tokens: Sequence[object], start: int, end: int
+) -> tuple[int, int] | None:
+    """Return one bounded direct A1 range's ``(width, height)``, if exact."""
+    reference = _direct_static_a1_range_reference(tokens, start, end)
+    if reference is None:  # narrowed by the direct static parser
+        return None
+    assert reference.min_column is not None
+    assert reference.min_row is not None
+    assert reference.max_column is not None
+    assert reference.max_row is not None
     return (
         reference.max_column - reference.min_column + 1,
         reference.max_row - reference.min_row + 1,
@@ -2194,6 +2234,31 @@ def _direct_positive_integer_literal(
     """Return one direct positive integer literal without evaluating it."""
     value = _direct_nonnegative_integer_literal(tokens, start, end)
     return value if value not in {None, "0"} else None
+
+
+def _direct_logical_literal(
+    tokens: Sequence[object], start: int, end: int
+) -> bool | None:
+    """Return one direct Excel logical literal without coercing an expression."""
+    meaningful = [
+        position
+        for position in range(start, end)
+        if not _is_whitespace(tokens[position])
+    ]
+    if len(meaningful) != 1:
+        return None
+    token = tokens[meaningful[0]]
+    if not (
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "LOGICAL"
+    ):
+        return None
+    value = str(getattr(token, "value", "")).strip().upper()
+    if value == "TRUE":
+        return True
+    if value == "FALSE":
+        return False
+    return None
 
 
 def _direct_signed_integer_literal(
@@ -2501,6 +2566,65 @@ def lookup_return_index_mismatches(formula: str) -> tuple[str, ...]:
         if _positive_integer_literal_exceeds(index_literal, table_limit):
             mismatches.append(function_name)
     return tuple(mismatches)
+
+
+def approximate_lookup_direct_table_references(
+    formula: str,
+) -> tuple[tuple[str, ParsedReference], ...]:
+    """Return inspectable approximate legacy-lookup table references.
+
+    This token-only helper accepts native ``VLOOKUP`` and ``HLOOKUP`` calls
+    (optionally preceded by ``@``) only when their approximate-match behavior
+    is explicit through a direct ``TRUE`` literal or implicit through an
+    omitted fourth argument. The table must be one bounded, direct, internal
+    A1 cell/range; whole-column forms are intentionally excluded because a
+    caller may need to inspect every lookup-vector cell. It returns the native
+    function name and a private parsed reference, never values or a calculated
+    result. Numeric coercions, names, expressions, external references,
+    malformed calls, explicit broken references, and custom namespaces remain
+    outside the contract.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return ()
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return ()
+
+    references: list[tuple[str, ParsedReference]] = []
+    for position, token in enumerate(tokens):
+        function_name = _unqualified_native_function_name(token)
+        if function_name not in {"VLOOKUP", "HLOOKUP"}:
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if len(arguments) not in {3, 4} or any(
+            not any(
+                not _is_whitespace(tokens[argument_position])
+                for argument_position in range(start, end)
+            )
+            for start, end in arguments[:3]
+        ):
+            continue
+        if len(arguments) == 4 and _direct_logical_literal(tokens, *arguments[3]) is not True:
+            continue
+        table_reference = _direct_static_a1_range_reference(
+            tokens,
+            *arguments[1],
+            allow_whole_columns=False,
+        )
+        if table_reference is not None:
+            references.append((function_name, table_reference))
+    return tuple(references)
 
 
 def index_literal_position_mismatch_count(formula: str) -> int:

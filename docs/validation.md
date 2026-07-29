@@ -5,6 +5,62 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Approximate `VLOOKUP` / `HLOOKUP` sort lint — 2026-07-28
+
+Microsoft's [VLOOKUP reference](https://support.microsoft.com/en-us/excel/functions/vlookup-function)
+warns that the first column must be sorted ascending when `range_lookup` is
+`TRUE` or omitted; its [HLOOKUP reference](https://support.microsoft.com/en-gb/office/hlookup-function-a3034eec-b719-4ba3-bb65-e1ad662ed95f?appver=zxl900&helpid=xlmain11.chm60149&ns=excel&syslcid=2057&uilcid=2057&version=90)
+requires the first row to be sorted ascending for `TRUE`. FormulaFence adds
+high-severity `FF101` only where that precondition and its violation are both
+provable without calculating a lookup or inferring a value.
+
+`FF101` accepts unqualified native `VLOOKUP` and `HLOOKUP`, optionally preceded
+by Excel's display-only `@`, with exactly three nonempty arguments (the omitted
+approximate mode) or four with a direct logical `TRUE` fourth argument. Its
+table must be one bounded internal direct A1 cell/range, and every key in the
+first column for `VLOOKUP` or first row for `HLOOKUP` must be a stored finite
+numeric value. It reports only when adjacent keys descend. The deliberately
+narrow direct-logical boundary leaves numeric `1` quiet even though Excel can
+coerce it; it also leaves false/exact mode, names, Tables, external/3-D,
+whole-column, full-row, union, computed/dynamic, spill, implicit-intersection,
+malformed, explicit-broken-reference, nonnumeric or incomplete keys,
+namespaced forms, and array territory quiet. Findings retain only the affected
+location plus aggregate qualifying-call and unsorted-vector counts, never a
+formula, key value, table range, or sheet identity.
+
+A read-only aggregate OOXML survey reconstructed shared-formula instances
+across 469 public workbooks: 463 packages were ZIP/OOXML-readable and six were
+rejected. It scanned 62,781 ordinary formula instances, observed 1,438
+approximate legacy-lookup calls with direct tables, and found all 1,438 had a
+fully stored static numeric lookup vector. None of those vectors was unsorted,
+so zero formula cells would have received `FF101`; shared-formula translation
+had zero failures. This is a conservative compatibility scan over raw OOXML,
+not the FormulaFence safe-loader replay or a claim that every unreported lookup
+is safe. It intentionally has different readable-workbook and formula-count
+totals from the full lint replay below.
+
+The actual FormulaFence safe-loader replay over the same 469 workbooks loaded
+454, rejected 15 at established safety boundaries, inspected 60,823 formula
+cells, and emitted zero `FF101` findings. That replay uses the production lint
+path rather than the raw survey and is likewise a compatibility check, not a
+claim that every unreported lookup is safe.
+
+A focused FF101 helper/lint/CLI/output selection passed **8 tests in 0.86
+seconds**. It covers vertical and horizontal violations, `@`, omitted/direct
+`TRUE` mode, exact/numeric mode exclusions, nonnumeric/incomplete keys,
+reference and namespace exclusions, array territory, generic-outlier
+replacement, shared finding caps, CLI severity gates, and JSON/Markdown/SARIF
+redaction.
+
+The release-versioned 0.203.0 source tree passed **1,456 tests in 97.40
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment with declared dependencies, reporting `FormulaFence 0.203.0`.
+Both reproduced one redacted `FF101` finding aggregating two unsorted direct
+numeric lookup vectors across a three-argument `VLOOKUP` and direct-`TRUE`
+`HLOOKUP`: the critical gate returned `0`, the high gate returned `1`, and
+SARIF contained neither source formula, key values, nor table references.
+
 ## Direct-literal `INDEX` bounds lint — 2026-07-28
 
 Microsoft's [INDEX reference](https://support.microsoft.com/en-us/excel/functions/index-function)

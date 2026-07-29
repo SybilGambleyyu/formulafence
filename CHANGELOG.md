@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.203.0 — 2026-07-28
+
+- Add high-severity `FF101` to `formulafence lint`: it reports a native
+  approximate `VLOOKUP` or `HLOOKUP` only when its direct static numeric key
+  vector is provably not sorted ascending.
+- Keep the rule deliberately narrow and private: only omitted or direct `TRUE`
+  lookup mode, bounded internal A1 tables, and fully stored finite numeric keys
+  are eligible; names, Tables, external/whole-column, computed, exact/numeric
+  mode, incomplete, nonnumeric, broken-reference, array-territory, and
+  namespaced forms stay quiet. Findings retain only the cell location and
+  aggregate call/vector counts.
+
 ## 0.202.0 — 2026-07-28
 
 - Add high-severity `FF100` to `formulafence lint`: it reports an unqualified

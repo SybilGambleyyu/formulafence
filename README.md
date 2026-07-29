@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.202.0/formulafence-0.202.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.203.0/formulafence-0.203.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -68,9 +68,9 @@ for the current version.
 check for copy-paste, aggregate-range, protection, calculation-freshness,
 error-checking-suppression, Excel Table calculated-column, static-circular-reference,
 conditional-aggregate and `SUMPRODUCT` range-shape, `MMULT` matrix-dimension,
-legacy-lookup return-index, `RANDBETWEEN` literal-bound, `SUBTOTAL`
-function-code, `INDEX` literal-position, explicit-broken-reference, and
-saved-result risks that a version diff cannot see. It reports a copied-formula
+legacy-lookup return-index and approximate-sort, `RANDBETWEEN` literal-bound,
+`SUBTOTAL` function-code, `INDEX` literal-position, explicit-broken-reference,
+and saved-result risks that a version diff cannot see. It reports a copied-formula
 interruption only
 when the immediately preceding and following formulas have the same
 relative-copy fingerprint and a third contiguous peer repeats that fingerprint.
@@ -81,7 +81,7 @@ direct conditional-aggregate and `SUMPRODUCT` range-shape, direct static
 `MMULT` matrix-dimension, direct static legacy-lookup return-index, direct
 literal `RANDBETWEEN` bounds, direct literal `SUBTOTAL` function codes, direct
 literal `INDEX` row/column positions, explicit-broken-reference, and saved
-broken-reference-result signals. Together these produce nineteen reviewable
+broken-reference-result signals. Together these produce twenty reviewable
 findings:
 
 - `FF082`: a non-formula interruption. Blanks and stored error values are high;
@@ -123,6 +123,8 @@ findings:
   outside Excel's supported codes.
 - `FF100` (high): a native `INDEX` call uses a literal row or column number
   outside its direct static array.
+- `FF101` (high): an approximate native `VLOOKUP` or `HLOOKUP` uses a direct
+  static numeric lookup vector that is not sorted ascending.
 
 Use `--fail-on critical` to gate explicit broken-reference operands, or
 `--fail-on high` to also gate blank/error interruptions and direct static
@@ -131,7 +133,8 @@ self-references, multi-cell static cycles, direct conditional-aggregate or
 mismatches, direct static legacy-lookup return-index mismatches, direct static
 `CHOOSE` literal-index mismatches, direct literal `RANDBETWEEN` bound
 mismatches, direct literal `SUBTOTAL` function-code mismatches, direct literal
-`INDEX` row/column-position mismatches, and saved broken-reference results.
+`INDEX` row/column-position mismatches, approximate legacy-lookup sort
+mismatches, and saved broken-reference results.
 Use `--fail-on medium` to additionally require review of manual-value,
 formula-outlier, aggregate-range, explicit formula-protection,
 incomplete-manual-calculation, error-checking-suppression, and Table
@@ -233,6 +236,18 @@ namespaced forms, plus array-formula territory, remain outside the boundary.
 Its evidence retains only the affected location, number of qualifying calls,
 and number of out-of-range literal positions—never a formula, position value,
 array range spelling, or source sheet identity.
+`FF101` accepts only native `VLOOKUP` or `HLOOKUP` calls (optionally with `@`)
+with exactly three nonempty arguments (omitted lookup mode) or four with a
+direct logical `TRUE` fourth argument. Its table must be one bounded internal
+direct A1 cell/range, and every key in its first column (`VLOOKUP`) or first row
+(`HLOOKUP`) must be a stored finite numeric value. It reports only an adjacent
+descending pair, without calculating a lookup. Numeric `1`, false/exact mode,
+names, Tables, external, whole-column, full-row, union, computed, dynamic,
+spill, implicit-intersection, malformed, explicit-broken-reference, nonnumeric
+or incomplete keys, namespaced forms, and array-formula territory stay quiet.
+Its evidence retains only the affected location and aggregate qualifying-call
+and unsorted-vector counts—never a formula, key value, table range spelling,
+or source sheet identity.
 `FF090`
 uses only a strongly connected component of
 resolved scalar static dependencies with at least two eligible ordinary formula
@@ -248,11 +263,12 @@ suppression counts, Table exception kinds, conditional-aggregate mismatch
 counts, `SUMPRODUCT` mismatch counts, and `MMULT` incompatible-matrix-pair
 counts, legacy-lookup out-of-range-literal-index counts, and `RANDBETWEEN`
 inverted-literal-bound counts, `SUBTOTAL` unsupported-literal-function-code
-counts, and `INDEX` out-of-range-literal-index counts—never formula text,
+counts, `INDEX` out-of-range-literal-index counts, and approximate-lookup
+unsorted-direct-numeric-vector counts—never formula text,
 cached values, ignored-error target ranges, direct
 conditional-aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup range spellings,
-`INDEX` position values or direct array ranges, or Table master formulas. `FF089` accepts
-only a valid saved formula-result cache whose exact
+`INDEX` position values or direct array ranges, approximate-lookup key values
+or table ranges, or Table master formulas. `FF089` accepts only a valid saved formula-result cache whose exact
 error is `#REF!`; other saved errors, missing or malformed cache records, and
 locations already covered by `FF088` stay quiet. It is a high-severity record
 of the last saved display state, not proof of the formula's current result. The
@@ -281,7 +297,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.202.0
+  uses: SybilGambleyyu/formulafence@v0.203.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx

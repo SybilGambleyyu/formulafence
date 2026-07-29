@@ -118,6 +118,19 @@ financial correctness or replace model review.
   array territory, stay outside the boundary. It emits only a location plus
   aggregate call and out-of-range-literal-index counts; formulas, position
   values, array range spellings, and source sheets remain private.
+  Its approximate legacy-lookup sort signal accepts only unqualified native
+  `VLOOKUP` and `HLOOKUP` spellings (optionally with `@`) with exactly three
+  nonempty arguments (omitted lookup mode) or four with a direct logical
+  `TRUE` fourth argument. Its table must be one bounded internal direct A1
+  cell/range, and every first-column (`VLOOKUP`) or first-row (`HLOOKUP`) key
+  must be a stored finite numeric value. It reports only a descending adjacent
+  key pair without calculating a lookup. Numeric `1`, false/exact mode, names,
+  Tables, external/3-D, whole-column, full-row, union, computed/dynamic, spill,
+  implicit-intersection, malformed, explicit-broken-reference, nonnumeric or
+  incomplete keys, namespaced forms, and all array territory stay outside the
+  boundary. It emits only a location plus aggregate qualifying-call and
+  unsorted-direct-numeric-vector counts; formulas, key values, table range
+  spellings, and source sheets remain private.
   Its direct
   circular-reference signal accepts only an ordinary formula with a resolved
   scalar static dependency directly back to itself while workbook `iterate` is
@@ -135,13 +148,14 @@ financial correctness or replace model review.
   incompatible-matrix-pair counts, legacy-lookup out-of-range-literal-index
   counts, `CHOOSE` out-of-range-literal-index counts, `RANDBETWEEN`
   inverted-literal-bound counts, `SUBTOTAL` unsupported-literal-function-code
-  counts, `INDEX` out-of-range-literal-index counts, direct- or multi-cell-
+  counts, `INDEX` out-of-range-literal-index counts, approximate-lookup
+  unsorted-direct-numeric-vector counts, direct- or multi-cell-
   static scope, and a multi-cell component size, never formula text, cell
   values, cached results, ignored-error target ranges, direct conditional-
   aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup ranges, `CHOOSE` values,
   `RANDBETWEEN` literal values, `SUBTOTAL` function-code or reference material,
-  `INDEX` position values or direct array ranges, Table identities, or Table
-  master formulas.
+  `INDEX` position values or direct array ranges, approximate-lookup key values
+  or table ranges, Table identities, or Table master formulas.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import re
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -13,6 +15,8 @@ from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter, range_bo
 from formulafence.formulas import (
     MAX_EXCEL_COLUMN,
     MAX_EXCEL_ROW,
+    ParsedReference,
+    approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
     index_literal_position_mismatch_count,
@@ -88,6 +92,14 @@ class _AggregateOmissionCandidate:
     referenced_range: str
     omitted_range: str
     omitted_cell_count: int
+
+
+@dataclass(frozen=True)
+class _StaticNumericAxis:
+    """One sorted axis of stored finite numeric cell values."""
+
+    positions: tuple[int, ...]
+    values: tuple[Real, ...]
 
 
 def _location_sort_key(location: CellKey) -> tuple[str, int, int]:
@@ -622,6 +634,164 @@ def _index_literal_position_candidates(
     return tuple(candidates)
 
 
+def _is_static_finite_numeric_cell(cell: object) -> bool:
+    """Return whether a snapshot cell is one stored finite numeric value."""
+    value = getattr(cell, "value", None)
+    if not (
+        getattr(cell, "cell_type", None) == "value"
+        and isinstance(value, Real)
+        and not isinstance(value, bool)
+    ):
+        return False
+    try:
+        return math.isfinite(value)
+    except TypeError:  # defensive for unusual ``Real`` implementations
+        return False
+
+
+def _static_numeric_lookup_axes(
+    snapshot: WorkbookSnapshot,
+) -> tuple[
+    dict[tuple[str, int], _StaticNumericAxis],
+    dict[tuple[str, int], _StaticNumericAxis],
+]:
+    """Index stored finite numeric values by column and row without ranges.
+
+    A candidate can prove an approximate lookup vector only when every cell in
+    its bounded span is present here. Keeping sparse positional indexes avoids
+    expanding a large declared range merely to discover a blank or formula.
+    """
+    by_column: dict[tuple[str, int], list[tuple[int, Real]]] = defaultdict(list)
+    by_row: dict[tuple[str, int], list[tuple[int, Real]]] = defaultdict(list)
+    for location, cell in snapshot.cells.items():
+        if not _is_static_finite_numeric_cell(cell):
+            continue
+        row, column = coordinate_to_tuple(location[1])
+        value = cell.value
+        assert isinstance(value, Real) and not isinstance(value, bool)
+        by_column[(location[0], column)].append((row, value))
+        by_row[(location[0], row)].append((column, value))
+
+    def freeze(
+        source: dict[tuple[str, int], list[tuple[int, Real]]],
+    ) -> dict[tuple[str, int], _StaticNumericAxis]:
+        result: dict[tuple[str, int], _StaticNumericAxis] = {}
+        for key, entries in source.items():
+            entries.sort()
+            positions, values = zip(*entries, strict=True)
+            result[key] = _StaticNumericAxis(positions=positions, values=values)
+        return result
+
+    return freeze(by_column), freeze(by_row)
+
+
+def _contiguous_static_numeric_axis_values(
+    axis: _StaticNumericAxis | None,
+    minimum: int,
+    maximum: int,
+) -> tuple[Real, ...] | None:
+    """Return a fully stored numeric interval without walking missing cells."""
+    if axis is None:
+        return None
+    start = bisect_left(axis.positions, minimum)
+    end = bisect_right(axis.positions, maximum)
+    if end - start != maximum - minimum + 1:
+        return None
+    return axis.values[start:end]
+
+
+def _approximate_lookup_vector_is_unsorted(
+    function_name: str,
+    reference: ParsedReference,
+    origin_sheet: str,
+    sheet_lookup: dict[str, str],
+    numeric_columns: dict[tuple[str, int], _StaticNumericAxis],
+    numeric_rows: dict[tuple[str, int], _StaticNumericAxis],
+) -> bool:
+    """Prove one approximate lookup's direct numeric key vector is unsorted."""
+    sheet = sheet_lookup.get((reference.sheet or origin_sheet).casefold())
+    if sheet is None:
+        return False
+    if (
+        reference.min_column is None
+        or reference.min_row is None
+        or reference.max_column is None
+        or reference.max_row is None
+    ):
+        return False
+    if function_name == "VLOOKUP":
+        values = _contiguous_static_numeric_axis_values(
+            numeric_columns.get((sheet, reference.min_column)),
+            reference.min_row,
+            reference.max_row,
+        )
+    else:
+        values = _contiguous_static_numeric_axis_values(
+            numeric_rows.get((sheet, reference.min_row)),
+            reference.min_column,
+            reference.max_column,
+        )
+    return values is not None and any(
+        previous > following
+        for previous, following in zip(values, values[1:], strict=False)
+    )
+
+
+def _approximate_lookup_sort_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int], ...]:
+    """Return approximate lookups with provably unsorted numeric key vectors.
+
+    The formula helper accepts only native ``VLOOKUP`` / ``HLOOKUP`` calls
+    (optionally preceded by ``@``), direct ``TRUE`` or omitted lookup mode,
+    and one bounded direct internal A1 table. This layer requires every key in
+    the table's first column or row to be a stored finite numeric value before
+    comparing its order. It retains only aggregate call counts, never formula
+    text, table references, or source numeric values.
+    """
+    numeric_columns, numeric_rows = _static_numeric_lookup_axes(snapshot)
+    sheet_lookup = {sheet.casefold(): sheet for sheet in snapshot.sheets}
+    candidates: list[tuple[CellKey, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        unsorted_lookup_count = sum(
+            _approximate_lookup_vector_is_unsorted(
+                function_name,
+                reference,
+                location[0],
+                sheet_lookup,
+                numeric_columns,
+                numeric_rows,
+            )
+            for function_name, reference in approximate_lookup_direct_table_references(
+                formula
+            )
+        )
+        if not unsorted_lookup_count:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append((location, unsorted_lookup_count))
+    return tuple(candidates)
+
+
 def _range_intersects_array_territory(
     snapshot: WorkbookSnapshot,
     *,
@@ -1117,7 +1287,8 @@ def lint_snapshot(
     static legacy-lookup return-index mismatches, direct static ``CHOOSE``
     literal-index mismatches, direct literal ``RANDBETWEEN`` bound mismatches,
     direct literal ``SUBTOTAL`` function-code mismatches, direct literal
-    ``INDEX`` row/column-position mismatches, direct and multi-cell static
+    ``INDEX`` row/column-position mismatches, approximate legacy lookups with
+    visibly unsorted direct numeric key vectors, direct and multi-cell static
     circular references while iteration is disabled, an explicit broken
     reference operand, and a saved broken-reference result. It never evaluates
     formulas, and rejects incomplete array metadata before claiming ordinary-
@@ -1215,6 +1386,21 @@ def lint_snapshot(
         ),
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
+    approximate_lookup_candidates = _approximate_lookup_sort_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=(
+            len(conditional_aggregate_candidates)
+            + len(sumproduct_candidates)
+            + len(mmult_candidates)
+            + len(lookup_candidates)
+            + len(choose_candidates)
+            + len(randbetween_candidates)
+            + len(subtotal_candidates)
+            + len(index_candidates)
+        ),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
     structural_formula_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
@@ -1232,6 +1418,9 @@ def lint_snapshot(
         location for location, _ in subtotal_candidates
     )
     structural_formula_locations.update(location for location, _ in index_candidates)
+    structural_formula_locations.update(
+        location for location, _ in approximate_lookup_candidates
+    )
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
     for preceding_location in sorted(snapshot.cells, key=_location_sort_key):
@@ -1316,6 +1505,8 @@ def lint_snapshot(
                     + len(choose_candidates)
                     + len(randbetween_candidates)
                     + len(subtotal_candidates)
+                    + len(index_candidates)
+                    + len(approximate_lookup_candidates)
                     >= max_formula_pattern_findings
                 ):
                     raise FormulaFenceError(
@@ -1552,6 +1743,33 @@ def lint_snapshot(
                     "index_call_count": index_call_count,
                     "out_of_range_literal_index_count": index_call_count,
                     "evidence_scope": "index_direct_a1_array_literal_indices",
+                },
+            )
+        )
+
+    for location, approximate_lookup_call_count in approximate_lookup_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF101",
+                severity="high",
+                message=(
+                    "An approximate VLOOKUP or HLOOKUP call uses a direct static "
+                    "numeric lookup vector that is not sorted ascending."
+                ),
+                location=location,
+                details={
+                    "approximate_lookup_call_count": approximate_lookup_call_count,
+                    "unsorted_direct_numeric_lookup_vector_count": (
+                        approximate_lookup_call_count
+                    ),
+                    "evidence_scope": (
+                        "approximate_lookup_direct_numeric_a1_vectors"
+                    ),
                 },
             )
         )

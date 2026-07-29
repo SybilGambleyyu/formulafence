@@ -787,14 +787,15 @@ def test_lint_range_shape_rules_share_the_finding_cap(
             "A2": "=SUMIFS(C2:C10,A2:A12,A14)",
             "A3": "=SUMPRODUCT(C2:C10,A2:A12)",
             "A4": "=MMULT(A2:B4,C2:D5)",
+            "A5": "=VLOOKUP(A2,C2:D4,3,FALSE)",
         },
     )
 
     with pytest.raises(
         FormulaFenceError,
-        match="max_formula_pattern_findings=2",
+        match="max_formula_pattern_findings=3",
     ):
-        lint_snapshot(snapshot, max_formula_pattern_findings=2)
+        lint_snapshot(snapshot, max_formula_pattern_findings=3)
 
 
 def test_lint_reports_direct_mmult_dimension_mismatches(
@@ -876,6 +877,98 @@ def test_lint_mmult_dimension_candidates_share_the_finding_cap(
             "B4": "=A4*2",
             "B5": "=A5*2",
             "E2": "=MMULT(C2:D4,A2:B6)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
+def test_lint_reports_direct_lookup_return_index_mismatches(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": (
+                "=IFERROR(VLOOKUP(A2,'Input Sheet'!$C$2:$D$6,3,FALSE)"
+                "+@HLOOKUP(B2,G2:H4,4,0),0)"
+            ),
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF096", "high", ("Model", "E2"))]
+    assert report.findings[0].details == {
+        "lookup_call_count": 2,
+        "out_of_range_literal_index_count": 2,
+        "evidence_scope": "lookup_direct_a1_table_literal_index",
+    }
+
+
+def test_lint_lookup_return_index_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=VLOOKUP(A2,C2:E6,3,FALSE)",
+            "A3": "=HLOOKUP(A2,C2:E4,3,FALSE)",
+            "A4": "=VLOOKUP(A2,NamedTable,4,FALSE)",
+            "A5": "=HLOOKUP(A2,Table1[Key],4,FALSE)",
+            "A6": "=VLOOKUP(A2,OFFSET(C2,0,0,5,3),4,FALSE)",
+            "A7": "=HLOOKUP(A2,C2#,4,FALSE)",
+            "A8": "=VLOOKUP(A2,[Inputs.xlsx]Data!C2:E6,4,FALSE)",
+            "A9": "=HLOOKUP(A2,C2:E4,D2,FALSE)",
+            "A10": "=VLOOKUP(A2,C2:E6,1+3,FALSE)",
+            "A11": "=HLOOKUP(A2,C2:E4,4.0,FALSE)",
+            "A12": "=VLOOKUP(A2,C2:E6,4,#REF!)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert "FF096" not in {finding.rule_id for finding in report.findings}
+
+
+def test_lint_lookup_return_index_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=VLOOKUP(A2,C2:D6,2,FALSE)",
+            "B3": "=VLOOKUP(A3,C3:D7,3,FALSE)",
+            "B4": "=VLOOKUP(A4,C4:D8,2,FALSE)",
+            "B5": "=VLOOKUP(A5,C5:D9,2,FALSE)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF096", "high", ("Model", "B3"))]
+
+
+def test_lint_lookup_return_index_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=VLOOKUP(A2,C2:D6,3,FALSE)",
         },
     )
 
@@ -1850,6 +1943,48 @@ def test_lint_mmult_dimension_renderers_keep_ranges_private(
                 "text": (
                     "An MMULT call uses direct static arrays with incompatible "
                     "matrix dimensions."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_lookup_return_index_renderers_keep_ranges_private(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=VLOOKUP(A2,'Private Inputs'!$C$2:$D$6,3,FALSE)",
+        },
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2:$D$6" not in rendered
+        assert "FF096" in rendered
+    assert "## Lookup return-index evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "lookup_call_count": 1,
+        "out_of_range_literal_index_count": 1,
+        "evidence_scope": "lookup_direct_a1_table_literal_index",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF096",
+            "name": "FF096",
+            "shortDescription": {
+                "text": (
+                    "A VLOOKUP or HLOOKUP call uses a literal return index outside "
+                    "its direct static table range."
                 )
             },
         }

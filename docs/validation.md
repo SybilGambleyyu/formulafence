@@ -5,6 +5,61 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct-static legacy lookup return-index lint — 2026-07-28
+
+Microsoft's [VLOOKUP reference](https://support.microsoft.com/en-us/excel/functions/vlookup-function)
+states that `col_index_num` greater than the number of table-array columns
+returns `#REF!`; its [HLOOKUP reference](https://support.microsoft.com/en-us/excel/hlookup-function)
+states the equivalent row-index/table-array-row boundary. FormulaFence therefore
+adds high-severity `FF096` only when that return-index error is statically
+provable without evaluating a formula.
+
+`FF096` accepts unqualified native `VLOOKUP` and `HLOOKUP`, optionally
+preceded by Excel's display-only `@`, with exactly three or four comma-separated
+arguments. The table argument must be one direct bounded internal A1
+cell/range or whole-column reference and the return index must be one direct
+positive integer literal. The detector compares a `VLOOKUP` index with table
+width or an `HLOOKUP` index with table height and retains only aggregate call
+and out-of-range-literal-index counts. It does not inspect lookup or table
+values. Names, Tables, external and 3-D references, full rows, unions,
+arithmetic or nested computed expressions, dynamic references, spills,
+implicit intersection, malformed calls, nonliteral or nonpositive indices,
+explicit broken references, array territory, and arbitrary namespaces remain
+quiet. Controlled fixtures cover compatible bounds, whole columns, multiple
+and nested calls, `@`, very long literal indices, malformed arity, names,
+Tables, external references, `OFFSET`, spills, implicit intersection, full
+rows, computed/decimal/positive-prefix indices, custom and `_xlfn`
+namespaces, high-versus-critical CLI behavior, shared-cap behavior,
+generic-outlier replacement, and JSON/Markdown/SARIF redaction.
+
+The full-lint replay of 12 public
+[ExceLint fixtures](https://github.com/ExceLint/ExceLint/tree/e8a8efd252a090945be8683ed42cfd714e8bb4b1),
+69 public [Calamine test workbooks](https://github.com/tafia/calamine/tree/f059beb13f733923f229c2977cb469443d3ddf07/tests),
+384 public [ClosedXML workbook resources](https://github.com/ClosedXML/ClosedXML/tree/6762b849342809be95467cdfbe426a64ad11d2bd/ClosedXML.Tests/Resource),
+and four public [DataAnalystPortfolioProjects workbooks](https://github.com/PriyankaJhaTheDeveloper/DataAnalystPortfolioProjects/tree/7e69f79079f2655878387deb6a15e86d85d60d39)
+saw 469 workbooks, loaded 454, rejected 15 at existing safety boundaries, and
+inspected 60,823 formula cells. It saw 3,244 native legacy lookup calls and
+emitted zero `FF096` findings. Of those calls, 3,153 met the direct-static
+table and literal-index grammar (2,969 `VLOOKUP`, 184 `HLOOKUP`), and every one
+was within bounds. The remaining 91 `VLOOKUP` calls had a nonstatic table
+argument or nonliteral index and correctly remained outside the rule. This is a
+compatibility and false-positive boundary check, not a claim about every
+unreported formula.
+
+A focused helper/lint/CLI/output run passed **200 tests in 9.13 seconds**
+before release-wide validation. It exercises the structural rule without
+calculating a workbook or exposing source formulas or ranges in rendered
+evidence.
+
+The release-versioned 0.198.0 source tree passed **1,416 tests in 95.76
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment with declared dependencies, reporting `FormulaFence 0.198.0`.
+Both reproduced two redacted `FF096` findings—one cross-sheet bounded-table
+`VLOOKUP` call and one `@HLOOKUP` bounded-table call: the critical gate returned
+`0`, the high gate returned `1`, and SARIF contained neither source-sheet nor
+source-range spellings.
+
 ## Direct-static `MMULT` inner-dimension lint — 2026-07-28
 
 Microsoft's [MMULT reference](https://support.microsoft.com/en-us/excel/functions/mmult-function)

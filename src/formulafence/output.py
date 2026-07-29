@@ -6503,6 +6503,25 @@ def lint_to_markdown(
                     call_count=_markdown_escape(evidence["mmult_call_count"]),
                 )
             )
+    lookup_return_index_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF096"
+    ]
+    if lookup_return_index_evidence:
+        lines.extend(["## Lookup return-index evidence", ""])
+        for location, evidence in lookup_return_index_evidence:
+            lines.append(
+                "- {location}: {index_count} direct static lookup calls across "
+                "{call_count} calls use out-of-range literal return indices."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    index_count=_markdown_escape(
+                        evidence["out_of_range_literal_index_count"]
+                    ),
+                    call_count=_markdown_escape(evidence["lookup_call_count"]),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6584,6 +6603,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF094": "A SUMPRODUCT call uses direct static ranges with different shapes.",
         "FF095": (
             "An MMULT call uses direct static arrays with incompatible matrix dimensions."
+        ),
+        "FF096": (
+            "A VLOOKUP or HLOOKUP call uses a literal return index outside its "
+            "direct static table range."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

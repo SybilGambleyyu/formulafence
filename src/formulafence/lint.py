@@ -14,6 +14,7 @@ from formulafence.formulas import (
     MAX_EXCEL_COLUMN,
     MAX_EXCEL_ROW,
     conditional_aggregate_range_shape_mismatches,
+    lookup_return_index_mismatches,
     mmult_dimension_mismatch_count,
     parse_reference_token,
     sumproduct_range_shape_mismatches,
@@ -406,6 +407,48 @@ def _mmult_dimension_mismatch_candidates(
                 f"max_formula_pattern_findings={max_formula_pattern_findings}."
             )
         candidates.append((location, mismatch_count))
+    return tuple(candidates)
+
+
+def _lookup_return_index_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int], ...]:
+    """Return cells with a provable static legacy-lookup return-index error.
+
+    The formula helper accepts only native ``VLOOKUP`` and ``HLOOKUP`` calls
+    (optionally preceded by ``@``), a direct bounded internal A1 table range,
+    and a direct positive integer return-index literal. This layer adds
+    workbook context: ordinary inspectable formula cells only, no array
+    territory, and no explicit broken-reference operand. Findings retain only
+    an aggregate count, never formula text, range spellings, or source sheet
+    identity.
+    """
+    candidates: list[tuple[CellKey, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        mismatches = lookup_return_index_mismatches(formula)
+        if not mismatches:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append((location, len(mismatches)))
     return tuple(candidates)
 
 
@@ -900,11 +943,12 @@ def lint_snapshot(
     manual-calculation state for a formula workbook, stored error-checking
     suppressions, isolated interior Excel Table calculated-column exceptions,
     direct static conditional-aggregate and ``SUMPRODUCT`` range-shape
-    mismatches, direct static ``MMULT`` matrix-dimension mismatches, direct and
-    multi-cell static circular references while iteration is disabled, an
-    explicit broken reference operand, and a saved broken-reference result. It
-    never evaluates formulas, and rejects incomplete array metadata before
-    claiming ordinary-cell coverage.
+    mismatches, direct static ``MMULT`` matrix-dimension mismatches, direct
+    static legacy-lookup return-index mismatches, direct and multi-cell static
+    circular references while iteration is disabled, an explicit broken
+    reference operand, and a saved broken-reference result. It never evaluates
+    formulas, and rejects incomplete array metadata before claiming ordinary-
+    cell coverage.
     """
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
@@ -938,12 +982,25 @@ def lint_snapshot(
         ),
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
-    range_shape_locations = {
+    lookup_candidates = _lookup_return_index_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=(
+            len(conditional_aggregate_candidates)
+            + len(sumproduct_candidates)
+            + len(mmult_candidates)
+        ),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
+    structural_formula_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
     }
-    range_shape_locations.update(location for location, _, _ in sumproduct_candidates)
-    range_shape_locations.update(location for location, _ in mmult_candidates)
+    structural_formula_locations.update(
+        location for location, _, _ in sumproduct_candidates
+    )
+    structural_formula_locations.update(location for location, _ in mmult_candidates)
+    structural_formula_locations.update(location for location, _ in lookup_candidates)
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
     for preceding_location in sorted(snapshot.cells, key=_location_sort_key):
@@ -973,7 +1030,7 @@ def lint_snapshot(
                 continue
             if _is_array_member(snapshot, target_location, array_ranges_by_sheet):
                 continue
-            if target_location in range_shape_locations:
+            if target_location in structural_formula_locations:
                 continue
 
             target = snapshot.cells.get(target_location)
@@ -1024,6 +1081,7 @@ def lint_snapshot(
                     + len(conditional_aggregate_candidates)
                     + len(sumproduct_candidates)
                     + len(mmult_candidates)
+                    + len(lookup_candidates)
                     >= max_formula_pattern_findings
                 ):
                     raise FormulaFenceError(
@@ -1145,6 +1203,29 @@ def lint_snapshot(
                     "mmult_call_count": mmult_call_count,
                     "incompatible_direct_matrix_pair_count": mmult_call_count,
                     "evidence_scope": "mmult_direct_a1_arrays",
+                },
+            )
+        )
+
+    for location, lookup_call_count in lookup_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF096",
+                severity="high",
+                message=(
+                    "A VLOOKUP or HLOOKUP call uses a literal return index outside "
+                    "its direct static table range."
+                ),
+                location=location,
+                details={
+                    "lookup_call_count": lookup_call_count,
+                    "out_of_range_literal_index_count": lookup_call_count,
+                    "evidence_scope": "lookup_direct_a1_table_literal_index",
                 },
             )
         )

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.198.0 — 2026-07-28
+
+- Add high-severity `FF096` to `formulafence lint`: it reports an unqualified
+  native `VLOOKUP` or `HLOOKUP` call only when a direct static internal A1
+  cell/range or whole-column table has a provably out-of-range literal return
+  index.
+- Keep the rule deliberately narrow and private: names, Tables, external or
+  3-D references, full rows, unions, computed/dynamic/spill/implicit forms,
+  nonliteral or nonpositive indices, malformed calls, explicit broken
+  references, array territory, and arbitrary namespaces stay quiet. Output
+  retains only aggregate call and out-of-range-literal-index counts.
+
 ## 0.197.0 — 2026-07-28
 
 - Add high-severity `FF095` to `formulafence lint`: it reports an unqualified

@@ -2156,6 +2156,45 @@ def _direct_static_a1_range_shape(
     )
 
 
+def _direct_positive_integer_literal(
+    tokens: Sequence[object], start: int, end: int
+) -> str | None:
+    """Return one direct positive integer literal without evaluating it.
+
+    The normalized decimal string deliberately avoids converting an
+    arbitrarily long formula token to ``int``. Callers can compare it against
+    their bounded structural limit lexically. Unary signs, decimal notation,
+    arithmetic, names, and references remain outside this narrow static
+    contract.
+    """
+    meaningful = [
+        position
+        for position in range(start, end)
+        if not _is_whitespace(tokens[position])
+    ]
+    if len(meaningful) != 1:
+        return None
+    token = tokens[meaningful[0]]
+    if not (
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "NUMBER"
+    ):
+        return None
+    value = str(getattr(token, "value", "")).strip()
+    if not value.isascii() or not value.isdecimal():
+        return None
+    normalized = value.lstrip("0")
+    return normalized or None
+
+
+def _positive_integer_literal_exceeds(value: str, limit: int) -> bool:
+    """Return whether normalized decimal ``value`` is greater than ``limit``."""
+    limit_text = str(limit)
+    return len(value) > len(limit_text) or (
+        len(value) == len(limit_text) and value > limit_text
+    )
+
+
 def conditional_aggregate_range_shape_mismatches(
     formula: str,
 ) -> tuple[tuple[str, int], ...]:
@@ -2318,6 +2357,54 @@ def mmult_dimension_mismatch_count(formula: str) -> int:
         if first_column_count != second_row_count:
             mismatch_count += 1
     return mismatch_count
+
+
+def lookup_return_index_mismatches(formula: str) -> tuple[str, ...]:
+    """Find provable direct-static return-index errors in legacy lookups.
+
+    This scans formula tokens only; it does not resolve names, inspect Table
+    identities, calculate a formula, or infer values. A call is deliberately
+    ignored unless it is an unqualified native ``VLOOKUP`` or ``HLOOKUP``
+    (optionally preceded by ``@``), has exactly three or four arguments, uses
+    one direct bounded internal A1 cell/range or whole-column table argument,
+    and supplies a direct positive integer literal as its return index. A
+    finding is returned only when a ``VLOOKUP`` index exceeds that table's
+    width or an ``HLOOKUP`` index exceeds its height. All dynamic and otherwise
+    ambiguous formulas remain outside the finding boundary.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return ()
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return ()
+
+    mismatches: list[str] = []
+    for position, token in enumerate(tokens):
+        function_name = _unqualified_native_function_name(token)
+        if function_name not in {"VLOOKUP", "HLOOKUP"}:
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if len(arguments) not in {3, 4}:
+            continue
+        table_shape = _direct_static_a1_range_shape(tokens, *arguments[1])
+        index_literal = _direct_positive_integer_literal(tokens, *arguments[2])
+        if table_shape is None or index_literal is None:
+            continue
+        table_limit = table_shape[0] if function_name == "VLOOKUP" else table_shape[1]
+        if _positive_integer_literal_exceeds(index_literal, table_limit):
+            mismatches.append(function_name)
+    return tuple(mismatches)
 
 
 def _function_lookup_key(token: object) -> str:

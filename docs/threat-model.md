@@ -69,6 +69,18 @@ financial correctness or replace model review.
   references, and all array territory stay outside the boundary. It emits only
   a location plus aggregate call and incompatible-matrix-pair counts; formulas,
   range spellings, and source sheets remain private.
+  Its legacy-lookup return-index signal accepts only unqualified native
+  `VLOOKUP` and `HLOOKUP` spellings (optionally with `@`) with exactly three or
+  four comma-separated arguments. Its table argument must be one bounded,
+  internal direct A1 cell/range or whole-column reference and its return index
+  one direct positive integer literal. It compares a `VLOOKUP` index with table
+  width or an `HLOOKUP` index with table height, without calculation or
+  inspecting lookup/table values. Names, Tables, external/3-D/full-row/union
+  references, computed or dynamic expressions, spills, implicit intersection,
+  malformed formulas, nonliteral or nonpositive indices, explicit broken
+  references, and all array territory stay outside the boundary. It emits only
+  a location plus aggregate call and out-of-range-literal-index counts;
+  formulas, range spellings, and source sheets remain private.
   Its direct
   circular-reference signal accepts only an ordinary formula with a resolved
   scalar static dependency directly back to itself while workbook `iterate` is
@@ -83,10 +95,11 @@ financial correctness or replace model review.
   evidence needs them, static range coordinates, the two calculation-status
   flags, aggregate error-checking suppression counts, Table exception kinds,
   conditional-aggregate and `SUMPRODUCT` mismatch counts, `MMULT`
-  incompatible-matrix-pair counts, direct- or multi-cell-static scope, and a
-  multi-cell component size, never formula text, cell values, cached results,
-  ignored-error target ranges, direct conditional-aggregate, `SUMPRODUCT`, or
-  `MMULT` ranges, Table identities, or Table master formulas.
+  incompatible-matrix-pair counts, legacy-lookup out-of-range-literal-index
+  counts, direct- or multi-cell-static scope, and a multi-cell component size,
+  never formula text, cell values, cached results, ignored-error target ranges,
+  direct conditional-aggregate, `SUMPRODUCT`, `MMULT`, or legacy-lookup ranges,
+  Table identities, or Table master formulas.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not

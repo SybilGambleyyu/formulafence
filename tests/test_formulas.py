@@ -10,6 +10,7 @@ from formulafence.formulas import (
     has_broken_reference,
     inspect_formula,
     lambda_parameter_count,
+    lookup_return_index_mismatches,
     mmult_dimension_mismatch_count,
     parse_external_link_indexed_defined_name_reference,
     parse_external_link_indexed_sheet_defined_name_reference,
@@ -197,6 +198,58 @@ def test_mmult_dimension_mismatch_count_keeps_ambiguous_forms_quiet() -> None:
 
     for formula in quiet_formulas:
         assert mmult_dimension_mismatch_count(formula) == 0
+
+
+def test_lookup_return_index_mismatches_find_direct_native_calls() -> None:
+    assert lookup_return_index_mismatches(
+        "=VLOOKUP(A2,C2:E6,4,FALSE)"
+    ) == ("VLOOKUP",)
+    assert lookup_return_index_mismatches(
+        "=HLOOKUP(A2,C2:E4,4,FALSE)"
+    ) == ("HLOOKUP",)
+    assert lookup_return_index_mismatches(
+        "=VLOOKUP(A2,$C:$D,3,FALSE)"
+    ) == ("VLOOKUP",)
+    assert lookup_return_index_mismatches(
+        "=VLOOKUP(A2,C2:E6,9999999999999999999999999999,FALSE)"
+    ) == ("VLOOKUP",)
+    assert lookup_return_index_mismatches(
+        "=IFERROR(VLOOKUP('Input Sheet'!$A$2,'Input Sheet'!$C$2:$D$6,3,FALSE)"
+        "+@HLOOKUP(B2,G2:H4,4,0),0)"
+    ) == ("VLOOKUP", "HLOOKUP")
+
+
+def test_lookup_return_index_mismatches_keep_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=VLOOKUP(A2,C2:E6,3,FALSE)",
+        "=HLOOKUP(A2,C2:E4,3,FALSE)",
+        "=VLOOKUP(A2,$C:$D,2,FALSE)",
+        "=HLOOKUP(A2,$C:$D,1048576,FALSE)",
+        "=VLOOKUP(A2,C2:E6,3)",
+        "=HLOOKUP(A2,C2:E4,3,TRUE)",
+        "=VLOOKUP(A2,C2:E6)",
+        "=HLOOKUP(A2,C2:E4,4,FALSE,1)",
+        "=VLOOKUP(A2,Table1[Key],4,FALSE)",
+        "=HLOOKUP(A2,NamedTable,4,FALSE)",
+        "=VLOOKUP(A2,OFFSET(C2,0,0,5,3),4,FALSE)",
+        "=HLOOKUP(A2,C2#,4,FALSE)",
+        "=VLOOKUP(A2,@C2:E6,4,FALSE)",
+        "=HLOOKUP(A2,[Inputs.xlsx]Data!C2:E4,4,FALSE)",
+        "=VLOOKUP(A2,2:6,4,FALSE)",
+        "=HLOOKUP(A2,(C2:E4,G2:I4),4,FALSE)",
+        "=VLOOKUP(A2,XFE2:XFF6,4,FALSE)",
+        "=HLOOKUP(A2,C2:E4,D2,FALSE)",
+        "=VLOOKUP(A2,C2:E6,1+3,FALSE)",
+        "=HLOOKUP(A2,C2:E4,+4,FALSE)",
+        "=VLOOKUP(A2,C2:E6,4.0,FALSE)",
+        "=HLOOKUP(A2,C2:E4,0,FALSE)",
+        "=Vendor.VLOOKUP(A2,C2:E6,4,FALSE)",
+        "=_xlfn.HLOOKUP(A2,C2:E4,4,FALSE)",
+        "=VLOOKUP(A2,C2:E6,4,#REF!)",
+    )
+
+    for formula in quiet_formulas:
+        assert lookup_return_index_mismatches(formula) == ()
 
 
 def test_extract_references_keeps_external_workbooks_separate() -> None:

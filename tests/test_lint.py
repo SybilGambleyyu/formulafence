@@ -17,6 +17,8 @@ from formulafence.models import (
 from formulafence.output import as_json, lint_to_markdown, lint_to_sarif
 from formulafence.workbook import load_snapshot
 
+from .helpers import make_formula_cached_result_model
+
 
 def _snapshot(
     tmp_path: Path,
@@ -460,6 +462,44 @@ def test_lint_keeps_ref_text_but_not_an_error_operand_quiet(tmp_path: Path) -> N
     assert lint_snapshot(literal).findings == []
 
 
+def test_lint_reports_a_saved_broken_reference_formula_result(tmp_path: Path) -> None:
+    snapshot = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "saved-reference-error.xlsx",
+            error_formula="=INDEX(Inputs!A1:A1,2)",
+            error_result="#REF!",
+        )
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert snapshot.broken_references == set()
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF089", "high", ("Report", "B5"))]
+    assert report.findings[0].details == {}
+
+
+def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
+    tmp_path: Path,
+) -> None:
+    other_error = load_snapshot(make_formula_cached_result_model(tmp_path / "other.xlsx"))
+    static_reference = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "static-reference.xlsx",
+            error_formula="=#REF!",
+            error_result="#REF!",
+        )
+    )
+
+    assert lint_snapshot(other_error).findings == []
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in lint_snapshot(static_reference).findings
+    ] == [("FF088", "critical", ("Report", "B5"))]
+
+
 def test_lint_keeps_short_or_non_numeric_aggregate_gaps_quiet(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -867,6 +907,41 @@ def test_lint_broken_reference_renderers_keep_formula_text_out(tmp_path: Path) -
             "name": "FF088",
             "shortDescription": {
                 "text": "Formula contains an explicit broken #REF! reference."
+            },
+        }
+    ]
+
+
+def test_lint_saved_broken_reference_renderers_keep_cache_data_out(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "saved-reference-error.xlsx",
+            error_formula="=INDEX(Inputs!A1:A1,2)",
+            error_result="#REF!",
+        )
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "=INDEX(Inputs!A1:A1,2)" not in rendered
+        assert "#REF!" not in rendered
+        assert "FF089" in rendered
+    assert "## Saved broken-reference evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Report!B5"
+    assert result["properties"] == {"severity": "high"}
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF089",
+            "name": "FF089",
+            "shortDescription": {
+                "text": "A formula's saved result is a broken-reference error."
             },
         }
     ]

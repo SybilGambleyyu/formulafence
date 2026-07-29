@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.189.0
+        uses: SybilGambleyyu/formulafence@v0.190.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -89,8 +89,8 @@ boundary.
 The composite Action intentionally compares a baseline and candidate. In a job
 where FormulaFence is already installed, run the single-workbook lint directly
 to catch conservative copied-formula, aggregate-range, protection,
-calculation-freshness, direct-circular-reference, and explicit-broken-reference
-risks before or after the normal change review:
+calculation-freshness, direct-circular-reference, explicit-broken-reference,
+and saved-result risks before or after the normal change review:
 
 ```yaml
 - name: Lint copied formulas
@@ -111,9 +111,10 @@ medium-severity formula workbook that explicitly records `calcMode=manual` and
 `calcCompleted=false`; and `FF087` is a high-severity ordinary formula whose
 resolved scalar static dependency returns to its own cell while calculation
 iteration is disabled; and `FF088` is a critical-severity stored formula whose
-tokenized syntax contains an explicit `#REF!` error operand. The copied-formula
-signal requires two matching immediate formula peers and a third contiguous
-supporting peer. `FF084` accepts only a pure
+tokenized syntax contains an explicit `#REF!` error operand; and `FF089` is a
+high-severity formula whose well-formed saved result is a broken-reference
+error. The copied-formula signal requires two matching immediate formula peers
+and a third contiguous supporting peer. `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
 range, ignores array territory and nonnumeric or one-cell gaps, and never
 calculates a workbook. `FF085` does not guess at row, column, default-style, or
@@ -125,8 +126,11 @@ range, dynamic, spill, explicit-intersection, or array-formula semantics.
 `FF088` accepts only the tokenizer's actual error operand: text literals,
 quoted worksheet names, and tokenization failures stay quiet. JSON, Markdown,
 and SARIF evidence contains locations, static range coordinates, limited
-calculation-status metadata, and the direct-static scope, not formula text or
-cached values. Use
+calculation-status metadata, the direct-static scope, and the saved-result
+fact, not formula text or cached values. `FF089` accepts only an exact saved
+`#REF!` formula result, skips a location already covered by `FF088`, and is a
+last-saved display fact rather than proof of a current calculation result.
+Other saved error kinds and missing or malformed cache records stay quiet. Use
 `--fail-on medium` only when intentional exceptions have an established review
 path. The default 10,000-finding cap is fail closed; adjust it only with an
 explicit positive `--max-formula-pattern-findings` value. `FF084` examines at
@@ -329,7 +333,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.189.0
+  uses: SybilGambleyyu/formulafence@v0.190.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -487,7 +491,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.189.0/formulafence-0.189.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.190.0/formulafence-0.190.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

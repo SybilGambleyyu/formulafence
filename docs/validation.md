@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Saved broken-reference result lint — 2026-07-28
+
+Microsoft's [SpreadsheetML formula guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-formulas)
+states that a formula cell's `<v>` stores the cached value from the last
+calculation and can let an application postpone calculation when opening the
+workbook. Microsoft's [#REF! guidance](https://support.microsoft.com/en-US/Excel/how-to-correct-a-ref-error)
+defines that error as a formula referring to an invalid cell. `FF089` therefore
+reports only a well-formed formula cache whose saved error is exactly `#REF!`.
+It is high severity because the file records a broken-reference display state,
+while deliberately not claiming that the formula would still produce that error
+after a fresh calculation. FormulaFence does not evaluate the formula or retain
+its formula text, cached value, or error value in the finding.
+
+The boundary accepts neither generic saved errors nor untrusted cache metadata:
+`#DIV/0!`, `#NAME?`, other error kinds, missing cache values, and malformed
+records remain quiet. A formula already covered by critical `FF088` is not
+repeated as `FF089`. Controlled fixtures cover a real `INDEX` reference error,
+generic-error exclusion, static-reference de-duplication, JSON/Markdown/SARIF
+redaction, and critical-versus-high CLI gates.
+
+The independent public scan covered the ten public ExceLint workbooks, an
+820-formula finance ledger, and a 10-formula compatibility workbook: 12
+workbooks and 50,362 stored formula cells. Their formula caches contained 54
+saved `#REF!` results; the candidate emitted 50 `FF089` findings after static
+duplicate suppression. It deliberately left 1,219 saved `#DIV/0!` results and
+18 saved `#NAME?` results quiet. This is a prevalence check, not proof that a
+cached error is current or that an unreported formula is correct.
+
+The release-versioned 0.190.0 source tree passed **1,357 tests in 94.96
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check`, installed into separate fresh
+environments with declared dependencies, and reported `FormulaFence 0.190.0`.
+Each reproduced a controlled `FF089` finding without rendering formula text or
+the saved error value: the high gate returned `1`, the critical gate returned
+`0`, a generic cached-error control stayed quiet, and a literal broken-reference
+formula emitted only `FF088`.
+
 ## Explicit broken-reference operand lint — 2026-07-28
 
 Microsoft's [#REF! guidance](https://support.microsoft.com/en-US/Excel/how-to-correct-a-ref-error)

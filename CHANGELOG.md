@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.190.0 — 2026-07-28
+
+- Add high-severity `FF089` to `formulafence lint`: it reports a formula only
+  when its well-formed saved result is an exact broken-reference error. The
+  finding describes the last saved display state rather than evaluating the
+  formula or claiming its current result is unchanged.
+- Keep the cache boundary narrow and private. Other saved error kinds, missing
+  or malformed cache records, and locations already covered by critical
+  `FF088` remain quiet. JSON, Markdown, and SARIF retain only the affected
+  location and no formula text, error value, or cached value.
+
 ## 0.189.0 — 2026-07-28
 
 - Add critical-severity `FF088` to `formulafence lint`: it reports a stored

@@ -394,6 +394,28 @@ def _explicit_broken_reference_locations(snapshot: WorkbookSnapshot) -> tuple[Ce
     return tuple(sorted(snapshot.broken_references, key=_location_sort_key))
 
 
+def _saved_broken_reference_result_locations(
+    snapshot: WorkbookSnapshot,
+) -> tuple[CellKey, ...]:
+    """Return locations with a valid saved ``#REF!`` formula result.
+
+    SpreadsheetML retains a formula's last calculated value beside its formula.
+    The private cache reader recognizes an exact broken-reference error without
+    keeping the error text. This lint reports that saved display state; it does
+    not recalculate the formula or infer that the current result is unchanged.
+    """
+    return tuple(
+        sorted(
+            {
+                entry.location
+                for entry in snapshot.formula_cached_results.entries
+                if entry.is_broken_reference_error
+            },
+            key=_location_sort_key,
+        )
+    )
+
+
 def _candidate_message(kind: str) -> tuple[str, str, str]:
     """Return the rule, severity, and reviewer-facing message for a pattern kind."""
     if kind == "blank_gap":
@@ -443,9 +465,10 @@ def lint_snapshot(
     short, contiguous numeric run on the same row or column. It also reports
     an explicitly unlocked formula on a protected sheet, an explicit incomplete
     manual-calculation state for a formula workbook, and a direct static
-    self-reference while iteration is disabled, and an explicit broken
-    reference operand. It never evaluates formulas, and rejects incomplete
-    array metadata before claiming ordinary-cell coverage.
+    self-reference while iteration is disabled, an explicit broken reference
+    operand, and a saved broken-reference result. It never evaluates formulas,
+    and rejects incomplete array metadata before claiming ordinary-cell
+    coverage.
     """
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
@@ -676,7 +699,8 @@ def lint_snapshot(
                 },
             )
         )
-    for location in _explicit_broken_reference_locations(snapshot):
+    explicit_broken_reference_locations = _explicit_broken_reference_locations(snapshot)
+    for location in explicit_broken_reference_locations:
         if len(findings) >= max_formula_pattern_findings:
             raise FormulaFenceError(
                 "Formula lint exceeds "
@@ -687,6 +711,23 @@ def lint_snapshot(
                 rule_id="FF088",
                 severity="critical",
                 message="Formula contains an explicit broken #REF! reference.",
+                location=location,
+            )
+        )
+    explicit_broken_reference_location_set = set(explicit_broken_reference_locations)
+    for location in _saved_broken_reference_result_locations(snapshot):
+        if location in explicit_broken_reference_location_set:
+            continue
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF089",
+                severity="high",
+                message="A formula's saved result is a broken-reference error.",
                 location=location,
             )
         )

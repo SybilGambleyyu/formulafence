@@ -15497,7 +15497,12 @@ def _set_formula_cached_result(
     cached_value.text = value
 
 
-def make_formula_cached_result_model(path: Path) -> Path:
+def make_formula_cached_result_model(
+    path: Path,
+    *,
+    error_formula: str = "=1/0",
+    error_result: str = "#DIV/0!",
+) -> Path:
     """Create a manual-calculation workbook with varied private formula caches."""
     workbook = Workbook()
     inputs = workbook.active
@@ -15509,7 +15514,7 @@ def make_formula_cached_result_model(path: Path) -> Path:
     report["B2"] = "=Inputs!A1*2"
     report["B3"] = '="PRIVATE-CACHED-STRING"'
     report["B4"] = "=TRUE"
-    report["B5"] = "=1/0"
+    report["B5"] = error_formula
     report["B6"] = "=Inputs!A1+1"
     workbook.save(path)
 
@@ -15548,7 +15553,7 @@ def make_formula_cached_result_model(path: Path) -> Path:
         _set_formula_cached_result(
             _formula_cached_result_cell(worksheet, "B5"),
             "e",
-            "#DIV/0!",
+            error_result,
         )
         _set_formula_cached_result(
             _formula_cached_result_cell(worksheet, "B6"),

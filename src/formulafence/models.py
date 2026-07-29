@@ -3115,6 +3115,7 @@ class FormulaCachedResultEntry:
     coordinate: str
     result_type: str
     result_signature: str = field(repr=False)
+    is_broken_reference_error: bool = False
 
     @property
     def location(self) -> CellKey:

@@ -425,8 +425,11 @@ means FormulaFence's resolved scalar static dependency returns to its own
 ordinary formula cell while calculation iteration is disabled. An
 explicit-broken-reference finding means a stored formula tokenized an actual
 `#REF!` error operand, rather than merely containing those characters as text.
-Each is a focused review prompt, not proof that a formula should change, a
-cached result is stale, or an error will occur at calculation time.
+A saved-broken-reference finding means a well-formed formula cache recorded a
+broken-reference error at its last calculation; the literal-formula finding
+takes precedence at the same location. Each is a focused review prompt, not
+proof that a formula should change, a cached result is current, or an error will
+occur at calculation time.
 
 For a portfolio `FF079`, the same distinction applies across candidate
 workbooks: it records that a changed source cell can reach a formula through a

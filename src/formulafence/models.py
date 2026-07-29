@@ -3135,6 +3135,7 @@ class FormulaCachedResultEntry:
     is_broken_reference_error: bool = False
     is_divide_by_zero_error: bool = False
     is_numeric_error: bool = False
+    is_name_error: bool = False
 
     @property
     def location(self) -> CellKey:

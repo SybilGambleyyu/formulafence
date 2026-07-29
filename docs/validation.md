@@ -5,6 +5,71 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Saved name-error result lint — 2026-07-28
+
+Microsoft's [#NAME? guidance](https://support.microsoft.com/en-us/office/how-to-correct-a-name-error-b6d54e31-a743-4d7d-9b61-40002a7b4286)
+describes syntax/name-resolution causes such as a misspelled function or
+defined name, missing text quotes, and a required add-in that is unavailable.
+`FF108` reports only an exact saved `#NAME?` result attached to a well-formed
+formula cell. It is a record of the last saved display state, not a formula
+evaluation, diagnosis of which cause applies, or a claim that the current result
+is unchanged.
+
+The rule reuses FormulaFence's private formula-cache reader. It accepts only a
+valid SpreadsheetML formula cache classified as this exact error, retains no
+formula text or cached value, and emits only a cell location plus a
+`saved_formula_result` scope. Other saved error kinds and missing or malformed
+cache records stay quiet.
+
+An aggregate raw OOXML survey of the public verified
+[SpreadsheetBench](https://github.com/RUCKBReasoning/SpreadsheetBench) release
+loaded all 800 workbook artifacts. It observed 68,770 formula cells, 3,433
+saved formula errors, and zero saved name errors. The same survey over the full
+5,464-artifact SpreadsheetBench v0.1 release observed 1,264,371 formula cells,
+31,119 saved formula errors, and 33 saved name errors across 19 artifacts. The
+full-corpus maximum was five name errors in one artifact. The benchmark is built
+from real-world spreadsheet scenarios, but these are public evaluation
+artifacts; the counts are saved visible error states, not a claim that every one
+is an unintended production defect.
+
+A separate public compatibility survey loaded 463 of 469 OOXML-readable
+workbooks, observed 60,866 formula cells and 1,322 saved formula errors, and
+found 12 saved name errors across five artifacts. Its maximum was eight entries
+in one artifact. That population is reported as a compatibility signal, not an
+independent prevalence estimate.
+
+The exact FormulaFence production cache reader replayed all 5,464 full
+SpreadsheetBench artifacts with zero parser warnings or exceptions. It saw the
+same 1,264,371 formula cells and 31,119 cached errors, and classified all 33
+name-error entries as FF108 candidates without retaining their formulas,
+locations, or cached values. The same reader replayed all 800 verified artifacts
+with zero warnings or exceptions and classified zero candidates.
+
+An aggregate candidate-only production replay raw-selected all 19 full-corpus
+artifacts with a saved name error, then safely loaded and fully linted all 19.
+It classified 33 production candidates, emitted 33 `FF108` findings, and had
+zero load or lint rejections. The independent compatibility replay raw-selected
+five candidate artifacts; all five safely loaded and linted, and its 12
+production candidates emitted 12 `FF108` findings with zero load or lint
+rejections.
+
+A focused saved-result lint/CLI/output selection passed **12 tests**. It covers
+exact saved name-error recognition, quiet non-target errors, high-severity CLI
+gates, and JSON/Markdown/SARIF redaction of formula and cached-result material.
+
+The release-versioned 0.210.0 source tree passed **1,497 tests in 99.03
+seconds**. `git diff --check`, `ruff check src tests`, and
+`python -m compileall -q src tests` also completed cleanly.
+
+Fresh virtual environments installed both the wheel and source distribution,
+reported `FormulaFence 0.210.0`, and linted a generated saved-name-error
+workbook as one high-severity `FF108` finding. The SARIF output checks confirmed
+that neither the formula nor the cached `#NAME?` value was emitted. `twine
+check` passed for both artifacts. SHA-256: wheel
+`6e5e877320e728c99d24bf85b32782153ac1cd85fb08f18cb85937417d4cc4cc`;
+source distribution
+`fd73380e25c4d420e304e737617bbbae8ad961aabf57ce1b8be8735b4e67a773`.
+
 ## Saved numeric-error result lint — 2026-07-28
 
 Microsoft's [#NUM! guidance](https://support.microsoft.com/en-US/Excel/how-to-correct-a-num-error)

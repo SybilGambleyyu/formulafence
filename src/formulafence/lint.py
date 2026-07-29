@@ -1446,6 +1446,28 @@ def _saved_numeric_error_result_locations(
     )
 
 
+def _saved_name_error_result_locations(
+    snapshot: WorkbookSnapshot,
+) -> tuple[CellKey, ...]:
+    """Return locations with a valid saved name-error formula result.
+
+    SpreadsheetML retains a formula's last calculated value beside its formula.
+    The private cache reader recognizes this exact error state without retaining
+    the cache value. This lint reports that saved display state; it does not
+    recalculate the formula or infer that the current result is unchanged.
+    """
+    return tuple(
+        sorted(
+            {
+                entry.location
+                for entry in snapshot.formula_cached_results.entries
+                if entry.is_name_error
+            },
+            key=_location_sort_key,
+        )
+    )
+
+
 def _candidate_message(kind: str) -> tuple[str, str, str]:
     """Return the rule, severity, and reviewer-facing message for a pattern kind."""
     if kind == "blank_gap":
@@ -1508,8 +1530,8 @@ def lint_snapshot(
     ``FIND``/``SEARCH`` arguments, direct literal zero divisors, direct and
     multi-cell static circular references while iteration is disabled, an explicit broken
     reference operand, and saved broken-reference, division-by-zero, or
-    numeric-error results. It never evaluates formulas, and rejects incomplete
-    array metadata before claiming ordinary-cell coverage.
+    numeric-error, or name-error results. It never evaluates formulas, and
+    rejects incomplete array metadata before claiming ordinary-cell coverage.
     """
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
@@ -2395,6 +2417,21 @@ def lint_snapshot(
                 rule_id="FF107",
                 severity="high",
                 message="A formula's saved result is a numeric error.",
+                location=location,
+                details={"evidence_scope": "saved_formula_result"},
+            )
+        )
+    for location in _saved_name_error_result_locations(snapshot):
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF108",
+                severity="high",
+                message="A formula's saved result is a name error.",
                 location=location,
                 details={"evidence_scope": "saved_formula_result"},
             )

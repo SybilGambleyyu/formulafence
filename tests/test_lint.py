@@ -2254,6 +2254,24 @@ def test_lint_reports_a_saved_numeric_error_formula_result(tmp_path: Path) -> No
     assert report.findings[0].details == {"evidence_scope": "saved_formula_result"}
 
 
+def test_lint_reports_a_saved_name_error_formula_result(tmp_path: Path) -> None:
+    snapshot = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "saved-name-error.xlsx",
+            error_formula="=UnknownCustomName(Inputs!A1)",
+            error_result="#NAME?",
+        )
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF108", "high", ("Report", "B5"))]
+    assert report.findings[0].details == {"evidence_scope": "saved_formula_result"}
+
+
 def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
     tmp_path: Path,
 ) -> None:
@@ -2896,6 +2914,44 @@ def test_lint_saved_numeric_error_renderers_keep_cache_data_out(
             "name": "FF107",
             "shortDescription": {
                 "text": "A formula's saved result is a numeric error."
+            },
+        }
+    ]
+
+
+def test_lint_saved_name_error_renderers_keep_cache_data_out(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "saved-name-error.xlsx",
+            error_formula="=UnknownCustomName(Inputs!A1)",
+            error_result="#NAME?",
+        )
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "=UnknownCustomName(Inputs!A1)" not in rendered
+        assert "#NAME?" not in rendered
+        assert "FF108" in rendered
+    assert "## Saved name-error evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Report!B5"
+    assert result["properties"] == {
+        "severity": "high",
+        "evidence_scope": "saved_formula_result",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF108",
+            "name": "FF108",
+            "shortDescription": {
+                "text": "A formula's saved result is a name error."
             },
         }
     ]

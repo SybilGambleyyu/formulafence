@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.209.0
+        uses: SybilGambleyyu/formulafence@v0.210.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -147,8 +147,9 @@ capacity. `FF104` is a high-severity native `LEFT`, `RIGHT`, `MID`, `FIND`, or
 `FF105` is a high-severity infix division expression whose immediate operand is
 a direct literal zero. `FF106` is a high-severity formula whose saved result is
 a division-by-zero error. `FF107` is a high-severity formula whose saved result
-is a numeric error. The copied-formula signal requires two matching immediate
-formula peers and a third contiguous supporting peer.
+is a numeric error. `FF108` is a high-severity formula whose saved result is a
+name error. The copied-formula signal requires two matching immediate formula
+peers and a third contiguous supporting peer.
 `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
 range, ignores array territory and nonnumeric or one-cell gaps, and never
@@ -279,6 +280,12 @@ formula, retains no cached value, and does not infer that the current result is
 unchanged. Other saved error kinds, missing or malformed cache records, and
 locations already covered by `FF098` or `FF103` stay quiet. It emits only a
 location and saved-result scope.
+`FF108` accepts only a well-formed stored formula-result cache whose exact
+private error classification is a name error. It neither calculates nor
+inspects a formula, retains no cached value, diagnoses no name/function/add-in
+cause, and does not infer that the current result is unchanged. Other saved
+error kinds and missing or malformed cache records stay quiet. It emits only a
+location and saved-result scope.
 `FF090` accepts only a component of at least two
 eligible ordinary formula cells connected by resolved scalar static
 dependencies; it never expands ranges or evaluates a workbook. Both stay quiet
@@ -308,11 +315,12 @@ Table master formulas. `FF089` accepts only an exact saved `#REF!` formula
 result and skips a location already covered by `FF088`; `FF106` separately
 accepts an exact saved division-by-zero error and skips a location already
 covered by `FF105`; `FF107` separately accepts an exact saved numeric error and
-skips a location already covered by `FF098` or `FF103`. All three are
-last-saved display facts rather than proof of a current calculation result.
-Missing or malformed cache records stay quiet. Use `--fail-on medium` only when
-intentional exceptions have an established review path. The default
-10,000-finding cap is fail closed; adjust it only with an explicit positive
+skips a location already covered by `FF098` or `FF103`; `FF108` separately
+accepts an exact saved name error. All four are last-saved display facts rather
+than proof of a current calculation result. Missing or malformed cache records
+stay quiet. Use `--fail-on medium` only when intentional exceptions have an
+established review path. The default 10,000-finding cap is fail closed; adjust
+it only with an explicit positive
 `--max-formula-pattern-findings` value. `FF084` examines at most 128 gap cells
 by default; use an explicit
 `--max-aggregate-omission-gap-cells` value of at least two to select another
@@ -513,7 +521,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.209.0
+  uses: SybilGambleyyu/formulafence@v0.210.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -671,7 +679,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.209.0/formulafence-0.209.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.210.0/formulafence-0.210.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

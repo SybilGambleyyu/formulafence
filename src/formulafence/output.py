@@ -6675,6 +6675,24 @@ def lint_to_markdown(
                     ),
                 )
             )
+    direct_zero_divisor_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF105"
+    ]
+    if direct_zero_divisor_evidence:
+        lines.extend(["## Direct zero-divisor evidence", ""])
+        for location, evidence in direct_zero_divisor_evidence:
+            lines.append(
+                "- {location}: {divisor_count} division expressions use a direct "
+                "literal zero divisor."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    divisor_count=_markdown_escape(
+                        evidence["direct_zero_divisor_count"]
+                    ),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6792,6 +6810,7 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
             "A LEFT, RIGHT, MID, FIND, or SEARCH call uses an invalid direct "
             "literal character position or count."
         ),
+        "FF105": "A division expression uses a direct literal zero divisor.",
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

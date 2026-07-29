@@ -2000,6 +2000,17 @@ def _is_whitespace(token: object) -> bool:
     return getattr(token, "type", None) in _WHITESPACE_TOKEN_TYPES
 
 
+def _next_meaningful_token_position(
+    tokens: Sequence[object], start: int, end: int | None = None
+) -> int | None:
+    """Return the next non-whitespace token position within one token span."""
+    limit = len(tokens) if end is None else end
+    for position in range(start, limit):
+        if not _is_whitespace(tokens[position]):
+            return position
+    return None
+
+
 def _matching_group_close(tokens: Sequence[object], opening: int, end: int) -> int | None:
     """Find a matching formula-token group close without parsing Excel values."""
     depth = 0
@@ -2880,6 +2891,78 @@ def text_literal_argument_mismatch_count(formula: str) -> int:
             and (start_position[0] or start_position[1] == "0")
         ):
             mismatch_count += 1
+    return mismatch_count
+
+
+def direct_zero_divisor_count(formula: str) -> int:
+    """Count syntactically direct literal zero divisors without evaluation.
+
+    This token-only helper recognizes an infix division whose immediate right
+    operand is one direct signed decimal integer zero, optionally separated by
+    whitespace. It intentionally stops before a parenthesized, powered,
+    percent, computed, reference, decimal, scientific, or repeated-sign
+    operand: those forms would require interpreting a larger Excel expression.
+    A following non-power infix operator, argument separator, group close, or
+    formula end leaves the literal as the complete division operand, so the
+    division itself is statically visible. Explicit broken references and
+    tokenization failures remain outside this narrow contract.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return 0
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return 0
+
+    mismatch_count = 0
+    for position, token in enumerate(tokens):
+        if not (
+            getattr(token, "type", None) == "OPERATOR-INFIX"
+            and str(getattr(token, "value", "")) == "/"
+        ):
+            continue
+        literal_start = _next_meaningful_token_position(tokens, position + 1)
+        if literal_start is None:
+            continue
+        literal_end = literal_start
+        if (
+            getattr(tokens[literal_start], "type", None) == "OPERATOR-PREFIX"
+            and str(getattr(tokens[literal_start], "value", "")) in {"+", "-"}
+        ):
+            literal_end = _next_meaningful_token_position(tokens, literal_start + 1)
+            if literal_end is None:
+                continue
+        literal = _direct_signed_integer_literal(
+            tokens,
+            literal_start,
+            literal_end + 1,
+        )
+        if literal is None or literal[1] != "0":
+            continue
+
+        following_position = _next_meaningful_token_position(tokens, literal_end + 1)
+        if following_position is not None:
+            following = tokens[following_position]
+            following_type = getattr(following, "type", None)
+            following_value = str(getattr(following, "value", ""))
+            if following_type == "OPERATOR-POSTFIX" or (
+                following_type == "OPERATOR-INFIX" and following_value == "^"
+            ):
+                continue
+            if not (
+                _is_group_close(following)
+                or following_type == "SEP"
+                or following_type == "OPERATOR-INFIX"
+            ):
+                continue
+        mismatch_count += 1
     return mismatch_count
 
 

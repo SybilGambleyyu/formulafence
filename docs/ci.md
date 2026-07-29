@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.206.0
+        uses: SybilGambleyyu/formulafence@v0.207.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -143,8 +143,9 @@ vector is not sorted ascending. `FF102` is a high-severity native `XLOOKUP` or
 supported codes. `FF103` is a high-severity native `LARGE` or `SMALL` call
 whose direct literal rank is nonpositive or exceeds direct static array
 capacity. `FF104` is a high-severity native `LEFT`, `RIGHT`, `MID`, `FIND`, or
-`SEARCH` call whose direct literal character position or count is invalid. The
-copied-formula signal requires two matching immediate
+`SEARCH` call whose direct literal character position or count is invalid.
+`FF105` is a high-severity infix division expression whose immediate operand is
+a direct literal zero. The copied-formula signal requires two matching immediate
 formula peers and a third contiguous supporting peer.
 `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
@@ -258,6 +259,12 @@ formulas. Computed or reference position/count operands, decimal/scientific,
 malformed, explicit-broken-reference, array-territory, and arbitrary namespace
 forms stay quiet. It emits only a location and aggregate invalid-literal-
 argument count.
+`FF105` accepts only an infix `/` whose immediate right operand is a direct
+signed decimal integer zero, with at most one unary sign and whitespace. It
+does not inspect or calculate either side of the division. Parenthesized,
+powered, postfix-percent, computed, reference, decimal/scientific,
+repeated-sign, malformed, explicit-broken-reference, and array-territory forms
+stay quiet. It emits only a location and aggregate direct-zero-divisor count.
 `FF090` accepts only a component of at least two
 eligible ordinary formula cells connected by resolved scalar static
 dependencies; it never expands ranges or evaluates a workbook. Both stay quiet
@@ -275,13 +282,15 @@ out-of-range-literal-index counts, and `RANDBETWEEN` inverted-literal-bound
 counts, `SUBTOTAL` unsupported-literal-function-code counts, and `INDEX`
 out-of-range-literal-index counts, and approximate-lookup unsorted-direct-
 numeric-vector counts, LARGE/SMALL invalid-literal-rank counts, and
-text-function invalid-literal-argument counts, not formula text, cached values,
+text-function invalid-literal-argument counts, and direct-zero-divisor counts,
+not formula text, cached values,
 ignored-error target ranges, direct conditional-aggregate, `SUMPRODUCT`,
 `MMULT`, legacy-lookup ranges, `CHOOSE` value arguments, `RANDBETWEEN` literal
 values, `SUBTOTAL` function-code/reference material, `INDEX` position values
 or direct array ranges, approximate-lookup key values or table ranges,
 LARGE/SMALL ranks or direct arrays, text-function literal values or text
-operands, Table identities, or Table master formulas.
+operands, zero-divisor literal spellings or numerators, Table identities, or
+Table master formulas.
 `FF089` accepts only an exact saved `#REF!` formula result, skips a location
 already covered by `FF088`, and is a last-saved display fact rather than proof
 of a current calculation result. Other saved error kinds and missing or
@@ -488,7 +497,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.206.0
+  uses: SybilGambleyyu/formulafence@v0.207.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -646,7 +655,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.206.0/formulafence-0.206.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.207.0/formulafence-0.207.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

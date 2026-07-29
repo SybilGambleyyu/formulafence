@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.207.0 — 2026-07-28
+
+- Add high-severity `FF105` to `formulafence lint`: it reports an infix
+  division only when its immediate operand is a direct signed decimal integer
+  zero.
+- Keep the rule deliberately narrow and private: it does not calculate a
+  numerator or denominator, and it leaves parenthesized, powered, percent,
+  computed, reference, decimal/scientific, malformed, explicit-broken-
+  reference, array-territory, and repeated-sign forms quiet. Findings retain
+  only the cell location and aggregate direct-zero-divisor count.
+
 ## 0.206.0 — 2026-07-28
 
 - Add high-severity `FF104` to `formulafence lint`: it reports a native

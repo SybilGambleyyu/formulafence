@@ -19,6 +19,7 @@ from formulafence.formulas import (
     approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
+    direct_zero_divisor_count,
     index_literal_position_mismatch_count,
     large_small_literal_rank_mismatch_count,
     lookup_return_index_mismatches,
@@ -762,6 +763,47 @@ def _text_literal_argument_candidates(
     return tuple(candidates)
 
 
+def _direct_zero_divisor_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int], ...]:
+    """Return cells with a syntactically direct literal zero divisor.
+
+    The formula helper accepts only an infix division with an immediate direct
+    signed integer zero operand. It does not calculate a numerator or inspect
+    any value; parenthesized, powered, percent, computed, reference, decimal,
+    scientific, malformed, or repeated-sign divisor forms remain outside the
+    contract. This layer limits results to ordinary inspectable formula cells
+    outside array territory and retains only an aggregate count.
+    """
+    candidates: list[tuple[CellKey, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        mismatch_count = direct_zero_divisor_count(formula)
+        if not mismatch_count:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append((location, mismatch_count))
+    return tuple(candidates)
+
+
 def _is_static_finite_numeric_cell(cell: object) -> bool:
     """Return whether a snapshot cell is one stored finite numeric value."""
     value = getattr(cell, "value", None)
@@ -1419,8 +1461,8 @@ def lint_snapshot(
     visibly unsorted direct numeric key vectors, unsupported direct literal
     XLOOKUP/XMATCH mode codes, direct literal ``LARGE``/``SMALL`` ranks outside
     static-array capacity, impossible direct literal ``LEFT``/``RIGHT``/``MID``/
-    ``FIND``/``SEARCH`` arguments, direct and multi-cell static circular
-    references while iteration is disabled, an explicit broken
+    ``FIND``/``SEARCH`` arguments, direct literal zero divisors, direct and
+    multi-cell static circular references while iteration is disabled, an explicit broken
     reference operand, and a saved broken-reference result. It never evaluates
     formulas, and rejects incomplete array metadata before claiming ordinary-
     cell coverage.
@@ -1583,6 +1625,25 @@ def lint_snapshot(
         ),
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
+    direct_zero_divisor_candidates = _direct_zero_divisor_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=(
+            len(conditional_aggregate_candidates)
+            + len(sumproduct_candidates)
+            + len(mmult_candidates)
+            + len(lookup_candidates)
+            + len(choose_candidates)
+            + len(randbetween_candidates)
+            + len(subtotal_candidates)
+            + len(index_candidates)
+            + len(approximate_lookup_candidates)
+            + len(modern_lookup_mode_candidates)
+            + len(large_small_rank_candidates)
+            + len(text_literal_argument_candidates)
+        ),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
     structural_formula_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
@@ -1611,6 +1672,9 @@ def lint_snapshot(
     )
     structural_formula_locations.update(
         location for location, _ in text_literal_argument_candidates
+    )
+    structural_formula_locations.update(
+        location for location, _ in direct_zero_divisor_candidates
     )
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
@@ -1699,6 +1763,9 @@ def lint_snapshot(
                     + len(index_candidates)
                     + len(approximate_lookup_candidates)
                     + len(modern_lookup_mode_candidates)
+                    + len(large_small_rank_candidates)
+                    + len(text_literal_argument_candidates)
+                    + len(direct_zero_divisor_candidates)
                     >= max_formula_pattern_findings
                 ):
                     raise FormulaFenceError(
@@ -2029,6 +2096,25 @@ def lint_snapshot(
                 details={
                     "invalid_literal_argument_count": invalid_literal_argument_count,
                     "evidence_scope": "text_direct_signed_integer_position_count",
+                },
+            )
+        )
+
+    for location, direct_zero_divisor_expression_count in direct_zero_divisor_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF105",
+                severity="high",
+                message="A division expression uses a direct literal zero divisor.",
+                location=location,
+                details={
+                    "direct_zero_divisor_count": direct_zero_divisor_expression_count,
+                    "evidence_scope": "infix_division_direct_signed_integer_zero",
                 },
             )
         )

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.206.0/formulafence-0.206.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.207.0/formulafence-0.207.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -70,8 +70,8 @@ error-checking-suppression, Excel Table calculated-column, static-circular-refer
 conditional-aggregate and `SUMPRODUCT` range-shape, `MMULT` matrix-dimension,
 legacy-lookup return-index and approximate-sort, `RANDBETWEEN` literal-bound,
 `SUBTOTAL` function-code, `INDEX` literal-position, `LARGE`/`SMALL` literal-rank,
-`LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH` literal-argument, explicit-broken-reference,
-and saved-result risks that a version diff cannot see. It reports a copied-formula
+`LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH` literal-argument, direct literal zero-divisor,
+explicit-broken-reference, and saved-result risks that a version diff cannot see. It reports a copied-formula
 interruption only
 when the immediately preceding and following formulas have the same
 relative-copy fingerprint and a third contiguous peer repeats that fingerprint.
@@ -82,9 +82,9 @@ direct conditional-aggregate and `SUMPRODUCT` range-shape, direct static
 `MMULT` matrix-dimension, direct static legacy-lookup return-index, direct
 literal `RANDBETWEEN` bounds, direct literal `SUBTOTAL` function codes, direct
 literal `INDEX` row/column positions, direct literal `LARGE`/`SMALL` ranks,
-direct literal `LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH` arguments,
-explicit-broken-reference, and saved broken-reference-result signals. Together
-these produce twenty-two reviewable findings:
+direct literal `LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH` arguments, direct literal
+zero divisors, explicit-broken-reference, and saved broken-reference-result
+signals. Together these produce twenty-four reviewable findings:
 
 - `FF082`: a non-formula interruption. Blanks and stored error values are high;
   numeric/manual values are medium; textual markers are low.
@@ -133,6 +133,8 @@ these produce twenty-two reviewable findings:
   that is nonpositive or exceeds its direct static array capacity.
 - `FF104` (high): a native `LEFT`, `RIGHT`, `MID`, `FIND`, or `SEARCH` call
   uses a direct literal character position or count that is invalid.
+- `FF105` (high): an infix division expression uses a direct literal zero
+  divisor.
 
 Use `--fail-on critical` to gate explicit broken-reference operands, or
 `--fail-on high` to also gate blank/error interruptions and direct static
@@ -143,8 +145,8 @@ mismatches, direct static legacy-lookup return-index mismatches, direct static
 mismatches, direct literal `SUBTOTAL` function-code mismatches, direct literal
 `INDEX` row/column-position mismatches, approximate legacy-lookup sort
 mismatches, direct literal modern-lookup mode-code mismatches, direct literal
-`LARGE`/`SMALL` rank mismatches, direct literal text-argument mismatches, and
-saved broken-reference results.
+`LARGE`/`SMALL` rank mismatches, direct literal text-argument mismatches,
+direct literal zero-divisor mismatches, and saved broken-reference results.
 Use `--fail-on medium` to additionally require review of manual-value,
 formula-outlier, aggregate-range, explicit formula-protection,
 incomplete-manual-calculation, error-checking-suppression, and Table
@@ -292,6 +294,14 @@ explicit-broken-reference, array-territory, and arbitrary namespace forms
 remain quiet. Its evidence retains only the affected location and aggregate
 invalid-literal-argument count—never a formula, literal value, text, or source
 sheet identity.
+`FF105` accepts only an infix `/` whose immediate right operand is a direct
+signed decimal integer zero, with at most one unary sign and whitespace. It
+does not inspect or calculate either side of the division. Parenthesized,
+powered, postfix-percent, computed, reference, decimal/scientific,
+repeated-sign, malformed, explicit-broken-reference, and array-territory forms
+stay quiet. Its evidence retains only the affected location and aggregate
+direct-zero-divisor count—never a formula, numerator, literal spelling, or
+source sheet identity.
 `FF090`
 uses only a strongly connected component of
 resolved scalar static dependencies with at least two eligible ordinary formula
@@ -309,13 +319,14 @@ counts, legacy-lookup out-of-range-literal-index counts, and `RANDBETWEEN`
 inverted-literal-bound counts, `SUBTOTAL` unsupported-literal-function-code
 counts, `INDEX` out-of-range-literal-index counts, and approximate-lookup
 unsorted-direct-numeric-vector counts, and XLOOKUP/XMATCH unsupported-literal-
-mode counts, LARGE/SMALL invalid-literal-rank counts, and text-function
-invalid-literal-argument counts—never formula text,
+mode counts, LARGE/SMALL invalid-literal-rank counts, text-function
+invalid-literal-argument counts, and direct-zero-divisor counts—never formula text,
 cached values, ignored-error target ranges, direct
 conditional-aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup range spellings,
 `INDEX` position values or direct array ranges, approximate-lookup key values
 or table ranges, LARGE/SMALL rank values or direct array ranges, text-function
-literal values or text operands, or Table master formulas. `FF089` accepts only a valid saved formula-result cache whose exact
+literal values or text operands, zero-divisor literal spellings or numerators,
+or Table master formulas. `FF089` accepts only a valid saved formula-result cache whose exact
 error is `#REF!`; other saved errors, missing or malformed cache records, and
 locations already covered by `FF088` stay quiet. It is a high-severity record
 of the last saved display state, not proof of the formula's current result. The
@@ -344,7 +355,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.206.0
+  uses: SybilGambleyyu/formulafence@v0.207.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx

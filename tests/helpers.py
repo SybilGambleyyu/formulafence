@@ -15586,7 +15586,7 @@ def _set_formula_cached_result(
 def make_formula_cached_result_model(
     path: Path,
     *,
-    error_formula: str = "=1/0",
+    error_formula: str = "=1/0.0",
     error_result: str = "#DIV/0!",
 ) -> Path:
     """Create a manual-calculation workbook with varied private formula caches."""
@@ -19238,13 +19238,13 @@ def make_ignored_error_model(path: Path) -> Path:
     model = workbook.active
     model.title = "Error Review"
     model["A1"] = "Review surface"
-    model["B2"] = "=1/0"
+    model["B2"] = "=1/0.0"
     model["B3"] = "=NA()"
     model["C2"] = "000123"
     model["C3"] = "000456"
     model["D2"] = "=SUM(B2:B3)"
     checks = workbook.create_sheet("Extension Review")
-    checks["E2"] = "=1/0"
+    checks["E2"] = "=1/0.0"
     workbook.save(path)
 
     def mutate(contents: dict[str, bytes]) -> None:

@@ -5,6 +5,62 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct literal zero-divisor lint — 2026-07-28
+
+Microsoft's [#DIV/0! guidance](https://support.microsoft.com/en-US/Excel/how-to-correct-a-div-0-error)
+states that Excel returns the error when a number is divided by zero, including
+a simple direct-literal expression. That makes an infix division with an
+immediate literal integer zero divisor a statically demonstrable error without
+calculating a workbook or inspecting either side of the division.
+
+`FF105` accepts only an infix `/` whose immediate right operand is a direct
+signed decimal integer zero, with at most one unary sign and whitespace. It
+does not inspect or calculate either operand. Parenthesized, powered,
+postfix-percent, computed, reference, decimal/scientific, repeated-sign,
+malformed, explicit-broken-reference, and array-territory forms stay quiet.
+Findings retain only a cell location and aggregate direct-zero-divisor count—
+never a formula, numerator, literal spelling, or source sheet identity.
+
+A read-only aggregate OOXML survey of the public verified
+[SpreadsheetBench](https://github.com/RUCKBReasoning/SpreadsheetBench) set
+loaded all 800 initial/golden workbooks and reconstructed 60,355 ordinary
+formula instances with zero shared-formula translation failures. It observed
+5,454 infix division operators and no direct signed integer zero divisor. The
+survey emits counts only and does not retain workbook contents, formulas,
+locations, or values.
+
+A separate raw OOXML compatibility survey across 469 public workbooks loaded
+463 packages, rejected six malformed/unreadable packages, and reconstructed
+62,781 ordinary formula instances. It observed 9,195 infix division operators
+and 11 direct integer-zero divisor candidates. This records statically visible
+syntax in public test resources, not a claim that the 11 candidates are
+unintentional defects or that every unreported formula is valid.
+
+The actual FormulaFence safe-loader candidate replay over those same 469
+workbooks loaded 454, rejected 15 at established safety boundaries, inspected
+60,823 formula cells, and emitted 11 `FF105` findings with 11 aggregate
+direct-zero-divisor counts. A separate safe-loader replay over SpreadsheetBench
+loaded 796 workbooks, rejected four at established safety boundaries, inspected
+68,497 formula cells, and emitted zero `FF105` findings or direct-zero-divisor
+counts. These replays exercise the production snapshot and candidate path
+without claiming that every unreported formula is valid.
+
+A focused FF105 helper/lint/CLI/output selection passed **8 tests**. It covers
+direct zero operands, leading signs and whitespace, nested/multiple divisions,
+valid nonzero divisors, decimal/scientific/parenthesized/powered/percent/
+computed/reference/repeated-sign forms, explicit broken references, array
+territory, generic-outlier replacement, shared finding caps, CLI severity
+gates, and JSON/Markdown/SARIF redaction.
+
+The release-versioned 0.207.0 source tree passed **1,488 tests in 98.33
+seconds**, Ruff, bytecode compilation, and `git diff --check` before packaging.
+Its wheel and source distribution passed `twine check` and each installed into
+a separate fresh environment reporting `FormulaFence 0.207.0`. The installed
+wheel reproduced one redacted `FF105` finding for a direct `-0` divisor: the
+critical gate returned `0`, the high gate returned `1`, and SARIF retained only
+`FF105` and the aggregate count—not the source formula, numerator, literal
+spelling, or sheet identity.
+
 ## Literal text position/count lint — 2026-07-28
 
 Microsoft's [LEFT](https://support.microsoft.com/en-gb/office/left-function-9203d2d2-7960-479b-84c6-1ea52b99640c)

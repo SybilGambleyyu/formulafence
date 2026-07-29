@@ -1912,6 +1912,105 @@ def test_lint_text_literal_argument_candidates_share_the_finding_cap(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_reports_direct_zero_divisors(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "F2": "=IFERROR(A2/0+B2/-0+C2/0*1,0)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF105", "high", ("Model", "F2"))]
+    assert report.findings[0].details == {
+        "direct_zero_divisor_count": 3,
+        "evidence_scope": "infix_division_direct_signed_integer_zero",
+    }
+
+
+def test_lint_direct_zero_divisor_rule_skips_ambiguous_forms(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=B2/1",
+            "A3": "=B2/0.0",
+            "A4": "=B2/0E0",
+            "A5": "=B2/(0)",
+            "A6": "=B2/0^1",
+            "A7": "=B2/0%",
+            "A8": "=B2/--0",
+            "A9": "=B2/+(-0)",
+            "A10": "=IFERROR(B2/#REF!,0)",
+        },
+    )
+
+    assert "FF105" not in {
+        finding.rule_id for finding in lint_snapshot(snapshot).findings
+    }
+
+    array_territory = _snapshot(tmp_path, {"B2": "=C2/0"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF105" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_direct_zero_divisor_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=C2/1",
+            "B3": "=C3/0",
+            "B4": "=C4/1",
+            "B5": "=C5/1",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF105", "high", ("Model", "B3"))]
+
+
+def test_lint_direct_zero_divisor_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=C2/0",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -3279,6 +3378,47 @@ def test_lint_text_literal_argument_renderers_keep_values_private(
                     "A LEFT, RIGHT, MID, FIND, or SEARCH call uses an invalid direct "
                     "literal character position or count."
                 )
+            },
+        }
+    ]
+
+
+def test_lint_direct_zero_divisor_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Private Inputs"
+    model = workbook.create_sheet("Model")
+    model["B2"] = "='Private Inputs'!$C$2/-0+N(\"confidential\")"
+    path = tmp_path / "private-direct-zero-divisor.xlsx"
+    workbook.save(path)
+
+    report = lint_snapshot(load_snapshot(path))
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2" not in rendered
+        assert "confidential" not in rendered
+        assert "'Private Inputs'!$C$2/-0" not in rendered
+        assert "FF105" in rendered
+    assert "## Direct zero-divisor evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "direct_zero_divisor_count": 1,
+        "evidence_scope": "infix_division_direct_signed_integer_zero",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF105",
+            "name": "FF105",
+            "shortDescription": {
+                "text": "A division expression uses a direct literal zero divisor."
             },
         }
     ]

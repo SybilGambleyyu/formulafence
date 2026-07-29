@@ -7,6 +7,7 @@ from formulafence.formulas import (
     approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
+    direct_zero_divisor_count,
     extract_references,
     formula_fingerprint,
     has_broken_reference,
@@ -412,6 +413,33 @@ def test_text_literal_argument_mismatch_count_keeps_ambiguous_forms_quiet() -> N
 
     for formula in quiet_formulas:
         assert text_literal_argument_mismatch_count(formula) == 0
+
+
+def test_direct_zero_divisor_count_finds_immediate_signed_integer_zeroes() -> None:
+    assert direct_zero_divisor_count("=A2/0") == 1
+    assert direct_zero_divisor_count("=A2/-0") == 1
+    assert direct_zero_divisor_count("=A2 / + 000") == 1
+    assert direct_zero_divisor_count("=SUM(A2/0,B2/-0)+C2/0*1") == 3
+    assert direct_zero_divisor_count("=A2/0/0") == 2
+
+
+def test_direct_zero_divisor_count_keeps_larger_or_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=A2/1",
+        "=A2/-1",
+        "=A2/B2",
+        "=A2/0.0",
+        "=A2/0E0",
+        "=A2/(0)",
+        "=A2/0^1",
+        "=A2/0%",
+        "=A2/--0",
+        "=A2/+(-0)",
+        "=IFERROR(A2/#REF!,0)",
+    )
+
+    for formula in quiet_formulas:
+        assert direct_zero_divisor_count(formula) == 0
 
 
 def test_index_literal_position_mismatch_count_finds_direct_native_calls() -> None:

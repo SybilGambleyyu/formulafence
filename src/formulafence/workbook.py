@@ -19,6 +19,7 @@ import warnings
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -472,6 +473,12 @@ _OOXML_XML_ROOT_CACHE_MAX_MEMBER_BYTES = 128 * 1024
 _OOXML_XML_ROOT_CACHE_MAX_TOTAL_BYTES = 4 * 1024 * 1024
 _OOXML_XML_ROOT_CACHE_MAX_RELATIONSHIP_RECORDS = 2_048
 _OOXML_XML_ROOT_CACHE_MAX_SHEET_PARTS = _OOXML_READER_MAX_WORKBOOK_SHEET_COUNT
+# XML bytes alone do not bound ElementTree allocation: compact markup can
+# produce many elements. Retain parsed trees only for very small payloads and
+# account every element before a reader receives an independent deep copy.
+_OOXML_XML_ROOT_CACHE_MAX_TREE_MEMBER_BYTES = 16 * 1024
+_OOXML_XML_ROOT_CACHE_MAX_TREE_ELEMENTS_PER_MEMBER = 2_048
+_OOXML_XML_ROOT_CACHE_MAX_TREE_ELEMENTS = 8_192
 # ElementTree gives its target character data incrementally, but its ordinary
 # tree builder accumulates all chunks for one text node until the next XML
 # boundary. Keep that parser-side buffer small before an end-event callback can
@@ -6281,11 +6288,13 @@ def _vba_hash(path: Path) -> str | None:
 
 @dataclass
 class _OoxmlXmlRootCache:
-    """Bounded, snapshot-local XML payloads and immutable raw catalogs."""
+    """Bounded, snapshot-local XML payloads, trees, and immutable catalogs."""
 
     source_filename: str
     payloads: dict[str, bytes] = field(default_factory=dict)
     cached_bytes: int = 0
+    root_trees: dict[str, ElementTree.Element] = field(default_factory=dict)
+    cached_tree_elements: int = 0
     relationship_catalogs: dict[str, tuple[_PackageRelationship, ...]] = field(
         default_factory=dict
     )
@@ -6294,46 +6303,81 @@ class _OoxmlXmlRootCache:
     worksheet_display_catalog: tuple[str, ...] | None = None
     visual_worksheet_catalog: tuple[tuple[str, str], ...] | None = None
     xlm_macro_sheet_target_catalog: frozenset[str] | None = None
-    catalog_character_data_limit: int | None = None
+    derived_character_data_limit: int | None = None
 
     def matches(self, archive: ZipFile) -> bool:
         """Keep a cache tied to its private stable workbook source only."""
         return archive.filename == self.source_filename
 
     def root(self, archive: ZipFile, member: str) -> ElementTree.Element:
-        """Return an isolated root, memoizing only validated payloads in bounds."""
+        """Return an isolated root with bounded private tree reuse when safe."""
+        if self.derived_cache_eligible(archive, member):
+            if (cached_tree := self.root_trees.get(member)) is not None:
+                return deepcopy(cached_tree)
+
         cached = self.payloads.get(member)
         if cached is not None:
-            return _xml_root_from_lexically_validated_payload(cached)
+            root = _xml_root_from_lexically_validated_payload(cached)
+        else:
+            payload = archive.read(member)
+            root = _xml_root_from_payload(payload)
+            payload_bytes = len(payload)
+            if (
+                payload_bytes <= _OOXML_XML_ROOT_CACHE_MAX_MEMBER_BYTES
+                and self.cached_bytes + payload_bytes
+                <= _OOXML_XML_ROOT_CACHE_MAX_TOTAL_BYTES
+            ):
+                self.payloads[member] = payload
+                self.cached_bytes += payload_bytes
 
-        payload = archive.read(member)
-        root = _xml_root_from_payload(payload)
-        payload_bytes = len(payload)
-        if (
-            payload_bytes <= _OOXML_XML_ROOT_CACHE_MAX_MEMBER_BYTES
-            and self.cached_bytes + payload_bytes
-            <= _OOXML_XML_ROOT_CACHE_MAX_TOTAL_BYTES
+        if self.derived_cache_eligible(archive, member) and self.remember_root_tree(
+            member,
+            root,
         ):
-            self.payloads[member] = payload
-            self.cached_bytes += payload_bytes
+            # Keep the parsed tree private: every reader, including the first,
+            # receives an independently mutable copy.
+            return deepcopy(root)
         return root
 
-    def catalog_cache_eligible(self, archive: ZipFile, *members: str) -> bool:
-        """Return whether small derived catalogs can reuse cached XML safely."""
+    def derived_cache_eligible(self, archive: ZipFile, *members: str) -> bool:
+        """Return whether bounded derived state can reuse cached XML safely."""
         if not self.matches(archive) or any(member not in self.payloads for member in members):
             return False
         character_data_limit = _OOXML_READER_MAX_XML_CHARACTER_DATA_CHARACTERS
-        if self.catalog_character_data_limit != character_data_limit:
+        if self.derived_character_data_limit != character_data_limit:
             # Payload cache hits always rerun this guard. Derived primitive
-            # catalogs do not parse a tree, so discard them if the active
-            # parser limit changes before another reader uses them.
+            # catalogs and retained trees do not parse one, so discard them if
+            # the active parser limit changes before another reader uses them.
+            self.root_trees.clear()
+            self.cached_tree_elements = 0
             self.relationship_catalogs.clear()
             self.cached_relationship_records = 0
             self.sheet_part_catalog = None
             self.worksheet_display_catalog = None
             self.visual_worksheet_catalog = None
             self.xlm_macro_sheet_target_catalog = None
-            self.catalog_character_data_limit = character_data_limit
+            self.derived_character_data_limit = character_data_limit
+        return True
+
+    def remember_root_tree(self, member: str, root: ElementTree.Element) -> bool:
+        """Retain one small parsed root without exceeding element budgets."""
+        payload = self.payloads[member]
+        if len(payload) > _OOXML_XML_ROOT_CACHE_MAX_TREE_MEMBER_BYTES:
+            return False
+        remaining_elements = (
+            _OOXML_XML_ROOT_CACHE_MAX_TREE_ELEMENTS - self.cached_tree_elements
+        )
+        maximum_elements = min(
+            _OOXML_XML_ROOT_CACHE_MAX_TREE_ELEMENTS_PER_MEMBER,
+            remaining_elements,
+        )
+        element_count = 0
+        for _element in root.iter():
+            element_count += 1
+            if element_count > maximum_elements:
+                return False
+        self.root_trees[member] = root
+        self.cached_tree_elements += element_count
         return True
 
     def remember_relationship_catalog(
@@ -6433,7 +6477,7 @@ def _package_relationships(
     """Read package relationships without following external targets."""
     relationship_member = _relationship_part_path(source_member)
     cache = _active_ooxml_xml_root_cache(archive)
-    if cache is not None and cache.catalog_cache_eligible(
+    if cache is not None and cache.derived_cache_eligible(
         archive,
         relationship_member,
     ):
@@ -6460,7 +6504,7 @@ def _package_relationships(
             )
         )
     result = tuple(parsed)
-    if cache is not None and cache.catalog_cache_eligible(archive, relationship_member):
+    if cache is not None and cache.derived_cache_eligible(archive, relationship_member):
         cache.remember_relationship_catalog(source_member, result)
     return result
 
@@ -6474,7 +6518,7 @@ def _xlm_macro_sheet_target_members(archive: ZipFile) -> frozenset[str]:
     """
     relationship_member = _relationship_part_path("xl/workbook.xml")
     cache = _active_ooxml_xml_root_cache(archive)
-    if cache is not None and cache.catalog_cache_eligible(
+    if cache is not None and cache.derived_cache_eligible(
         archive,
         relationship_member,
     ):
@@ -6492,7 +6536,7 @@ def _xlm_macro_sheet_target_members(archive: ZipFile) -> frozenset[str]:
     if (
         cache is not None
         and len(targets) <= _OOXML_XML_ROOT_CACHE_MAX_SHEET_PARTS
-        and cache.catalog_cache_eligible(archive, relationship_member)
+        and cache.derived_cache_eligible(archive, relationship_member)
     ):
         cache.xlm_macro_sheet_target_catalog = targets
     return targets
@@ -6503,7 +6547,7 @@ def _sheet_xml_parts(archive: ZipFile) -> dict[str, tuple[str, str]]:
     workbook_member = "xl/workbook.xml"
     relationship_member = _relationship_part_path(workbook_member)
     cache = _active_ooxml_xml_root_cache(archive)
-    if cache is not None and cache.catalog_cache_eligible(
+    if cache is not None and cache.derived_cache_eligible(
         archive,
         workbook_member,
         relationship_member,
@@ -6543,7 +6587,7 @@ def _sheet_xml_parts(archive: ZipFile) -> dict[str, tuple[str, str]]:
     if (
         cache is not None
         and len(sheet_parts) <= _OOXML_XML_ROOT_CACHE_MAX_SHEET_PARTS
-        and cache.catalog_cache_eligible(
+        and cache.derived_cache_eligible(
             archive,
             workbook_member,
             relationship_member,
@@ -6723,7 +6767,7 @@ def _worksheet_display_xml_paths(archive: ZipFile) -> tuple[str, ...]:
     workbook_member = "xl/workbook.xml"
     relationship_member = _relationship_part_path(workbook_member)
     cache = _active_ooxml_xml_root_cache(archive)
-    if cache is not None and cache.catalog_cache_eligible(
+    if cache is not None and cache.derived_cache_eligible(
         archive,
         workbook_member,
         relationship_member,
@@ -6761,7 +6805,7 @@ def _worksheet_display_xml_paths(archive: ZipFile) -> tuple[str, ...]:
     if (
         cache is not None
         and len(result) <= _OOXML_XML_ROOT_CACHE_MAX_SHEET_PARTS
-        and cache.catalog_cache_eligible(
+        and cache.derived_cache_eligible(
             archive,
             workbook_member,
             relationship_member,
@@ -6781,7 +6825,7 @@ def _visual_worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
     workbook_member = "xl/workbook.xml"
     relationship_member = _relationship_part_path(workbook_member)
     cache = _active_ooxml_xml_root_cache(archive)
-    if cache is not None and cache.catalog_cache_eligible(
+    if cache is not None and cache.derived_cache_eligible(
         archive,
         workbook_member,
         relationship_member,
@@ -6821,7 +6865,7 @@ def _visual_worksheet_xml_paths(archive: ZipFile) -> dict[str, str]:
     if (
         cache is not None
         and len(members) <= _OOXML_XML_ROOT_CACHE_MAX_SHEET_PARTS
-        and cache.catalog_cache_eligible(
+        and cache.derived_cache_eligible(
             archive,
             workbook_member,
             relationship_member,

@@ -6076,7 +6076,7 @@ def test_snapshot_xml_root_cache_reuses_validated_payloads_in_reader_isolation(
 ) -> None:
     package = tmp_path / "root-cache.zip"
     member = "parts/root.xml"
-    payload = b"<root>alpha</root>"
+    payload = b"<root><child>alpha</child></root>"
     with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr(member, payload)
     unrelated_package = tmp_path / "unrelated-root-cache.zip"
@@ -6102,9 +6102,15 @@ def test_snapshot_xml_root_cache_reuses_validated_payloads_in_reader_isolation(
         with ZipFile(package) as archive:
             first = workbook_module._xml_root(archive, member)
         first.set("reader-local", "changed")
+        assert first.find("child") is not None
+        first.find("child").text = "changed"
+        assert cache.root_trees[member].get("reader-local") is None
+        assert cache.root_trees[member].findtext("child") == "alpha"
+        assert cache.cached_tree_elements == 2
         with ZipFile(package) as archive:
             second = workbook_module._xml_root(archive, member)
         assert second.get("reader-local") is None
+        assert second.findtext("child") == "alpha"
         assert parse_calls == [payload]
         assert cache.payloads == {member: payload}
 
@@ -6121,6 +6127,8 @@ def test_snapshot_xml_root_cache_reuses_validated_payloads_in_reader_isolation(
         with ZipFile(package) as archive:
             with pytest.raises(ValueError, match="XML character data"):
                 workbook_module._xml_root(archive, member)
+        assert cache.root_trees == {}
+        assert cache.cached_tree_elements == 0
     finally:
         workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.reset(cache_token)
 
@@ -6159,6 +6167,108 @@ def test_snapshot_xml_root_cache_leaves_over_budget_payloads_uncached(
 
     assert parse_calls == [payload, payload]
     assert cache.payloads == {}
+    assert cache.root_trees == {}
+    assert cache.cached_tree_elements == 0
+
+
+def test_snapshot_xml_root_tree_cache_respects_element_budgets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "root-tree-budget.zip"
+    first_member = "parts/first.xml"
+    oversized_member = "parts/oversized.xml"
+    second_member = "parts/second.xml"
+    first_payload = b"<root/>"
+    oversized_payload = b"<root><first/><second/></root>"
+    second_payload = b"<root/>"
+    with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(first_member, first_payload)
+        archive.writestr(oversized_member, oversized_payload)
+        archive.writestr(second_member, second_payload)
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_XML_ROOT_CACHE_MAX_TREE_ELEMENTS_PER_MEMBER",
+        1,
+    )
+    monkeypatch.setattr(
+        workbook_module,
+        "_OOXML_XML_ROOT_CACHE_MAX_TREE_ELEMENTS",
+        2,
+    )
+    cache = workbook_module._OoxmlXmlRootCache(source_filename=str(package))
+    cache_token = workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.set(cache)
+    parse_calls: list[bytes] = []
+    original_parse = workbook_module._xml_root_from_lexically_validated_payload
+
+    def count_parse(candidate: bytes) -> ElementTree.Element:
+        parse_calls.append(candidate)
+        return original_parse(candidate)
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_xml_root_from_lexically_validated_payload",
+        count_parse,
+    )
+    try:
+        with ZipFile(package) as archive:
+            assert workbook_module._xml_root(archive, first_member).tag == "root"
+            assert workbook_module._xml_root(archive, oversized_member).tag == "root"
+            assert workbook_module._xml_root(archive, second_member).tag == "root"
+            assert workbook_module._xml_root(archive, oversized_member).tag == "root"
+    finally:
+        workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.reset(cache_token)
+
+    assert set(cache.root_trees) == {first_member, second_member}
+    assert cache.cached_tree_elements == 2
+    assert parse_calls == [
+        first_payload,
+        oversized_payload,
+        second_payload,
+        oversized_payload,
+    ]
+
+
+def test_snapshot_xml_root_tree_cache_leaves_over_tree_byte_budget_uncached(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "root-tree-byte-budget.zip"
+    member = "parts/root.xml"
+    payload = (
+        b"<root>"
+        + b"a" * workbook_module._OOXML_XML_ROOT_CACHE_MAX_TREE_MEMBER_BYTES
+        + b"</root>"
+    )
+    with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(member, payload)
+
+    cache = workbook_module._OoxmlXmlRootCache(source_filename=str(package))
+    cache_token = workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.set(cache)
+    parse_calls: list[bytes] = []
+    original_parse = workbook_module._xml_root_from_lexically_validated_payload
+
+    def count_parse(candidate: bytes) -> ElementTree.Element:
+        parse_calls.append(candidate)
+        return original_parse(candidate)
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_xml_root_from_lexically_validated_payload",
+        count_parse,
+    )
+    try:
+        for _ in range(2):
+            with ZipFile(package) as archive:
+                assert workbook_module._xml_root(archive, member).tag == "root"
+    finally:
+        workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.reset(cache_token)
+
+    assert cache.payloads == {member: payload}
+    assert cache.root_trees == {}
+    assert cache.cached_tree_elements == 0
+    assert parse_calls == [payload, payload]
 
 
 def test_snapshot_xml_catalog_cache_reuses_bounded_immutable_metadata(
@@ -6338,6 +6448,10 @@ def test_load_snapshot_activates_a_private_xml_payload_cache(
     assert (
         created_caches[0].cached_bytes
         <= workbook_module._OOXML_XML_ROOT_CACHE_MAX_TOTAL_BYTES
+    )
+    assert (
+        created_caches[0].cached_tree_elements
+        <= workbook_module._OOXML_XML_ROOT_CACHE_MAX_TREE_ELEMENTS
     )
 
 

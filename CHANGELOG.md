@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.182.0 — 2026-07-28
+
+- Reuse small parsed OOXML roots as private, element-accounted trees during one
+  stable workbook snapshot. Each raw reader receives a deep copy, so reader
+  mutation remains isolated while repeated worksheet XML parsing is avoided.
+- Cache a tree only after its payload is already within the existing validated
+  payload cache, at most 16 KiB and 2,048 elements per part, with 8,192
+  retained elements in total. Derived trees and catalogs are discarded if the
+  character-data parser limit changes; byte, per-tree, aggregate, source, and
+  nested-mutation regressions hold the boundary.
+
 ## 0.181.0 — 2026-07-28
 
 - Reuse bounded, immutable OOXML relationship and worksheet-part catalogs for

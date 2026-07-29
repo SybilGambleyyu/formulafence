@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Snapshot-local bounded XML root trees — 2026-07-28
+
+Version 0.182.0 removes the repeated XML-tree construction left after 0.179.0
+reused payload bytes and 0.181.0 reused primitive catalogs. For a small parsed
+root, FormulaFence now retains the original tree privately and gives every raw
+metadata reader a deep copy. No reader can mutate shared XML state, while later
+readers avoid reparsing the same worksheet root.
+
+This is deliberately narrower than the payload cache. A tree is eligible only
+after its payload has passed the existing lexical and character-data gates and
+already fits the private payload cache; it must be at most 16 KiB and 2,048
+elements, and all retained roots together may contain only 8,192 elements.
+If the character-data limit changes during a snapshot, every derived tree and
+catalog is cleared before reuse, forcing the existing guarded parse. Targeted
+coverage proves source isolation, nested reader-mutation isolation, byte,
+per-tree, and aggregate element fallbacks, plus renewed character-data
+enforcement.
+
+For the controlled valid 232,295-byte, 512-sheet `.xlsx` used for the prior
+columnless releases (SHA-256
+`224811129cb243b3494fc61f330583ee898103bb1c2dca1ca5a01f7445293881`), with
+one `=1` formula in each worksheet and no column declarations, the public
+0.181.0 wheel emitted a 122,090-byte JSON profile (SHA-256
+`27a6737a6f3ba3c2f9e3c70f94326da2cccd78f42900e459e70e1001adb81361`) in
+1.687454, 1.703902, 1.677452, 1.706006, and 1.683790 seconds. The 0.182.0
+candidate emitted the same bytes and digest in 1.173725, 1.181311, 1.165613,
+1.179587, and 1.205045 seconds. The medians fell from 1.687454 to 1.179587
+seconds: 0.507867 seconds, or about 30.1%, less elapsed time. Fresh one-process
+measurements reported 44,448 KiB peak resident memory for the public wheel and
+48,044 KiB for the candidate: a bounded 3,596 KiB increase. The final source
+suite passed 1,302 tests in 95.02 seconds with no failures, errors, or skips;
+bytecode compilation, Ruff, and whitespace checks were also clean.
+
 ## Snapshot-local OOXML metadata catalogs — 2026-07-28
 
 Version 0.181.0 removes repeated raw catalog construction left after 0.179.0

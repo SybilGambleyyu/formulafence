@@ -383,6 +383,17 @@ def _direct_self_reference_locations(
     return tuple(locations)
 
 
+def _explicit_broken_reference_locations(snapshot: WorkbookSnapshot) -> tuple[CellKey, ...]:
+    """Return formula locations whose tokenizer exposed a ``#REF!`` operand.
+
+    Workbook loading records this ledger only for actual error operands, not
+    for a matching string literal or quoted worksheet name.  The lint keeps
+    that exact lexical fact separate from a cached formula result and does not
+    evaluate the formula.
+    """
+    return tuple(sorted(snapshot.broken_references, key=_location_sort_key))
+
+
 def _candidate_message(kind: str) -> tuple[str, str, str]:
     """Return the rule, severity, and reviewer-facing message for a pattern kind."""
     if kind == "blank_gap":
@@ -432,9 +443,9 @@ def lint_snapshot(
     short, contiguous numeric run on the same row or column. It also reports
     an explicitly unlocked formula on a protected sheet, an explicit incomplete
     manual-calculation state for a formula workbook, and a direct static
-    self-reference while iteration is disabled. It never evaluates formulas,
-    and rejects incomplete array metadata before claiming ordinary-cell
-    coverage.
+    self-reference while iteration is disabled, and an explicit broken
+    reference operand. It never evaluates formulas, and rejects incomplete
+    array metadata before claiming ordinary-cell coverage.
     """
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
@@ -663,6 +674,20 @@ def lint_snapshot(
                     "calculation_iteration_enabled": False,
                     "reference_scope": "direct_static",
                 },
+            )
+        )
+    for location in _explicit_broken_reference_locations(snapshot):
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF088",
+                severity="critical",
+                message="Formula contains an explicit broken #REF! reference.",
+                location=location,
             )
         )
     findings.sort(

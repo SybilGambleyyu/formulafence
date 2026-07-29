@@ -611,6 +611,26 @@ def test_diff_detects_pattern_break_and_static_hazards(tmp_path) -> None:
     assert {"FF003", "FF004", "FF006", "FF007"} <= rule_ids
 
 
+def test_diff_does_not_treat_ref_text_or_a_quoted_sheet_as_broken_reference(
+    tmp_path,
+) -> None:
+    baseline = make_model(tmp_path / "baseline.xlsx")
+    candidate = make_model(tmp_path / "candidate.xlsx")
+
+    def add_ref_text(workbook) -> None:
+        workbook["Model"]["D3"] = '="#REF!"'
+        ref_sheet = workbook.create_sheet("#REF!")
+        ref_sheet["A1"] = 1
+        workbook["Model"]["D4"] = "='#REF!'!A1"
+
+    rewrite(candidate, add_ref_text)
+    snapshot = load_snapshot(candidate)
+    report = compare_snapshots(load_snapshot(baseline), snapshot)
+
+    assert snapshot.broken_references == set()
+    assert "FF003" not in {finding.rule_id for finding in report.findings}
+
+
 def test_defined_name_change_is_semantic_control_change(tmp_path) -> None:
     baseline = make_model(tmp_path / "baseline.xlsx")
     candidate = make_model(tmp_path / "candidate.xlsx")

@@ -3746,4 +3746,22 @@ def extract_references(
 
 
 def has_broken_reference(formula: str) -> bool:
-    return "#REF!" in formula.upper()
+    """Return whether a tokenized formula contains an explicit ``#REF!`` operand.
+
+    A raw substring would incorrectly classify ordinary text such as
+    ``="#REF!"`` and a valid quoted worksheet name such as ``'#REF!'!A1``.
+    Tokenization lets the caller distinguish the actual SpreadsheetML error
+    operand without evaluating the formula.  If FormulaFence cannot tokenize a
+    formula, the caller retains its separate tokenization-coverage boundary
+    rather than guessing from raw text.
+    """
+    tokens, _, _ = _tokenize_formula(formula)
+    return bool(
+        tokens is not None
+        and any(
+            token.type == "OPERAND"
+            and token.subtype == "ERROR"
+            and token.value.casefold() == "#ref!"
+            for token in tokens
+        )
+    )

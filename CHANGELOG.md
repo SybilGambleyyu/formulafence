@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.189.0 — 2026-07-28
+
+- Add critical-severity `FF088` to `formulafence lint`: it reports a stored
+  formula only when tokenization exposes an actual `#REF!` error operand.
+- Replace the shared broken-reference substring heuristic with the same exact
+  token boundary. Formula text literals, quoted worksheet names, and
+  tokenization failures remain quiet. The lint never evaluates a formula and
+  JSON, Markdown, and SARIF retain only the location, never formula text or a
+  cached value.
+
 ## 0.188.0 — 2026-07-28
 
 - Add high-severity `FF087` to `formulafence lint`: it reports an ordinary

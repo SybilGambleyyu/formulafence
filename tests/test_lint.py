@@ -439,6 +439,27 @@ def test_lint_keeps_iteration_and_dynamic_or_range_self_forms_quiet(
     assert lint_snapshot(array_territory).findings == []
 
 
+def test_lint_reports_an_explicit_broken_reference_operand(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {"A2": 10, "B2": "=SUM(A2,#REF!,C2)", "C2": 20},
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF088", "critical", ("Model", "B2"))]
+    assert report.findings[0].details == {}
+
+
+def test_lint_keeps_ref_text_but_not_an_error_operand_quiet(tmp_path: Path) -> None:
+    literal = _snapshot(tmp_path, {"B2": '="#REF!"'})
+
+    assert lint_snapshot(literal).findings == []
+
+
 def test_lint_keeps_short_or_non_numeric_aggregate_gaps_quiet(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -649,6 +670,16 @@ def test_lint_shares_its_finding_cap_with_direct_self_references(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_shares_its_finding_cap_with_broken_references(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {"B2": "=#REF!", "C2": "=IFERROR(#REF!,0)"},
+    )
+
+    with pytest.raises(FormulaFenceError, match="max_formula_pattern_findings=1"):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_renderers_keep_formula_text_out_of_review_artifacts(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -810,6 +841,32 @@ def test_lint_direct_self_reference_renderers_keep_formula_text_out(
                     "A formula directly references its own cell while calculation "
                     "iteration is disabled."
                 )
+            },
+        }
+    ]
+
+
+def test_lint_broken_reference_renderers_keep_formula_text_out(tmp_path: Path) -> None:
+    snapshot = _snapshot(tmp_path, {"B2": "=IFERROR(#REF!,0)"})
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "=IFERROR(#REF!,0)" not in rendered
+        assert "FF088" in rendered
+    assert "## Explicit broken-reference evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {"severity": "critical"}
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF088",
+            "name": "FF088",
+            "shortDescription": {
+                "text": "Formula contains an explicit broken #REF! reference."
             },
         }
     ]

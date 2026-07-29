@@ -6,6 +6,7 @@ from formulafence.formulas import (
     StructuredTable,
     extract_references,
     formula_fingerprint,
+    has_broken_reference,
     inspect_formula,
     lambda_parameter_count,
     parse_external_link_indexed_defined_name_reference,
@@ -43,6 +44,17 @@ def test_fingerprint_normalises_relative_copy_patterns() -> None:
     assert formula_fingerprint("=@A1:A3", "B2") == formula_fingerprint(
         "=_xlfn.SINGLE(A1:A3)", "B2"
     )
+
+
+def test_broken_reference_detection_accepts_only_error_operands() -> None:
+    assert has_broken_reference("=#REF!")
+    assert has_broken_reference("=SUM(A1,#REF!,C1)")
+    assert has_broken_reference("=IFERROR(#REF!,0)")
+
+    assert not has_broken_reference('="#REF!"')
+    assert not has_broken_reference('=IF(A1="#REF!",1,0)')
+    assert not has_broken_reference("='#REF!'!A1")
+    assert not has_broken_reference('=INDIRECT("#REF!")')
 
 
 def test_extract_references_keeps_external_workbooks_separate() -> None:

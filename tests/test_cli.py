@@ -265,6 +265,18 @@ def test_lint_direct_self_reference_is_high(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
 
 
+def test_lint_explicit_broken_reference_is_critical(tmp_path) -> None:
+    workbook_path = tmp_path / "broken-reference.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["B2"] = "=IFERROR(#REF!,0)"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 1
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
+
+
 def test_lint_defaults_its_bounded_finding_limit() -> None:
     arguments = cli_module.build_parser().parse_args(["lint", "model.xlsx"])
 

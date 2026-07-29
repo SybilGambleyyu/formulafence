@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.188.0/formulafence-0.188.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.189.0/formulafence-0.189.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -66,13 +66,13 @@ for the current version.
 
 `formulafence lint WORKBOOK` is a deliberately conservative, single-workbook
 check for copy-paste, aggregate-range, protection, calculation-freshness, and
-direct-circular-reference risks that a version diff cannot see. It reports a
-copied-formula interruption only when the immediately preceding and following
-formulas have the same relative-copy fingerprint and a third contiguous peer
-repeats that fingerprint.
+direct-circular-reference and explicit-broken-reference risks that a version
+diff cannot see. It reports a copied-formula interruption only when the
+immediately preceding and following formulas have the same relative-copy
+fingerprint and a third contiguous peer repeats that fingerprint.
 It also recognizes narrow aggregate-range, formula-protection,
-calculation-freshness, and direct-circular-reference signals. Together these
-produce six reviewable findings:
+calculation-freshness, direct-circular-reference, and explicit broken-reference
+signals. Together these produce seven reviewable findings:
 
 - `FF082`: a non-formula interruption. Blanks and stored error values are high;
   numeric/manual values are medium; textual markers are low.
@@ -87,11 +87,14 @@ produce six reviewable findings:
   completed before it was saved.
 - `FF087` (high): an ordinary formula's resolved scalar static dependency
   returns to its own cell while workbook calculation iteration is disabled.
+- `FF088` (critical): a stored formula's tokenized syntax contains an explicit
+  `#REF!` error operand.
 
-Use `--fail-on high` to gate blank/error interruptions and direct static
-self-references, or `--fail-on medium` to also require review of manual-value,
-formula-outlier, aggregate-range, and explicit formula-protection and
-incomplete-manual-calculation exceptions. `FF084` intentionally ignores
+Use `--fail-on critical` to gate explicit broken-reference operands, or
+`--fail-on high` to also gate blank/error interruptions and direct static
+self-references. Use `--fail-on medium` to additionally require review of
+manual-value, formula-outlier, aggregate-range, and explicit formula-protection
+and incomplete-manual-calculation exceptions. `FF084` intentionally ignores
 named/table/external/3-D references, multi-range or computed expressions, a
 formula before or beside its range, one-cell gaps, nonnumeric gaps, tokenizer
 failures, and array-formula territory. `FF085` deliberately does not infer
@@ -102,10 +105,12 @@ quiet. It is a configuration prompt, not a claim that a particular cached
 result is wrong. `FF087` stays quiet when `iterate=true`, and intentionally
 does not infer an indirect cycle, inspect a static range for self-membership,
 or model dynamic references, spill references, explicit intersection, or array
-territory. JSON, Markdown, and SARIF output show only locations, static range
-coordinates, calculation-status flags, and the direct-static scope, never
-formula text or cached values. The lint does not calculate formulas and fails
-closed if array metadata is incomplete.
+territory. `FF088` requires a tokenizer `#REF!` error operand: a matching text
+literal, quoted worksheet name, or tokenization failure stays quiet. JSON,
+Markdown, and SARIF output show only locations, static range coordinates,
+calculation-status flags, and the direct-static scope, never formula text or
+cached values. The lint does not calculate formulas and fails closed if array
+metadata is incomplete.
 
 It retains at most 10,000 total formula-lint findings by default; use
 `--max-formula-pattern-findings` to choose another positive reviewed bound.
@@ -129,7 +134,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.188.0
+  uses: SybilGambleyyu/formulafence@v0.189.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx

@@ -422,9 +422,11 @@ cell style makes an ordinary formula editable despite active sheet protection.
 A calculation-freshness finding means a formula workbook records manual mode
 and incomplete calculation before save. A direct-circular-reference finding
 means FormulaFence's resolved scalar static dependency returns to its own
-ordinary formula cell while calculation iteration is disabled. Each is a
-focused review prompt, not proof that a formula should change, a cached result
-is stale, or an error will occur at calculation time.
+ordinary formula cell while calculation iteration is disabled. An
+explicit-broken-reference finding means a stored formula tokenized an actual
+`#REF!` error operand, rather than merely containing those characters as text.
+Each is a focused review prompt, not proof that a formula should change, a
+cached result is stale, or an error will occur at calculation time.
 
 For a portfolio `FF079`, the same distinction applies across candidate
 workbooks: it records that a changed source cell can reach a formula through a

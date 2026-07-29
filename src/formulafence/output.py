@@ -6402,6 +6402,18 @@ def lint_to_markdown(
                 "the same cell while calculation iteration is disabled."
                 .format(location=_markdown_code(location or "workbook"))
             )
+    broken_reference_evidence = [
+        finding["location"]
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF088"
+    ]
+    if broken_reference_evidence:
+        lines.extend(["## Explicit broken-reference evidence", ""])
+        for location in broken_reference_evidence:
+            lines.append(
+                "- {location}: formula tokenization found an explicit `#REF!` error "
+                "operand.".format(location=_markdown_code(location or "workbook"))
+            )
     return lines.render()
 
 
@@ -6416,6 +6428,7 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF087": (
             "A formula directly references its own cell while calculation iteration is disabled."
         ),
+        "FF088": "Formula contains an explicit broken #REF! reference.",
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

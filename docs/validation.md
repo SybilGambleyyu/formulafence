@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Explicit broken-reference operand lint — 2026-07-28
+
+Microsoft's [#REF! guidance](https://support.microsoft.com/en-US/Excel/how-to-correct-a-ref-error)
+defines the error as a formula referring to an invalid cell, commonly after a
+referenced cell is deleted or pasted over. `FF088` therefore reports a stored
+formula only when the tokenizer exposes an actual `#REF!` error operand. It is
+critical because the formula contains a visibly unresolved reference, even when
+an error-handling wrapper would mask its result. FormulaFence neither evaluates
+the formula nor exposes its text or a cached value in the finding.
+
+The boundary is lexical and deliberately exact: a formula text literal, an
+`INDIRECT` text argument, a valid quoted worksheet name, and a tokenization
+failure remain quiet. Controlled fixtures cover direct and wrapped error
+operands, all of those exclusions, the shared finding cap, diff/profile
+classification, JSON/Markdown/SARIF redaction, and critical-versus-high CLI
+gates.
+
+The candidate lint scanned 438 generated `.xlsx`/`.xlsm` fixtures successfully.
+Across 1,588 formula cells it found one `FF088` finding. The independent public
+scan covered the ten public ExceLint workbooks, an 820-formula finance ledger,
+and a 10-formula compatibility workbook. Those 12 workbooks contained 50,362
+stored formula cells and produced six `FF088` findings. This is a prevalence
+check, not proof that the detected models are erroneous beyond the explicit
+stored operands or that undetected formulas are correct.
+
+The release-versioned 0.189.0 source tree passed **1,353 tests in 93.55
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check`, installed into separate fresh
+environments with declared dependencies, reported `FormulaFence 0.189.0`, and
+reproduced a controlled `FF088` finding without rendering formula text. A
+critical and high gate each returned `1`; a `#REF!` text-literal control stayed
+quiet with exit `0`.
+
 ## Direct static self-reference lint — 2026-07-28
 
 Microsoft's [calculation guidance](https://support.microsoft.com/en-US/Excel/change-formula-recalculation-iteration-or-precision-in-excel)

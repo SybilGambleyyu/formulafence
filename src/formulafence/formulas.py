@@ -2737,6 +2737,66 @@ def modern_lookup_literal_mode_mismatch_count(formula: str) -> int:
     return mismatch_count
 
 
+def large_small_literal_rank_mismatch_count(formula: str) -> int:
+    """Count provable literal-rank bounds errors in native ``LARGE``/``SMALL``.
+
+    This token-only helper accepts only unqualified native ``LARGE`` and
+    ``SMALL`` calls (optionally preceded by ``@``) with exactly two nonempty
+    arguments, one direct static internal A1 array/range, and one direct signed
+    decimal integer rank literal. A finding is returned when the rank is
+    nonpositive or exceeds the array's rectangular cell capacity. The capacity
+    is an upper bound on numeric data points, so an overage is invalid without
+    inspecting cell values or calculating a formula. Names, Tables, external
+    or 3-D references, computed/dynamic/spill/implicit forms, decimal or
+    scientific ranks, malformed calls, explicit broken references, and
+    arbitrary namespaces remain outside the contract.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return 0
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return 0
+
+    mismatch_count = 0
+    for position, token in enumerate(tokens):
+        if _unqualified_native_function_name(token) not in {"LARGE", "SMALL"}:
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if len(arguments) != 2 or any(
+            not any(
+                not _is_whitespace(tokens[argument_position])
+                for argument_position in range(start, end)
+            )
+            for start, end in arguments
+        ):
+            continue
+        array_shape = _direct_static_a1_range_shape(tokens, *arguments[0])
+        rank = _direct_signed_integer_literal(tokens, *arguments[1])
+        if array_shape is None or rank is None:
+            continue
+        rank_is_negative, rank_digits = rank
+        array_width, array_height = array_shape
+        array_capacity = array_width * array_height
+        if (
+            rank_is_negative
+            or rank_digits == "0"
+            or _positive_integer_literal_exceeds(rank_digits, array_capacity)
+        ):
+            mismatch_count += 1
+    return mismatch_count
+
+
 def index_literal_position_mismatch_count(formula: str) -> int:
     """Count provable literal-position bounds errors in native ``INDEX`` calls.
 

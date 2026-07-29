@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.205.0 — 2026-07-28
+
+- Add high-severity `FF103` to `formulafence lint`: it reports a native
+  `LARGE` or `SMALL` call only when a direct signed literal rank is
+  nonpositive or exceeds the maximum possible data-point count of its direct
+  static A1 array.
+- Keep the rule deliberately narrow and private: it accepts only exact native
+  spellings, valid two-argument calls, and direct internal A1 cell/range or
+  whole-column arrays. Names, Tables, external/3-D/full-row/union, computed,
+  dynamic, spill/implicit, decimal/scientific, malformed,
+  explicit-broken-reference, array-territory, and arbitrary namespace forms
+  stay quiet. Findings retain only the cell location and aggregate invalid-rank
+  count.
+
 ## 0.204.0 — 2026-07-28
 
 - Add high-severity `FF102` to `formulafence lint`: it reports a native

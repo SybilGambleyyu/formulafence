@@ -5,6 +5,67 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Literal `LARGE` / `SMALL` rank lint — 2026-07-28
+
+Microsoft's [LARGE reference](https://support.microsoft.com/en-gb/office/large-function-3af0af19-1190-42bb-bb8b-01672ec00a64)
+and [SMALL reference](https://support.microsoft.com/en-us/office/small-function-17da8222-7c82-42b2-961b-14c45384df07)
+state that either function returns `#NUM!` when `k` is nonpositive or exceeds
+the number of data points. A direct static range has no more numeric data
+points than cells, so a literal rank over its rectangular capacity is a
+statically demonstrable error without evaluating a formula or inspecting a
+cell value.
+
+`FF103` accepts only unqualified native `LARGE` and `SMALL`, optionally
+preceded by Excel's display-only `@`, with exactly two nonempty arguments, one
+direct internal A1 cell/range or whole-column array, and a direct signed
+decimal integer rank. It reports a negative/zero rank or a positive rank above
+the array capacity. The detector deliberately does not infer the actual number
+of numeric points: a rank at or below capacity might still fail for a sparse
+range and remains quiet. Names, Tables, external/3-D/full-row/union,
+computed/dynamic/spill/implicit, decimal/scientific, malformed,
+explicit-broken-reference, arbitrary namespace, and array-territory forms stay
+quiet. Findings retain only a cell location and aggregate invalid-rank count—
+never a formula, rank, array spelling, sheet identity, or source value.
+
+A read-only aggregate OOXML survey of the public verified
+[SpreadsheetBench](https://github.com/RUCKBReasoning/SpreadsheetBench) set
+loaded all 800 initial/golden workbooks and reconstructed 60,355 ordinary
+formula instances with zero shared-formula translation failures. It observed
+1,559 native `LARGE`/`SMALL` calls, including 816 direct static
+array/literal-rank calls. No nonpositive rank or rank over array capacity
+occurred; the production FF103 helper independently returned zero mismatches
+over the same reconstructed formula instances. The survey emits counts only
+and does not retain workbook contents, formulas, locations, or values.
+
+A separate raw OOXML compatibility survey across 469 public workbooks loaded
+463 packages, rejected six malformed/unreadable packages, and reconstructed
+62,781 ordinary formula instances. It observed no native `LARGE` or `SMALL`
+calls and the production helper reported zero mismatches. This is a
+compatibility and false-positive boundary check, not a claim that every
+unreported formula is valid.
+
+The actual FormulaFence safe-loader candidate replay over those same 469
+workbooks loaded 454, rejected 15 at established safety boundaries, inspected
+60,823 formula cells, and emitted zero `FF103` findings or invalid-rank counts.
+This exercises the production snapshot and candidate path without claiming that
+every unreported formula is valid.
+
+A focused FF103 helper/lint/CLI/output selection passed **8 tests in 0.61
+seconds**. It covers negative/zero, over-capacity, nested calls, `@`, leading
+signs/zeros, whole-column capacity, valid ranks, dynamic/decimal/array/name/
+Table/external/spill/custom-namespace forms, explicit broken references,
+array territory, generic-outlier replacement, shared finding caps, CLI severity
+gates, and JSON/Markdown/SARIF redaction.
+
+The release-versioned 0.205.0 source tree passed **1,472 tests in 97.97
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment reporting `FormulaFence 0.205.0`. Both reproduced one
+redacted `FF103` finding for an impossible direct literal rank: the critical
+gate returned `0`, the high gate returned `1`, and SARIF retained only `FF103`
+and the aggregate count—not the source formula, rank, source range, or sheet
+identity.
+
 ## Literal `XLOOKUP` / `XMATCH` mode-code lint — 2026-07-28
 
 Microsoft's [XLOOKUP reference](https://support.microsoft.com/en-us/excel/functions/xlookup-function)

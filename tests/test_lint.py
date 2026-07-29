@@ -1694,6 +1694,111 @@ def test_lint_modern_lookup_mode_candidates_share_the_finding_cap(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_reports_large_small_invalid_literal_ranks(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": "=IFERROR(LARGE(A2:B4,0)+@SMALL(C2:D4,+7),0)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF103", "high", ("Model", "E2"))]
+    assert report.findings[0].details == {
+        "large_small_call_count": 2,
+        "invalid_literal_rank_count": 2,
+        "evidence_scope": "large_small_direct_a1_array_literal_rank",
+    }
+
+
+def test_lint_large_small_rank_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=LARGE(B2:C4,1)",
+            "A3": "=SMALL(B2:C4,6)",
+            "A4": "=LARGE(B2:C4,D4)",
+            "A5": "=SMALL(B2:C4,1+6)",
+            "A6": "=LARGE(B2:C4,7.0)",
+            "A7": "=SMALL({1,2},3)",
+            "A8": "=LARGE(NamedArray,7)",
+            "A9": "=SMALL(Table1[One],7)",
+            "A10": "=LARGE(B2#,7)",
+            "A11": "=SMALL([Inputs.xlsx]Data!B2:C4,7)",
+            "A12": "=LARGE(B2:C4,7,#REF!)",
+            "A13": "=Vendor.SMALL(B2:C4,7)",
+        },
+    )
+
+    assert "FF103" not in {finding.rule_id for finding in lint_snapshot(snapshot).findings}
+
+    array_territory = _snapshot(tmp_path, {"B2": "=LARGE(C2:D4,7)"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF103" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_large_small_rank_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=LARGE(C2:D4,1)",
+            "B3": "=LARGE(C3:D5,7)",
+            "B4": "=LARGE(C4:D6,1)",
+            "B5": "=LARGE(C5:D7,1)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF103", "high", ("Model", "B3"))]
+
+
+def test_lint_large_small_rank_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=LARGE(C2:D4,7)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -2971,6 +3076,51 @@ def test_lint_modern_lookup_mode_renderers_keep_values_private(
                 "text": (
                     "An XLOOKUP or XMATCH call uses a literal mode outside Excel's "
                     "supported codes."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_large_small_rank_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Private Inputs"
+    model = workbook.create_sheet("Model")
+    model["B2"] = "=LARGE('Private Inputs'!$C$2:$D$4,7)+N(\"confidential\")"
+    path = tmp_path / "private-large-small-rank.xlsx"
+    workbook.save(path)
+
+    report = lint_snapshot(load_snapshot(path))
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2:$D$4" not in rendered
+        assert "confidential" not in rendered
+        assert "LARGE('Private Inputs'" not in rendered
+        assert "FF103" in rendered
+    assert "## LARGE/SMALL literal-rank evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "large_small_call_count": 1,
+        "invalid_literal_rank_count": 1,
+        "evidence_scope": "large_small_direct_a1_array_literal_rank",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF103",
+            "name": "FF103",
+            "shortDescription": {
+                "text": (
+                    "A LARGE or SMALL call uses a literal rank that is nonpositive or "
+                    "exceeds its direct static array capacity."
                 )
             },
         }

@@ -6639,6 +6639,24 @@ def lint_to_markdown(
                     ),
                 )
             )
+    large_small_rank_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF103"
+    ]
+    if large_small_rank_evidence:
+        lines.extend(["## LARGE/SMALL literal-rank evidence", ""])
+        for location, evidence in large_small_rank_evidence:
+            lines.append(
+                "- {location}: {rank_count} direct literal LARGE or SMALL ranks are "
+                "nonpositive or exceed direct static array capacity."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    rank_count=_markdown_escape(
+                        evidence["invalid_literal_rank_count"]
+                    ),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6747,6 +6765,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF102": (
             "An XLOOKUP or XMATCH call uses a literal mode outside Excel's "
             "supported codes."
+        ),
+        "FF103": (
+            "A LARGE or SMALL call uses a literal rank that is nonpositive or "
+            "exceeds its direct static array capacity."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

@@ -13,6 +13,7 @@ from formulafence.formulas import (
     index_literal_position_mismatch_count,
     inspect_formula,
     lambda_parameter_count,
+    large_small_literal_rank_mismatch_count,
     lookup_return_index_mismatches,
     mmult_dimension_mismatch_count,
     modern_lookup_literal_mode_mismatch_count,
@@ -332,6 +333,43 @@ def test_modern_lookup_literal_mode_mismatch_count_keeps_ambiguous_forms_quiet()
 
     for formula in quiet_formulas:
         assert modern_lookup_literal_mode_mismatch_count(formula) == 0
+
+
+def test_large_small_literal_rank_mismatch_count_finds_direct_native_calls() -> None:
+    assert large_small_literal_rank_mismatch_count("=LARGE(A2:B4,0)") == 1
+    assert large_small_literal_rank_mismatch_count("=@SMALL(A2:B4,-0)") == 1
+    assert large_small_literal_rank_mismatch_count("=LARGE(A2:B4,+0007)") == 1
+    assert large_small_literal_rank_mismatch_count("=SMALL($A:$B,2097153)") == 1
+    assert large_small_literal_rank_mismatch_count(
+        "=IFERROR(LARGE('Input Sheet'!$A$2:$B$4,7)+SMALL(C2:D4,-1),0)"
+    ) == 2
+
+
+def test_large_small_literal_rank_mismatch_count_keeps_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=LARGE(A2:B4,1)",
+        "=SMALL(A2:B4,6)",
+        "=LARGE($A:$B,2097152)",
+        "=SMALL(A2:B4,A5)",
+        "=LARGE(A2:B4,1+6)",
+        "=SMALL(A2:B4,--1)",
+        "=LARGE(A2:B4,7.0)",
+        "=SMALL(A2:B4,7E0)",
+        "=LARGE({1,2},3)",
+        "=SMALL(NamedArray,3)",
+        "=LARGE(Table1[Amount],3)",
+        "=SMALL(A2#,3)",
+        "=LARGE([Inputs.xlsx]Data!A2:B4,7)",
+        "=LARGE(A2:B4)",
+        "=SMALL(A2:B4,3,1)",
+        "=LARGE(A2:B4,)",
+        "=SMALL(A2:B4,#REF!)",
+        "=Vendor.LARGE(A2:B4,7)",
+        "=_xlfn.SMALL(A2:B4,7)",
+    )
+
+    for formula in quiet_formulas:
+        assert large_small_literal_rank_mismatch_count(formula) == 0
 
 
 def test_index_literal_position_mismatch_count_finds_direct_native_calls() -> None:

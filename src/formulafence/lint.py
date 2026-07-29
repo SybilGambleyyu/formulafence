@@ -20,6 +20,7 @@ from formulafence.formulas import (
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
     index_literal_position_mismatch_count,
+    large_small_literal_rank_mismatch_count,
     lookup_return_index_mismatches,
     mmult_dimension_mismatch_count,
     modern_lookup_literal_mode_mismatch_count,
@@ -662,6 +663,49 @@ def _modern_lookup_literal_mode_candidates(
         if formula is None:
             continue
         mismatch_count = modern_lookup_literal_mode_mismatch_count(formula)
+        if not mismatch_count:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append((location, mismatch_count))
+    return tuple(candidates)
+
+
+def _large_small_literal_rank_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int], ...]:
+    """Return cells with provably invalid literal ``LARGE``/``SMALL`` ranks.
+
+    The formula helper accepts only native ``LARGE``/``SMALL`` calls (optionally
+    preceded by ``@``), exactly two nonempty arguments, a direct static internal
+    A1 array, and a direct signed integer rank literal. It reports a rank only
+    when it is nonpositive or above the array's possible cell-data capacity.
+    This layer adds workbook context: ordinary inspectable formula cells only,
+    no array territory, and no explicit broken-reference operand. Findings
+    retain only an aggregate count, never formula text, literal values, array
+    range spellings, or source sheet identity.
+    """
+    candidates: list[tuple[CellKey, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        mismatch_count = large_small_literal_rank_mismatch_count(formula)
         if not mismatch_count:
             continue
         if (
@@ -1331,7 +1375,8 @@ def lint_snapshot(
     direct literal ``SUBTOTAL`` function-code mismatches, direct literal
     ``INDEX`` row/column-position mismatches, approximate legacy lookups with
     visibly unsorted direct numeric key vectors, unsupported direct literal
-    XLOOKUP/XMATCH mode codes, direct and multi-cell static circular references
+    XLOOKUP/XMATCH mode codes, direct literal ``LARGE``/``SMALL`` ranks outside
+    static-array capacity, direct and multi-cell static circular references
     while iteration is disabled, an explicit broken
     reference operand, and a saved broken-reference result. It never evaluates
     formulas, and rejects incomplete array metadata before claiming ordinary-
@@ -1460,6 +1505,23 @@ def lint_snapshot(
         ),
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
+    large_small_rank_candidates = _large_small_literal_rank_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=(
+            len(conditional_aggregate_candidates)
+            + len(sumproduct_candidates)
+            + len(mmult_candidates)
+            + len(lookup_candidates)
+            + len(choose_candidates)
+            + len(randbetween_candidates)
+            + len(subtotal_candidates)
+            + len(index_candidates)
+            + len(approximate_lookup_candidates)
+            + len(modern_lookup_mode_candidates)
+        ),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
     structural_formula_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
@@ -1482,6 +1544,9 @@ def lint_snapshot(
     )
     structural_formula_locations.update(
         location for location, _ in modern_lookup_mode_candidates
+    )
+    structural_formula_locations.update(
+        location for location, _ in large_small_rank_candidates
     )
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
@@ -1855,6 +1920,29 @@ def lint_snapshot(
                 details={
                     "unsupported_literal_mode_count": unsupported_literal_mode_count,
                     "evidence_scope": "xlookup_xmatch_literal_mode_codes",
+                },
+            )
+        )
+
+    for location, invalid_literal_rank_count in large_small_rank_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF103",
+                severity="high",
+                message=(
+                    "A LARGE or SMALL call uses a literal rank that is nonpositive "
+                    "or exceeds its direct static array capacity."
+                ),
+                location=location,
+                details={
+                    "large_small_call_count": invalid_literal_rank_count,
+                    "invalid_literal_rank_count": invalid_literal_rank_count,
+                    "evidence_scope": "large_small_direct_a1_array_literal_rank",
                 },
             )
         )

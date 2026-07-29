@@ -396,6 +396,18 @@ def test_lint_modern_lookup_unsupported_literal_mode_is_high(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
 
 
+def test_lint_large_small_invalid_literal_rank_is_high(tmp_path) -> None:
+    workbook_path = tmp_path / "large-small-literal-rank.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["B2"] = "=LARGE(C2:D4,7)"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
+
+
 def test_lint_direct_self_reference_is_high(tmp_path) -> None:
     workbook_path = tmp_path / "direct-self-reference.xlsx"
     workbook = Workbook()

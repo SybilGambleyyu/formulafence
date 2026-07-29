@@ -2273,6 +2273,53 @@ def sumproduct_range_shape_mismatches(formula: str) -> tuple[int, ...]:
     return tuple(mismatches)
 
 
+def mmult_dimension_mismatch_count(formula: str) -> int:
+    """Count provable direct-static matrix dimension mismatches in ``MMULT``.
+
+    This scans formula tokens only; it does not resolve names, inspect table
+    identities, calculate a formula, or infer cell values. A call is
+    deliberately ignored unless it has exactly two arguments and each is one
+    direct, bounded, internal A1 cell/range or whole-column reference. It
+    accepts only Excel's unqualified native ``MMULT`` spelling, optionally
+    preceded by ``@``. A finding is returned only when the first argument's
+    column count differs from the second argument's row count. All dynamic and
+    otherwise ambiguous formulas remain outside the finding boundary.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return 0
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return 0
+
+    mismatch_count = 0
+    for position, token in enumerate(tokens):
+        if _unqualified_native_function_name(token) != "MMULT":
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if len(arguments) != 2:
+            continue
+        first_shape = _direct_static_a1_range_shape(tokens, *arguments[0])
+        second_shape = _direct_static_a1_range_shape(tokens, *arguments[1])
+        if first_shape is None or second_shape is None:
+            continue
+        first_column_count, _ = first_shape
+        _, second_row_count = second_shape
+        if first_column_count != second_row_count:
+            mismatch_count += 1
+    return mismatch_count
+
+
 def _function_lookup_key(token: object) -> str:
     """Normalize a callable defined-name token without losing sheet qualification."""
     return reference_lookup_key(str(getattr(token, "value", "")).rstrip("(").strip())

@@ -10,6 +10,7 @@ from formulafence.formulas import (
     has_broken_reference,
     inspect_formula,
     lambda_parameter_count,
+    mmult_dimension_mismatch_count,
     parse_external_link_indexed_defined_name_reference,
     parse_external_link_indexed_sheet_defined_name_reference,
     parse_external_link_indexed_workbook_reference,
@@ -159,6 +160,43 @@ def test_sumproduct_range_shape_mismatches_keep_ambiguous_forms_quiet() -> None:
 
     for formula in quiet_formulas:
         assert sumproduct_range_shape_mismatches(formula) == ()
+
+
+def test_mmult_dimension_mismatch_count_finds_direct_native_calls() -> None:
+    assert mmult_dimension_mismatch_count("=MMULT(A2:B4,C2:D5)") == 1
+    assert mmult_dimension_mismatch_count("=MMULT(A2:A5,B2:C3)") == 1
+    assert mmult_dimension_mismatch_count("=MMULT($A:$A,$B:$B)") == 1
+    assert mmult_dimension_mismatch_count(
+        "=IFERROR(MMULT('Input Sheet'!$A$2:$B$4,'Input Sheet'!$C$2:$D$6)"
+        "+@MMULT(E2:F4,G2:H5),0)"
+    ) == 2
+
+
+def test_mmult_dimension_mismatch_count_keeps_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=MMULT(A2:B4,C2:D3)",
+        "=MMULT($A:$A,$B$1)",
+        "=MMULT(A2:B4)",
+        "=MMULT(A2:B4,C2:D3,E2:E3)",
+        "=MMULT({1,2;3,4},{5,6;7,8})",
+        "=MMULT(Table1[One],Table1[Two])",
+        "=MMULT(A2:B4,NamedMatrix)",
+        "=MMULT(A2:B4,OFFSET(C2,0,0,3,2))",
+        "=MMULT(A2:B4,C2#)",
+        "=MMULT(A2:B4,@C2:D3)",
+        "=MMULT(A2:B4,[Inputs.xlsx]Data!C2:D5)",
+        "=MMULT(A2:B4,2:3)",
+        "=MMULT(XFE2:XFE4,C2:D5)",
+        "=MMULT(B4:A2,C2:D3)",
+        "=MMULT(A2:B4,C1048577:D1048578)",
+        "=MMULT(A2:B4,C2:D3*2)",
+        "=Vendor.MMULT(A2:B4,C2:D5)",
+        "=_xlfn.MMULT(A2:B4,C2:D5)",
+        "=MMULT(A2:B4,C2:D3,#REF!)",
+    )
+
+    for formula in quiet_formulas:
+        assert mmult_dimension_mismatch_count(formula) == 0
 
 
 def test_extract_references_keeps_external_workbooks_separate() -> None:

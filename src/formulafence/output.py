@@ -6484,6 +6484,25 @@ def lint_to_markdown(
                     call_count=_markdown_escape(evidence["sumproduct_call_count"]),
                 )
             )
+    mmult_dimension_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF095"
+    ]
+    if mmult_dimension_evidence:
+        lines.extend(["## MMULT matrix-dimension evidence", ""])
+        for location, evidence in mmult_dimension_evidence:
+            lines.append(
+                "- {location}: {pair_count} direct static matrix pairs across "
+                "{call_count} MMULT calls have incompatible inner dimensions."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    pair_count=_markdown_escape(
+                        evidence["incompatible_direct_matrix_pair_count"]
+                    ),
+                    call_count=_markdown_escape(evidence["mmult_call_count"]),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6563,6 +6582,9 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
             "A conditional aggregate uses direct static ranges with different shapes."
         ),
         "FF094": "A SUMPRODUCT call uses direct static ranges with different shapes.",
+        "FF095": (
+            "An MMULT call uses direct static arrays with incompatible matrix dimensions."
+        ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

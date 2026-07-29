@@ -786,6 +786,96 @@ def test_lint_range_shape_rules_share_the_finding_cap(
         {
             "A2": "=SUMIFS(C2:C10,A2:A12,A14)",
             "A3": "=SUMPRODUCT(C2:C10,A2:A12)",
+            "A4": "=MMULT(A2:B4,C2:D5)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=2",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=2)
+
+
+def test_lint_reports_direct_mmult_dimension_mismatches(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": (
+                "=IFERROR(MMULT(C2:D4,A2:B6)"
+                "+MMULT(B2:C4,D2:E5),0)"
+            ),
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF095", "high", ("Model", "E2"))]
+    assert report.findings[0].details == {
+        "mmult_call_count": 2,
+        "incompatible_direct_matrix_pair_count": 2,
+        "evidence_scope": "mmult_direct_a1_arrays",
+    }
+
+
+def test_lint_mmult_dimension_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=MMULT(C2:D4,A2:B3)",
+            "A3": "=MMULT(C2:D4,NamedMatrix)",
+            "A4": "=MMULT(Table1[One],Table1[Two])",
+            "A5": "=MMULT(C2:D4,OFFSET(A2,0,0,5,2))",
+            "A6": "=MMULT(C2:D4,A2#)",
+            "A7": "=MMULT(C2:D4,[Inputs.xlsx]Data!A2:B6)",
+            "A8": "=MMULT(C2:D4,A2:B3,#REF!)",
+            "A9": "=MMULT(C2:D4,A2:B6*2)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert "FF095" not in {finding.rule_id for finding in report.findings}
+
+
+def test_lint_mmult_dimension_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=MMULT(C2:D4,E2:F3)",
+            "B3": "=MMULT(C3:D5,E3:F6)",
+            "B4": "=MMULT(C4:D6,E4:F5)",
+            "B5": "=MMULT(C5:D7,E5:F6)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF095", "high", ("Model", "B3"))]
+
+
+def test_lint_mmult_dimension_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=MMULT(C2:D4,A2:B6)",
         },
     )
 
@@ -1715,6 +1805,52 @@ def test_lint_sumproduct_range_shape_renderers_keep_ranges_private(
             "name": "FF094",
             "shortDescription": {
                 "text": "A SUMPRODUCT call uses direct static ranges with different shapes."
+            },
+        }
+    ]
+
+
+def test_lint_mmult_dimension_renderers_keep_ranges_private(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": (
+                "=MMULT('Private Inputs'!$C$2:$D$4,"
+                "'Private Inputs'!$A$2:$B$6)"
+            ),
+        },
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2:$D$4" not in rendered
+        assert "$A$2:$B$6" not in rendered
+        assert "FF095" in rendered
+    assert "## MMULT matrix-dimension evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "mmult_call_count": 1,
+        "incompatible_direct_matrix_pair_count": 1,
+        "evidence_scope": "mmult_direct_a1_arrays",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF095",
+            "name": "FF095",
+            "shortDescription": {
+                "text": (
+                    "An MMULT call uses direct static arrays with incompatible "
+                    "matrix dimensions."
+                )
             },
         }
     ]

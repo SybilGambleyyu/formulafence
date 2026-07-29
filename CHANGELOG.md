@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.197.0 — 2026-07-28
+
+- Add high-severity `FF095` to `formulafence lint`: it reports an unqualified
+  native `MMULT` call only when exactly two direct static internal A1
+  cell/range or whole-column arguments have incompatible matrix inner
+  dimensions.
+- Keep the rule deliberately narrow and private: it does not inspect numeric
+  values, and computed arrays, names, Tables, external or 3-D references, full
+  rows, unions, dynamic/spill/implicit forms, malformed calls, explicit broken
+  references, array territory, and arbitrary namespaces stay quiet. Output
+  retains only aggregate call and incompatible-matrix-pair counts.
+
 ## 0.196.0 — 2026-07-28
 
 - Add high-severity `FF094` to `formulafence lint`: it reports an unqualified

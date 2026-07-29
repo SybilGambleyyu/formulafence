@@ -5,6 +5,59 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct-static `MMULT` inner-dimension lint — 2026-07-28
+
+Microsoft's [MMULT reference](https://support.microsoft.com/en-us/excel/functions/mmult-function)
+defines `MMULT(array1, array2)`, requires the number of columns in `array1` to
+equal the number of rows in `array2`, and states that a difference returns
+`#VALUE!`. FormulaFence therefore adds high-severity `FF095` only when that
+inner-dimension mismatch is statically provable without evaluating a formula.
+
+`FF095` accepts unqualified native `MMULT`, optionally preceded by Excel's
+display-only `@`, with exactly two comma-separated arguments. Each argument
+must be one direct bounded internal A1 cell/range or whole-column reference;
+the detector compares the first argument's column count with the second
+argument's row count and retains only aggregate call and incompatible-matrix-
+pair counts. It intentionally does not inspect cell values, so the separate
+numeric/empty-cell `#VALUE!` causes in Microsoft's contract are outside this
+static rule. Names, Tables, external and 3-D references, full rows, unions,
+arithmetic or nested computed arrays, dynamic references, spills, implicit
+intersection, malformed calls, explicit broken references, array territory,
+and arbitrary namespaces remain quiet. Controlled fixtures cover compatible
+dimensions, same-cell-count but incompatible inner dimensions, whole columns,
+multiple and nested calls, `@`, malformed arity, names, Tables, external
+references, `OFFSET`, spills, implicit intersection, full rows, custom and
+`_xlfn` namespaces, high-versus-critical CLI behavior, shared-cap behavior,
+generic-outlier replacement, and JSON/Markdown/SARIF redaction.
+
+The full-lint replay of 12 public
+[ExceLint fixtures](https://github.com/ExceLint/ExceLint/tree/e8a8efd252a090945be8683ed42cfd714e8bb4b1),
+69 public [Calamine test workbooks](https://github.com/tafia/calamine/tree/f059beb13f733923f229c2977cb469443d3ddf07/tests),
+384 public [ClosedXML workbook resources](https://github.com/ClosedXML/ClosedXML/tree/6762b849342809be95467cdfbe426a64ad11d2bd/ClosedXML.Tests/Resource),
+and four public [DataAnalystPortfolioProjects workbooks](https://github.com/PriyankaJhaTheDeveloper/DataAnalystPortfolioProjects/tree/7e69f79079f2655878387deb6a15e86d85d60d39)
+saw 469 workbooks, loaded 454, rejected 15 at existing safety boundaries, and
+inspected 60,823 formula cells. It observed one native `MMULT` call and emitted
+zero `FF095` findings. That call is in ClosedXML's public
+[matrix-multiplication workbook](https://github.com/ClosedXML/ClosedXML/blob/6762b849342809be95467cdfbe426a64ad11d2bd/ClosedXML.Tests/Resource/TryToLoad/LO/xlsx/matrix-multiplication.xlsx):
+FormulaFence loaded its one formula cell, recognized one native call, and
+correctly reported zero direct-static dimension mismatches. This is a
+compatibility and false-positive boundary check, not a claim about every
+unreported formula.
+
+A focused helper/lint/CLI/output run passed **192 tests in 8.96 seconds**
+before release-wide validation. It exercises the structural rule without
+calculating a workbook or exposing source formulas or ranges in rendered
+evidence.
+
+The release-versioned 0.197.0 source tree passed **1,408 tests in 95.54
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment with declared dependencies, reporting `FormulaFence 0.197.0`.
+Both reproduced two redacted `FF095` findings—one cross-sheet bounded-range
+call and one `@` whole-column call: the critical gate returned `0`, the high
+gate returned `1`, and SARIF contained neither source-sheet nor source-range
+spellings.
+
 ## Direct-static `SUMPRODUCT` shape lint — 2026-07-28
 
 Microsoft's [SUMPRODUCT `#VALUE!` guidance](https://support.microsoft.com/en-US/Excel/how-to-correct-a-value-error-in-the-sumproduct-function)

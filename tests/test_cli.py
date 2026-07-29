@@ -297,6 +297,18 @@ def test_lint_sumproduct_range_shape_mismatch_is_high(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
 
 
+def test_lint_mmult_dimension_mismatch_is_high(tmp_path) -> None:
+    workbook_path = tmp_path / "mmult-dimension.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["B2"] = "=MMULT(C2:D4,A2:B6)"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
+
+
 def test_lint_direct_self_reference_is_high(tmp_path) -> None:
     workbook_path = tmp_path / "direct-self-reference.xlsx"
     workbook = Workbook()

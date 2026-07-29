@@ -40,14 +40,16 @@ financial correctness or replace model review.
   match its fingerprint. It skips first/last data rows, array territory,
   uninspectable formulas, and longer or ambiguous exception runs; the stored
   master formula and table identity remain private. Its conditional-aggregate
-  range-shape signal accepts only native `SUMIFS`/`COUNTIFS` calls with valid
-  arity whose relevant arguments are each one bounded, internal direct A1
-  cell/range or whole-column reference, then compares dimensions without
-  calculation. Names, Tables, external/3-D/full-row/union references,
-  computed or dynamic expressions, spills, implicit intersection, malformed
-  formulas, explicit broken references, and all array territory stay outside
-  the boundary. It emits only a location plus aggregate call and mismatched-
-  range counts; formulas, range spellings, and Table identities remain private.
+  range-shape signal accepts only native `SUMIFS`, `COUNTIFS`, `AVERAGEIFS`,
+  `MAXIFS`, and `MINIFS` calls (optionally with `@`) plus the exact OOXML
+  `_xlfn.MAXIFS`/`_xlfn.MINIFS` serializations, with valid arity and relevant
+  arguments that are each one bounded, internal direct A1 cell/range or
+  whole-column reference. It then compares dimensions without calculation.
+  Names, Tables, external/3-D/full-row/union references, computed or dynamic
+  expressions, spills, implicit intersection, malformed formulas, explicit
+  broken references, and all array territory stay outside the boundary. It
+  emits only a location plus aggregate call and mismatched-range counts;
+  formulas, range spellings, and Table identities remain private.
   Its direct
   circular-reference signal accepts only an ordinary formula with a resolved
   scalar static dependency directly back to itself while workbook `iterate` is

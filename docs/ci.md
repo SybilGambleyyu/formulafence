@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.194.0
+        uses: SybilGambleyyu/formulafence@v0.195.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -120,8 +120,8 @@ circular-reference component while calculation iteration is disabled; and
 error-checking suppressions, so review prompts may be hidden. `FF092` is a
 medium-severity interior Table data cell that differs from its declared
 calculated-column formula while immediate adjacent cells match it. `FF093` is
-a high-severity native `SUMIFS`/`COUNTIFS` call whose direct static range
-arguments have different dimensions. The
+a high-severity native `SUMIFS`/`COUNTIFS`/`AVERAGEIFS`/`MAXIFS`/`MINIFS` call
+whose direct static range arguments have different dimensions. The
 copied-formula signal requires two matching immediate formula peers and a third
 contiguous supporting peer. `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
@@ -137,12 +137,13 @@ self-reference boundary. `FF092` accepts only non-array stored Table master
 formula metadata with two immediate matching formula neighbors around an
 interior data cell. It leaves edge rows, array territory, uninspectable
 formulas, and longer or ambiguous exception runs quiet, and retains no table
-identity or master formula. `FF093` accepts only native calls whose relevant
-range arguments are individually direct bounded internal A1 cell/range or
-whole-column references. Names, Tables, external/3-D, full-row, union,
-computed/dynamic, spill, implicit-intersection, malformed, explicit-broken-
-reference, and array territory are outside its boundary. It emits only a
-location and aggregate call/range-mismatch counts. `FF090` accepts only a component of at least two
+identity or master formula. `FF093` accepts only those native spellings
+(optionally with `@`) and the exact OOXML `_xlfn.MAXIFS`/`_xlfn.MINIFS`
+serializations whose relevant range arguments are individually direct bounded
+internal A1 cell/range or whole-column references. Names, Tables, external/3-D,
+full-row, union, computed/dynamic, spill, implicit-intersection, malformed,
+explicit-broken-reference, and array territory are outside its boundary. It
+emits only a location and aggregate call/range-mismatch counts. `FF090` accepts only a component of at least two
 eligible ordinary formula cells connected by resolved scalar static
 dependencies; it never expands ranges or evaluates a workbook. Both stay quiet
 when `iterate=true`; `FF090` also excludes dynamic-reference, 3-D, spill,
@@ -361,7 +362,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.194.0
+  uses: SybilGambleyyu/formulafence@v0.195.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -519,7 +520,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.194.0/formulafence-0.194.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.195.0/formulafence-0.195.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

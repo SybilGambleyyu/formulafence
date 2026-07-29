@@ -336,13 +336,13 @@ _LITERAL_IMPLICIT_INTERSECTION_REFERENCE = re.compile(
     r"(?=$|[ \t\r\n,;)}+\-*/^&=<>%])",
     re.IGNORECASE,
 )
-# ``SUMIFS`` and ``COUNTIFS`` require each range argument to have the same
-# dimensions.  Keep this grammar much narrower than the general reference
-# parser: it admits one internal A1 cell/range or whole-column range, with an
-# optional simple sheet qualifier.  Named expressions, structured references,
-# external and 3-D references, full rows, unions, computed references, and
-# display-only spill/intersection syntax intentionally remain outside this
-# lint's static evidence boundary.
+# Excel's conditional ``IFS`` aggregates require their relevant range arguments
+# to have the same dimensions. Keep this grammar much narrower than the general
+# reference parser: it admits one internal A1 cell/range or whole-column range,
+# with an optional simple sheet qualifier. Named expressions, structured
+# references, external and 3-D references, full rows, unions, computed
+# references, and display-only spill/intersection syntax intentionally remain
+# outside this lint's static evidence boundary.
 _DIRECT_STATIC_A1_RANGE_ARGUMENT = re.compile(
     r"^(?:(?:'(?:[^']|'')*'|[A-Z0-9_.]+)!)?"
     r"(?:\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}"
@@ -350,7 +350,19 @@ _DIRECT_STATIC_A1_RANGE_ARGUMENT = re.compile(
     r"|\$?[A-Z]{1,3}:\$?[A-Z]{1,3})$",
     re.IGNORECASE,
 )
-_CONDITIONAL_AGGREGATE_RANGE_SHAPE_FUNCTIONS = frozenset({"SUMIFS", "COUNTIFS"})
+_CONDITIONAL_AGGREGATE_RANGE_SHAPE_FUNCTIONS = frozenset(
+    {"SUMIFS", "COUNTIFS", "AVERAGEIFS", "MAXIFS", "MINIFS"}
+)
+_CONDITIONAL_AGGREGATE_VALUE_RANGE_FUNCTIONS = frozenset(
+    {"SUMIFS", "AVERAGEIFS", "MAXIFS", "MINIFS"}
+)
+# MAXIFS and MINIFS are OOXML future functions.  Microsoft documents these two
+# exact serialized spellings in the XLSX function list, so recognize them as
+# their native counterparts without generally folding arbitrary namespaces.
+_OOXML_FUTURE_CONDITIONAL_AGGREGATE_FUNCTION_NAMES = {
+    "_XLFN.MAXIFS": "MAXIFS",
+    "_XLFN.MINIFS": "MINIFS",
+}
 
 
 @dataclass(frozen=True)
@@ -2069,8 +2081,9 @@ def _native_conditional_aggregate_function_name(token: object) -> str | None:
 
     ``_function_name`` intentionally folds namespace prefixes for broad
     inspection. That would be unsafe here: a custom ``Vendor.SUMIFS`` call can
-    have unrelated range semantics. This lint only trusts Excel's unqualified
-    native spelling, optionally preceded by the display-only ``@`` operator.
+    have unrelated range semantics. This lint trusts Excel's unqualified native
+    spelling, optionally preceded by the display-only ``@`` operator, plus the
+    exact OOXML future-function serializations for ``MAXIFS`` and ``MINIFS``.
     """
     if not (
         getattr(token, "type", None) == "FUNC"
@@ -2081,7 +2094,7 @@ def _native_conditional_aggregate_function_name(token: object) -> str | None:
     function_name = value.removeprefix("@")
     if function_name in _CONDITIONAL_AGGREGATE_RANGE_SHAPE_FUNCTIONS:
         return function_name
-    return None
+    return _OOXML_FUTURE_CONDITIONAL_AGGREGATE_FUNCTION_NAMES.get(function_name)
 
 
 def _direct_static_a1_range_shape(
@@ -2133,15 +2146,17 @@ def _direct_static_a1_range_shape(
 def conditional_aggregate_range_shape_mismatches(
     formula: str,
 ) -> tuple[tuple[str, int], ...]:
-    """Find direct static range-shape mismatches in ``SUMIFS``/``COUNTIFS``.
+    """Find direct static range-shape mismatches in conditional aggregates.
 
     Each returned pair contains a native function name and the number of its
     range arguments whose dimensions differ from that call's first range.
     This scans formula tokens only; it does not resolve names, inspect table
     identities, calculate a formula, or infer values. A call is deliberately
     ignored unless every relevant range argument is one direct, bounded,
-    internal A1 cell/range or whole-column reference. That leaves all dynamic
-    and otherwise ambiguous formulas outside the finding boundary.
+    internal A1 cell/range or whole-column reference. It covers `SUMIFS`,
+    `COUNTIFS`, `AVERAGEIFS`, `MAXIFS`, and `MINIFS`, including the exact
+    OOXML ``_xlfn.MAXIFS`` and ``_xlfn.MINIFS`` serializations. All dynamic and
+    otherwise ambiguous formulas remain outside the finding boundary.
     """
     tokens, _, _ = _tokenize_formula(
         formula,
@@ -2166,7 +2181,7 @@ def conditional_aggregate_range_shape_mismatches(
         if closing is None:
             continue
         arguments = _function_argument_spans(tokens, position + 1, closing)
-        if function_name == "SUMIFS":
+        if function_name in _CONDITIONAL_AGGREGATE_VALUE_RANGE_FUNCTIONS:
             if len(arguments) < 3 or len(arguments) % 2 == 0:
                 continue
             range_argument_indexes = (0, *range(1, len(arguments), 2))

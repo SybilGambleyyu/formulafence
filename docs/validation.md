@@ -5,7 +5,51 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
-## Conditional-aggregate range-shape lint — 2026-07-28
+## Conditional `IFS` aggregate expansion — 2026-07-28
+
+Microsoft's [AVERAGEIFS reference](https://support.microsoft.com/en-us/excel/functions/averageifs-function)
+requires every criteria range to have the same size and shape as its average
+range. Its [MAXIFS reference](https://support.microsoft.com/en-us/excel/functions/maxifs-function)
+requires matching size and shape for `max_range` and each criteria range, and
+states that the same criteria contract applies to `MINIFS`, `SUMIFS`, and
+`AVERAGEIFS`; the [MINIFS reference](https://support.microsoft.com/en-us/excel/functions/minifs-function)
+states the equivalent `#VALUE!` boundary. FormulaFence therefore extends `FF093`
+to direct static `AVERAGEIFS`, `MAXIFS`, and `MINIFS` calls without changing its
+dimension-only test or severity.
+
+The [MS-XLSX future-function catalog](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/5d1b6d44-6fc1-4ecd-8fef-0b27406cc2bf)
+lists the exact serialized forms `_xlfn.MAXIFS` and `_xlfn.MINIFS`. `FF093`
+accepts those two aliases as their native counterparts, optionally after `@`,
+but does not fold arbitrary namespaces: `Vendor.MAXIFS`,
+`Vendor._xlfn.MINIFS`, and unsupported `_xlfn` spellings stay outside the
+boundary. Controlled fixtures cover positive and valid-shape calls for all
+five functions, malformed arities, exact OOXML aliases, custom namespaces,
+and high-versus-critical CLI behavior.
+
+The full-lint replay of the existing public corpus after the expansion still
+saw 469 workbooks, loaded 454, rejected 15 at existing safety boundaries, and
+inspected 60,823 formula cells. It recognized 20 `COUNTIFS` and 25 `SUMIFS`
+calls, no newly covered conditional aggregates, and emitted zero `FF093`
+findings. Two public [Highline College course workbooks](https://people.highline.edu/mgirvin/AllClasses/218_2016/218Excel2016.htm)
+then exercised the new forms directly: the
+[Video 06 finished workbook](https://people.highline.edu/mgirvin/AllClasses/218_2016/Content/Week04/Busn218-Video06Finished.xlsx)
+loaded 4,546 formula cells with one native `AVERAGEIFS`, while the
+[Video 07 workbook](https://people.highline.edu/mgirvin/AllClasses/218_2016/Content/Week04/Busn218-Video07.xlsx)
+loaded 123 formula cells with 18 exact `_xlfn.MAXIFS` and 18 exact
+`_xlfn.MINIFS` calls. All three scans emitted zero `FF093` findings. This is a
+false-positive and serialization-compatibility check, not proof that every
+unreported conditional aggregate is correct.
+
+The release-versioned 0.195.0 source tree passed **1,391 tests in 94.48
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment with declared dependencies, reporting `FormulaFence 0.195.0`.
+Both reproduced two redacted `FF093` findings—one native `MAXIFS` and one exact
+serialized `MINIFS`: the critical gate returned `0`, the high gate returned
+`1`, and the SARIF output contained neither function names nor source-range or
+sheet spellings.
+
+## Initial `FF093` boundary — 0.194.0
 
 Microsoft's [SUMIFS reference](https://support.microsoft.com/en-us/excel/functions/sumifs-function)
 requires each criteria range to have the same number of rows and columns as
@@ -14,8 +58,8 @@ requires each additional criteria range to have the same shape as the first.
 The Office compatibility profile's
 [SUMIFS rule](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/1566f7d5-cb32-4ac1-8965-fe7de2441a58)
 likewise requires every cell range to have the same size and shape as the sum
-range. `FF093` therefore raises a high-severity review finding only when a
-native `SUMIFS` or `COUNTIFS` call has valid arity and every relevant range
+range. `FF093` initially raised a high-severity review finding only when a
+native `SUMIFS` or `COUNTIFS` call had valid arity and every relevant range
 argument is a single direct, bounded internal A1 cell/range or whole-column
 reference whose dimensions are statically visible and differ.
 
@@ -30,7 +74,7 @@ retain only the formula-cell location, number of qualifying calls, and number
 of mismatched direct range arguments; source formulas, range spellings, sheet
 names used by source ranges, and Table identities remain private.
 
-Controlled fixtures cover `SUMIFS` and `COUNTIFS`, nested calls, multiple
+Controlled fixtures at 0.194.0 covered `SUMIFS` and `COUNTIFS`, nested calls, multiple
 calls in one formula, qualified internal ranges, whole-column ranges, correct
 shapes, invalid arities, `SUMIF`, custom namespaced calls, names, Tables,
 external references, `OFFSET`, spills, implicit intersection, full rows, and
@@ -38,7 +82,7 @@ explicit broken references. They also prove high-versus-critical CLI gates,
 shared-cap behavior, generic-outlier replacement, and JSON/Markdown/SARIF
 redaction.
 
-The independent full-lint scan used twelve public
+The initial independent full-lint scan used twelve public
 [ExceLint fixtures](https://github.com/ExceLint/ExceLint/tree/e8a8efd252a090945be8683ed42cfd714e8bb4b1),
 all 69 public [Calamine test workbooks](https://github.com/tafia/calamine/tree/f059beb13f733923f229c2977cb469443d3ddf07/tests),
 all 384 public [ClosedXML workbook resources](https://github.com/ClosedXML/ClosedXML/tree/6762b849342809be95467cdfbe426a64ad11d2bd/ClosedXML.Tests/Resource),

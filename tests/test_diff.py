@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 import shutil
 import struct
 import warnings
@@ -21000,6 +21001,14 @@ def test_worksheet_drawing_connectors_are_profiled_diffed_and_redacted(
         report_to_markdown(attachment_report),
         json.dumps(report_to_sarif(attachment_report)),
     )
+    artifacts_without_sha256 = tuple(
+        re.sub(
+            r"(?i)(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])",
+            "",
+            artifact,
+        )
+        for artifact in rendered_artifacts
+    )
     for sensitive_value in (
         "PRIVATE-WORKFLOW-CONNECTOR-NAME",
         "PRIVATE-WORKFLOW-CONNECTOR-DESCRIPTION",
@@ -21008,7 +21017,9 @@ def test_worksheet_drawing_connectors_are_profiled_diffed_and_redacted(
         "1026",
         "1027",
     ):
-        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+        assert all(
+            sensitive_value not in artifact for artifact in artifacts_without_sha256
+        )
 
 
 def test_worksheet_drawing_connector_identifier_rewrites_are_ignored(tmp_path) -> None:

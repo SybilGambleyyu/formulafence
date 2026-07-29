@@ -283,11 +283,13 @@ def _conditional_aggregate_range_shape_candidates(
 ) -> tuple[tuple[CellKey, int, int], ...]:
     """Return formula cells with an unambiguous conditional-range mismatch.
 
-    The formula helper accepts only native ``SUMIFS``/``COUNTIFS`` calls whose
-    relevant arguments are direct, bounded internal A1 ranges. This layer adds
-    workbook context: ordinary inspectable formula cells only, no array
-    territory, and no explicit broken-reference operand. Findings retain only
-    aggregate counts, never formula text, range spellings, or table identity.
+    The formula helper accepts only native ``SUMIFS``, ``COUNTIFS``,
+    ``AVERAGEIFS``, ``MAXIFS``, and ``MINIFS`` calls, plus the exact OOXML
+    ``_xlfn`` serializations for the latter two, whose relevant arguments are
+    direct, bounded internal A1 ranges. This layer adds workbook context:
+    ordinary inspectable formula cells only, no array territory, and no
+    explicit broken-reference operand. Findings retain only aggregate counts,
+    never formula text, range spellings, or table identity.
     """
     candidates: list[tuple[CellKey, int, int]] = []
     for location in sorted(snapshot.cells, key=_location_sort_key):
@@ -807,7 +809,7 @@ def lint_snapshot(
     an explicitly unlocked formula on a protected sheet, an explicit incomplete
     manual-calculation state for a formula workbook, stored error-checking
     suppressions, isolated interior Excel Table calculated-column exceptions,
-    direct static `SUMIFS`/`COUNTIFS` range-shape mismatches, direct and
+    direct static conditional-aggregate range-shape mismatches, direct and
     multi-cell static circular references while iteration is disabled, an
     explicit broken reference operand, and a saved broken-reference result. It
     never evaluates formulas, and rejects incomplete array metadata before

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.195.0 — 2026-07-28
+
+- Extend high-severity `FF093` from `SUMIFS`/`COUNTIFS` to direct static
+  `AVERAGEIFS`, `MAXIFS`, and `MINIFS` range-shape mismatches too. Recognize
+  only Excel's unqualified native spellings and the exact standardized OOXML
+  `_xlfn.MAXIFS`/`_xlfn.MINIFS` serializations; custom namespaces remain quiet.
+- Preserve the existing private and conservative evidence boundary: valid arity
+  and every relevant direct internal A1/whole-column range are still required;
+  output retains only aggregate call and mismatched-range counts.
+
 ## 0.194.0 — 2026-07-28
 
 - Add high-severity `FF093` to `formulafence lint`: it reports a native

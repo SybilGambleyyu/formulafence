@@ -278,7 +278,7 @@ def test_lint_conditional_aggregate_range_shape_mismatch_is_high(tmp_path) -> No
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "Model"
-    worksheet["B2"] = "=SUMIFS(C2:C10,A2:A12,A14)"
+    worksheet["B2"] = "=MAXIFS(C2:C10,A2:A12,A14)"
     workbook.save(workbook_path)
 
     assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0

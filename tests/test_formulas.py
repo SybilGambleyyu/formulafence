@@ -58,13 +58,23 @@ def test_broken_reference_detection_accepts_only_error_operands() -> None:
     assert not has_broken_reference('=INDIRECT("#REF!")')
 
 
-def test_conditional_aggregate_range_shape_mismatches_find_direct_sumifs_and_countifs() -> None:
+def test_conditional_aggregate_range_shape_mismatches_find_direct_conditional_aggregates() -> None:
     assert conditional_aggregate_range_shape_mismatches(
         "=SUMIFS(C2:C10,A2:A12,A14,B2:B12,B14)"
     ) == (("SUMIFS", 2),)
     assert conditional_aggregate_range_shape_mismatches(
         "=COUNTIFS(A2:A10,\">0\",B2:B9,\"open\")"
     ) == (("COUNTIFS", 1),)
+    for function_name in ("AVERAGEIFS", "MAXIFS", "MINIFS"):
+        assert conditional_aggregate_range_shape_mismatches(
+            f"={function_name}(C2:C10,A2:A12,A14)"
+        ) == ((function_name, 1),)
+    assert conditional_aggregate_range_shape_mismatches(
+        "=_xlfn.MAXIFS(C2:C10,A2:A12,A14)"
+    ) == (("MAXIFS", 1),)
+    assert conditional_aggregate_range_shape_mismatches(
+        "=@_xlfn.MINIFS(C2:C10,A2:A12,A14)"
+    ) == (("MINIFS", 1),)
     assert conditional_aggregate_range_shape_mismatches(
         "=IFERROR(SUMIFS('Input Sheet'!$C$2:$C$10,'Input Sheet'!$A$2:$A$11,$D$2)"
         "+COUNTIFS(B2:B10,1,C2:C8,2),0)"
@@ -75,6 +85,10 @@ def test_conditional_aggregate_range_shape_mismatches_keep_ambiguous_forms_quiet
     quiet_formulas = (
         "=SUMIFS(C2:C10,A2:A10,A14,B2:B10,B14)",
         "=COUNTIFS($A:$A,\">0\",$B:$B,\"open\")",
+        "=AVERAGEIFS(C2:C10,A2:A10,A14)",
+        "=MAXIFS(C2:C10,A2:A10,A14)",
+        "=MINIFS(C2:C10,A2:A10,A14)",
+        "=_xlfn.MAXIFS(A2:A5,B3:B6,\"a\")",
         "=SUMIF(A2:A10,A14,C2:C12)",
         "=SUMIFS(Table1[Total],Table1[State],A1)",
         "=SUMIFS(C2:C10,NamedCriteriaRange,A1)",
@@ -87,8 +101,15 @@ def test_conditional_aggregate_range_shape_mismatches_keep_ambiguous_forms_quiet
         "=SUMIFS(C10:C2,A2:A12,A1)",
         "=SUMIFS(C1048577:C1048578,A2:A3,A1)",
         "=SUMIFS(C2:C10,A2:A10)",
+        "=AVERAGEIFS(C2:C10,A2:A10)",
+        "=MAXIFS(C2:C10,A2:A10)",
+        "=MINIFS(C2:C10,A2:A10)",
         "=COUNTIFS(A2:A10,\">0\",)",
         "=Vendor.SUMIFS(C2:C10,A2:A12,A1)",
+        "=Vendor.MAXIFS(C2:C10,A2:A12,A1)",
+        "=Vendor._xlfn.MINIFS(C2:C10,A2:A12,A1)",
+        "=_xlfn.AVERAGEIFS(C2:C10,A2:A12,A1)",
+        "=_xlfn.SUMIFS(C2:C10,A2:A12,A1)",
         "=SUMIFS(C2:C10,A2:A10,#REF!)",
     )
 

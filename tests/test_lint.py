@@ -606,7 +606,10 @@ def test_lint_reports_direct_conditional_aggregate_range_shape_mismatches(
         {
             "E2": (
                 "=IFERROR(SUMIFS(C2:C10,A2:A12,A14)"
-                "+COUNTIFS(B2:B10,1,C2:C8,2),0)"
+                "+COUNTIFS(B2:B10,1,C2:C8,2)"
+                "+AVERAGEIFS(D2:D10,A2:A12,A14)"
+                "+MAXIFS(E2:E10,A2:A12,A14)"
+                "+MINIFS(F2:F10,A2:A12,A14),0)"
             ),
         },
     )
@@ -618,8 +621,8 @@ def test_lint_reports_direct_conditional_aggregate_range_shape_mismatches(
         for finding in report.findings
     ] == [("FF093", "high", ("Model", "E2"))]
     assert report.findings[0].details == {
-        "conditional_aggregate_call_count": 2,
-        "mismatched_direct_range_argument_count": 2,
+        "conditional_aggregate_call_count": 5,
+        "mismatched_direct_range_argument_count": 5,
         "evidence_scope": "conditional_aggregate_direct_a1_ranges",
     }
 

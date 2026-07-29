@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.210.0/formulafence-0.210.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.211.0/formulafence-0.211.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -83,9 +83,10 @@ direct conditional-aggregate and `SUMPRODUCT` range-shape, direct static
 literal `RANDBETWEEN` bounds, direct literal `SUBTOTAL` function codes, direct
 literal `INDEX` row/column positions, direct literal `LARGE`/`SMALL` ranks,
 direct literal `LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH` arguments, direct literal
-zero divisors, saved division-by-zero, numeric-error, and name-error results,
+zero divisors, saved division-by-zero, numeric-error, name-error, and
+value-error results,
 explicit-broken-reference, and saved broken-reference-result signals. Together
-these produce twenty-seven reviewable findings:
+these produce twenty-eight reviewable findings:
 
 - `FF082`: a non-formula interruption. Blanks and stored error values are high;
   numeric/manual values are medium; textual markers are low.
@@ -139,6 +140,7 @@ these produce twenty-seven reviewable findings:
 - `FF106` (high): a formula's saved result is a division-by-zero error.
 - `FF107` (high): a formula's saved result is a numeric error.
 - `FF108` (high): a formula's saved result is a name error.
+- `FF109` (high): a formula's saved result is a value error.
 
 Use `--fail-on critical` to gate explicit broken-reference operands, or
 `--fail-on high` to also gate blank/error interruptions and direct static
@@ -151,7 +153,7 @@ mismatches, direct literal `SUBTOTAL` function-code mismatches, direct literal
 mismatches, direct literal modern-lookup mode-code mismatches, direct literal
 `LARGE`/`SMALL` rank mismatches, direct literal text-argument mismatches,
 direct literal zero-divisor mismatches, saved division-by-zero results, and
-saved numeric-error, name-error, and broken-reference results.
+saved numeric-error, name-error, value-error, and broken-reference results.
 Use `--fail-on medium` to additionally require review of manual-value,
 formula-outlier, aggregate-range, explicit formula-protection,
 incomplete-manual-calculation, error-checking-suppression, and Table
@@ -327,6 +329,13 @@ name, function, or add-in caused the result, or infer that the current result
 is unchanged. Other saved error kinds and missing or malformed cache records
 stay quiet. Its evidence retains only the affected location and a saved-result
 scope.
+`FF109` accepts only a well-formed stored formula-result cache whose exact
+private error classification is a value error. It does not calculate the
+formula, inspect its formula text, retain its cached value, diagnose a
+value-error cause, or infer that the current result is unchanged. Other saved
+error kinds, missing or malformed cache records, and locations already covered
+by direct-static `FF093` stay quiet. Its evidence retains only the affected
+location and a saved-result scope.
 `FF090`
 uses only a strongly connected component of
 resolved scalar static dependencies with at least two eligible ordinary formula
@@ -353,13 +362,15 @@ or table ranges, LARGE/SMALL rank values or direct array ranges, text-function
 literal values or text operands, zero-divisor literal spellings or numerators,
 or Table master formulas. `FF089` accepts only a valid saved formula-result
 cache whose exact error is `#REF!`; `FF106` separately accepts an exact saved
-division-by-zero error; and `FF107` separately accepts an exact saved numeric
-error; `FF108` separately accepts an exact saved name error. Missing or
-malformed cache records stay quiet; `FF089` skips a location already covered by
-`FF088`, `FF106` skips one already covered by `FF105`, and `FF107` skips one
-already covered by `FF098` or `FF103`. All four are high-severity records of
-the last saved display state, not proof of a formula's current result. The lint
-does not calculate formulas and fails closed if array metadata is incomplete.
+division-by-zero error; `FF107` separately accepts an exact saved numeric
+error; `FF108` separately accepts an exact saved name error; and `FF109`
+separately accepts an exact saved value error. Missing or malformed cache
+records stay quiet; `FF089` skips a location already covered by `FF088`,
+`FF106` skips one already covered by `FF105`, `FF107` skips one already covered
+by `FF098` or `FF103`, and `FF109` skips one already covered by `FF093`. All
+five are high-severity records of the last saved display state, not proof of a
+formula's current result. The lint does not calculate formulas and fails closed
+if array metadata is incomplete.
 
 It retains at most 10,000 total formula-lint findings by default; use
 `--max-formula-pattern-findings` to choose another positive reviewed bound.
@@ -383,7 +394,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.210.0
+  uses: SybilGambleyyu/formulafence@v0.211.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx

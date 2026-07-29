@@ -6776,6 +6776,18 @@ def lint_to_markdown(
                 "- {location}: the stored formula-result cache records a name "
                 "error.".format(location=_markdown_code(location or "workbook"))
             )
+    saved_value_error_evidence = [
+        finding["location"]
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF109"
+    ]
+    if saved_value_error_evidence:
+        lines.extend(["## Saved value-error evidence", ""])
+        for location in saved_value_error_evidence:
+            lines.append(
+                "- {location}: the stored formula-result cache records a value "
+                "error.".format(location=_markdown_code(location or "workbook"))
+            )
     return lines.render()
 
 
@@ -6850,6 +6862,7 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF106": "A formula's saved result is a division-by-zero error.",
         "FF107": "A formula's saved result is a numeric error.",
         "FF108": "A formula's saved result is a name error.",
+        "FF109": "A formula's saved result is a value error.",
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

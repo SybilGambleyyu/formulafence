@@ -5,6 +5,83 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Saved value-error result lint — 2026-07-28
+
+Microsoft's [#VALUE! guidance](https://support.microsoft.com/en-us/excel/how-to-correct-a-value-error)
+describes it as a general formula or referenced-cell problem with many possible
+causes. `FF109` therefore reports only an exact saved `#VALUE!` result attached
+to a well-formed formula cell. It is a record of the last saved display state,
+not a formula evaluation, diagnosis of which cause applies, or a claim that the
+current result is unchanged.
+
+The rule reuses FormulaFence's private formula-cache reader. It accepts only a
+valid SpreadsheetML formula cache classified as this exact error, retains no
+formula text or cached value, and emits only a cell location plus a
+`saved_formula_result` scope. Other saved error kinds and missing or malformed
+cache records stay quiet. Microsoft documents that incompatible `SUMIFS`
+criteria and sum ranges produce `#VALUE!`; where FormulaFence already proves
+that exact direct-static condition as `FF093`, `FF109` stays quiet rather than
+duplicating the cause.
+
+An aggregate raw OOXML survey of the full public
+[SpreadsheetBench](https://github.com/RUCKBReasoning/SpreadsheetBench) v0.1
+release loaded all 5,464 workbook artifacts. It observed 1,264,371 formula
+cells, 31,119 saved formula errors, and 20,003 saved value errors across 71
+artifacts. Affected-artifact concentration had a median of two entries, a
+90th-percentile of 920, a 95th-percentile of 2,211, and a maximum of 2,212.
+The benchmark is built from real-world spreadsheet scenarios, but these are
+public evaluation artifacts; the counts are saved visible error states, not a
+claim that every one is an unintended production defect.
+
+A separate public compatibility survey loaded 463 of 469 OOXML-readable
+workbooks, observed 60,866 formula cells and 1,322 saved formula errors, and
+found three saved value errors across three artifacts. That population is
+reported as a compatibility signal, not an independent prevalence estimate.
+
+The exact FormulaFence production cache reader replayed all 5,464 full
+SpreadsheetBench artifacts with zero parser warnings or exceptions. It saw the
+same 1,264,371 formula cells and 31,119 cached errors, and classified all
+20,003 value-error entries as FF109 candidates without retaining their
+formulas, locations, or cached values. The same reader replayed all 469
+compatibility artifacts with six established parser warnings and zero
+exceptions, and classified all three candidates.
+
+An aggregate production overlap survey raw-selected all 71 full-corpus
+artifacts with a saved value error, then safely loaded all 71. Of 20,003
+production candidates, 19,888 were eligible for the direct-static checks and
+115 were deliberately outside that static boundary. Only three candidates
+overlapped an existing direct-static finding, all `FF093` conditional-aggregate
+range-shape mismatches. The independent compatibility survey safely loaded all
+three candidate artifacts, directly checked all three, and found zero
+overlaps. This supports suppressing only the already-proven `FF093` cause.
+
+An aggregate candidate-only production replay then raw-selected those same 71
+full-corpus artifacts and ran the ordinary bounded production lint. All 71
+safely loaded and linted with zero load or lint rejections. It classified
+20,003 production candidates, emitted 20,000 `FF109` findings, and emitted
+three `FF093` findings at the already-proven direct-static range-shape
+locations. This confirms that the narrow de-duplication leaves every other
+saved value-error evidence record reviewable under the normal production path.
+
+A focused saved-result lint/CLI/output selection passed **15 tests**. It covers
+exact saved value-error recognition, quiet non-target errors, FF093 duplicate
+suppression, high-severity CLI gates, and JSON/Markdown/SARIF redaction of
+formula and cached-result material.
+
+The release-versioned 0.211.0 source tree passed **1,500 tests in 97.94
+seconds**. `git diff --check`, `ruff check src tests`, and
+`python -m compileall -q src tests` also completed cleanly.
+
+Fresh virtual environments installed both exact final artifacts, reported
+`FormulaFence 0.211.0`, and linted a generated saved-value-error workbook as
+one high-severity `FF109` finding. The high gate returned its expected failure
+status, and JSON, Markdown, and SARIF checks confirmed that neither the formula
+nor the cached error value was emitted. `twine check` passed for both artifacts.
+SHA-256: wheel
+`6c4e676e45ff08adbae4ae65f4382f4a09a16d378aefb913a0de51f30ecac225`;
+source distribution
+`34fb8c96b4520c28506bf2f527484abd050803b3d1d2ce8b0f54abeb54fbb9e1`.
+
 ## Saved name-error result lint — 2026-07-28
 
 Microsoft's [#NAME? guidance](https://support.microsoft.com/en-us/office/how-to-correct-a-name-error-b6d54e31-a743-4d7d-9b61-40002a7b4286)

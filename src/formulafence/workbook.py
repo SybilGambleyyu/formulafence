@@ -34137,6 +34137,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                     is_divide_by_zero_error = False
                     is_numeric_error = False
                     is_name_error = False
+                    is_value_error = False
                     value_is_blank = (
                         value_element is None
                         or value_element.text is None
@@ -34179,6 +34180,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                         is_divide_by_zero_error = result_value.casefold() == "#div/0!"
                         is_numeric_error = result_value.casefold() == "#num!"
                         is_name_error = result_value.casefold() == "#name?"
+                        is_value_error = result_value.casefold() == "#value!"
                         cached_result_cell_count += 1
                         error_cached_result_count += 1
                     elif cell_type == "str":
@@ -34199,6 +34201,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                         is_divide_by_zero_error = False
                         is_numeric_error = False
                         is_name_error = False
+                        is_value_error = False
 
                     result_signature = _formula_cached_result_signature(
                         result_type,
@@ -34213,6 +34216,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                             is_divide_by_zero_error=is_divide_by_zero_error,
                             is_numeric_error=is_numeric_error,
                             is_name_error=is_name_error,
+                            is_value_error=is_value_error,
                             result_signature=result_signature,
                         )
                     )

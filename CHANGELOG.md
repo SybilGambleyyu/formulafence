@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.211.0 — 2026-07-28
+
+- Add high-severity `FF109` to `formulafence lint`: it reports a formula only
+  when its well-formed saved result is an exact value error. The finding records
+  the last saved display state and does not evaluate a formula, diagnose a
+  value-error cause, or claim its current result is unchanged.
+- Keep the cache boundary narrow and private: other saved error kinds and
+  missing or malformed cache records stay quiet. Locations where `FF093`
+  already proves a direct conditional-aggregate range-shape cause stay quiet
+  for `FF109`. JSON, Markdown, and SARIF retain only the affected location and
+  a saved-result scope, never formula text, an error value, or a cached value.
+
 ## 0.210.0 — 2026-07-28
 
 - Add high-severity `FF108` to `formulafence lint`: it reports a formula only

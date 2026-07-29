@@ -513,6 +513,17 @@ def test_lint_saved_name_error_result_is_high(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
 
 
+def test_lint_saved_value_error_result_is_high(tmp_path) -> None:
+    workbook_path = make_formula_cached_result_model(
+        tmp_path / "saved-value-error.xlsx",
+        error_formula='=VALUE("not-a-number")',
+        error_result="#VALUE!",
+    )
+
+    assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
+
+
 def test_lint_defaults_its_bounded_finding_limit() -> None:
     arguments = cli_module.build_parser().parse_args(["lint", "model.xlsx"])
 

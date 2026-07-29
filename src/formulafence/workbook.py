@@ -6311,6 +6311,20 @@ class _OoxmlXmlRootCache:
 
     def root(self, archive: ZipFile, member: str) -> ElementTree.Element:
         """Return an isolated root with bounded private tree reuse when safe."""
+        cached = self.payloads.get(member)
+        return self.root_from_payload(
+            archive,
+            member,
+            cached if cached is not None else archive.read(member),
+        )
+
+    def root_from_payload(
+        self,
+        archive: ZipFile,
+        member: str,
+        payload: bytes,
+    ) -> ElementTree.Element:
+        """Return one reader-bounded payload with private snapshot reuse when safe."""
         if self.derived_cache_eligible(archive, member):
             if (cached_tree := self.root_trees.get(member)) is not None:
                 return deepcopy(cached_tree)
@@ -6319,16 +6333,8 @@ class _OoxmlXmlRootCache:
         if cached is not None:
             root = _xml_root_from_lexically_validated_payload(cached)
         else:
-            payload = archive.read(member)
             root = _xml_root_from_payload(payload)
-            payload_bytes = len(payload)
-            if (
-                payload_bytes <= _OOXML_XML_ROOT_CACHE_MAX_MEMBER_BYTES
-                and self.cached_bytes + payload_bytes
-                <= _OOXML_XML_ROOT_CACHE_MAX_TOTAL_BYTES
-            ):
-                self.payloads[member] = payload
-                self.cached_bytes += payload_bytes
+            self.remember_payload(member, payload)
 
         if self.derived_cache_eligible(archive, member) and self.remember_root_tree(
             member,
@@ -6338,6 +6344,17 @@ class _OoxmlXmlRootCache:
             # receives an independently mutable copy.
             return deepcopy(root)
         return root
+
+    def remember_payload(self, member: str, payload: bytes) -> None:
+        """Keep one already-validated payload inside the source-local byte budget."""
+        payload_bytes = len(payload)
+        if (
+            payload_bytes <= _OOXML_XML_ROOT_CACHE_MAX_MEMBER_BYTES
+            and self.cached_bytes + payload_bytes
+            <= _OOXML_XML_ROOT_CACHE_MAX_TOTAL_BYTES
+        ):
+            self.payloads[member] = payload
+            self.cached_bytes += payload_bytes
 
     def derived_cache_eligible(self, archive: ZipFile, *members: str) -> bool:
         """Return whether bounded derived state can reuse cached XML safely."""
@@ -6414,6 +6431,17 @@ def _xml_root(archive: ZipFile, member: str) -> ElementTree.Element:
     if cache := _active_ooxml_xml_root_cache(archive):
         return cache.root(archive, member)
     return _xml_root_from_payload(archive.read(member))
+
+
+def _xml_root_from_snapshot_payload(
+    archive: ZipFile,
+    member: str,
+    payload: bytes,
+) -> ElementTree.Element:
+    """Parse one reader-bounded payload with private snapshot reuse when safe."""
+    if cache := _active_ooxml_xml_root_cache(archive):
+        return cache.root_from_payload(archive, member, payload)
+    return _xml_root_from_payload(payload)
 
 
 def _xml_root_from_payload(payload: bytes) -> ElementTree.Element:
@@ -14301,7 +14329,7 @@ def _worksheet_web_extension_inspection(
             definition_signature=fallback_signature,
         )
     try:
-        worksheet = _xml_root_from_payload(payload)
+        worksheet = _xml_root_from_snapshot_payload(archive, member, payload)
     except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
         warnings.add(
             "FormulaFence could not inspect worksheet XML for Office Web Add-in "
@@ -35121,7 +35149,7 @@ def _cell_hyperlink_worksheet_inspection(
             definition_signature=fallback_signature,
         )
     try:
-        worksheet = _xml_root_from_payload(payload)
+        worksheet = _xml_root_from_snapshot_payload(archive, member, payload)
     except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
         warnings.add(
             "FormulaFence could not inspect worksheet XML for cell hyperlinks "
@@ -35918,7 +35946,7 @@ def _worksheet_sparkline_worksheet_inspection(
             definition_signature=fallback_signature,
         )
     try:
-        worksheet = _xml_root_from_payload(payload)
+        worksheet = _xml_root_from_snapshot_payload(archive, member, payload)
     except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
         warnings.add(
             "FormulaFence could not inspect worksheet XML for worksheet sparklines "
@@ -47771,7 +47799,11 @@ def _worksheet_image_metadata(path: Path) -> _WorksheetImageMetadata:
                     candidate_sheets.add(sheet)
                     continue
                 try:
-                    worksheet = _xml_root_from_payload(payload)
+                    worksheet = _xml_root_from_snapshot_payload(
+                        archive,
+                        member,
+                        payload,
+                    )
                 except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
                     warnings.add(
                         "FormulaFence could not inspect worksheet XML for native image "

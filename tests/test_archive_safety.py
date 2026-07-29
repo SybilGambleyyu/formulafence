@@ -6111,11 +6111,26 @@ def test_snapshot_xml_root_cache_reuses_validated_payloads_in_reader_isolation(
             second = workbook_module._xml_root(archive, member)
         assert second.get("reader-local") is None
         assert second.findtext("child") == "alpha"
+        with ZipFile(package) as archive:
+            bounded_reader = workbook_module._xml_root_from_snapshot_payload(
+                archive,
+                member,
+                archive.read(member),
+            )
+        bounded_reader.set("reader-local", "changed")
+        assert bounded_reader.find("child") is not None
+        bounded_reader.find("child").text = "changed"
+        assert cache.root_trees[member].get("reader-local") is None
+        assert cache.root_trees[member].findtext("child") == "alpha"
         assert parse_calls == [payload]
         assert cache.payloads == {member: payload}
 
         with ZipFile(unrelated_package) as archive:
-            assert workbook_module._xml_root(archive, member).text == "bravo"
+            assert workbook_module._xml_root_from_snapshot_payload(
+                archive,
+                member,
+                archive.read(member),
+            ).text == "bravo"
         assert parse_calls == [payload, unrelated_payload]
         assert cache.payloads == {member: payload}
 
@@ -6126,11 +6141,80 @@ def test_snapshot_xml_root_cache_reuses_validated_payloads_in_reader_isolation(
         )
         with ZipFile(package) as archive:
             with pytest.raises(ValueError, match="XML character data"):
-                workbook_module._xml_root(archive, member)
+                workbook_module._xml_root_from_snapshot_payload(
+                    archive,
+                    member,
+                    archive.read(member),
+                )
         assert cache.root_trees == {}
         assert cache.cached_tree_elements == 0
     finally:
         workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.reset(cache_token)
+
+
+@pytest.mark.parametrize(
+    "reader",
+    ("web-extension", "cell-hyperlink", "sparkline"),
+)
+def test_bounded_worksheet_readers_reuse_snapshot_xml_root_trees(
+    reader: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / f"{reader}-root-cache.zip"
+    member = "xl/worksheets/sheet1.xml"
+    payload = (
+        b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        b"<sheetData/>"
+        b"</worksheet>"
+    )
+    with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(member, payload)
+
+    cache = workbook_module._OoxmlXmlRootCache(source_filename=str(package))
+    cache_token = workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.set(cache)
+    parse_calls: list[bytes] = []
+    original_parse = workbook_module._xml_root_from_payload
+
+    def count_parse(candidate: bytes) -> ElementTree.Element:
+        parse_calls.append(candidate)
+        return original_parse(candidate)
+
+    monkeypatch.setattr(workbook_module, "_xml_root_from_payload", count_parse)
+    warnings: set[str] = set()
+    try:
+        with ZipFile(package) as archive:
+            assert workbook_module._xml_root(archive, member).tag.endswith("worksheet")
+            if reader == "web-extension":
+                inspection = workbook_module._worksheet_web_extension_inspection(
+                    archive,
+                    member,
+                    warnings,
+                    workbook_module._WorksheetWebExtensionBudget(),
+                )
+            elif reader == "cell-hyperlink":
+                inspection = workbook_module._cell_hyperlink_worksheet_inspection(
+                    archive,
+                    sheet="Sheet 1",
+                    member=member,
+                    archive_members={member},
+                    warnings=warnings,
+                    budget=workbook_module._CellHyperlinkBudget(),
+                )
+            else:
+                inspection = workbook_module._worksheet_sparkline_worksheet_inspection(
+                    archive,
+                    sheet="Sheet 1",
+                    member=member,
+                    warnings=warnings,
+                    budget=workbook_module._WorksheetSparklineBudget(),
+                )
+    finally:
+        workbook_module._ACTIVE_OOXML_XML_ROOT_CACHE.reset(cache_token)
+
+    assert inspection.unrecognized_count == 0
+    assert warnings == set()
+    assert parse_calls == [payload]
 
 
 def test_snapshot_xml_root_cache_leaves_over_budget_payloads_uncached(

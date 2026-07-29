@@ -5,6 +5,41 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Bounded reader-payload XML root reuse — 2026-07-28
+
+Version 0.183.0 removes four remaining repeated worksheet parses inside one
+private stable snapshot. The Office Web Add-in, cell-hyperlink, worksheet
+sparkline, and native-image scanners still read each selected part and enforce
+their own part-count, byte, and aggregate-reader budgets first. Only then can
+they ask the snapshot cache for a root. If that exact private source already
+holds an eligible root, the scanner receives a deep copy; no reader can mutate
+another reader's XML state.
+
+The reuse primitive does not widen the cache: payloads still need the existing
+128 KiB-per-member and 4 MiB-total allowance, trees still need the 16 KiB and
+2,048-element per-member allowances plus the 8,192-element aggregate ceiling,
+and all derived trees clear when the character-data limit changes. Targeted
+tests prove helper source isolation, nested mutation isolation, renewed
+character-data enforcement, and reuse by the three direct worksheet readers;
+the complete suite exercises the image reader as part of ordinary snapshots.
+
+For the controlled valid 232,295-byte, 512-sheet `.xlsx` used for the prior
+columnless releases (SHA-256
+`224811129cb243b3494fc61f330583ee898103bb1c2dca1ca5a01f7445293881`), with
+one `=1` formula per worksheet and no column declarations, public 0.182.0
+emitted a 122,090-byte JSON profile (SHA-256
+`27a6737a6f3ba3c2f9e3c70f94326da2cccd78f42900e459e70e1001adb81361`) in
+1.563712, 1.501466, 1.512483, 1.517561, and 1.528110 seconds. The 0.183.0
+candidate emitted identical bytes and digest in 1.310107, 1.274422, 1.274028,
+1.287080, and 1.274137 seconds. The medians fell from 1.517561 to 1.274422
+seconds: 0.243139 seconds, or 16.02%, less elapsed time. The cProfile run
+reduced full `_xml_root_from_payload` calls from 2,576 to 528. Fresh child
+process RSS samples (KiB) were 51,616, 51,000, and 50,928 for public 0.182.0,
+and 51,508, 51,544, and 51,140 for the candidate; their medians were 51,000
+and 51,508 KiB. The final source suite passed 1,305 tests in 91.53 seconds
+with no failures, errors, or skips; bytecode compilation, Ruff, and whitespace
+checks were also clean.
+
 ## Snapshot-local bounded XML root trees — 2026-07-28
 
 Version 0.182.0 removes the repeated XML-tree construction left after 0.179.0

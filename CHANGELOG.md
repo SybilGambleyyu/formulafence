@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.183.0 — 2026-07-28
+
+- Let bounded worksheet readers reuse a private snapshot XML root after they
+  have independently read and enforced their own part and aggregate budgets.
+  Office Web Add-in, cell-hyperlink, sparkline, and native-image readers now
+  receive deep copies rather than reparsing the same safe worksheet payload.
+- Reuse remains tied to the private materialized source and the existing 128
+  KiB-per-payload, 4 MiB-total, 16 KiB-per-tree, 2,048-elements-per-tree, and
+  8,192-total-elements limits. Source, nested-mutation, character-guard, and
+  specialized-reader regressions hold the boundary.
+
 ## 0.182.0 — 2026-07-28
 
 - Reuse small parsed OOXML roots as private, element-accounted trees during one

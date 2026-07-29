@@ -22,6 +22,7 @@ from formulafence.formulas import (
     index_literal_position_mismatch_count,
     lookup_return_index_mismatches,
     mmult_dimension_mismatch_count,
+    modern_lookup_literal_mode_mismatch_count,
     parse_reference_token,
     randbetween_literal_bound_mismatch_count,
     subtotal_literal_function_num_mismatch_count,
@@ -620,6 +621,47 @@ def _index_literal_position_candidates(
         if formula is None:
             continue
         mismatch_count = index_literal_position_mismatch_count(formula)
+        if not mismatch_count:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append((location, mismatch_count))
+    return tuple(candidates)
+
+
+def _modern_lookup_literal_mode_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int], ...]:
+    """Return cells with unsupported literal XLOOKUP/XMATCH mode codes.
+
+    The formula helper accepts exact native (or exact ``_xlfn``) XLOOKUP and
+    XMATCH spellings, required nonempty arguments, and only direct signed
+    integer literals in their optional mode slots. This layer adds workbook
+    context: ordinary inspectable formula cells only, no array territory, and
+    no explicit broken-reference operand. Findings retain only an aggregate
+    count, never formula text, literal values, or source sheet identity.
+    """
+    candidates: list[tuple[CellKey, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        mismatch_count = modern_lookup_literal_mode_mismatch_count(formula)
         if not mismatch_count:
             continue
         if (
@@ -1288,8 +1330,9 @@ def lint_snapshot(
     literal-index mismatches, direct literal ``RANDBETWEEN`` bound mismatches,
     direct literal ``SUBTOTAL`` function-code mismatches, direct literal
     ``INDEX`` row/column-position mismatches, approximate legacy lookups with
-    visibly unsorted direct numeric key vectors, direct and multi-cell static
-    circular references while iteration is disabled, an explicit broken
+    visibly unsorted direct numeric key vectors, unsupported direct literal
+    XLOOKUP/XMATCH mode codes, direct and multi-cell static circular references
+    while iteration is disabled, an explicit broken
     reference operand, and a saved broken-reference result. It never evaluates
     formulas, and rejects incomplete array metadata before claiming ordinary-
     cell coverage.
@@ -1401,6 +1444,22 @@ def lint_snapshot(
         ),
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
+    modern_lookup_mode_candidates = _modern_lookup_literal_mode_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=(
+            len(conditional_aggregate_candidates)
+            + len(sumproduct_candidates)
+            + len(mmult_candidates)
+            + len(lookup_candidates)
+            + len(choose_candidates)
+            + len(randbetween_candidates)
+            + len(subtotal_candidates)
+            + len(index_candidates)
+            + len(approximate_lookup_candidates)
+        ),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
     structural_formula_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
@@ -1420,6 +1479,9 @@ def lint_snapshot(
     structural_formula_locations.update(location for location, _ in index_candidates)
     structural_formula_locations.update(
         location for location, _ in approximate_lookup_candidates
+    )
+    structural_formula_locations.update(
+        location for location, _ in modern_lookup_mode_candidates
     )
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
@@ -1507,6 +1569,7 @@ def lint_snapshot(
                     + len(subtotal_candidates)
                     + len(index_candidates)
                     + len(approximate_lookup_candidates)
+                    + len(modern_lookup_mode_candidates)
                     >= max_formula_pattern_findings
                 ):
                     raise FormulaFenceError(
@@ -1770,6 +1833,28 @@ def lint_snapshot(
                     "evidence_scope": (
                         "approximate_lookup_direct_numeric_a1_vectors"
                     ),
+                },
+            )
+        )
+
+    for location, unsupported_literal_mode_count in modern_lookup_mode_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF102",
+                severity="high",
+                message=(
+                    "An XLOOKUP or XMATCH call uses a literal mode outside Excel's "
+                    "supported codes."
+                ),
+                location=location,
+                details={
+                    "unsupported_literal_mode_count": unsupported_literal_mode_count,
+                    "evidence_scope": "xlookup_xmatch_literal_mode_codes",
                 },
             )
         )

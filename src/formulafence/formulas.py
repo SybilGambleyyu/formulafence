@@ -375,6 +375,20 @@ _OOXML_FUTURE_CONDITIONAL_AGGREGATE_FUNCTION_NAMES = {
     "_XLFN.MAXIFS": "MAXIFS",
     "_XLFN.MINIFS": "MINIFS",
 }
+# XLOOKUP and XMATCH are OOXML future functions in workbooks saved by some
+# Excel versions. Recognize only those exact serializations rather than folding
+# a general namespace, because a custom ``Vendor.XLOOKUP`` can have unrelated
+# optional-argument semantics.
+_OOXML_FUTURE_MODERN_LOOKUP_FUNCTION_NAMES = {
+    "_XLFN.XLOOKUP": "XLOOKUP",
+    "_XLFN.XMATCH": "XMATCH",
+}
+_MODERN_LOOKUP_MATCH_MODE_CODES = frozenset(
+    {(True, "1"), (False, "0"), (False, "1"), (False, "2")}
+)
+_MODERN_LOOKUP_SEARCH_MODE_CODES = frozenset(
+    {(True, "2"), (True, "1"), (False, "1"), (False, "2")}
+)
 
 
 @dataclass(frozen=True)
@@ -2122,6 +2136,21 @@ def _native_conditional_aggregate_function_name(token: object) -> str | None:
     return _OOXML_FUTURE_CONDITIONAL_AGGREGATE_FUNCTION_NAMES.get(function_name)
 
 
+def _native_modern_lookup_function_name(token: object) -> str | None:
+    """Return one exact native XLOOKUP/XMATCH spelling, if present.
+
+    The static mode-code contract accepts unqualified native spellings
+    (optionally preceded by ``@``), plus Excel's exact OOXML future-function
+    serializations. Arbitrary qualified calls stay outside the contract.
+    """
+    function_name = _unqualified_native_function_name(token)
+    if function_name in {"XLOOKUP", "XMATCH"}:
+        return function_name
+    if function_name is None:
+        return None
+    return _OOXML_FUTURE_MODERN_LOOKUP_FUNCTION_NAMES.get(function_name)
+
+
 def _direct_static_a1_range_reference(
     tokens: Sequence[object],
     start: int,
@@ -2625,6 +2654,87 @@ def approximate_lookup_direct_table_references(
         if table_reference is not None:
             references.append((function_name, table_reference))
     return tuple(references)
+
+
+def modern_lookup_literal_mode_mismatch_count(formula: str) -> int:
+    """Count unsupported direct mode literals in native XLOOKUP/XMATCH calls.
+
+    This token-only helper accepts unqualified native ``XLOOKUP`` and
+    ``XMATCH`` calls (optionally preceded by ``@``), plus their exact
+    ``_xlfn`` serializations. It requires their required arguments to be
+    present, then inspects only direct signed decimal integer literals in the
+    optional match and search mode positions. ``XLOOKUP`` accepts three to six
+    arguments; ``XMATCH`` accepts two to four. The documented match-mode codes
+    are ``-1``, ``0``, ``1``, and ``2``. The documented search-mode codes are
+    ``-2``, ``-1``, ``1``, and ``2``. Omitted, nonliteral, dynamic, malformed,
+    broken-reference, array, and arbitrary namespace forms remain quiet.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return 0
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return 0
+
+    mismatch_count = 0
+    for position, token in enumerate(tokens):
+        function_name = _native_modern_lookup_function_name(token)
+        if function_name is None:
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        required_argument_count = 3 if function_name == "XLOOKUP" else 2
+        maximum_argument_count = 6 if function_name == "XLOOKUP" else 4
+        if not (
+            required_argument_count <= len(arguments) <= maximum_argument_count
+        ) or any(
+            not any(
+                not _is_whitespace(tokens[argument_position])
+                for argument_position in range(start, end)
+            )
+            for start, end in arguments[:required_argument_count]
+        ):
+            continue
+
+        match_mode_argument = (
+            arguments[4]
+            if function_name == "XLOOKUP" and len(arguments) >= 5
+            else arguments[2]
+            if function_name == "XMATCH" and len(arguments) >= 3
+            else None
+        )
+        if match_mode_argument is not None:
+            match_mode = _direct_signed_integer_literal(tokens, *match_mode_argument)
+            if (
+                match_mode is not None
+                and match_mode not in _MODERN_LOOKUP_MATCH_MODE_CODES
+            ):
+                mismatch_count += 1
+
+        search_mode_argument = (
+            arguments[5]
+            if function_name == "XLOOKUP" and len(arguments) == 6
+            else arguments[3]
+            if function_name == "XMATCH" and len(arguments) == 4
+            else None
+        )
+        if search_mode_argument is not None:
+            search_mode = _direct_signed_integer_literal(tokens, *search_mode_argument)
+            if (
+                search_mode is not None
+                and search_mode not in _MODERN_LOOKUP_SEARCH_MODE_CODES
+            ):
+                mismatch_count += 1
+    return mismatch_count
 
 
 def index_literal_position_mismatch_count(formula: str) -> int:

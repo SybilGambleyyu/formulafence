@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.204.0 — 2026-07-28
+
+- Add high-severity `FF102` to `formulafence lint`: it reports a native
+  `XLOOKUP` or `XMATCH` call only when a direct literal match or search mode is
+  outside Excel's documented code sets.
+- Keep the rule deliberately narrow and private: it accepts only exact native
+  or `_xlfn` spellings, valid arity, required nonempty positions, and direct
+  signed decimal mode literals. Empty optional positions, computed, reference,
+  logical, decimal/scientific, malformed, explicit-broken-reference, array-
+  territory, and arbitrary namespace forms stay quiet. Findings retain only the
+  cell location and aggregate unsupported-mode count.
+
 ## 0.203.0 — 2026-07-28
 
 - Add high-severity `FF101` to `formulafence lint`: it reports a native

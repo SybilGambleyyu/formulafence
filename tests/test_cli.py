@@ -384,6 +384,18 @@ def test_lint_approximate_lookup_unsorted_vector_is_high(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
 
 
+def test_lint_modern_lookup_unsupported_literal_mode_is_high(tmp_path) -> None:
+    workbook_path = tmp_path / "modern-lookup-literal-mode.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["B2"] = "=XLOOKUP(A2,C2:C4,D2:D4,,3)"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
+
+
 def test_lint_direct_self_reference_is_high(tmp_path) -> None:
     workbook_path = tmp_path / "direct-self-reference.xlsx"
     workbook = Workbook()

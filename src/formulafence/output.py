@@ -6621,6 +6621,24 @@ def lint_to_markdown(
                     ),
                 )
             )
+    modern_lookup_mode_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF102"
+    ]
+    if modern_lookup_mode_evidence:
+        lines.extend(["## XLOOKUP/XMATCH mode-code evidence", ""])
+        for location, evidence in modern_lookup_mode_evidence:
+            lines.append(
+                "- {location}: {mode_count} direct literal XLOOKUP or XMATCH modes "
+                "use unsupported codes."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    mode_count=_markdown_escape(
+                        evidence["unsupported_literal_mode_count"]
+                    ),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6725,6 +6743,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF101": (
             "An approximate VLOOKUP or HLOOKUP call uses a direct static numeric "
             "lookup vector that is not sorted ascending."
+        ),
+        "FF102": (
+            "An XLOOKUP or XMATCH call uses a literal mode outside Excel's "
+            "supported codes."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.203.0
+        uses: SybilGambleyyu/formulafence@v0.204.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -137,8 +137,10 @@ call whose literal function number is outside Excel's supported codes. `FF100`
 is a high-severity native `INDEX` call whose literal row or column
 number is outside its direct static array. `FF101` is a high-severity native
 approximate `VLOOKUP` or `HLOOKUP` call whose direct static numeric lookup
-vector is not sorted ascending. The copied-formula signal requires
-two matching immediate formula peers and a third contiguous supporting peer.
+vector is not sorted ascending. `FF102` is a high-severity native `XLOOKUP` or
+`XMATCH` call whose direct literal match or search mode is outside Excel's
+supported codes. The copied-formula signal requires two matching immediate
+formula peers and a third contiguous supporting peer.
 `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
 range, ignores array territory and nonnumeric or one-cell gaps, and never
@@ -225,6 +227,15 @@ spill, implicit-intersection, malformed, explicit-broken-reference, nonnumeric
 or incomplete keys, namespaced forms, and array territory remain outside that
 boundary. It emits only a location and aggregate qualifying-call/unsorted-
 direct-numeric-vector counts.
+`FF102` accepts only unqualified native `XLOOKUP` or `XMATCH` calls (optionally
+with `@`) plus exact OOXML `_xlfn.XLOOKUP`/`_xlfn.XMATCH` serializations. Its
+first three `XLOOKUP` positions or first two `XMATCH` positions must be
+nonempty. It inspects only direct signed decimal literals in optional
+match/search positions: `match_mode` permits `-1`, `0`, `1`, or `2`, while
+`search_mode` permits `-2`, `-1`, `1`, or `2`. Empty optional positions,
+computed, reference, logical, decimal/scientific, array, malformed,
+explicit-broken-reference, array-territory, and arbitrary namespace forms stay
+quiet. It emits only a location and aggregate unsupported-literal-mode count.
 `FF090` accepts only a component of at least two
 eligible ordinary formula cells connected by resolved scalar static
 dependencies; it never expands ranges or evaluates a workbook. Both stay quiet
@@ -453,7 +464,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.203.0
+  uses: SybilGambleyyu/formulafence@v0.204.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -611,7 +622,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.203.0/formulafence-0.203.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.204.0/formulafence-0.204.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

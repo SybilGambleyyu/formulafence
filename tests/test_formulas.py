@@ -15,6 +15,7 @@ from formulafence.formulas import (
     lambda_parameter_count,
     lookup_return_index_mismatches,
     mmult_dimension_mismatch_count,
+    modern_lookup_literal_mode_mismatch_count,
     parse_external_link_indexed_defined_name_reference,
     parse_external_link_indexed_sheet_defined_name_reference,
     parse_external_link_indexed_workbook_reference,
@@ -291,6 +292,46 @@ def test_approximate_lookup_direct_table_references_keep_ambiguous_forms_quiet()
 
     for formula in quiet_formulas:
         assert approximate_lookup_direct_table_references(formula) == ()
+
+
+def test_modern_lookup_literal_mode_mismatch_count_finds_direct_native_calls() -> None:
+    assert modern_lookup_literal_mode_mismatch_count(
+        "=XLOOKUP(A2,B2:B4,C2:C4,,3,-2)"
+    ) == 1
+    assert modern_lookup_literal_mode_mismatch_count(
+        "=XLOOKUP(A2,B2:B4,C2:C4,,-1,0)"
+    ) == 1
+    assert modern_lookup_literal_mode_mismatch_count(
+        "=XMATCH(A2,B2:B4,3,-3)"
+    ) == 2
+    assert modern_lookup_literal_mode_mismatch_count(
+        "=IFERROR(@XLOOKUP(A2,B2:B4,C2:C4,,+03,-02)"
+        "+_xlfn.XMATCH(D2,E2:E4,+3,+2),0)"
+    ) == 2
+
+
+def test_modern_lookup_literal_mode_mismatch_count_keeps_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=XLOOKUP(A2,B2:B4,C2:C4)",
+        "=XLOOKUP(A2,B2:B4,C2:C4,,-1,+2)",
+        "=XMATCH(A2,B2:B4)",
+        "=XMATCH(A2,B2:B4,,-02)",
+        "=_xlfn.XLOOKUP(A2,B2:B4,C2:C4,,2,-1)",
+        "=@_xlfn.XMATCH(A2,B2:B4,0,1)",
+        "=XLOOKUP(A2,B2:B4,C2:C4,,D2)",
+        "=XMATCH(A2,B2:B4,1+3)",
+        "=XMATCH(A2,B2:B4,3.0)",
+        "=XLOOKUP(A2,B2:B4,C2:C4,,2,TRUE)",
+        "=XLOOKUP(A2,B2:B4,C2:C4,,3,#REF!)",
+        "=XLOOKUP(A2,B2:B4,,3)",
+        "=XLOOKUP(A2,B2:B4,C2:C4,,3,,1)",
+        "=XMATCH(A2,B2:B4,,3,4)",
+        "=Vendor.XLOOKUP(A2,B2:B4,C2:C4,,3,-3)",
+        "=Vendor.XMATCH(A2,B2:B4,3,-3)",
+    )
+
+    for formula in quiet_formulas:
+        assert modern_lookup_literal_mode_mismatch_count(formula) == 0
 
 
 def test_index_literal_position_mismatch_count_finds_direct_native_calls() -> None:

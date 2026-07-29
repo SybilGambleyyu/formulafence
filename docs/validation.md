@@ -5,6 +5,63 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Literal `XLOOKUP` / `XMATCH` mode-code lint — 2026-07-28
+
+Microsoft's [XLOOKUP reference](https://support.microsoft.com/en-us/excel/functions/xlookup-function)
+defines `match_mode` as `-1`, `0`, `1`, or `2`, and `search_mode` as `-2`,
+`-1`, `1`, or `2`. Its [XMATCH reference](https://support.microsoft.com/en-us/excel/functions/xmatch-function)
+defines the same two code sets. A direct integer outside those sets is therefore
+a statically demonstrable contract error, without needing to calculate a
+formula or inspect a lookup value.
+
+`FF102` accepts only unqualified native `XLOOKUP` and `XMATCH`, optionally
+preceded by Excel's display-only `@`, plus exact `_xlfn.XLOOKUP` and
+`_xlfn.XMATCH` OOXML future-function serializations. `XLOOKUP` must have three
+through six arguments and `XMATCH` two through four; their first three or first
+two positions respectively must be nonempty. The detector then inspects only a
+direct signed decimal literal in a populated optional match/search position.
+It reports an out-of-set code while leaving empty optional positions, computed,
+reference, logical, decimal/scientific, array, malformed,
+explicit-broken-reference, arbitrary namespace, and array-territory forms
+quiet. Findings retain only a cell location and aggregate unsupported-mode
+count—never a formula, mode value, range, or sheet identity.
+
+A read-only aggregate OOXML survey of the public verified
+[SpreadsheetBench](https://github.com/RUCKBReasoning/SpreadsheetBench) set
+loaded all 800 initial/golden workbooks and reconstructed 60,355 ordinary
+formula instances with zero shared-formula translation failures. It observed
+151 native `XLOOKUP` calls, including 16 direct literal match modes and 54
+direct literal search modes; all 70 codes were within the documented sets. It
+observed no native `XMATCH` calls and no invalid direct literal mode. The
+production FF102 helper independently returned zero unsupported literal modes
+across those same reconstructed formula instances. The survey emits counts only
+and does not retain workbook contents, formulas, locations, or values.
+
+The actual FormulaFence safe-loader replay over 12 public
+[ExceLint fixtures](https://github.com/ExceLint/ExceLint/tree/e8a8efd252a090945be8683ed42cfd714e8bb4b1),
+69 public [Calamine test workbooks](https://github.com/tafia/calamine/tree/f059beb13f733923f229c2977cb469443d3ddf07/tests),
+384 public [ClosedXML workbook resources](https://github.com/ClosedXML/ClosedXML/tree/6762b849342809be95467cdfbe426a64ad11d2bd/ClosedXML.Tests/Resource),
+and four public [DataAnalystPortfolioProjects workbooks](https://github.com/PriyankaJhaTheDeveloper/DataAnalystPortfolioProjects/tree/7e69f79079f2655878387deb6a15e86d85d60d39)
+loaded 454 of 469 workbooks, rejected 15 at established safety boundaries,
+inspected 60,823 formula cells, and emitted zero `FF102` findings. This is a
+compatibility and false-positive boundary check, not a claim that every
+unreported formula is valid.
+
+A focused FF102 helper/lint/CLI/output selection passed **8 tests in 0.50
+seconds**. It covers invalid match/search codes, nested calls, `@`, exact
+`_xlfn` spellings, leading signs/zeros, omitted optional slots, valid codes,
+dynamic/logical/decimal forms, malformed and custom namespaces, explicit broken
+references, array territory, generic-outlier replacement, shared finding caps,
+CLI severity gates, and JSON/Markdown/SARIF redaction.
+
+The release-versioned 0.204.0 source tree passed **1,464 tests in 96.54
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment reporting `FormulaFence 0.204.0`. Both reproduced one
+redacted `FF102` finding for an unsupported direct literal mode: the critical
+gate returned `0`, the high gate returned `1`, and SARIF retained only `FF102`
+and the aggregate count—not the source formula.
+
 ## Approximate `VLOOKUP` / `HLOOKUP` sort lint — 2026-07-28
 
 Microsoft's [VLOOKUP reference](https://support.microsoft.com/en-us/excel/functions/vlookup-function)

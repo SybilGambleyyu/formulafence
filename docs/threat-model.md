@@ -131,6 +131,18 @@ financial correctness or replace model review.
   boundary. It emits only a location plus aggregate qualifying-call and
   unsorted-direct-numeric-vector counts; formulas, key values, table range
   spellings, and source sheets remain private.
+  Its modern-lookup mode-code signal accepts only unqualified native `XLOOKUP`
+  and `XMATCH` spellings (optionally with `@`) plus exact
+  `_xlfn.XLOOKUP`/`_xlfn.XMATCH` serializations. The first three `XLOOKUP`
+  positions or first two `XMATCH` positions must be nonempty. It inspects only
+  direct signed decimal literals in optional match/search positions and reports
+  a code outside the documented `match_mode` set (`-1`, `0`, `1`, `2`) or
+  `search_mode` set (`-2`, `-1`, `1`, `2`). Empty optional positions, computed,
+  reference, logical, decimal/scientific, array, malformed,
+  explicit-broken-reference, array-territory, and arbitrary namespace forms
+  stay outside the boundary. It emits only a location plus aggregate
+  unsupported-literal-mode counts; formulas, mode values, and source sheets
+  remain private.
   Its direct
   circular-reference signal accepts only an ordinary formula with a resolved
   scalar static dependency directly back to itself while workbook `iterate` is
@@ -149,7 +161,8 @@ financial correctness or replace model review.
   counts, `CHOOSE` out-of-range-literal-index counts, `RANDBETWEEN`
   inverted-literal-bound counts, `SUBTOTAL` unsupported-literal-function-code
   counts, `INDEX` out-of-range-literal-index counts, approximate-lookup
-  unsorted-direct-numeric-vector counts, direct- or multi-cell-
+  unsorted-direct-numeric-vector counts, XLOOKUP/XMATCH unsupported-literal-
+  mode counts, direct- or multi-cell-
   static scope, and a multi-cell component size, never formula text, cell
   values, cached results, ignored-error target ranges, direct conditional-
   aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup ranges, `CHOOSE` values,

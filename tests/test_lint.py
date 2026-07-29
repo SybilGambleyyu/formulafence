@@ -1588,6 +1588,112 @@ def test_lint_approximate_lookup_sort_candidates_share_the_finding_cap(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_reports_modern_lookup_unsupported_literal_modes(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": (
+                "=IFERROR(XLOOKUP(A2,B2:B4,C2:C4,,3,-3)"
+                "+@XMATCH(D2,F2:F4,3,0),0)"
+            ),
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF102", "high", ("Model", "E2"))]
+    assert report.findings[0].details == {
+        "unsupported_literal_mode_count": 4,
+        "evidence_scope": "xlookup_xmatch_literal_mode_codes",
+    }
+
+
+def test_lint_modern_lookup_mode_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=XLOOKUP(B2,C2:C4,D2:D4)",
+            "A3": "=XLOOKUP(B3,C3:C5,D3:D5,,-1,2)",
+            "A4": "=XMATCH(B4,C2:C4,,-2)",
+            "A5": "=_xlfn.XMATCH(B5,C2:C4,0,1)",
+            "A6": "=XLOOKUP(B6,C2:C4,D2:D4,,E6)",
+            "A7": "=XMATCH(B7,C2:C4,1+3)",
+            "A8": "=Vendor.XLOOKUP(B8,C2:C4,D2:D4,,3,-3)",
+            "A9": "=XLOOKUP(B9,C2:C4,D2:D4,,3,#REF!)",
+        },
+    )
+
+    assert "FF102" not in {finding.rule_id for finding in lint_snapshot(snapshot).findings}
+
+    array_territory = _snapshot(
+        tmp_path,
+        {"B2": "=XLOOKUP(A2,C2:C4,D2:D4,,3)"},
+    )
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF102" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_modern_lookup_mode_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=XLOOKUP(A2,C2:C4,D2:D4)",
+            "B3": "=XLOOKUP(A3,C3:C5,D3:D5,,3)",
+            "B4": "=XLOOKUP(A4,C4:C6,D4:D6)",
+            "B5": "=XLOOKUP(A5,C5:C7,D5:D7)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF102", "high", ("Model", "B3"))]
+
+
+def test_lint_modern_lookup_mode_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=XLOOKUP(A2,C2:C4,D2:D4,,3)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -2818,6 +2924,53 @@ def test_lint_approximate_lookup_sort_renderers_keep_values_private(
                 "text": (
                     "An approximate VLOOKUP or HLOOKUP call uses a direct static "
                     "numeric lookup vector that is not sorted ascending."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_modern_lookup_mode_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Private Inputs"
+    model = workbook.create_sheet("Model")
+    model["B2"] = (
+        "=XLOOKUP(A2,'Private Inputs'!$C$2:$C$4,"
+        "'Private Inputs'!$D$2:$D$4,,3)+N(\"confidential\")"
+    )
+    path = tmp_path / "private-modern-lookup-mode.xlsx"
+    workbook.save(path)
+
+    report = lint_snapshot(load_snapshot(path))
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2:$C$4" not in rendered
+        assert "confidential" not in rendered
+        assert "XLOOKUP(A2" not in rendered
+        assert "FF102" in rendered
+    assert "## XLOOKUP/XMATCH mode-code evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "unsupported_literal_mode_count": 1,
+        "evidence_scope": "xlookup_xmatch_literal_mode_codes",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF102",
+            "name": "FF102",
+            "shortDescription": {
+                "text": (
+                    "An XLOOKUP or XMATCH call uses a literal mode outside Excel's "
+                    "supported codes."
                 )
             },
         }

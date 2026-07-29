@@ -6657,6 +6657,24 @@ def lint_to_markdown(
                     ),
                 )
             )
+    text_literal_argument_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF104"
+    ]
+    if text_literal_argument_evidence:
+        lines.extend(["## Text literal-argument evidence", ""])
+        for location, evidence in text_literal_argument_evidence:
+            lines.append(
+                "- {location}: {argument_count} direct literal text-function "
+                "positions or counts are invalid."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    argument_count=_markdown_escape(
+                        evidence["invalid_literal_argument_count"]
+                    ),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6769,6 +6787,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF103": (
             "A LARGE or SMALL call uses a literal rank that is nonpositive or "
             "exceeds its direct static array capacity."
+        ),
+        "FF104": (
+            "A LEFT, RIGHT, MID, FIND, or SEARCH call uses an invalid direct "
+            "literal character position or count."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

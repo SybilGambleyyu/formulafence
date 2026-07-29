@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.206.0 — 2026-07-28
+
+- Add high-severity `FF104` to `formulafence lint`: it reports a native
+  `LEFT`, `RIGHT`, `MID`, `FIND`, or `SEARCH` call only when a direct signed
+  integer character position or count is outside that function's documented
+  domain.
+- Keep the rule deliberately narrow and private: it accepts only exact native
+  spellings, valid arity, nonempty arguments, and direct signed decimal
+  integer literals. It neither inspects text nor evaluates formulas; computed
+  or reference position/count operands, decimal/scientific, malformed,
+  explicit-broken-reference, array-territory, and arbitrary namespace forms
+  stay quiet. Findings retain only the cell location and aggregate invalid-
+  literal-argument count.
+
 ## 0.205.0 — 2026-07-28
 
 - Add high-severity `FF103` to `formulafence lint`: it reports a native

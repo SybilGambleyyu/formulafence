@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.205.0
+        uses: SybilGambleyyu/formulafence@v0.206.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -93,8 +93,9 @@ calculation-freshness, error-checking-suppression, Table calculated-column,
 static-circular-reference, conditional-aggregate and `SUMPRODUCT` range-shape,
 `MMULT` matrix-dimension, legacy-lookup return-index and approximate-sort,
 `RANDBETWEEN` literal-bound, `SUBTOTAL` function-code, `INDEX` literal-position,
-explicit-broken-reference, and saved-result risks before or after the normal
-change review:
+`LARGE`/`SMALL` literal-rank, `LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH`
+literal-argument, explicit-broken-reference, and saved-result risks before or
+after the normal change review:
 
 ```yaml
 - name: Lint copied formulas
@@ -139,7 +140,11 @@ number is outside its direct static array. `FF101` is a high-severity native
 approximate `VLOOKUP` or `HLOOKUP` call whose direct static numeric lookup
 vector is not sorted ascending. `FF102` is a high-severity native `XLOOKUP` or
 `XMATCH` call whose direct literal match or search mode is outside Excel's
-supported codes. The copied-formula signal requires two matching immediate
+supported codes. `FF103` is a high-severity native `LARGE` or `SMALL` call
+whose direct literal rank is nonpositive or exceeds direct static array
+capacity. `FF104` is a high-severity native `LEFT`, `RIGHT`, `MID`, `FIND`, or
+`SEARCH` call whose direct literal character position or count is invalid. The
+copied-formula signal requires two matching immediate
 formula peers and a third contiguous supporting peer.
 `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
@@ -236,6 +241,23 @@ match/search positions: `match_mode` permits `-1`, `0`, `1`, or `2`, while
 computed, reference, logical, decimal/scientific, array, malformed,
 explicit-broken-reference, array-territory, and arbitrary namespace forms stay
 quiet. It emits only a location and aggregate unsupported-literal-mode count.
+`FF103` accepts only unqualified native `LARGE` or `SMALL` calls (optionally
+with `@`) with exactly two nonempty arguments, a direct internal A1 cell/range
+or whole-column array, and a direct signed decimal integer rank. It reports
+only a nonpositive rank or a positive rank over the array's rectangular cell
+capacity, without inspecting cell values. Names, Tables, external/3-D/full-row/
+union, computed/dynamic, spill/implicit, decimal/scientific, malformed,
+explicit-broken-reference, array-territory, and arbitrary namespace forms stay
+quiet. It emits only a location and aggregate invalid-literal-rank count.
+`FF104` accepts only unqualified native `LEFT`, `RIGHT`, `MID`, `FIND`, and
+`SEARCH` calls (optionally with `@`) with valid arity, nonempty arguments, and a
+direct signed decimal integer in the relevant position/count slot. It reports
+only a negative `LEFT`/`RIGHT` count, a nonpositive `MID`, `FIND`, or `SEARCH`
+start, or a negative `MID` count. It neither inspects text values nor evaluates
+formulas. Computed or reference position/count operands, decimal/scientific,
+malformed, explicit-broken-reference, array-territory, and arbitrary namespace
+forms stay quiet. It emits only a location and aggregate invalid-literal-
+argument count.
 `FF090` accepts only a component of at least two
 eligible ordinary formula cells connected by resolved scalar static
 dependencies; it never expands ranges or evaluates a workbook. Both stay quiet
@@ -252,12 +274,14 @@ legacy-lookup out-of-range-literal-index counts, `CHOOSE`
 out-of-range-literal-index counts, and `RANDBETWEEN` inverted-literal-bound
 counts, `SUBTOTAL` unsupported-literal-function-code counts, and `INDEX`
 out-of-range-literal-index counts, and approximate-lookup unsorted-direct-
-numeric-vector counts, not formula text, cached values,
+numeric-vector counts, LARGE/SMALL invalid-literal-rank counts, and
+text-function invalid-literal-argument counts, not formula text, cached values,
 ignored-error target ranges, direct conditional-aggregate, `SUMPRODUCT`,
 `MMULT`, legacy-lookup ranges, `CHOOSE` value arguments, `RANDBETWEEN` literal
 values, `SUBTOTAL` function-code/reference material, `INDEX` position values
-or direct array ranges, approximate-lookup key values or table ranges, Table
-identities, or Table master formulas.
+or direct array ranges, approximate-lookup key values or table ranges,
+LARGE/SMALL ranks or direct arrays, text-function literal values or text
+operands, Table identities, or Table master formulas.
 `FF089` accepts only an exact saved `#REF!` formula result, skips a location
 already covered by `FF088`, and is a last-saved display fact rather than proof
 of a current calculation result. Other saved error kinds and missing or
@@ -464,7 +488,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.205.0
+  uses: SybilGambleyyu/formulafence@v0.206.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -622,7 +646,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.205.0/formulafence-0.205.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.206.0/formulafence-0.206.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

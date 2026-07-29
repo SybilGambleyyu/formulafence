@@ -31,6 +31,7 @@ from formulafence.formulas import (
     randbetween_literal_bound_mismatch_count,
     subtotal_literal_function_num_mismatch_count,
     sumproduct_range_shape_mismatches,
+    text_literal_argument_mismatch_count,
 )
 from formulafence.models import (
     ExternalWorkbookReference,
@@ -370,6 +371,47 @@ def test_large_small_literal_rank_mismatch_count_keeps_ambiguous_forms_quiet() -
 
     for formula in quiet_formulas:
         assert large_small_literal_rank_mismatch_count(formula) == 0
+
+
+def test_text_literal_argument_mismatch_count_finds_direct_native_calls() -> None:
+    assert text_literal_argument_mismatch_count("=LEFT(A2,-1)") == 1
+    assert text_literal_argument_mismatch_count("=@RIGHT(A2,-0002)") == 1
+    assert text_literal_argument_mismatch_count("=MID(A2,0,-1)") == 2
+    assert text_literal_argument_mismatch_count("=MID(A2,-0,1)") == 1
+    assert text_literal_argument_mismatch_count('=FIND("x",A2,-1)') == 1
+    assert text_literal_argument_mismatch_count('=SEARCH("x",A2,+0)') == 1
+    assert text_literal_argument_mismatch_count(
+        '=IFERROR(LEFT(A2,-1)+MID(B2,0,-2)+FIND("x",C2,0),0)'
+    ) == 4
+
+
+def test_text_literal_argument_mismatch_count_keeps_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=LEFT(A2,0)",
+        "=RIGHT(A2,-0)",
+        "=MID(A2,1,0)",
+        '=@FIND("x",A2,1)',
+        '=@SEARCH("x",A2,+1)',
+        "=LEFT(A2,B2)",
+        "=RIGHT(A2,1-2)",
+        "=MID(A2,1.0,2)",
+        "=MID(A2,1,2.0)",
+        '=FIND("x",A2,0.0)',
+        '=SEARCH("x",A2,1+1)',
+        "=LEFT(A2)",
+        "=RIGHT(A2)",
+        "=RIGHT(A2,-1,0)",
+        "=MID(A2,0)",
+        '=FIND("x",A2)',
+        '=SEARCH("x",A2)',
+        '=FIND("x",A2,)',
+        '=SEARCH("x",A2,0,#REF!)',
+        "=Vendor.LEFT(A2,-1)",
+        "=_xlfn.RIGHT(A2,-1)",
+    )
+
+    for formula in quiet_formulas:
+        assert text_literal_argument_mismatch_count(formula) == 0
 
 
 def test_index_literal_position_mismatch_count_finds_direct_native_calls() -> None:

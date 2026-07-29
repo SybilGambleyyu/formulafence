@@ -5,6 +5,70 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Literal text position/count lint — 2026-07-28
+
+Microsoft's [LEFT](https://support.microsoft.com/en-gb/office/left-function-9203d2d2-7960-479b-84c6-1ea52b99640c)
+and [RIGHT](https://support.microsoft.com/en-us/Excel/functions/right-function)
+references require `num_chars >= 0`. Its [MID](https://support.microsoft.com/en-gb/office/mid-function-d5f9e25c-d7d6-472e-b568-4ecb12433028)
+reference says that `start_num < 1` and `num_chars < 0` return `#VALUE!`.
+The [FIND](https://support.microsoft.com/en-gb/office/find-function-c7912941-af2a-4bdf-a553-d0d89b0a0628)
+and [SEARCH](https://support.microsoft.com/en-us/office/search-function-9ab04538-0e55-4719-a72e-b6f54513b495)
+references likewise document `#VALUE!` when `start_num` is not greater than
+zero. Those direct integer-domain violations are statically demonstrable
+without calculating a formula or inspecting its text operand.
+
+`FF104` accepts only unqualified native `LEFT`, `RIGHT`, `MID`, `FIND`, and
+`SEARCH` calls, optionally preceded by Excel's display-only `@`, with valid
+arity, nonempty arguments, and a direct signed decimal integer in the relevant
+position/count slot. It reports a negative `LEFT`/`RIGHT` count, a nonpositive
+`MID`/`FIND`/`SEARCH` start, or a negative `MID` count. It intentionally does
+not infer text length, coerce numeric expressions, inspect text, or calculate a
+formula. Computed or reference position/count operands, decimal/scientific,
+malformed, explicit-broken-reference, arbitrary namespace, and array-territory
+forms stay quiet. Findings retain only a cell location and aggregate invalid-
+argument count—never a formula, literal value, text value, or source sheet
+identity.
+
+A read-only aggregate OOXML survey of the public verified
+[SpreadsheetBench](https://github.com/RUCKBReasoning/SpreadsheetBench) set
+loaded all 800 initial/golden workbooks and reconstructed 60,355 ordinary
+formula instances with zero shared-formula translation failures. It observed
+6,442 native FF104-scope calls: 478 `LEFT`, 4,554 `RIGHT`, 543 `MID`, 249
+`FIND`, and 618 `SEARCH`. Of those, 1,429 supplied direct signed integer
+position/count arguments. No invalid argument occurred, and the production
+FF104 helper independently returned zero mismatches over the same reconstructed
+formula instances. The survey emits counts only and does not retain workbook
+contents, formulas, locations, or values.
+
+A separate raw OOXML compatibility survey across 469 public workbooks loaded
+463 packages, rejected six malformed/unreadable packages, and reconstructed
+62,781 ordinary formula instances. It observed no native FF104-scope calls and
+the production helper reported zero mismatches. This is a compatibility and
+false-positive boundary check, not a claim that every unreported formula is
+valid.
+
+The actual FormulaFence safe-loader candidate replay over those same 469
+workbooks loaded 454, rejected 15 at established safety boundaries, inspected
+60,823 formula cells, and emitted zero `FF104` findings or invalid-literal-
+argument counts. This exercises the production snapshot and candidate path
+without claiming that every unreported formula is valid.
+
+A focused FF104 helper/lint/CLI/output selection passed **8 tests**. It covers
+all five functions, negative/zero boundaries, nested calls, `@`, leading
+signs/zeros, valid values, computed/reference/decimal/array/custom-namespace
+forms, malformed and explicit broken references, array territory,
+generic-outlier replacement, shared finding caps, CLI severity gates, and
+JSON/Markdown/SARIF redaction.
+
+The release-versioned 0.206.0 source tree passed **1,480 tests in 97.47
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment reporting `FormulaFence 0.206.0`. Both reproduced one
+redacted `FF104` finding for a direct invalid `MID` start/count pair: the
+critical gate returned `0`, the high gate returned `1`, and SARIF retained only
+`FF104` and the aggregate count—not the source formula, literal, text,
+reference, or sheet identity.
+
 ## Literal `LARGE` / `SMALL` rank lint — 2026-07-28
 
 Microsoft's [LARGE reference](https://support.microsoft.com/en-gb/office/large-function-3af0af19-1190-42bb-bb8b-01672ec00a64)

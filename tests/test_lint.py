@@ -1799,6 +1799,119 @@ def test_lint_large_small_rank_candidates_share_the_finding_cap(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_reports_invalid_text_literal_arguments(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "F2": (
+                '=IFERROR(LEFT(A2,-1)+@RIGHT(B2,-2)+MID(C2,0,-3)'
+                '+FIND("x",D2,0)+SEARCH("x",E2,-1),0)'
+            ),
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF104", "high", ("Model", "F2"))]
+    assert report.findings[0].details == {
+        "invalid_literal_argument_count": 6,
+        "evidence_scope": "text_direct_signed_integer_position_count",
+    }
+
+
+def test_lint_text_literal_argument_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=LEFT(B2,0)",
+            "A3": "=RIGHT(B2,-0)",
+            "A4": "=MID(B2,1,0)",
+            "A5": '=FIND("x",B2,1)',
+            "A6": '=SEARCH("x",B2,+1)',
+            "A7": "=LEFT(B2,C2)",
+            "A8": "=RIGHT(B2,1-2)",
+            "A9": "=MID(B2,1.0,2)",
+            "A10": "=MID(B2,1,2.0)",
+            "A11": '=FIND("x",B2,0.0)',
+            "A12": '=SEARCH("x",B2,1+1)',
+            "A13": "=LEFT(B2)",
+            "A14": "=RIGHT(B2,-1,0)",
+            "A15": "=MID(B2,0)",
+            "A16": '=FIND("x",B2,)',
+            "A17": '=SEARCH("x",B2,0,#REF!)',
+            "A18": "=Vendor.LEFT(B2,-1)",
+            "A19": "=_xlfn.RIGHT(B2,-1)",
+        },
+    )
+
+    assert "FF104" not in {
+        finding.rule_id for finding in lint_snapshot(snapshot).findings
+    }
+
+    array_territory = _snapshot(tmp_path, {"B2": "=LEFT(C2,-1)"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF104" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_text_literal_argument_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=LEFT(C2,1)",
+            "B3": "=LEFT(C3,-1)",
+            "B4": "=LEFT(C4,1)",
+            "B5": "=LEFT(C5,1)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF104", "high", ("Model", "B3"))]
+
+
+def test_lint_text_literal_argument_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=LEFT(C2,-1)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -3121,6 +3234,50 @@ def test_lint_large_small_rank_renderers_keep_values_private(
                 "text": (
                     "A LARGE or SMALL call uses a literal rank that is nonpositive or "
                     "exceeds its direct static array capacity."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_text_literal_argument_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Private Inputs"
+    model = workbook.create_sheet("Model")
+    model["B2"] = "=LEFT('Private Inputs'!$C$2,-1)+N(\"confidential\")"
+    path = tmp_path / "private-text-literal-argument.xlsx"
+    workbook.save(path)
+
+    report = lint_snapshot(load_snapshot(path))
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2" not in rendered
+        assert "confidential" not in rendered
+        assert "LEFT('Private Inputs'" not in rendered
+        assert "FF104" in rendered
+    assert "## Text literal-argument evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "invalid_literal_argument_count": 1,
+        "evidence_scope": "text_direct_signed_integer_position_count",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF104",
+            "name": "FF104",
+            "shortDescription": {
+                "text": (
+                    "A LEFT, RIGHT, MID, FIND, or SEARCH call uses an invalid direct "
+                    "literal character position or count."
                 )
             },
         }

@@ -408,6 +408,18 @@ def test_lint_large_small_invalid_literal_rank_is_high(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
 
 
+def test_lint_invalid_text_literal_argument_is_high(tmp_path) -> None:
+    workbook_path = tmp_path / "text-literal-argument.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["B2"] = "=MID(C2,0,-1)"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
+
+
 def test_lint_direct_self_reference_is_high(tmp_path) -> None:
     workbook_path = tmp_path / "direct-self-reference.xlsx"
     workbook = Workbook()

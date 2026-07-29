@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.194.0 — 2026-07-28
+
+- Add high-severity `FF093` to `formulafence lint`: it reports a native
+  `SUMIFS` or `COUNTIFS` call only when its relevant direct static internal A1
+  cell/range or whole-column arguments have provably different dimensions.
+- Keep the rule intentionally narrow and private: names, Tables, external or
+  3-D references, full rows, unions, computed/dynamic/spill/implicit forms,
+  malformed calls, explicit broken references, and array territory stay quiet.
+  A stronger `FF093` replaces a same-cell generic formula-outlier signal and
+  output retains only aggregate call and mismatched-range counts.
+
 ## 0.193.0 — 2026-07-28
 
 - Add medium-severity `FF092` to `formulafence lint`: it reports an isolated

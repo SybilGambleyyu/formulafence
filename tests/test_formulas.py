@@ -4,6 +4,7 @@ from formulafence.formulas import (
     _EXCEL_UNQUALIFIED_NATIVE_FUNCTIONS,
     ParsedReference,
     StructuredTable,
+    conditional_aggregate_range_shape_mismatches,
     extract_references,
     formula_fingerprint,
     has_broken_reference,
@@ -55,6 +56,44 @@ def test_broken_reference_detection_accepts_only_error_operands() -> None:
     assert not has_broken_reference('=IF(A1="#REF!",1,0)')
     assert not has_broken_reference("='#REF!'!A1")
     assert not has_broken_reference('=INDIRECT("#REF!")')
+
+
+def test_conditional_aggregate_range_shape_mismatches_find_direct_sumifs_and_countifs() -> None:
+    assert conditional_aggregate_range_shape_mismatches(
+        "=SUMIFS(C2:C10,A2:A12,A14,B2:B12,B14)"
+    ) == (("SUMIFS", 2),)
+    assert conditional_aggregate_range_shape_mismatches(
+        "=COUNTIFS(A2:A10,\">0\",B2:B9,\"open\")"
+    ) == (("COUNTIFS", 1),)
+    assert conditional_aggregate_range_shape_mismatches(
+        "=IFERROR(SUMIFS('Input Sheet'!$C$2:$C$10,'Input Sheet'!$A$2:$A$11,$D$2)"
+        "+COUNTIFS(B2:B10,1,C2:C8,2),0)"
+    ) == (("SUMIFS", 1), ("COUNTIFS", 1))
+
+
+def test_conditional_aggregate_range_shape_mismatches_keep_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=SUMIFS(C2:C10,A2:A10,A14,B2:B10,B14)",
+        "=COUNTIFS($A:$A,\">0\",$B:$B,\"open\")",
+        "=SUMIF(A2:A10,A14,C2:C12)",
+        "=SUMIFS(Table1[Total],Table1[State],A1)",
+        "=SUMIFS(C2:C10,NamedCriteriaRange,A1)",
+        "=SUMIFS(C2:C10,OFFSET(A2,0,0,9,1),A1)",
+        "=SUMIFS(C2:C10,A2#,A1)",
+        "=SUMIFS(C2:C10,@A2:A10,A1)",
+        "=SUMIFS(C2:C10,[Inputs.xlsx]Data!A2:A12,A1)",
+        "=SUMIFS(C2:C10,2:12,A1)",
+        "=SUMIFS(XFE2:XFE10,A2:A12,A1)",
+        "=SUMIFS(C10:C2,A2:A12,A1)",
+        "=SUMIFS(C1048577:C1048578,A2:A3,A1)",
+        "=SUMIFS(C2:C10,A2:A10)",
+        "=COUNTIFS(A2:A10,\">0\",)",
+        "=Vendor.SUMIFS(C2:C10,A2:A12,A1)",
+        "=SUMIFS(C2:C10,A2:A10,#REF!)",
+    )
+
+    for formula in quiet_formulas:
+        assert conditional_aggregate_range_shape_mismatches(formula) == ()
 
 
 def test_extract_references_keeps_external_workbooks_separate() -> None:

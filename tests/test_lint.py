@@ -598,6 +598,94 @@ def test_lint_table_calculated_column_does_not_walk_an_oversized_sparse_ref(
     ] == [("FF092", ("Private Table Sheet", "C3"))]
 
 
+def test_lint_reports_direct_conditional_aggregate_range_shape_mismatches(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": (
+                "=IFERROR(SUMIFS(C2:C10,A2:A12,A14)"
+                "+COUNTIFS(B2:B10,1,C2:C8,2),0)"
+            ),
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF093", "high", ("Model", "E2"))]
+    assert report.findings[0].details == {
+        "conditional_aggregate_call_count": 2,
+        "mismatched_direct_range_argument_count": 2,
+        "evidence_scope": "conditional_aggregate_direct_a1_ranges",
+    }
+
+
+def test_lint_conditional_aggregate_range_shape_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=SUMIFS(C2:C10,A2:A10,A1)",
+            "A3": "=SUMIFS(C2:C10,NamedCriteriaRange,A1)",
+            "A4": "=SUMIFS(Table1[Total],Table1[State],A1)",
+            "A5": "=SUMIFS(C2:C10,OFFSET(A2,0,0,11,1),A1)",
+            "A6": "=SUMIFS(C2:C10,A2#,A1)",
+            "A7": "=SUMIFS(C2:C10,[Inputs.xlsx]Data!A2:A12,A1)",
+            "A8": "=SUMIFS(C2:C10,A2:A10,#REF!)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [finding.rule_id for finding in report.findings] == ["FF088"]
+
+
+def test_lint_conditional_aggregate_range_shape_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=SUMIFS(C2:C10,A2:A10,A1)",
+            "B3": "=SUMIFS(C3:C11,A3:A13,A2)",
+            "B4": "=SUMIFS(C4:C12,A4:A12,A3)",
+            "B5": "=SUMIFS(C5:C13,A5:A13,A4)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF093", "high", ("Model", "B3"))]
+
+
+def test_lint_conditional_aggregate_range_shape_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=SUMIFS(C2:C10,A2:A12,A14)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -1427,6 +1515,52 @@ def test_lint_table_calculated_column_renderers_keep_master_formula_private(
                 "text": (
                     "An interior Excel Table cell differs from its declared "
                     "calculated-column formula."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_conditional_aggregate_range_shape_renderers_keep_ranges_private(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": (
+                "=SUMIFS('Private Inputs'!$C$2:$C$10,"
+                "'Private Inputs'!$A$2:$A$12,$D$2)"
+            ),
+        },
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2:$C$10" not in rendered
+        assert "$A$2:$A$12" not in rendered
+        assert "FF093" in rendered
+    assert "## Conditional-aggregate range-shape evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "conditional_aggregate_call_count": 1,
+        "mismatched_direct_range_argument_count": 1,
+        "evidence_scope": "conditional_aggregate_direct_a1_ranges",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF093",
+            "name": "FF093",
+            "shortDescription": {
+                "text": (
+                    "A conditional aggregate uses direct static ranges with different "
+                    "shapes."
                 )
             },
         }

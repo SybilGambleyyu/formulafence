@@ -5,6 +5,58 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Conditional-aggregate range-shape lint — 2026-07-28
+
+Microsoft's [SUMIFS reference](https://support.microsoft.com/en-us/excel/functions/sumifs-function)
+requires each criteria range to have the same number of rows and columns as
+the sum range, and its [COUNTIFS reference](https://support.microsoft.com/en-US/Excel/functions/countifs-function)
+requires each additional criteria range to have the same shape as the first.
+The Office compatibility profile's
+[SUMIFS rule](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/1566f7d5-cb32-4ac1-8965-fe7de2441a58)
+likewise requires every cell range to have the same size and shape as the sum
+range. `FF093` therefore raises a high-severity review finding only when a
+native `SUMIFS` or `COUNTIFS` call has valid arity and every relevant range
+argument is a single direct, bounded internal A1 cell/range or whole-column
+reference whose dimensions are statically visible and differ.
+
+The detector does not evaluate a formula, resolve a name, or inspect a Table.
+Names, structured references, external and 3-D references, full rows, unions,
+computed or dynamic references, spill and implicit-intersection syntax,
+malformed calls, explicit `#REF!` operands, and array territory remain outside
+the boundary. A stronger `FF093` replaces a generic `FF083` copied-formula
+outlier at the same formula cell. Its shared finding cap is reserved before
+ordinary copied-pattern findings are collected. JSON, Markdown, and SARIF
+retain only the formula-cell location, number of qualifying calls, and number
+of mismatched direct range arguments; source formulas, range spellings, sheet
+names used by source ranges, and Table identities remain private.
+
+Controlled fixtures cover `SUMIFS` and `COUNTIFS`, nested calls, multiple
+calls in one formula, qualified internal ranges, whole-column ranges, correct
+shapes, invalid arities, `SUMIF`, custom namespaced calls, names, Tables,
+external references, `OFFSET`, spills, implicit intersection, full rows, and
+explicit broken references. They also prove high-versus-critical CLI gates,
+shared-cap behavior, generic-outlier replacement, and JSON/Markdown/SARIF
+redaction.
+
+The independent full-lint scan used twelve public
+[ExceLint fixtures](https://github.com/ExceLint/ExceLint/tree/e8a8efd252a090945be8683ed42cfd714e8bb4b1),
+all 69 public [Calamine test workbooks](https://github.com/tafia/calamine/tree/f059beb13f733923f229c2977cb469443d3ddf07/tests),
+all 384 public [ClosedXML workbook resources](https://github.com/ClosedXML/ClosedXML/tree/6762b849342809be95467cdfbe426a64ad11d2bd/ClosedXML.Tests/Resource),
+and four public [DataAnalystPortfolioProjects workbooks](https://github.com/PriyankaJhaTheDeveloper/DataAnalystPortfolioProjects/tree/7e69f79079f2655878387deb6a15e86d85d60d39).
+FormulaFence successfully loaded 454 of those 469 workbooks (the other 15
+were independently malformed or exceeded existing reader-safety boundaries).
+The accepted corpus contained 60,823 formula cells and emitted zero `FF093`
+findings. This is a prevalence check, not proof that the corpus has no
+conditional-aggregate defects or that an unreported formula is correct.
+
+The release-versioned 0.194.0 source tree passed **1,391 tests in 95.08
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel
+and source distribution passed `twine check` and each installed into a separate
+fresh environment with declared dependencies, reporting `FormulaFence 0.194.0`.
+Both reproduced one redacted `FF093` finding: the critical gate returned `0`,
+the high gate returned `1`, and the emitted evidence retained only the location
+and safe aggregate counts.
+
 ## Excel Table calculated-column exception lint — 2026-07-28
 
 Microsoft's [formula-error guidance](https://support.microsoft.com/en-US/Excel/detect-formula-errors-in-excel)

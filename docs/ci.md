@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.193.0
+        uses: SybilGambleyyu/formulafence@v0.194.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -119,7 +119,9 @@ circular-reference component while calculation iteration is disabled; and
 `FF091` is a medium-severity workbook with recognized stored Excel
 error-checking suppressions, so review prompts may be hidden. `FF092` is a
 medium-severity interior Table data cell that differs from its declared
-calculated-column formula while immediate adjacent cells match it. The
+calculated-column formula while immediate adjacent cells match it. `FF093` is
+a high-severity native `SUMIFS`/`COUNTIFS` call whose direct static range
+arguments have different dimensions. The
 copied-formula signal requires two matching immediate formula peers and a third
 contiguous supporting peer. `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
@@ -135,7 +137,12 @@ self-reference boundary. `FF092` accepts only non-array stored Table master
 formula metadata with two immediate matching formula neighbors around an
 interior data cell. It leaves edge rows, array territory, uninspectable
 formulas, and longer or ambiguous exception runs quiet, and retains no table
-identity or master formula. `FF090` accepts only a component of at least two
+identity or master formula. `FF093` accepts only native calls whose relevant
+range arguments are individually direct bounded internal A1 cell/range or
+whole-column references. Names, Tables, external/3-D, full-row, union,
+computed/dynamic, spill, implicit-intersection, malformed, explicit-broken-
+reference, and array territory are outside its boundary. It emits only a
+location and aggregate call/range-mismatch counts. `FF090` accepts only a component of at least two
 eligible ordinary formula cells connected by resolved scalar static
 dependencies; it never expands ranges or evaluates a workbook. Both stay quiet
 when `iterate=true`; `FF090` also excludes dynamic-reference, 3-D, spill,
@@ -145,8 +152,9 @@ worksheet names, and tokenization failures stay quiet. JSON, Markdown, and
 SARIF evidence contains locations, static range coordinates, limited
 calculation-status metadata, direct- or multi-cell-static scope, a multi-cell
 component size, saved-result facts, aggregate error-checking suppression
-counts, and Table exception kinds, not formula text, cached values,
-ignored-error target ranges, Table identities, or Table master formulas.
+counts, Table exception kinds, and conditional-aggregate mismatch counts, not
+formula text, cached values, ignored-error target ranges, direct conditional-
+aggregate ranges, Table identities, or Table master formulas.
 `FF089` accepts only an exact saved `#REF!` formula result, skips a location
 already covered by `FF088`, and is a last-saved display fact rather than proof
 of a current calculation result. Other saved error kinds and missing or
@@ -353,7 +361,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.193.0
+  uses: SybilGambleyyu/formulafence@v0.194.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -511,7 +519,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.193.0/formulafence-0.193.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.194.0/formulafence-0.194.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

@@ -336,6 +336,21 @@ _LITERAL_IMPLICIT_INTERSECTION_REFERENCE = re.compile(
     r"(?=$|[ \t\r\n,;)}+\-*/^&=<>%])",
     re.IGNORECASE,
 )
+# ``SUMIFS`` and ``COUNTIFS`` require each range argument to have the same
+# dimensions.  Keep this grammar much narrower than the general reference
+# parser: it admits one internal A1 cell/range or whole-column range, with an
+# optional simple sheet qualifier.  Named expressions, structured references,
+# external and 3-D references, full rows, unions, computed references, and
+# display-only spill/intersection syntax intentionally remain outside this
+# lint's static evidence boundary.
+_DIRECT_STATIC_A1_RANGE_ARGUMENT = re.compile(
+    r"^(?:(?:'(?:[^']|'')*'|[A-Z0-9_.]+)!)?"
+    r"(?:\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}"
+    r"(?::\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6})?"
+    r"|\$?[A-Z]{1,3}:\$?[A-Z]{1,3})$",
+    re.IGNORECASE,
+)
+_CONDITIONAL_AGGREGATE_RANGE_SHAPE_FUNCTIONS = frozenset({"SUMIFS", "COUNTIFS"})
 
 
 @dataclass(frozen=True)
@@ -2047,6 +2062,134 @@ def _function_name(token: object) -> str:
     """Normalize function names, including Excel's OOXML namespace prefixes."""
     value = str(getattr(token, "value", "")).rstrip("(").strip().upper()
     return value.rsplit(".", 1)[-1].lstrip("@")
+
+
+def _native_conditional_aggregate_function_name(token: object) -> str | None:
+    """Return one exact native conditional-aggregate spelling, if present.
+
+    ``_function_name`` intentionally folds namespace prefixes for broad
+    inspection. That would be unsafe here: a custom ``Vendor.SUMIFS`` call can
+    have unrelated range semantics. This lint only trusts Excel's unqualified
+    native spelling, optionally preceded by the display-only ``@`` operator.
+    """
+    if not (
+        getattr(token, "type", None) == "FUNC"
+        and getattr(token, "subtype", None) == "OPEN"
+    ):
+        return None
+    value = str(getattr(token, "value", "")).rstrip("(").strip().upper()
+    function_name = value.removeprefix("@")
+    if function_name in _CONDITIONAL_AGGREGATE_RANGE_SHAPE_FUNCTIONS:
+        return function_name
+    return None
+
+
+def _direct_static_a1_range_shape(
+    tokens: Sequence[object], start: int, end: int
+) -> tuple[int, int] | None:
+    """Return one bounded direct A1 range's ``(width, height)``, if exact."""
+    meaningful = [
+        position
+        for position in range(start, end)
+        if not _is_whitespace(tokens[position])
+    ]
+    if len(meaningful) != 1:
+        return None
+    token = tokens[meaningful[0]]
+    if not (
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "RANGE"
+    ):
+        return None
+    value = str(getattr(token, "value", "")).strip()
+    if _DIRECT_STATIC_A1_RANGE_ARGUMENT.fullmatch(value) is None:
+        return None
+    reference = parse_reference_token(value)
+    if (
+        reference is None
+        or reference.is_external
+        or reference.min_column is None
+        or reference.min_row is None
+        or reference.max_column is None
+        or reference.max_row is None
+        or not (
+            1
+            <= reference.min_column
+            <= reference.max_column
+            <= MAX_EXCEL_COLUMN
+            and 1
+            <= reference.min_row
+            <= reference.max_row
+            <= MAX_EXCEL_ROW
+        )
+    ):
+        return None
+    return (
+        reference.max_column - reference.min_column + 1,
+        reference.max_row - reference.min_row + 1,
+    )
+
+
+def conditional_aggregate_range_shape_mismatches(
+    formula: str,
+) -> tuple[tuple[str, int], ...]:
+    """Find direct static range-shape mismatches in ``SUMIFS``/``COUNTIFS``.
+
+    Each returned pair contains a native function name and the number of its
+    range arguments whose dimensions differ from that call's first range.
+    This scans formula tokens only; it does not resolve names, inspect table
+    identities, calculate a formula, or infer values. A call is deliberately
+    ignored unless every relevant range argument is one direct, bounded,
+    internal A1 cell/range or whole-column reference. That leaves all dynamic
+    and otherwise ambiguous formulas outside the finding boundary.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return ()
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return ()
+
+    mismatches: list[tuple[str, int]] = []
+    for position, token in enumerate(tokens):
+        function_name = _native_conditional_aggregate_function_name(token)
+        if function_name is None:
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if function_name == "SUMIFS":
+            if len(arguments) < 3 or len(arguments) % 2 == 0:
+                continue
+            range_argument_indexes = (0, *range(1, len(arguments), 2))
+        else:
+            if len(arguments) < 2 or len(arguments) % 2 != 0:
+                continue
+            range_argument_indexes = range(0, len(arguments), 2)
+
+        shapes: list[tuple[int, int]] = []
+        for argument_index in range_argument_indexes:
+            start, end = arguments[argument_index]
+            shape = _direct_static_a1_range_shape(tokens, start, end)
+            if shape is None:
+                break
+            shapes.append(shape)
+        else:
+            mismatched_range_argument_count = sum(
+                shape != shapes[0]
+                for shape in shapes[1:]
+            )
+            if mismatched_range_argument_count:
+                mismatches.append((function_name, mismatched_range_argument_count))
+    return tuple(mismatches)
 
 
 def _function_lookup_key(token: object) -> str:

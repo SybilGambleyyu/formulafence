@@ -39,7 +39,16 @@ financial correctness or replace model review.
   and an interior data cell bracketed by two immediate eligible formulas that
   match its fingerprint. It skips first/last data rows, array territory,
   uninspectable formulas, and longer or ambiguous exception runs; the stored
-  master formula and table identity remain private. Its direct
+  master formula and table identity remain private. Its conditional-aggregate
+  range-shape signal accepts only native `SUMIFS`/`COUNTIFS` calls with valid
+  arity whose relevant arguments are each one bounded, internal direct A1
+  cell/range or whole-column reference, then compares dimensions without
+  calculation. Names, Tables, external/3-D/full-row/union references,
+  computed or dynamic expressions, spills, implicit intersection, malformed
+  formulas, explicit broken references, and all array territory stay outside
+  the boundary. It emits only a location plus aggregate call and mismatched-
+  range counts; formulas, range spellings, and Table identities remain private.
+  Its direct
   circular-reference signal accepts only an ordinary formula with a resolved
   scalar static dependency directly back to itself while workbook `iterate` is
   absent or false (the OOXML default). Its separate multi-cell signal accepts
@@ -52,9 +61,10 @@ financial correctness or replace model review.
   evidence contains only locations, peer coordinates where copied-pattern
   evidence needs them, static range coordinates, the two calculation-status
   flags, aggregate error-checking suppression counts, Table exception kinds,
-  direct- or multi-cell-static scope, and a multi-cell component size, never
-  formula text, cell values, cached results, ignored-error target ranges, Table
-  identities, or Table master formulas.
+  conditional-aggregate mismatch counts, direct- or multi-cell-static scope,
+  and a multi-cell component size, never formula text, cell values, cached
+  results, ignored-error target ranges, direct conditional-aggregate ranges,
+  Table identities, or Table master formulas.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not

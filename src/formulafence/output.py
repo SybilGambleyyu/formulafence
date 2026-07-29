@@ -6444,6 +6444,27 @@ def lint_to_markdown(
                     ),
                 )
             )
+    conditional_aggregate_range_shape_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF093"
+    ]
+    if conditional_aggregate_range_shape_evidence:
+        lines.extend(["## Conditional-aggregate range-shape evidence", ""])
+        for location, evidence in conditional_aggregate_range_shape_evidence:
+            lines.append(
+                "- {location}: {range_count} direct static range arguments across "
+                "{call_count} conditional-aggregate calls have different shapes."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    range_count=_markdown_escape(
+                        evidence["mismatched_direct_range_argument_count"]
+                    ),
+                    call_count=_markdown_escape(
+                        evidence["conditional_aggregate_call_count"]
+                    ),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6518,6 +6539,9 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF092": (
             "An interior Excel Table cell differs from its declared calculated-column "
             "formula."
+        ),
+        "FF093": (
+            "A conditional aggregate uses direct static ranges with different shapes."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

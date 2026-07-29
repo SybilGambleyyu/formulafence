@@ -13,6 +13,7 @@ from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter, range_bo
 from formulafence.formulas import (
     MAX_EXCEL_COLUMN,
     MAX_EXCEL_ROW,
+    conditional_aggregate_range_shape_mismatches,
     parse_reference_token,
 )
 from formulafence.models import (
@@ -272,6 +273,48 @@ def _table_calculated_column_exception_candidates(
     return tuple(
         sorted(candidates.items(), key=lambda candidate: _location_sort_key(candidate[0]))
     )
+
+
+def _conditional_aggregate_range_shape_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int, int], ...]:
+    """Return formula cells with an unambiguous conditional-range mismatch.
+
+    The formula helper accepts only native ``SUMIFS``/``COUNTIFS`` calls whose
+    relevant arguments are direct, bounded internal A1 ranges. This layer adds
+    workbook context: ordinary inspectable formula cells only, no array
+    territory, and no explicit broken-reference operand. Findings retain only
+    aggregate counts, never formula text, range spellings, or table identity.
+    """
+    candidates: list[tuple[CellKey, int, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        mismatches = conditional_aggregate_range_shape_mismatches(formula)
+        if not mismatches:
+            continue
+        if len(candidates) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append(
+            (
+                location,
+                len(mismatches),
+                sum(mismatched_range_count for _, mismatched_range_count in mismatches),
+            )
+        )
+    return tuple(candidates)
 
 
 def _range_intersects_array_territory(
@@ -764,10 +807,11 @@ def lint_snapshot(
     an explicitly unlocked formula on a protected sheet, an explicit incomplete
     manual-calculation state for a formula workbook, stored error-checking
     suppressions, isolated interior Excel Table calculated-column exceptions,
-    direct and multi-cell static circular references while iteration is
-    disabled, an explicit broken reference operand, and a saved
-    broken-reference result. It never evaluates formulas, and rejects
-    incomplete array metadata before claiming ordinary-cell coverage.
+    direct static `SUMIFS`/`COUNTIFS` range-shape mismatches, direct and
+    multi-cell static circular references while iteration is disabled, an
+    explicit broken reference operand, and a saved broken-reference result. It
+    never evaluates formulas, and rejects incomplete array metadata before
+    claiming ordinary-cell coverage.
     """
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
@@ -782,6 +826,15 @@ def lint_snapshot(
         )
 
     array_ranges_by_sheet = _array_ranges_by_sheet(snapshot)
+    conditional_aggregate_candidates = _conditional_aggregate_range_shape_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
+    conditional_aggregate_locations = {
+        location
+        for location, _, _ in conditional_aggregate_candidates
+    }
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
     for preceding_location in sorted(snapshot.cells, key=_location_sort_key):
@@ -810,6 +863,8 @@ def lint_snapshot(
             if following.formula_fingerprint != fingerprint:
                 continue
             if _is_array_member(snapshot, target_location, array_ranges_by_sheet):
+                continue
+            if target_location in conditional_aggregate_locations:
                 continue
 
             target = snapshot.cells.get(target_location)
@@ -855,7 +910,10 @@ def lint_snapshot(
 
             candidate = candidates.get(target_location)
             if candidate is None:
-                if len(candidates) >= max_formula_pattern_findings:
+                if (
+                    len(candidates) + len(conditional_aggregate_candidates)
+                    >= max_formula_pattern_findings
+                ):
                     raise FormulaFenceError(
                         "Formula lint exceeds "
                         f"max_formula_pattern_findings={max_formula_pattern_findings}."
@@ -895,6 +953,37 @@ def lint_snapshot(
                         }
                         for evidence in candidate.evidence
                     ],
+                },
+            )
+        )
+
+    for (
+        location,
+        conditional_aggregate_call_count,
+        mismatched_direct_range_argument_count,
+    ) in conditional_aggregate_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF093",
+                severity="high",
+                message=(
+                    "A conditional aggregate uses direct static ranges with different "
+                    "shapes."
+                ),
+                location=location,
+                details={
+                    "conditional_aggregate_call_count": (
+                        conditional_aggregate_call_count
+                    ),
+                    "mismatched_direct_range_argument_count": (
+                        mismatched_direct_range_argument_count
+                    ),
+                    "evidence_scope": "conditional_aggregate_direct_a1_ranges",
                 },
             )
         )

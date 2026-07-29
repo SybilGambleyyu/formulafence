@@ -25,6 +25,7 @@ from formulafence.formulas import (
     parse_external_workbook_three_d_reference,
     parse_workbook_defined_name_alias,
     randbetween_literal_bound_mismatch_count,
+    subtotal_literal_function_num_mismatch_count,
     sumproduct_range_shape_mismatches,
 )
 from formulafence.models import (
@@ -330,6 +331,44 @@ def test_randbetween_literal_bound_mismatch_count_keeps_ambiguous_forms_quiet() 
 
     for formula in quiet_formulas:
         assert randbetween_literal_bound_mismatch_count(formula) == 0
+
+
+def test_subtotal_literal_function_num_mismatch_count_finds_direct_native_calls() -> None:
+    assert subtotal_literal_function_num_mismatch_count("=SUBTOTAL(0,A2)") == 1
+    assert subtotal_literal_function_num_mismatch_count("=SUBTOTAL(12,A2)") == 1
+    assert subtotal_literal_function_num_mismatch_count("=@SUBTOTAL(00112,A2)") == 1
+    assert subtotal_literal_function_num_mismatch_count(
+        "=SUBTOTAL(9999999999999999999999999999,A2)"
+    ) == 1
+    assert subtotal_literal_function_num_mismatch_count(
+        "=IFERROR(SUBTOTAL(12,A2)+SUBTOTAL(100,A2),0)"
+    ) == 2
+
+
+def test_subtotal_literal_function_num_mismatch_count_keeps_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=SUBTOTAL(1,A2)",
+        "=SUBTOTAL(11,A2,A3)",
+        "=SUBTOTAL(101,A2)",
+        "=SUBTOTAL(111,A2)",
+        "=SUBTOTAL(00101,A2)",
+        "=SUBTOTAL(A2,A3)",
+        "=SUBTOTAL(1+11,A2)",
+        "=SUBTOTAL(+12,A2)",
+        "=SUBTOTAL(-1,A2)",
+        "=SUBTOTAL(12.0,A2)",
+        "=SUBTOTAL(1E1,A2)",
+        "=SUBTOTAL({12},A2)",
+        "=SUBTOTAL(12)",
+        "=SUBTOTAL(12,A2,)",
+        "=SUBTOTAL(12,,A2)",
+        "=SUBTOTAL(12,#REF!)",
+        "=Vendor.SUBTOTAL(12,A2)",
+        "=_xlfn.SUBTOTAL(12,A2)",
+    )
+
+    for formula in quiet_formulas:
+        assert subtotal_literal_function_num_mismatch_count(formula) == 0
 
 
 def test_extract_references_keeps_external_workbooks_separate() -> None:

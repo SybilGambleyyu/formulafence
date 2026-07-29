@@ -2263,6 +2263,34 @@ def _positive_integer_literal_exceeds(value: str, limit: int) -> bool:
     )
 
 
+_SUBTOTAL_FUNCTION_NUMBERS = frozenset(
+    {
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "101",
+        "102",
+        "103",
+        "104",
+        "105",
+        "106",
+        "107",
+        "108",
+        "109",
+        "110",
+        "111",
+    }
+)
+
+
 def conditional_aggregate_range_shape_mismatches(
     formula: str,
 ) -> tuple[tuple[str, int], ...]:
@@ -2571,6 +2599,55 @@ def randbetween_literal_bound_mismatch_count(formula: str) -> int:
         if bottom is None or top is None:
             continue
         if _compare_signed_integer_literals(bottom, top) > 0:
+            mismatch_count += 1
+    return mismatch_count
+
+
+def subtotal_literal_function_num_mismatch_count(formula: str) -> int:
+    """Count unsupported direct literal function codes in ``SUBTOTAL`` calls.
+
+    This scans formula tokens only; it does not evaluate subtotal values,
+    inspect referenced cells, or resolve names. A call is deliberately ignored
+    unless it is an unqualified native ``SUBTOTAL`` (optionally preceded by
+    ``@``), has a function number plus one through 254 nonempty reference
+    arguments, and supplies a direct bare nonnegative decimal function-number
+    literal. A finding is returned only when that literal is outside Excel's
+    documented 1–11 and 101–111 code families. Computed, signed, decimal,
+    array, malformed, explicit-broken-reference, and arbitrary namespace forms
+    remain outside this narrow contract.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return 0
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return 0
+
+    mismatch_count = 0
+    for position, token in enumerate(tokens):
+        if _unqualified_native_function_name(token) != "SUBTOTAL":
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if not 2 <= len(arguments) <= 255 or any(
+            not any(
+                not _is_whitespace(tokens[argument_position])
+                for argument_position in range(start, end)
+            )
+            for start, end in arguments
+        ):
+            continue
+        function_num = _direct_nonnegative_integer_literal(tokens, *arguments[0])
+        if function_num is not None and function_num not in _SUBTOTAL_FUNCTION_NUMBERS:
             mismatch_count += 1
     return mismatch_count
 

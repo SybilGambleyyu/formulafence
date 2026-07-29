@@ -5,6 +5,53 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct-literal `SUBTOTAL` function-code lint — 2026-07-28
+
+Microsoft's [SUBTOTAL reference](https://support.microsoft.com/en-us/excel/subtotal-function)
+defines `function_num` as one of the 1–11 or 101–111 code families, with one
+required reference and up to 254 optional references. FormulaFence adds
+high-severity `FF099` only when a literal code outside that documented set is
+statically provable; the rule does not depend on or claim a particular
+client-side error rendering.
+
+`FF099` accepts unqualified native `SUBTOTAL`, optionally preceded by Excel's
+display-only `@`, with a direct bare nonnegative decimal function number and
+one through 254 nonempty reference arguments. The detector reports only when
+that literal is outside the documented code families. It does not inspect
+references or calculate a subtotal. Computed, signed, decimal, array, dynamic,
+malformed, explicit broken-reference, array-territory, and arbitrary namespace
+forms remain quiet. Controlled fixtures cover zero, unsupported gaps, leading
+zeros, very long codes, nested calls, `@`, both valid code families, computed/
+signed/decimal/array arguments, omitted arguments, malformed arity, explicit
+broken references, custom and `_xlfn` namespaces, array territory,
+high-versus-critical CLI behavior, shared-cap behavior, generic-outlier
+replacement, and JSON/Markdown/SARIF redaction.
+
+The full-lint replay of 12 public
+[ExceLint fixtures](https://github.com/ExceLint/ExceLint/tree/e8a8efd252a090945be8683ed42cfd714e8bb4b1),
+69 public [Calamine test workbooks](https://github.com/tafia/calamine/tree/f059beb13f733923f229c2977cb469443d3ddf07/tests),
+384 public [ClosedXML workbook resources](https://github.com/ClosedXML/ClosedXML/tree/6762b849342809be95467cdfbe426a64ad11d2bd/ClosedXML.Tests/Resource),
+and four public [DataAnalystPortfolioProjects workbooks](https://github.com/PriyankaJhaTheDeveloper/DataAnalystPortfolioProjects/tree/7e69f79079f2655878387deb6a15e86d85d60d39)
+saw 469 workbooks, loaded 454, rejected 15 at existing safety boundaries, and
+inspected 60,823 formula cells. It observed 27 native `SUBTOTAL` calls: all 27
+had direct valid integer function codes, with three in the 1–11 family and 24
+in the 101–111 family. The replay emitted zero `FF099` findings. This is a
+compatibility and false-positive boundary check, not a claim about every
+unreported formula.
+
+A focused helper/lint/CLI/output run passed **224 tests in 10.38 seconds**. It
+exercises the structural rule without calculating a workbook or exposing source
+formulas, function-code values, or reference arguments in rendered evidence.
+
+The release-versioned 0.201.0 source tree passed **1,440 tests in 96.22
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment with declared dependencies, reporting `FormulaFence 0.201.0`.
+Both reproduced one redacted `FF099` finding aggregating two unsupported
+literal function codes: the critical gate returned `0`, the high gate returned
+`1`, and SARIF contained neither source formula nor function-code/reference
+spellings.
+
 ## Direct-literal `RANDBETWEEN` bound lint — 2026-07-28
 
 Microsoft's [WorksheetFunction.RandBetween reference](https://learn.microsoft.com/en-us/office/vba/api/excel.worksheetfunction.randbetween)

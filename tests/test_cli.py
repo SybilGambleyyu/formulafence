@@ -345,6 +345,18 @@ def test_lint_randbetween_literal_bound_mismatch_is_high(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
 
 
+def test_lint_subtotal_literal_function_num_mismatch_is_high(tmp_path) -> None:
+    workbook_path = tmp_path / "subtotal-literal-function-num.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["B2"] = "=SUBTOTAL(12,C2:C10)"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
+
+
 def test_lint_direct_self_reference_is_high(tmp_path) -> None:
     workbook_path = tmp_path / "direct-self-reference.xlsx"
     workbook = Workbook()

@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.200.0/formulafence-0.200.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.201.0/formulafence-0.201.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -68,8 +68,8 @@ for the current version.
 check for copy-paste, aggregate-range, protection, calculation-freshness,
 error-checking-suppression, Excel Table calculated-column, static-circular-reference,
 conditional-aggregate and `SUMPRODUCT` range-shape, `MMULT` matrix-dimension,
-legacy-lookup return-index, `RANDBETWEEN` literal-bound, explicit-broken-reference,
-and saved-result risks
+legacy-lookup return-index, `RANDBETWEEN` literal-bound, `SUBTOTAL`
+function-code, explicit-broken-reference, and saved-result risks
 that a version diff cannot see. It reports a copied-formula interruption only
 when the immediately preceding and following formulas have the same
 relative-copy fingerprint and a third contiguous peer repeats that fingerprint.
@@ -78,9 +78,9 @@ calculation-freshness, stored error-checking suppression, interior Table
 calculated-column exception, direct and multi-cell static circular-reference,
 direct conditional-aggregate and `SUMPRODUCT` range-shape, direct static
 `MMULT` matrix-dimension, direct static legacy-lookup return-index, direct
-literal `RANDBETWEEN` bounds, explicit-broken-reference, and saved
-broken-reference-result signals. Together these produce seventeen reviewable
-findings:
+literal `RANDBETWEEN` bounds, direct literal `SUBTOTAL` function codes,
+explicit-broken-reference, and saved broken-reference-result signals. Together
+these produce eighteen reviewable findings:
 
 - `FF082`: a non-formula interruption. Blanks and stored error values are high;
   numeric/manual values are medium; textual markers are low.
@@ -117,6 +117,8 @@ findings:
   available value arguments.
 - `FF098` (high): a native `RANDBETWEEN` call uses direct literal bounds with
   the bottom above the top.
+- `FF099` (high): a native `SUBTOTAL` call uses a literal function number
+  outside Excel's supported codes.
 
 Use `--fail-on critical` to gate explicit broken-reference operands, or
 `--fail-on high` to also gate blank/error interruptions and direct static
@@ -124,7 +126,8 @@ self-references, multi-cell static cycles, direct conditional-aggregate or
 `SUMPRODUCT` range-shape mismatches, direct static `MMULT` matrix-dimension
 mismatches, direct static legacy-lookup return-index mismatches, direct static
 `CHOOSE` literal-index mismatches, direct literal `RANDBETWEEN` bound
-mismatches, and saved broken-reference results.
+mismatches, direct literal `SUBTOTAL` function-code mismatches, and saved
+broken-reference results.
 Use `--fail-on medium` to additionally require review of manual-value,
 formula-outlier, aggregate-range, explicit formula-protection,
 incomplete-manual-calculation, error-checking-suppression, and Table
@@ -206,6 +209,15 @@ broken-reference operands, array-formula territory, and arbitrary namespaces
 stay quiet. Its evidence retains only the affected location, number of
 qualifying calls, and number of inverted literal-bound pairs—never a formula,
 literal value, or source sheet identity.
+`FF099` accepts only native `SUBTOTAL` calls (optionally with `@`) with a
+direct bare nonnegative decimal function number plus one through 254 nonempty
+reference arguments. It reports only when that literal is outside Excel's
+documented 1–11 and 101–111 code families, without inspecting references or
+calculating a subtotal. Computed, signed, decimal, array, malformed, explicit
+broken-reference operands, array-formula territory, and arbitrary namespaces
+stay quiet. Its evidence retains only the affected location, number of
+qualifying calls, and number of unsupported literal function codes—never a
+formula, function-code value, reference, or source sheet identity.
 `FF090`
 uses only a strongly connected component of
 resolved scalar static dependencies with at least two eligible ordinary formula
@@ -220,9 +232,10 @@ multi-cell component size, saved-result facts, aggregate error-checking
 suppression counts, Table exception kinds, conditional-aggregate mismatch
 counts, `SUMPRODUCT` mismatch counts, and `MMULT` incompatible-matrix-pair
 counts, legacy-lookup out-of-range-literal-index counts, and `RANDBETWEEN`
-inverted-literal-bound counts—never formula text, cached values, ignored-error
-target ranges, direct conditional-aggregate, `SUMPRODUCT`, `MMULT`, or
-legacy-lookup range spellings, or Table master formulas. `FF089` accepts
+inverted-literal-bound counts, and `SUBTOTAL` unsupported-literal-function-code
+counts—never formula text, cached values, ignored-error target ranges, direct
+conditional-aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup range spellings,
+or Table master formulas. `FF089` accepts
 only a valid saved formula-result cache whose exact
 error is `#REF!`; other saved errors, missing or malformed cache records, and
 locations already covered by `FF088` stay quiet. It is a high-severity record
@@ -252,7 +265,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.200.0
+  uses: SybilGambleyyu/formulafence@v0.201.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx

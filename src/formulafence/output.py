@@ -6560,6 +6560,25 @@ def lint_to_markdown(
                     call_count=_markdown_escape(evidence["randbetween_call_count"]),
                 )
             )
+    subtotal_literal_function_num_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF099"
+    ]
+    if subtotal_literal_function_num_evidence:
+        lines.extend(["## SUBTOTAL function-code evidence", ""])
+        for location, evidence in subtotal_literal_function_num_evidence:
+            lines.append(
+                "- {location}: {code_count} direct literal SUBTOTAL calls across "
+                "{call_count} calls use unsupported function codes."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    code_count=_markdown_escape(
+                        evidence["unsupported_literal_function_num_count"]
+                    ),
+                    call_count=_markdown_escape(evidence["subtotal_call_count"]),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6652,6 +6671,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF098": (
             "A RANDBETWEEN call uses direct literal bounds with the bottom above "
             "the top."
+        ),
+        "FF099": (
+            "A SUBTOTAL call uses a literal function number outside Excel's "
+            "supported codes."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

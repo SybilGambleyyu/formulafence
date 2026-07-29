@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.201.0 — 2026-07-28
+
+- Add high-severity `FF099` to `formulafence lint`: it reports an unqualified
+  native `SUBTOTAL` call only when a direct bare decimal function number is
+  outside Excel's documented 1–11 and 101–111 code families.
+- Keep the rule deliberately narrow and private: computed, signed, decimal,
+  array, malformed, explicit-broken-reference, and namespaced forms stay
+  quiet. Output retains only aggregate call and unsupported-literal-function-
+  code counts.
+
 ## 0.200.0 — 2026-07-28
 
 - Add high-severity `FF098` to `formulafence lint`: it reports an unqualified

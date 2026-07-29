@@ -790,14 +790,15 @@ def test_lint_structural_formula_rules_share_the_finding_cap(
             "A5": "=VLOOKUP(A2,C2:D4,3,FALSE)",
             "A6": "=CHOOSE(0,A2)",
             "A7": "=RANDBETWEEN(2,1)",
+            "A8": "=SUBTOTAL(12,A2)",
         },
     )
 
     with pytest.raises(
         FormulaFenceError,
-        match="max_formula_pattern_findings=5",
+        match="max_formula_pattern_findings=6",
     ):
-        lint_snapshot(snapshot, max_formula_pattern_findings=5)
+        lint_snapshot(snapshot, max_formula_pattern_findings=6)
 
 
 def test_lint_reports_direct_mmult_dimension_mismatches(
@@ -1184,6 +1185,115 @@ def test_lint_randbetween_literal_bound_candidates_share_the_finding_cap(
             "B4": "=A4*2",
             "B5": "=A5*2",
             "E2": "=RANDBETWEEN(2,1)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
+def test_lint_reports_direct_subtotal_literal_function_num_mismatches(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": "=IFERROR(SUBTOTAL(12,A2)+@SUBTOTAL(00112,A3),0)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF099", "high", ("Model", "E2"))]
+    assert report.findings[0].details == {
+        "subtotal_call_count": 2,
+        "unsupported_literal_function_num_count": 2,
+        "evidence_scope": "subtotal_literal_function_num",
+    }
+
+
+def test_lint_subtotal_literal_function_num_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=SUBTOTAL(1,A2)",
+            "A3": "=SUBTOTAL(11,A2,A3)",
+            "A4": "=SUBTOTAL(101,A2)",
+            "A5": "=SUBTOTAL(111,A2)",
+            "A6": "=SUBTOTAL(B6,A2)",
+            "A7": "=SUBTOTAL(1+11,A2)",
+            "A8": "=SUBTOTAL(+12,A2)",
+            "A9": "=SUBTOTAL(-1,A2)",
+            "A10": "=SUBTOTAL(12.0,A2)",
+            "A11": "=SUBTOTAL({12},A2)",
+            "A12": "=SUBTOTAL(12)",
+            "A13": "=SUBTOTAL(12,A2,)",
+            "A14": "=SUBTOTAL(12,#REF!)",
+            "A15": "=Vendor.SUBTOTAL(12,A2)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert "FF099" not in {finding.rule_id for finding in report.findings}
+
+    array_territory = _snapshot(tmp_path, {"B2": "=SUBTOTAL(12,C2)"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF099" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_subtotal_literal_function_num_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=SUBTOTAL(9,A2)",
+            "B3": "=SUBTOTAL(12,A3)",
+            "B4": "=SUBTOTAL(9,A4)",
+            "B5": "=SUBTOTAL(9,A5)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF099", "high", ("Model", "B3"))]
+
+
+def test_lint_subtotal_literal_function_num_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=SUBTOTAL(12,A2)",
         },
     )
 
@@ -2286,6 +2396,50 @@ def test_lint_randbetween_literal_bound_renderers_keep_values_private(
                 "text": (
                     "A RANDBETWEEN call uses direct literal bounds with the bottom "
                     "above the top."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_subtotal_literal_function_num_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=SUBTOTAL(12,'Private Inputs'!$C$2:$D$6)+N('confidential')",
+        },
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2:$D$6" not in rendered
+        assert "confidential" not in rendered
+        assert "SUBTOTAL(12" not in rendered
+        assert "FF099" in rendered
+    assert "## SUBTOTAL function-code evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "subtotal_call_count": 1,
+        "unsupported_literal_function_num_count": 1,
+        "evidence_scope": "subtotal_literal_function_num",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF099",
+            "name": "FF099",
+            "shortDescription": {
+                "text": (
+                    "A SUBTOTAL call uses a literal function number outside Excel's "
+                    "supported codes."
                 )
             },
         }

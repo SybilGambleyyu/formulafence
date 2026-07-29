@@ -31,7 +31,7 @@ from openpyxl.styles import (
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
-from openpyxl.worksheet.table import Table
+from openpyxl.worksheet.table import Table, TableColumn, TableFormula
 
 _DATA_MASHUP_NS = "http://schemas.microsoft.com/DataMashup"
 _PACKAGE_RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -4110,6 +4110,92 @@ def make_table_model(path: Path) -> Path:
     report["B5"] = "=COUNTA(Sales[[#Headers],[#Data],[Rate]])"
     workbook.save(path)
     return path
+
+
+_CALCULATED_COLUMN_NO_EXCEPTION = object()
+
+
+def make_calculated_column_model(
+    path: Path,
+    *,
+    exception: object = _CALCULATED_COLUMN_NO_EXCEPTION,
+    exception_coordinate: str = "C3",
+    exceptions: dict[str, object] | None = None,
+    data_row_count: int = 3,
+    array_formula: bool = False,
+    structured_formula: bool = False,
+) -> Path:
+    """Create one Table with an OOXML calculated-column master formula.
+
+    The master stores an A1-style formula relative to the first table data row.
+    Callers can replace one interior or boundary result cell without changing
+    the private Table declaration, matching the static exception shape linted
+    by FormulaFence.
+    """
+    if data_row_count < 3:
+        raise ValueError("Calculated-column fixture needs at least three data rows")
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Private Table Sheet"
+    worksheet.append(["Private Amount", "Private Rate", "Private Result"])
+    master_formula = (
+        "[@[Private Amount]]*[@[Private Rate]]"
+        if structured_formula
+        else "A2*B2"
+    )
+    for row in range(2, data_row_count + 2):
+        cell_formula = (
+            f"={master_formula}"
+            if structured_formula
+            else f"=A{row}*B{row}"
+        )
+        worksheet.append([row * 10, row, cell_formula])
+    table = Table(
+        displayName="PRIVATE_RESULT_TABLE",
+        ref=f"A1:C{data_row_count + 1}",
+    )
+    table.tableColumns = [
+        TableColumn(id=1, name="Private Amount"),
+        TableColumn(id=2, name="Private Rate"),
+        TableColumn(
+            id=3,
+            name="Private Result",
+            calculatedColumnFormula=TableFormula(
+                array=array_formula,
+                attr_text=master_formula,
+            ),
+        ),
+    ]
+    worksheet.add_table(table)
+    if exception is not _CALCULATED_COLUMN_NO_EXCEPTION:
+        worksheet[exception_coordinate] = exception
+    for coordinate, value in (exceptions or {}).items():
+        worksheet[coordinate] = value
+    workbook.save(path)
+    return path
+
+
+def change_calculated_column_formula_metadata(path: Path) -> Path:
+    """Change only a Table calculated-column declaration for private diff tests."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        table_member = _table_style_control_table_member(contents)
+        table = ElementTree.fromstring(contents[table_member])
+        formula = table.find(
+            f"{{{_SPREADSHEETML_NS}}}tableColumns/"
+            f"{{{_SPREADSHEETML_NS}}}tableColumn/"
+            f"{{{_SPREADSHEETML_NS}}}calculatedColumnFormula"
+        )
+        if formula is None:
+            raise ValueError("Fixture table does not contain a calculated-column formula")
+        formula.text = "A2+B2"
+        contents[table_member] = ElementTree.tostring(
+            table,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".calculated-column-formula.tmp.xlsx")
 
 
 def _table_style_control_table_member(contents: dict[str, bytes]) -> str:

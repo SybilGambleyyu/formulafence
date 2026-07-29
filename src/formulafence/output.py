@@ -6305,8 +6305,8 @@ def lint_to_markdown(
             "It reports a formula as unlocked only for an explicit direct cell assignment "
             "on a protected worksheet, and reports explicitly incomplete manual calculation "
             "for a formula workbook. It also reports stored error-checking suppressions "
-            "as aggregate structural evidence. It does not evaluate formulas or expose "
-            "formula text.",
+            "and isolated interior Excel Table calculated-column exceptions. It does not "
+            "evaluate formulas or expose formula text.",
             "",
             "## Findings",
             "",
@@ -6416,6 +6416,34 @@ def lint_to_markdown(
                     categories=categories,
                 )
             )
+    table_calculated_column_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF092"
+    ]
+    if table_calculated_column_evidence:
+        lines.extend(["## Excel Table calculated-column evidence", ""])
+        exception_labels = {
+            "blank": "blank",
+            "formula_mismatch": "a different formula",
+            "stored_error_value": "a stored error value",
+            "text_value": "a text value",
+            "non_formula_value": "a non-formula value",
+        }
+        for location, evidence in table_calculated_column_evidence:
+            lines.append(
+                "- {location}: this interior Table cell is {exception} while its "
+                "immediate adjacent cells match the declared calculated-column formula."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    exception=_markdown_escape(
+                        exception_labels.get(
+                            str(evidence.get("exception_kind", "")),
+                            "an exception",
+                        )
+                    ),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6486,6 +6514,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF091": (
             "Workbook suppresses Excel error-checking prompts; review warnings may be "
             "hidden."
+        ),
+        "FF092": (
+            "An interior Excel Table cell differs from its declared calculated-column "
+            "formula."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

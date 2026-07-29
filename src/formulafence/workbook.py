@@ -128,6 +128,7 @@ from formulafence.models import (
     SheetProtectionSnapshot,
     SheetSnapshot,
     SlicerTimelineCacheSnapshot,
+    TableCalculatedColumnFormulaSnapshot,
     TableSnapshot,
     TableStyleControlsSnapshot,
     ThreadedCommentSnapshot,
@@ -51093,6 +51094,58 @@ def _table_columns(
     return ()
 
 
+def _table_calculated_column_formulas(
+    table: object,
+    *,
+    min_column: int,
+    min_row: int,
+    max_column: int,
+    max_row: int,
+    header_row_count: int,
+    totals_row_count: int,
+) -> tuple[TableCalculatedColumnFormulaSnapshot, ...]:
+    """Return safe calculated-column formula fingerprints for one Table.
+
+    SpreadsheetML stores a calculated-column master formula beside the table
+    column definition. The formula's A1 references are authored relative to
+    the first data-row cell, so fingerprint it at that exact origin before
+    comparing later row formulas. Array-style declarations stay outside this
+    scalar-copy boundary, as do empty, tokenization-failed, and explicit
+    broken-reference declarations.
+    """
+    table_columns = tuple(getattr(table, "tableColumns", ()) or ())
+    width = max_column - min_column + 1
+    if len(table_columns) != width:
+        return ()
+    first_data_row = min_row + header_row_count
+    last_data_row = max_row - totals_row_count
+    if first_data_row > last_data_row:
+        return ()
+
+    snapshots: list[TableCalculatedColumnFormulaSnapshot] = []
+    for column_index, table_column in enumerate(table_columns, start=1):
+        declaration = getattr(table_column, "calculatedColumnFormula", None)
+        if declaration is None or bool(getattr(declaration, "array", False)):
+            continue
+        raw_formula = getattr(declaration, "attr_text", None)
+        if not isinstance(raw_formula, str) or not raw_formula.strip():
+            continue
+        formula = raw_formula.strip()
+        if not formula.startswith("="):
+            formula = f"={formula}"
+        inspection = inspect_formula(formula)
+        if inspection.tokenization_failed or has_broken_reference(formula):
+            continue
+        origin = f"{get_column_letter(min_column + column_index - 1)}{first_data_row}"
+        snapshots.append(
+            TableCalculatedColumnFormulaSnapshot(
+                column_index=column_index,
+                formula_fingerprint=formula_fingerprint(formula, origin),
+            )
+        )
+    return tuple(snapshots)
+
+
 def _table_snapshots(workbook: object) -> dict[str, TableSnapshot]:
     """Inventory Excel-table definitions that affect structured references."""
     result: dict[str, TableSnapshot] = {}
@@ -51134,6 +51187,15 @@ def _table_snapshots(workbook: object) -> dict[str, TableSnapshot]:
                 ),
                 header_row_count=header_rows,
                 totals_row_count=totals_rows,
+                calculated_column_formulas=_table_calculated_column_formulas(
+                    table,
+                    min_column=min_column,
+                    min_row=min_row,
+                    max_column=max_column,
+                    max_row=max_row,
+                    header_row_count=header_rows,
+                    totals_row_count=totals_rows,
+                ),
             )
     return result
 

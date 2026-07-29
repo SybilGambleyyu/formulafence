@@ -77,6 +77,7 @@ from .helpers import (
     change_alignment_definition,
     change_border_definition,
     change_border_logical_start_side,
+    change_calculated_column_formula_metadata,
     change_cell_hyperlink_display,
     change_cell_hyperlink_location,
     change_cell_hyperlink_target,
@@ -299,6 +300,7 @@ from .helpers import (
     lowercase_legacy_threaded_placeholder_identifiers,
     make_alignment_model,
     make_border_model,
+    make_calculated_column_model,
     make_cell_hyperlink_model,
     make_cell_hyperlink_sparkline_model,
     make_chart_definition_model,
@@ -2072,6 +2074,23 @@ def test_table_definition_change_is_a_semantic_control_change(tmp_path) -> None:
     assert any(finding.rule_id == "FF013" for finding in report.findings)
     assert baseline_snapshot.xml_mapping_controls == candidate_snapshot.xml_mapping_controls
     assert not any(finding.rule_id == "FF049" for finding in report.findings)
+
+
+def test_calculated_column_formula_metadata_changes_are_diffed_privately(tmp_path) -> None:
+    baseline = make_calculated_column_model(tmp_path / "baseline.xlsx")
+    candidate = make_calculated_column_model(tmp_path / "candidate.xlsx")
+    change_calculated_column_formula_metadata(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    table_change = next(
+        change for change in report.changes if change.kind == "table_definition_changed"
+    )
+    assert table_change.details["calculated_column_formula_material_changed"] is True
+    rendered = str(report.to_dict())
+    assert "A2*B2" not in rendered
+    assert "A2+B2" not in rendered
+    assert any(finding.rule_id == "FF013" for finding in report.findings)
 
 
 def test_data_validation_controls_are_profiled_without_exposing_criteria(tmp_path) -> None:

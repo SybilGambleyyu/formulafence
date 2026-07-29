@@ -162,6 +162,20 @@ class SheetSnapshot:
 
 
 @dataclass(frozen=True)
+class TableCalculatedColumnFormulaSnapshot:
+    """Private static fingerprint for one Excel Table calculated-column formula.
+
+    A table's formula text can reveal model logic, so the snapshot retains only
+    an internal copied-formula fingerprint. Linting uses it to compare nearby
+    table cells without publishing the master formula, table column name, or
+    table identity in a finding.
+    """
+
+    column_index: int
+    formula_fingerprint: str = field(repr=False)
+
+
+@dataclass(frozen=True)
 class TableSnapshot:
     """Inspectable Excel-table metadata that can change formula semantics."""
 
@@ -171,6 +185,9 @@ class TableSnapshot:
     columns: tuple[str, ...]
     header_row_count: int
     totals_row_count: int
+    calculated_column_formulas: tuple[TableCalculatedColumnFormulaSnapshot, ...] = (
+        field(default_factory=tuple, repr=False)
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return {

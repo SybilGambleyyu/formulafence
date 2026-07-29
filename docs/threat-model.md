@@ -34,7 +34,12 @@ financial correctness or replace model review.
   error-checking-suppression signal accepts only recognized stored per-range
   declarations and emits aggregate warning-category, suppression-rule, and
   target-range counts. It never exposes target ranges, decides whether a prompt
-  would apply, or claims that a suppression was incorrect. Its direct
+  would apply, or claims that a suppression was incorrect. Its Table
+  calculated-column signal accepts only a stored scalar table master formula
+  and an interior data cell bracketed by two immediate eligible formulas that
+  match its fingerprint. It skips first/last data rows, array territory,
+  uninspectable formulas, and longer or ambiguous exception runs; the stored
+  master formula and table identity remain private. Its direct
   circular-reference signal accepts only an ordinary formula with a resolved
   scalar static dependency directly back to itself while workbook `iterate` is
   absent or false (the OOXML default). Its separate multi-cell signal accepts
@@ -46,9 +51,10 @@ financial correctness or replace model review.
   array metadata makes the command fail closed. Its JSON, Markdown, and SARIF
   evidence contains only locations, peer coordinates where copied-pattern
   evidence needs them, static range coordinates, the two calculation-status
-  flags, aggregate error-checking suppression counts, direct- or multi-cell-
-  static scope, and a multi-cell component size, never formula text, cell
-  values, cached results, or ignored-error target ranges.
+  flags, aggregate error-checking suppression counts, Table exception kinds,
+  direct- or multi-cell-static scope, and a multi-cell component size, never
+  formula text, cell values, cached results, ignored-error target ranges, Table
+  identities, or Table master formulas.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not
@@ -432,8 +438,12 @@ A calculation-freshness finding means a formula workbook records manual mode
 and incomplete calculation before save. An error-checking-suppression finding
 means the workbook stores recognized Excel prompt suppressions; its aggregate
 counts do not reveal targets, determine whether a prompt applies, or judge the
-suppression. A direct-circular-reference finding means FormulaFence's resolved
-scalar static dependency returns to its own ordinary formula cell while
+suppression. A Table-calculated-column finding means an
+interior data cell differs while its immediate neighboring rows match the
+stored scalar Table master; it retains neither that master nor the Table
+identity and does not determine whether the exception was intentional. A
+direct-circular-reference finding means FormulaFence's resolved scalar static
+dependency returns to its own ordinary formula cell while
 calculation iteration is disabled. A multi-cell static-circular-reference
 finding means the formula belongs to a component of at least two ordinary
 formula cells connected through those resolved scalar dependencies; its

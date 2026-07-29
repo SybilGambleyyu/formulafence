@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,11 @@ from formulafence.models import (
 from formulafence.output import as_json, lint_to_markdown, lint_to_sarif
 from formulafence.workbook import load_snapshot
 
-from .helpers import make_formula_cached_result_model, make_ignored_error_model
+from .helpers import (
+    make_calculated_column_model,
+    make_formula_cached_result_model,
+    make_ignored_error_model,
+)
 
 
 def _snapshot(
@@ -432,6 +437,165 @@ def test_lint_reports_excel_error_checking_suppressions(tmp_path: Path) -> None:
         "suppressed_warning_rule_count": 11,
         "suppressed_warning_target_range_count": 5,
     }
+
+
+@pytest.mark.parametrize(
+    ("exception", "expected_kind"),
+    [
+        (None, "blank"),
+        (99, "non_formula_value"),
+        ("manual exception", "text_value"),
+        ("#DIV/0!", "stored_error_value"),
+        ("=A3+B3", "formula_mismatch"),
+    ],
+)
+def test_lint_reports_isolated_table_calculated_column_exceptions(
+    tmp_path: Path,
+    exception: object,
+    expected_kind: str,
+) -> None:
+    snapshot = load_snapshot(
+        make_calculated_column_model(
+            tmp_path / "calculated-column.xlsx",
+            exception=exception,
+        )
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF092", "medium", ("Private Table Sheet", "C3"))]
+    assert report.findings[0].details == {
+        "exception_kind": expected_kind,
+        "matching_adjacent_formula_peers": 2,
+        "evidence_scope": "table_calculated_column",
+    }
+    declaration = snapshot.tables["PRIVATE_RESULT_TABLE"].calculated_column_formulas
+    assert [(entry.column_index, entry.formula_fingerprint) for entry in declaration] == [
+        (3, "R[0]C[-2]*R[0]C[-1]")
+    ]
+
+
+def test_lint_keeps_table_calculated_column_boundary_and_array_exceptions_quiet(
+    tmp_path: Path,
+) -> None:
+    boundary = load_snapshot(
+        make_calculated_column_model(
+            tmp_path / "boundary.xlsx",
+            exception=None,
+            exception_coordinate="C2",
+        )
+    )
+    array_master = load_snapshot(
+        make_calculated_column_model(
+            tmp_path / "array.xlsx",
+            exception=99,
+            array_formula=True,
+        )
+    )
+
+    assert lint_snapshot(boundary).findings == []
+    assert array_master.tables["PRIVATE_RESULT_TABLE"].calculated_column_formulas == ()
+    assert lint_snapshot(array_master).findings == []
+
+
+def test_lint_matches_a_structured_reference_table_calculated_column_master(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_calculated_column_model(
+            tmp_path / "structured-master.xlsx",
+            exception=99,
+            structured_formula=True,
+        )
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.location)
+        for finding in report.findings
+    ] == [("FF092", ("Private Table Sheet", "C3"))]
+
+
+def test_lint_table_calculated_column_leaves_explicit_broken_formula_to_ff088(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_calculated_column_model(
+            tmp_path / "broken-formula.xlsx",
+            exception="=IFERROR(#REF!,0)",
+        )
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF088", "critical", ("Private Table Sheet", "C3"))]
+
+
+def test_lint_table_calculated_column_signal_does_not_repeat_stronger_copy_pattern(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_calculated_column_model(
+            tmp_path / "copied-pattern.xlsx",
+            exception=99,
+            data_row_count=4,
+        )
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF082", "medium", ("Private Table Sheet", "C3"))]
+
+
+def test_lint_table_calculated_column_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_calculated_column_model(
+            tmp_path / "too-many-exceptions.xlsx",
+            data_row_count=5,
+            exceptions={"C3": 99, "C5": 99},
+        )
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
+def test_lint_table_calculated_column_does_not_walk_an_oversized_sparse_ref(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(make_calculated_column_model(tmp_path / "sparse.xlsx"))
+    cells = dict(snapshot.cells)
+    cells.pop(("Private Table Sheet", "C3"))
+    table = snapshot.tables["PRIVATE_RESULT_TABLE"]
+    sparse_snapshot = replace(
+        snapshot,
+        cells=cells,
+        tables={
+            "PRIVATE_RESULT_TABLE": replace(table, ref="A1:C1048576"),
+        },
+    )
+
+    report = lint_snapshot(sparse_snapshot)
+
+    assert [
+        (finding.rule_id, finding.location)
+        for finding in report.findings
+    ] == [("FF092", ("Private Table Sheet", "C3"))]
 
 
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
@@ -1217,6 +1381,52 @@ def test_lint_error_checking_suppression_renderers_keep_targets_private(
                 "text": (
                     "Workbook suppresses Excel error-checking prompts; review warnings may "
                     "be hidden."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_table_calculated_column_renderers_keep_master_formula_private(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_calculated_column_model(
+            tmp_path / "private-table-exception.xlsx",
+            exception="=A3+B3",
+        )
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "PRIVATE_RESULT_TABLE" not in rendered
+        assert "Private Result" not in rendered
+        assert "=A2*B2" not in rendered
+        assert "=A3+B3" not in rendered
+        assert "FF092" in rendered
+    assert "## Excel Table calculated-column evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == (
+        "'Private Table Sheet'!C3"
+    )
+    assert result["properties"] == {
+        "severity": "medium",
+        "exception_kind": "formula_mismatch",
+        "matching_adjacent_formula_peers": 2,
+        "evidence_scope": "table_calculated_column",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF092",
+            "name": "FF092",
+            "shortDescription": {
+                "text": (
+                    "An interior Excel Table cell differs from its declared "
+                    "calculated-column formula."
                 )
             },
         }

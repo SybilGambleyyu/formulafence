@@ -364,8 +364,8 @@ def build_parser() -> argparse.ArgumentParser:
         "lint",
         help=(
             "Find conservative formula, aggregate-range, protection, calculation, and "
-            "error-checking-suppression, static-circular-reference, broken-reference, "
-            "and saved-result risks"
+            "error-checking-suppression, table-calculated-column, static-circular-reference, "
+            "broken-reference, and saved-result risks"
         ),
     )
     lint.add_argument("workbook", type=Path)

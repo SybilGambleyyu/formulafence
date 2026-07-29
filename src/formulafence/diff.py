@@ -487,6 +487,13 @@ def _workbook_control_changes(
             "before": old_table.to_dict() if old_table else None,
             "after": new_table.to_dict() if new_table else None,
         }
+        if (
+            old_table is not None
+            and new_table is not None
+            and old_table.calculated_column_formulas
+            != new_table.calculated_column_formulas
+        ):
+            details["calculated_column_formula_material_changed"] = True
         changes.append(
             Change(
                 "table_definition_changed",

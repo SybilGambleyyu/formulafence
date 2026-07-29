@@ -5,6 +5,59 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Excel Table calculated-column exception lint — 2026-07-28
+
+Microsoft's [formula-error guidance](https://support.microsoft.com/en-US/Excel/detect-formula-errors-in-excel)
+defines an inconsistent calculated-column formula as a Table exception and
+lists typed values, copied formulas that do not match, and overwritten formulas
+among its causes. SpreadsheetML's
+[`calculatedColumnFormula`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.calculatedcolumnformula?view=openxml-3.0.1)
+stores the formula used to calculate each cell in a Table column, including its
+same-row structured-reference semantics. `FF092` therefore reports a
+medium-severity review prompt only for an isolated interior data cell whose
+immediate preceding and following cells match a stored scalar master formula.
+It does not decide whether an exception was intentional or whether Excel would
+display an error prompt.
+
+The loader fingerprints a Table master at its first data-row origin, allowing
+A1-relative formulas and structured references to compare without evaluating a
+formula. Array-style declarations, explicit broken-reference master
+declarations or formula cells (which remain the separate `FF088` boundary),
+empty Table bodies, table edges, array territory, uninspectable formula cells,
+and wider or contiguous exception runs remain outside the boundary. The lint
+indexes existing snapshot cells rather than expanding a Table range, so a sparse
+oversized table cannot force a grid scan. It retains only a location, exception
+kind, and two matching-peer count; table names, column names, and master or
+exception formula text remain private.
+
+Controlled fixtures cover blank, numeric, text, stored-error, and formula
+exceptions; A1-relative master normalization; first-row edge exclusion;
+structured-reference master normalization; array-master exclusion;
+explicit-broken-reference de-duplication; duplicate suppression when the
+stronger three-peer copied-formula lint already reports a target; the shared
+cap; a sparse 1,048,576-row Table declaration; JSON/Markdown/SARIF redaction; and
+medium-versus-high CLI gates. A private Table-master-only diff test proves that
+formula metadata changes are classified without rendering either formula.
+
+The independent scan used the ten public
+[ExceLint test-data workbooks](https://github.com/ExceLint/ExceLint/tree/e8a8efd252a090945be8683ed42cfd714e8bb4b1/ExceLintTests/TestData),
+Calamine's
+[`table_with_insertrow_attribute.xlsx`](https://github.com/tafia/calamine/blob/f059beb13f733923f229c2977cb469443d3ddf07/tests/table_with_insertrow_attribute.xlsx),
+and four public
+[ClosedXML workbook resources](https://github.com/ClosedXML/ClosedXML/tree/6762b849342809be95467cdfbe426a64ad11d2bd/ClosedXML.Tests/Resource).
+Those 15 workbooks contained 51,094 formula cells, 34 Tables, and 10 eligible
+stored calculated-column masters; the candidate emitted zero `FF092` findings.
+This is a prevalence check, not proof that the files contain no intentional or
+runtime-dependent exceptions.
+
+The release-versioned 0.193.0 source tree passed **1,383 tests in 94.61
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment with declared dependencies, reporting `FormulaFence 0.193.0`.
+Both reproduced one redacted `FF092` finding: the high gate returned `0`, the
+medium gate returned `1` for the wheel, and the source-install SARIF result
+retained only the location and safe exception metadata.
+
 ## Excel error-checking suppression lint — 2026-07-28
 
 Microsoft's [formula-error guidance](https://support.microsoft.com/en-US/Excel/detect-formula-errors-in-excel)

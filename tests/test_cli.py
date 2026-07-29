@@ -45,6 +45,7 @@ from .helpers import (
     change_unqualified_runtime_function_input,
     change_worksheet_code_resource_registration_call,
     change_worksheet_code_resource_registration_input,
+    make_calculated_column_model,
     make_formula_cached_result_model,
     make_formula_dde_link_model,
     make_formula_defined_xlm_action_model,
@@ -257,6 +258,16 @@ def test_lint_incomplete_manual_formula_calculation_is_medium(tmp_path) -> None:
 
 def test_lint_error_checking_suppression_is_medium(tmp_path) -> None:
     workbook_path = make_ignored_error_model(tmp_path / "ignored-errors.xlsx")
+
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "medium"]) == 1
+
+
+def test_lint_table_calculated_column_exception_is_medium(tmp_path) -> None:
+    workbook_path = make_calculated_column_model(
+        tmp_path / "calculated-column.xlsx",
+        exception=99,
+    )
 
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 0
     assert main(["lint", str(workbook_path), "--fail-on", "medium"]) == 1

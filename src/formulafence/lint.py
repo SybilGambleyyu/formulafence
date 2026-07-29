@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from numbers import Real
 
-from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
+from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter, range_boundaries
 
 from formulafence.formulas import (
     MAX_EXCEL_COLUMN,
@@ -144,6 +144,133 @@ def _eligible_formula(
         and cell.formula_fingerprint is not None
         and location not in snapshot.tokenization_failure_cells
         and not _is_array_member(snapshot, location, array_ranges_by_sheet)
+    )
+
+
+def _matches_table_calculated_column_formula(
+    snapshot: WorkbookSnapshot,
+    location: CellKey,
+    formula_fingerprint: str,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+) -> bool:
+    """Return whether one ordinary formula matches a Table master fingerprint."""
+    return bool(
+        _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        and snapshot.cells[location].formula_fingerprint == formula_fingerprint
+    )
+
+
+def _table_calculated_column_exception_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    formula_pattern_locations: set[CellKey],
+    max_formula_pattern_findings: int,
+    existing_finding_count: int,
+) -> tuple[tuple[CellKey, str], ...]:
+    """Return isolated interior exceptions to stored Excel Table master formulas.
+
+    A calculated-column declaration is stronger evidence than a generic copied
+    formula pattern, but the first and last table rows can be intentional
+    exceptions (for example, a running comparison with no prior row). This
+    accepts only a cell strictly inside the data body when its immediate rows
+    above and below are eligible formulas matching the same declared master.
+    It indexes existing snapshot cells rather than walking declared table
+    rectangles, so an oversized sparse table cannot turn linting into a grid
+    scan. Array territory and uninspectable formula cells remain outside the
+    boundary. The same shared finding cap as the other formula signals applies
+    while candidates are retained.
+    """
+    cells_by_sheet_column: dict[tuple[str, int], list[tuple[int, CellKey]]] = (
+        defaultdict(list)
+    )
+    for location in snapshot.cells:
+        row, column = coordinate_to_tuple(location[1])
+        cells_by_sheet_column[(location[0], column)].append((row, location))
+    for locations in cells_by_sheet_column.values():
+        locations.sort()
+
+    candidates: dict[CellKey, str] = {}
+    for table in sorted(
+        snapshot.tables.values(),
+        key=lambda table: (table.sheet.casefold(), table.name.casefold()),
+    ):
+        if not table.calculated_column_formulas:
+            continue
+        try:
+            min_column, min_row, max_column, max_row = range_boundaries(table.ref)
+        except ValueError:
+            continue
+        first_data_row = min_row + table.header_row_count
+        last_data_row = max_row - table.totals_row_count
+        if first_data_row + 2 > last_data_row:
+            continue
+        for declaration in table.calculated_column_formulas:
+            column = min_column + declaration.column_index - 1
+            if not min_column <= column <= max_column:
+                continue
+            matching_rows = [
+                row
+                for row, location in cells_by_sheet_column.get((table.sheet, column), ())
+                if (
+                    first_data_row <= row <= last_data_row
+                    and _matches_table_calculated_column_formula(
+                        snapshot,
+                        location,
+                        declaration.formula_fingerprint,
+                        array_ranges_by_sheet,
+                    )
+                )
+            ]
+            for preceding_row, following_row in zip(
+                matching_rows,
+                matching_rows[1:],
+                strict=False,
+            ):
+                if following_row != preceding_row + 2:
+                    continue
+                target_row = preceding_row + 1
+                if not first_data_row < target_row < last_data_row:
+                    continue
+                location = table.sheet, f"{get_column_letter(column)}{target_row}"
+                if location in formula_pattern_locations:
+                    continue
+                if _is_array_member(snapshot, location, array_ranges_by_sheet):
+                    continue
+                target = snapshot.cells.get(location)
+                if target is None:
+                    exception_kind = "blank"
+                elif target.is_formula:
+                    if (
+                        location in snapshot.broken_references
+                        or not _eligible_formula(
+                            snapshot,
+                            location,
+                            array_ranges_by_sheet,
+                        )
+                    ):
+                        continue
+                    exception_kind = "formula_mismatch"
+                elif target.cell_type == "error":
+                    exception_kind = "stored_error_value"
+                elif isinstance(target.value, str):
+                    exception_kind = "text_value"
+                else:
+                    exception_kind = "non_formula_value"
+                if location in candidates:
+                    continue
+                if (
+                    existing_finding_count + len(candidates)
+                    >= max_formula_pattern_findings
+                ):
+                    raise FormulaFenceError(
+                        "Formula lint exceeds "
+                        "max_formula_pattern_findings="
+                        f"{max_formula_pattern_findings}."
+                    )
+                candidates[location] = exception_kind
+    return tuple(
+        sorted(candidates.items(), key=lambda candidate: _location_sort_key(candidate[0]))
     )
 
 
@@ -636,8 +763,9 @@ def lint_snapshot(
     short, contiguous numeric run on the same row or column. It also reports
     an explicitly unlocked formula on a protected sheet, an explicit incomplete
     manual-calculation state for a formula workbook, stored error-checking
-    suppressions, direct and multi-cell static circular references while
-    iteration is disabled, an explicit broken reference operand, and a saved
+    suppressions, isolated interior Excel Table calculated-column exceptions,
+    direct and multi-cell static circular references while iteration is
+    disabled, an explicit broken reference operand, and a saved
     broken-reference result. It never evaluates formulas, and rejects
     incomplete array metadata before claiming ordinary-cell coverage.
     """
@@ -745,6 +873,7 @@ def lint_snapshot(
                 )
             )
 
+    formula_pattern_locations = set(candidates)
     findings: list[Finding] = []
     for location in sorted(candidates, key=_location_sort_key):
         candidate = candidates[location]
@@ -861,6 +990,29 @@ def lint_snapshot(
                     "may be hidden."
                 ),
                 details=details,
+            )
+        )
+    for location, exception_kind in _table_calculated_column_exception_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        formula_pattern_locations=formula_pattern_locations,
+        max_formula_pattern_findings=max_formula_pattern_findings,
+        existing_finding_count=len(findings),
+    ):
+        findings.append(
+            Finding(
+                rule_id="FF092",
+                severity="medium",
+                message=(
+                    "An interior Excel Table cell differs from its declared "
+                    "calculated-column formula."
+                ),
+                location=location,
+                details={
+                    "exception_kind": exception_kind,
+                    "matching_adjacent_formula_peers": 2,
+                    "evidence_scope": "table_calculated_column",
+                },
             )
         )
     direct_self_reference_locations = _direct_self_reference_locations(

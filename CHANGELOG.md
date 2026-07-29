@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.193.0 — 2026-07-28
+
+- Add medium-severity `FF092` to `formulafence lint`: it reports an isolated
+  interior Excel Table cell that differs from a stored scalar
+  calculated-column master while its immediate neighboring data cells match.
+- Fingerprint Table master formulas privately at the first data-row origin,
+  support A1-relative and structured-reference spellings without evaluation,
+  and retain only location, exception kind, and peer count in lint output.
+  Table edges, array-style masters/territory, uninspectable formulas, wider
+  runs, and targets already covered by the stronger three-peer copy signal stay
+  quiet. Table-master-only changes remain visible to semantic diff without
+  exposing formula text.
+
 ## 0.192.0 — 2026-07-28
 
 - Add medium-severity `FF091` to `formulafence lint`: it reports recognized

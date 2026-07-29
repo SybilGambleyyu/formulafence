@@ -6541,6 +6541,25 @@ def lint_to_markdown(
                     call_count=_markdown_escape(evidence["choose_call_count"]),
                 )
             )
+    randbetween_literal_bound_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF098"
+    ]
+    if randbetween_literal_bound_evidence:
+        lines.extend(["## RANDBETWEEN literal-bound evidence", ""])
+        for location, evidence in randbetween_literal_bound_evidence:
+            lines.append(
+                "- {location}: {bound_count} direct literal-bound RANDBETWEEN calls "
+                "across {call_count} calls have a bottom above the top."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    bound_count=_markdown_escape(
+                        evidence["inverted_literal_bound_count"]
+                    ),
+                    call_count=_markdown_escape(evidence["randbetween_call_count"]),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6629,6 +6648,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         ),
         "FF097": (
             "A CHOOSE call uses a literal index outside its available value arguments."
+        ),
+        "FF098": (
+            "A RANDBETWEEN call uses direct literal bounds with the bottom above "
+            "the top."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

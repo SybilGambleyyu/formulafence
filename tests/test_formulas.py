@@ -24,6 +24,7 @@ from formulafence.formulas import (
     parse_external_workbook_structured_reference,
     parse_external_workbook_three_d_reference,
     parse_workbook_defined_name_alias,
+    randbetween_literal_bound_mismatch_count,
     sumproduct_range_shape_mismatches,
 )
 from formulafence.models import (
@@ -292,6 +293,43 @@ def test_choose_literal_index_mismatch_count_keeps_ambiguous_forms_quiet() -> No
 
     for formula in quiet_formulas:
         assert choose_literal_index_mismatch_count(formula) == 0
+
+
+def test_randbetween_literal_bound_mismatch_count_finds_direct_native_calls() -> None:
+    assert randbetween_literal_bound_mismatch_count("=RANDBETWEEN(5,4)") == 1
+    assert randbetween_literal_bound_mismatch_count("=@RANDBETWEEN(+0005,4)") == 1
+    assert randbetween_literal_bound_mismatch_count("=RANDBETWEEN(-1,-2)") == 1
+    assert randbetween_literal_bound_mismatch_count(
+        "=RANDBETWEEN(9999999999999999999999999999,1)"
+    ) == 1
+    assert randbetween_literal_bound_mismatch_count(
+        "=IFERROR(RANDBETWEEN(2,1)+RANDBETWEEN(-10,-11),0)"
+    ) == 2
+
+
+def test_randbetween_literal_bound_mismatch_count_keeps_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=RANDBETWEEN(4,5)",
+        "=RANDBETWEEN(4,4)",
+        "=RANDBETWEEN(-2,-1)",
+        "=RANDBETWEEN(-000,0)",
+        "=RANDBETWEEN(A2,4)",
+        "=RANDBETWEEN(1+4,4)",
+        "=RANDBETWEEN(--5,4)",
+        "=RANDBETWEEN(5,4.0)",
+        "=RANDBETWEEN(5E0,4)",
+        "=RANDBETWEEN({5},4)",
+        "=RANDBETWEEN(5)",
+        "=RANDBETWEEN(5,4,3)",
+        "=RANDBETWEEN(,4)",
+        "=RANDBETWEEN(5,)",
+        "=RANDBETWEEN(5,#REF!)",
+        "=Vendor.RANDBETWEEN(5,4)",
+        "=_xlfn.RANDBETWEEN(5,4)",
+    )
+
+    for formula in quiet_formulas:
+        assert randbetween_literal_bound_mismatch_count(formula) == 0
 
 
 def test_extract_references_keeps_external_workbooks_separate() -> None:

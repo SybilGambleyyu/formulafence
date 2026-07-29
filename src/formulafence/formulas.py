@@ -2196,6 +2196,65 @@ def _direct_positive_integer_literal(
     return value if value not in {None, "0"} else None
 
 
+def _direct_signed_integer_literal(
+    tokens: Sequence[object], start: int, end: int
+) -> tuple[bool, str] | None:
+    """Return a direct signed integer literal without evaluating it.
+
+    The result is ``(is_negative, normalized_digits)``. A zero literal is
+    always normalized as nonnegative, including ``-0``. As with the unsigned
+    helper above, this deliberately keeps arbitrarily long literal values as
+    strings. One unary ``+`` or ``-`` is accepted; repeated signs, decimals,
+    scientific notation, arithmetic, names, and references stay outside this
+    static contract.
+    """
+    meaningful = [
+        position
+        for position in range(start, end)
+        if not _is_whitespace(tokens[position])
+    ]
+    is_negative = False
+    if len(meaningful) == 2:
+        prefix = tokens[meaningful[0]]
+        if (
+            getattr(prefix, "type", None) != "OPERATOR-PREFIX"
+            or str(getattr(prefix, "value", "")) not in {"+", "-"}
+        ):
+            return None
+        is_negative = str(getattr(prefix, "value", "")) == "-"
+        meaningful = meaningful[1:]
+    if len(meaningful) != 1:
+        return None
+    token = tokens[meaningful[0]]
+    if not (
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "NUMBER"
+    ):
+        return None
+    value = str(getattr(token, "value", "")).strip()
+    if not value.isascii() or not value.isdecimal():
+        return None
+    normalized = value.lstrip("0") or "0"
+    return (is_negative and normalized != "0", normalized)
+
+
+def _compare_signed_integer_literals(
+    left: tuple[bool, str], right: tuple[bool, str]
+) -> int:
+    """Compare two normalized signed integer literals without integer conversion."""
+    left_negative, left_digits = left
+    right_negative, right_digits = right
+    if left_negative != right_negative:
+        return -1 if left_negative else 1
+    if len(left_digits) != len(right_digits):
+        magnitude_comparison = -1 if len(left_digits) < len(right_digits) else 1
+    elif left_digits != right_digits:
+        magnitude_comparison = -1 if left_digits < right_digits else 1
+    else:
+        magnitude_comparison = 0
+    return -magnitude_comparison if left_negative else magnitude_comparison
+
+
 def _positive_integer_literal_exceeds(value: str, limit: int) -> bool:
     """Return whether normalized decimal ``value`` is greater than ``limit``."""
     limit_text = str(limit)
@@ -2467,6 +2526,51 @@ def choose_literal_index_mismatch_count(formula: str) -> int:
             index_literal,
             value_argument_count,
         ):
+            mismatch_count += 1
+    return mismatch_count
+
+
+def randbetween_literal_bound_mismatch_count(formula: str) -> int:
+    """Count provably inverted direct-literal bounds in ``RANDBETWEEN`` calls.
+
+    This scans formula tokens only; it does not calculate a random value,
+    resolve names, or infer referenced values. A call is deliberately ignored
+    unless it is an unqualified native ``RANDBETWEEN`` (optionally preceded by
+    ``@``), has exactly two arguments, and supplies one direct signed decimal
+    integer literal for each bound. A finding is returned only when the first
+    literal is greater than the second. Decimal/scientific notation, computed
+    expressions, references, arrays, malformed calls, explicit broken
+    references, and arbitrary namespaces remain outside this narrow contract.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return 0
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return 0
+
+    mismatch_count = 0
+    for position, token in enumerate(tokens):
+        if _unqualified_native_function_name(token) != "RANDBETWEEN":
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if len(arguments) != 2:
+            continue
+        bottom = _direct_signed_integer_literal(tokens, *arguments[0])
+        top = _direct_signed_integer_literal(tokens, *arguments[1])
+        if bottom is None or top is None:
+            continue
+        if _compare_signed_integer_literals(bottom, top) > 0:
             mismatch_count += 1
     return mismatch_count
 

@@ -81,6 +81,23 @@ financial correctness or replace model review.
   references, and all array territory stay outside the boundary. It emits only
   a location plus aggregate call and out-of-range-literal-index counts;
   formulas, range spellings, and source sheets remain private.
+  Its `CHOOSE` literal-index signal accepts only the unqualified native spelling
+  (optionally with `@`) with one through 254 nonempty value arguments and one
+  direct bare nonnegative decimal index. It reports only a zero index or one
+  above the supplied value-argument count, without inspecting selected values.
+  Computed, signed, decimal, array, dynamic, malformed, explicit-broken-
+  reference, and namespaced forms, plus all array territory, stay outside the
+  boundary. It emits only a location plus aggregate call and out-of-range-
+  literal-index counts; formulas, values, and source sheets remain private.
+  Its `RANDBETWEEN` literal-bound signal accepts only the unqualified native
+  spelling (optionally with `@`) with exactly two direct decimal integer
+  literals, each optionally preceded by one unary `+` or `-`. It reports only
+  when the bottom literal is greater than the top literal, without calculating
+  a random value. Decimal/scientific, computed, reference, array, malformed,
+  explicit-broken-reference, and namespaced forms, plus all array territory,
+  stay outside the boundary. It emits only a location plus aggregate call and
+  inverted-literal-bound counts; formulas, literal values, and source sheets
+  remain private.
   Its direct
   circular-reference signal accepts only an ordinary formula with a resolved
   scalar static dependency directly back to itself while workbook `iterate` is
@@ -96,9 +113,11 @@ financial correctness or replace model review.
   flags, aggregate error-checking suppression counts, Table exception kinds,
   conditional-aggregate and `SUMPRODUCT` mismatch counts, `MMULT`
   incompatible-matrix-pair counts, legacy-lookup out-of-range-literal-index
-  counts, direct- or multi-cell-static scope, and a multi-cell component size,
-  never formula text, cell values, cached results, ignored-error target ranges,
-  direct conditional-aggregate, `SUMPRODUCT`, `MMULT`, or legacy-lookup ranges,
+  counts, `CHOOSE` out-of-range-literal-index counts, `RANDBETWEEN`
+  inverted-literal-bound counts, direct- or multi-cell-static scope, and a
+  multi-cell component size, never formula text, cell values, cached results,
+  ignored-error target ranges, direct conditional-aggregate, `SUMPRODUCT`,
+  `MMULT`, legacy-lookup ranges, `CHOOSE` values, `RANDBETWEEN` literal values,
   Table identities, or Table master formulas.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web

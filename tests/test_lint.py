@@ -789,14 +789,15 @@ def test_lint_structural_formula_rules_share_the_finding_cap(
             "A4": "=MMULT(A2:B4,C2:D5)",
             "A5": "=VLOOKUP(A2,C2:D4,3,FALSE)",
             "A6": "=CHOOSE(0,A2)",
+            "A7": "=RANDBETWEEN(2,1)",
         },
     )
 
     with pytest.raises(
         FormulaFenceError,
-        match="max_formula_pattern_findings=3",
+        match="max_formula_pattern_findings=5",
     ):
-        lint_snapshot(snapshot, max_formula_pattern_findings=3)
+        lint_snapshot(snapshot, max_formula_pattern_findings=5)
 
 
 def test_lint_reports_direct_mmult_dimension_mismatches(
@@ -1077,6 +1078,112 @@ def test_lint_choose_literal_index_candidates_share_the_finding_cap(
             "B4": "=A4*2",
             "B5": "=A5*2",
             "E2": "=CHOOSE(0,A2)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
+def test_lint_reports_direct_randbetween_literal_bound_mismatches(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": "=IFERROR(RANDBETWEEN(2,1)+@RANDBETWEEN(-10,-11),0)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF098", "high", ("Model", "E2"))]
+    assert report.findings[0].details == {
+        "randbetween_call_count": 2,
+        "inverted_literal_bound_count": 2,
+        "evidence_scope": "randbetween_direct_signed_integer_bounds",
+    }
+
+
+def test_lint_randbetween_literal_bound_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=RANDBETWEEN(1,2)",
+            "A3": "=RANDBETWEEN(2,2)",
+            "A4": "=RANDBETWEEN(-2,-1)",
+            "A5": "=RANDBETWEEN(B5,1)",
+            "A6": "=RANDBETWEEN(1+2,1)",
+            "A7": "=RANDBETWEEN(2,1.0)",
+            "A8": "=RANDBETWEEN({2},1)",
+            "A9": "=RANDBETWEEN(2)",
+            "A10": "=RANDBETWEEN(2,1,0)",
+            "A11": "=RANDBETWEEN(2,#REF!)",
+            "A12": "=Vendor.RANDBETWEEN(2,1)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert "FF098" not in {finding.rule_id for finding in report.findings}
+
+    array_territory = _snapshot(tmp_path, {"B2": "=RANDBETWEEN(2,1)"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF098" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_randbetween_literal_bound_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=RANDBETWEEN(1,2)",
+            "B3": "=RANDBETWEEN(2,1)",
+            "B4": "=RANDBETWEEN(1,2)",
+            "B5": "=RANDBETWEEN(1,2)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF098", "high", ("Model", "B3"))]
+
+
+def test_lint_randbetween_literal_bound_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=RANDBETWEEN(2,1)",
         },
     )
 
@@ -2136,6 +2243,49 @@ def test_lint_choose_literal_index_renderers_keep_values_private(
                 "text": (
                     "A CHOOSE call uses a literal index outside its available "
                     "value arguments."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_randbetween_literal_bound_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=RANDBETWEEN(99,1)+N('Private Inputs confidential')",
+        },
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "confidential" not in rendered
+        assert "RANDBETWEEN(99,1)" not in rendered
+        assert "FF098" in rendered
+    assert "## RANDBETWEEN literal-bound evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "randbetween_call_count": 1,
+        "inverted_literal_bound_count": 1,
+        "evidence_scope": "randbetween_direct_signed_integer_bounds",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF098",
+            "name": "FF098",
+            "shortDescription": {
+                "text": (
+                    "A RANDBETWEEN call uses direct literal bounds with the bottom "
+                    "above the top."
                 )
             },
         }

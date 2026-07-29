@@ -18,6 +18,7 @@ from formulafence.formulas import (
     lookup_return_index_mismatches,
     mmult_dimension_mismatch_count,
     parse_reference_token,
+    randbetween_literal_bound_mismatch_count,
     sumproduct_range_shape_mismatches,
 )
 from formulafence.models import (
@@ -480,6 +481,47 @@ def _choose_literal_index_candidates(
         if formula is None:
             continue
         mismatch_count = choose_literal_index_mismatch_count(formula)
+        if not mismatch_count:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append((location, mismatch_count))
+    return tuple(candidates)
+
+
+def _randbetween_literal_bound_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int], ...]:
+    """Return cells with provably inverted literal ``RANDBETWEEN`` bounds.
+
+    The formula helper accepts only native ``RANDBETWEEN`` calls (optionally
+    preceded by ``@``), exactly two arguments, and direct signed integer
+    literals for both bounds. This layer adds workbook context: ordinary
+    inspectable formula cells only, no array territory, and no explicit
+    broken-reference operand. Findings retain only an aggregate count, never
+    formula text, literal values, or source sheet identity.
+    """
+    candidates: list[tuple[CellKey, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        mismatch_count = randbetween_literal_bound_mismatch_count(formula)
         if not mismatch_count:
             continue
         if (
@@ -987,9 +1029,10 @@ def lint_snapshot(
     direct static conditional-aggregate and ``SUMPRODUCT`` range-shape
     mismatches, direct static ``MMULT`` matrix-dimension mismatches, direct
     static legacy-lookup return-index mismatches, direct static ``CHOOSE``
-    literal-index mismatches, direct and multi-cell static circular references
-    while iteration is disabled, an explicit broken reference operand, and a
-    saved broken-reference result. It never evaluates formulas, and rejects
+    literal-index mismatches, direct literal ``RANDBETWEEN`` bound mismatches,
+    direct and multi-cell static circular references while iteration is
+    disabled, an explicit broken reference operand, and a saved
+    broken-reference result. It never evaluates formulas, and rejects
     incomplete array metadata before claiming ordinary-cell coverage.
     """
     if max_formula_pattern_findings < 1:
@@ -1045,6 +1088,18 @@ def lint_snapshot(
         ),
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
+    randbetween_candidates = _randbetween_literal_bound_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=(
+            len(conditional_aggregate_candidates)
+            + len(sumproduct_candidates)
+            + len(mmult_candidates)
+            + len(lookup_candidates)
+            + len(choose_candidates)
+        ),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
     structural_formula_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
@@ -1055,6 +1110,9 @@ def lint_snapshot(
     structural_formula_locations.update(location for location, _ in mmult_candidates)
     structural_formula_locations.update(location for location, _ in lookup_candidates)
     structural_formula_locations.update(location for location, _ in choose_candidates)
+    structural_formula_locations.update(
+        location for location, _ in randbetween_candidates
+    )
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
     for preceding_location in sorted(snapshot.cells, key=_location_sort_key):
@@ -1136,6 +1194,8 @@ def lint_snapshot(
                     + len(sumproduct_candidates)
                     + len(mmult_candidates)
                     + len(lookup_candidates)
+                    + len(choose_candidates)
+                    + len(randbetween_candidates)
                     >= max_formula_pattern_findings
                 ):
                     raise FormulaFenceError(
@@ -1303,6 +1363,29 @@ def lint_snapshot(
                     "choose_call_count": choose_call_count,
                     "out_of_range_literal_index_count": choose_call_count,
                     "evidence_scope": "choose_literal_index_value_arity",
+                },
+            )
+        )
+
+    for location, randbetween_call_count in randbetween_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF098",
+                severity="high",
+                message=(
+                    "A RANDBETWEEN call uses direct literal bounds with the bottom "
+                    "above the top."
+                ),
+                location=location,
+                details={
+                    "randbetween_call_count": randbetween_call_count,
+                    "inverted_literal_bound_count": randbetween_call_count,
+                    "evidence_scope": "randbetween_direct_signed_integer_bounds",
                 },
             )
         )

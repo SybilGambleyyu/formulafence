@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.199.0/formulafence-0.199.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.200.0/formulafence-0.200.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -68,7 +68,8 @@ for the current version.
 check for copy-paste, aggregate-range, protection, calculation-freshness,
 error-checking-suppression, Excel Table calculated-column, static-circular-reference,
 conditional-aggregate and `SUMPRODUCT` range-shape, `MMULT` matrix-dimension,
-legacy-lookup return-index, explicit-broken-reference, and saved-result risks
+legacy-lookup return-index, `RANDBETWEEN` literal-bound, explicit-broken-reference,
+and saved-result risks
 that a version diff cannot see. It reports a copied-formula interruption only
 when the immediately preceding and following formulas have the same
 relative-copy fingerprint and a third contiguous peer repeats that fingerprint.
@@ -76,9 +77,10 @@ It also recognizes narrow aggregate-range, formula-protection,
 calculation-freshness, stored error-checking suppression, interior Table
 calculated-column exception, direct and multi-cell static circular-reference,
 direct conditional-aggregate and `SUMPRODUCT` range-shape, direct static
-`MMULT` matrix-dimension, direct static legacy-lookup return-index,
-explicit-broken-reference, and saved broken-reference-result signals. Together
-these produce fifteen reviewable findings:
+`MMULT` matrix-dimension, direct static legacy-lookup return-index, direct
+literal `RANDBETWEEN` bounds, explicit-broken-reference, and saved
+broken-reference-result signals. Together these produce seventeen reviewable
+findings:
 
 - `FF082`: a non-formula interruption. Blanks and stored error values are high;
   numeric/manual values are medium; textual markers are low.
@@ -113,13 +115,16 @@ these produce fifteen reviewable findings:
   index outside its direct static table range.
 - `FF097` (high): a native `CHOOSE` call uses a literal index outside its
   available value arguments.
+- `FF098` (high): a native `RANDBETWEEN` call uses direct literal bounds with
+  the bottom above the top.
 
 Use `--fail-on critical` to gate explicit broken-reference operands, or
 `--fail-on high` to also gate blank/error interruptions and direct static
 self-references, multi-cell static cycles, direct conditional-aggregate or
 `SUMPRODUCT` range-shape mismatches, direct static `MMULT` matrix-dimension
 mismatches, direct static legacy-lookup return-index mismatches, direct static
-`CHOOSE` literal-index mismatches, and saved broken-reference results.
+`CHOOSE` literal-index mismatches, direct literal `RANDBETWEEN` bound
+mismatches, and saved broken-reference results.
 Use `--fail-on medium` to additionally require review of manual-value,
 formula-outlier, aggregate-range, explicit formula-protection,
 incomplete-manual-calculation, error-checking-suppression, and Table
@@ -192,6 +197,15 @@ array-formula territory; and arbitrary namespaces stay quiet. Its evidence
 retains only the affected location, number of qualifying calls, and number of
 out-of-range literal indices—never a formula, value argument, or source sheet
 identity.
+`FF098` accepts only native `RANDBETWEEN` calls (optionally with `@`) with
+exactly two direct decimal integer literals, each optionally preceded by one
+unary `+` or `-`. It reports only when the bottom literal exceeds the top
+literal, without calculating a random value. Decimal or scientific notation,
+computed expressions, references, arrays, malformed calls, explicit
+broken-reference operands, array-formula territory, and arbitrary namespaces
+stay quiet. Its evidence retains only the affected location, number of
+qualifying calls, and number of inverted literal-bound pairs—never a formula,
+literal value, or source sheet identity.
 `FF090`
 uses only a strongly connected component of
 resolved scalar static dependencies with at least two eligible ordinary formula
@@ -205,10 +219,10 @@ coordinates, calculation-status flags, direct- or multi-cell-static scope, a
 multi-cell component size, saved-result facts, aggregate error-checking
 suppression counts, Table exception kinds, conditional-aggregate mismatch
 counts, `SUMPRODUCT` mismatch counts, and `MMULT` incompatible-matrix-pair
-counts, and legacy-lookup out-of-range-literal-index counts—never formula text,
-cached values, ignored-error target ranges, direct conditional-aggregate,
-`SUMPRODUCT`, `MMULT`, or legacy-lookup range spellings, or Table master
-formulas. `FF089` accepts
+counts, legacy-lookup out-of-range-literal-index counts, and `RANDBETWEEN`
+inverted-literal-bound counts—never formula text, cached values, ignored-error
+target ranges, direct conditional-aggregate, `SUMPRODUCT`, `MMULT`, or
+legacy-lookup range spellings, or Table master formulas. `FF089` accepts
 only a valid saved formula-result cache whose exact
 error is `#REF!`; other saved errors, missing or malformed cache records, and
 locations already covered by `FF088` stay quiet. It is a high-severity record
@@ -238,7 +252,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.199.0
+  uses: SybilGambleyyu/formulafence@v0.200.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.200.0 — 2026-07-28
+
+- Add high-severity `FF098` to `formulafence lint`: it reports an unqualified
+  native `RANDBETWEEN` call only when two direct integer literal bounds are
+  provably inverted.
+- Keep the rule deliberately narrow and private: decimal/scientific, computed,
+  reference, array, malformed, explicit-broken-reference, and namespaced
+  forms stay quiet. Output retains only aggregate call and inverted-literal-
+  bound counts.
+
 ## 0.199.0 — 2026-07-28
 
 - Add high-severity `FF097` to `formulafence lint`: it reports an unqualified

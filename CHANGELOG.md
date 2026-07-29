@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.187.0 — 2026-07-28
+
+- Add medium-severity `FF086` to `formulafence lint`: it reports a workbook
+  containing formulas only when stored calculation properties explicitly
+  combine `calcMode=manual` with `calcCompleted=false`, so the file records
+  incomplete calculation before save.
+- Keep the calculation-freshness boundary deliberately narrow. Manual mode
+  alone, automatic mode, completed or omitted completion metadata, and
+  formula-free workbooks remain quiet; the finding does not claim a particular
+  cached result is stale or incorrect. JSON, Markdown, and SARIF retain only
+  the two configuration flags and no formula text or cached values.
+
 ## 0.186.0 — 2026-07-28
 
 - Add medium-severity `FF085` to `formulafence lint`: it reports an ordinary

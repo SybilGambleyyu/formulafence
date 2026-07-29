@@ -6303,7 +6303,8 @@ def lint_to_markdown(
             "peers and a third contiguous supporting peer. It also reports a pure local "
             "numeric aggregate only when it stops before a short contiguous numeric run. "
             "It reports a formula as unlocked only for an explicit direct cell assignment "
-            "on a protected worksheet. It does not evaluate formulas or expose formula text.",
+            "on a protected worksheet, and reports explicitly incomplete manual calculation "
+            "for a formula workbook. It does not evaluate formulas or expose formula text.",
             "",
             "## Findings",
             "",
@@ -6374,6 +6375,20 @@ def lint_to_markdown(
                 "- {location}: direct cell protection marks this formula cell as unlocked."
                 .format(location=_markdown_code(location or "workbook"))
             )
+    calculation_evidence = [
+        finding["details"]
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF086"
+    ]
+    if calculation_evidence:
+        lines.extend(["## Calculation freshness evidence", ""])
+        for evidence in calculation_evidence:
+            lines.append(
+                "- Workbook: calculation mode is `{mode}` and the file records no "
+                "completed calculation before save.".format(
+                    mode=_markdown_escape(evidence["calculation_mode"])
+                )
+            )
     return lines.render()
 
 
@@ -6384,6 +6399,7 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF083": "A formula differs from a stable copied-formula pattern.",
         "FF084": "A simple numeric aggregate stops before adjacent numeric cells.",
         "FF085": "A formula cell is explicitly unlocked on a protected worksheet.",
+        "FF086": "A formula workbook was saved with incomplete manual calculation.",
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

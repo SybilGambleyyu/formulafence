@@ -238,6 +238,21 @@ def test_lint_direct_unlocked_formula_is_medium(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "medium"]) == 1
 
 
+def test_lint_incomplete_manual_formula_calculation_is_medium(tmp_path) -> None:
+    workbook_path = tmp_path / "manual-incomplete.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["A2"] = 10
+    worksheet["B2"] = "=A2*2"
+    workbook.calculation.calcMode = "manual"
+    workbook.calculation.calcCompleted = False
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "medium"]) == 1
+
+
 def test_lint_defaults_its_bounded_finding_limit() -> None:
     arguments = cli_module.build_parser().parse_args(["lint", "model.xlsx"])
 

@@ -26,10 +26,15 @@ financial correctness or replace model review.
   unclassified array-formula territory. Its formula-protection signal accepts
   only an explicit direct-cell unlocked assignment for an ordinary formula on
   an active worksheet-protection declaration; it does not infer row, column,
-  default-style, or allowed-edit-range precedence. Incomplete array metadata
-  makes the command fail closed. Its JSON, Markdown, and SARIF evidence
-  contains only locations, peer coordinates, and static range coordinates,
-  never formula text or cell values.
+  default-style, or allowed-edit-range precedence. Its calculation-freshness
+  signal accepts only a workbook with at least one formula whose stored
+  calculation properties explicitly combine `calcMode=manual` and
+  `calcCompleted=false`; it does not infer a stale result from manual mode
+  alone or claim a particular result is mathematically wrong. Incomplete array
+  metadata makes the command fail closed. Its JSON, Markdown, and SARIF
+  evidence contains only locations, peer coordinates, static range coordinates,
+  and those two calculation-status flags, never formula text, cell values, or
+  cached results.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not
@@ -409,8 +414,10 @@ formula fingerprint while the changed middle cell does not. An aggregate-range
 finding means an accepted static aggregate range ends before a short contiguous
 run of numeric literals. A formula-protection finding means a stored direct
 cell style makes an ordinary formula editable despite active sheet protection.
-Each is a focused review prompt, not proof that a formula should change or an
-error will occur at calculation time.
+A calculation-freshness finding means a formula workbook records manual mode
+and incomplete calculation before save. Each is a focused review prompt, not
+proof that a formula should change, a cached result is stale, or an error will
+occur at calculation time.
 
 For a portfolio `FF079`, the same distinction applies across candidate
 workbooks: it records that a changed source cell can reach a formula through a

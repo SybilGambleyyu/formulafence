@@ -24,6 +24,8 @@ def _snapshot(
     *,
     protected: bool = False,
     unlocked_cells: tuple[str, ...] = (),
+    calculation_mode: str | None = None,
+    calculation_completed: bool | None = None,
 ):
     workbook = Workbook()
     worksheet = workbook.active
@@ -33,6 +35,10 @@ def _snapshot(
     for coordinate in unlocked_cells:
         worksheet[coordinate].protection = Protection(locked=False)
     worksheet.protection.sheet = protected
+    if calculation_mode is not None:
+        workbook.calculation.calcMode = calculation_mode
+    if calculation_completed is not None:
+        workbook.calculation.calcCompleted = calculation_completed
     path = tmp_path / "model.xlsx"
     workbook.save(path)
     return load_snapshot(path)
@@ -335,6 +341,51 @@ def test_lint_keeps_non_direct_or_inactive_unlocked_formula_controls_quiet(
     assert lint_snapshot(protected).findings == []
 
 
+def test_lint_reports_explicit_incomplete_manual_formula_calculation(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {"A2": 10, "B2": "=A2*2"},
+        calculation_mode="manual",
+        calculation_completed=False,
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF086", "medium", None)]
+    assert report.findings[0].details == {
+        "calculation_mode": "manual",
+        "calculation_completed_before_save": False,
+    }
+
+
+def test_lint_keeps_completed_or_non_manual_calculation_states_quiet(tmp_path: Path) -> None:
+    completed_manual = _snapshot(
+        tmp_path,
+        {"A2": 10, "B2": "=A2*2"},
+        calculation_mode="manual",
+        calculation_completed=True,
+    )
+    incomplete_automatic = _snapshot(
+        tmp_path,
+        {"A2": 10, "B2": "=A2*2"},
+        calculation_mode="auto",
+        calculation_completed=False,
+    )
+    formula_free_manual = _snapshot(
+        tmp_path,
+        {"A2": 10},
+        calculation_mode="manual",
+        calculation_completed=False,
+    )
+
+    assert lint_snapshot(completed_manual).findings == []
+    assert lint_snapshot(incomplete_automatic).findings == []
+    assert lint_snapshot(formula_free_manual).findings == []
+
+
 def test_lint_keeps_short_or_non_numeric_aggregate_gaps_quiet(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -517,6 +568,22 @@ def test_lint_shares_its_finding_cap_with_direct_unlocked_formulas(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_shares_its_finding_cap_with_incomplete_manual_calculation(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {"A2": 10, "B2": "=A2*2"},
+        protected=True,
+        unlocked_cells=("B2",),
+        calculation_mode="manual",
+        calculation_completed=False,
+    )
+
+    with pytest.raises(FormulaFenceError, match="max_formula_pattern_findings=1"):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_renderers_keep_formula_text_out_of_review_artifacts(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -606,6 +673,43 @@ def test_lint_unlocked_formula_renderers_keep_formula_text_out_of_review_artifac
             "name": "FF085",
             "shortDescription": {
                 "text": "A formula cell is explicitly unlocked on a protected worksheet."
+            },
+        }
+    ]
+
+
+def test_lint_incomplete_manual_calculation_renderers_keep_formula_text_out(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {"A2": 10, "B2": "=A2*2"},
+        calculation_mode="manual",
+        calculation_completed=False,
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "=A2*2" not in rendered
+        assert "FF086" in rendered
+    assert "## Calculation freshness evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert "locations" not in result
+    assert result["properties"] == {
+        "severity": "medium",
+        "calculation_mode": "manual",
+        "calculation_completed_before_save": False,
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF086",
+            "name": "FF086",
+            "shortDescription": {
+                "text": "A formula workbook was saved with incomplete manual calculation."
             },
         }
     ]

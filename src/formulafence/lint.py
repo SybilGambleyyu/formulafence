@@ -336,6 +336,22 @@ def _direct_unlocked_formula_locations(
     return tuple(locations)
 
 
+def _has_incomplete_manual_calculation(snapshot: WorkbookSnapshot) -> bool:
+    """Return whether stored formula results may be stale by explicit metadata.
+
+    ``calcCompleted=false`` says that the workbook was not recalculated before
+    it was saved.  FormulaFence reports that state only when the workbook also
+    explicitly requests manual calculation, where Excel requires a user to
+    request recalculation.  It is a configuration risk, not a claim that any
+    particular formula result is mathematically wrong.
+    """
+    return bool(
+        any(cell.is_formula for cell in snapshot.cells.values())
+        and snapshot.calculation_settings.get("calcMode") == "manual"
+        and snapshot.calculation_settings.get("calcCompleted") is False
+    )
+
+
 def _candidate_message(kind: str) -> tuple[str, str, str]:
     """Return the rule, severity, and reviewer-facing message for a pattern kind."""
     if kind == "blank_gap":
@@ -375,16 +391,18 @@ def lint_snapshot(
     max_formula_pattern_findings: int = DEFAULT_MAX_FORMULA_PATTERN_FINDINGS,
     max_aggregate_omission_gap_cells: int = DEFAULT_MAX_AGGREGATE_OMISSION_GAP_CELLS,
 ) -> FormulaLintReport:
-    """Find conservative copied-formula interruptions and aggregate omissions.
+    """Find conservative formula patterns, protection, and calculation risks.
 
     A target is reported only when its immediate predecessor and successor have
     the same relative formula fingerprint *and* a third contiguous peer repeats
     that fingerprint. This intentionally misses short or ambiguous sequences
     rather than treating a general spreadsheet smell as an error. Separately,
     a pure local numeric aggregate is reported only when it stops before a
-    short, contiguous numeric run on the same row or column. It never evaluates
-    formulas, and rejects incomplete array metadata before claiming ordinary-
-    cell coverage.
+    short, contiguous numeric run on the same row or column. It also reports
+    an explicitly unlocked formula on a protected sheet and an explicit
+    incomplete manual-calculation state for a formula workbook. It never
+    evaluates formulas, and rejects incomplete array metadata before claiming
+    ordinary-cell coverage.
     """
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
@@ -569,6 +587,26 @@ def lint_snapshot(
                 ),
                 location=location,
                 details={"protection_scope": "direct_cell"},
+            )
+        )
+    if _has_incomplete_manual_calculation(snapshot):
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF086",
+                severity="medium",
+                message=(
+                    "Workbook contains formulas and was saved with incomplete "
+                    "manual calculation."
+                ),
+                details={
+                    "calculation_mode": "manual",
+                    "calculation_completed_before_save": False,
+                },
             )
         )
     findings.sort(

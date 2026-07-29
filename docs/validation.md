@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Incomplete manual-calculation lint — 2026-07-28
+
+Excel's [calculation guidance](https://support.microsoft.com/en-US/Excel/change-formula-recalculation-iteration-or-precision-in-excel)
+states that Manual mode turns off automatic recalculation until the user requests
+it (for example with F9). SpreadsheetML's
+[`calcPr` definition](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_calcPr_topic_ID0EWJ63.html)
+defines `calcCompleted=false` as no recalculation completed before save and
+notes that a manual calculation mode does not perform a full recalculation on
+load even when `fullCalcOnLoad` is set. `FF086` therefore accepts only the
+intersection: at least one stored formula plus explicit `calcMode=manual` and
+`calcCompleted=false`. It is a medium-severity configuration prompt, not a
+claim that any formula result is stale or mathematically incorrect; FormulaFence
+does not evaluate formulas or retain cached values in the finding.
+
+Controlled fixtures cover a matching formula workbook, completed manual mode,
+incomplete automatic mode, a formula-free manual workbook, the shared finding
+cap, JSON/Markdown/SARIF redaction, and high-versus-medium CLI gates. The
+generated-fixture corpus had 419 safely readable workbooks: ten explicitly used
+manual calculation, but none stored `calcCompleted=false`, so the final
+candidate produced zero `FF086` findings. The independent public scan covered
+the ten public ExceLint workbooks, an 820-formula finance ledger, and a
+10-formula compatibility workbook—12 workbooks and 50,367 formula cells in
+total. It found no manual or incomplete calculation declaration and zero
+`FF086` findings. This is a prevalence check, not evidence that these models'
+results are correct.
+
+The release-versioned 0.187.0 source tree passed **1,341 tests in 92.74
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check`, installed into separate fresh
+environments with declared dependencies, reported `FormulaFence 0.187.0`, and
+reproduced a controlled `FF086` finding without rendering formula text. A
+medium gate returned exit `1`; the high-only gate returned `0`.
+
 ## Direct unlocked-formula lint — 2026-07-28
 
 Microsoft documents an **Unlocked cells containing formulas** error-checking

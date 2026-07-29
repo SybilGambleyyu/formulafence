@@ -6,19 +6,33 @@ from pathlib import Path
 
 import pytest
 from openpyxl import Workbook
+from openpyxl.styles import Protection
 
 from formulafence.lint import lint_snapshot
-from formulafence.models import ArrayFormulaRange, FormulaFenceError
+from formulafence.models import (
+    ArrayFormulaRange,
+    CellProtectionAssignmentSnapshot,
+    FormulaFenceError,
+)
 from formulafence.output import as_json, lint_to_markdown, lint_to_sarif
 from formulafence.workbook import load_snapshot
 
 
-def _snapshot(tmp_path: Path, cells: dict[str, object]):
+def _snapshot(
+    tmp_path: Path,
+    cells: dict[str, object],
+    *,
+    protected: bool = False,
+    unlocked_cells: tuple[str, ...] = (),
+):
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "Model"
     for coordinate, value in cells.items():
         worksheet[coordinate] = value
+    for coordinate in unlocked_cells:
+        worksheet[coordinate].protection = Protection(locked=False)
+    worksheet.protection.sheet = protected
     path = tmp_path / "model.xlsx"
     workbook.save(path)
     return load_snapshot(path)
@@ -279,6 +293,48 @@ def test_lint_reports_omitted_numeric_row_run_after_simple_aggregate(tmp_path: P
     }
 
 
+def test_lint_reports_a_directly_unlocked_formula_on_a_protected_sheet(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {"A2": 10, "B2": "=A2*2"},
+        protected=True,
+        unlocked_cells=("B2",),
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF085", "medium", ("Model", "B2"))]
+    assert report.findings[0].details == {"protection_scope": "direct_cell"}
+
+
+def test_lint_keeps_non_direct_or_inactive_unlocked_formula_controls_quiet(
+    tmp_path: Path,
+) -> None:
+    inactive = _snapshot(
+        tmp_path,
+        {"A2": 10, "B2": "=A2*2"},
+        unlocked_cells=("B2",),
+    )
+    assert lint_snapshot(inactive).findings == []
+
+    protected = _snapshot(tmp_path, {"A2": 10, "B2": "=A2*2"}, protected=True)
+    protected.cell_protection_assignments = (
+        CellProtectionAssignmentSnapshot(
+            sheet="Model",
+            scope="column",
+            target="B:B",
+            locked=False,
+            hidden=False,
+        ),
+    )
+    assert lint_snapshot(protected).findings == []
+
+
 def test_lint_keeps_short_or_non_numeric_aggregate_gaps_quiet(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -447,6 +503,20 @@ def test_lint_shares_its_finding_cap_with_aggregate_omissions(tmp_path: Path) ->
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_shares_its_finding_cap_with_direct_unlocked_formulas(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {"A2": 10, "B2": "=A2*2", "C2": "=A2*3"},
+        protected=True,
+        unlocked_cells=("B2", "C2"),
+    )
+
+    with pytest.raises(FormulaFenceError, match="max_formula_pattern_findings=1"):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_renderers_keep_formula_text_out_of_review_artifacts(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -505,6 +575,37 @@ def test_lint_aggregate_renderers_keep_formula_text_out_of_review_artifacts(
             "name": "FF084",
             "shortDescription": {
                 "text": "A simple numeric aggregate stops before adjacent numeric cells."
+            },
+        }
+    ]
+
+
+def test_lint_unlocked_formula_renderers_keep_formula_text_out_of_review_artifacts(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {"A2": 10, "B2": "=A2*2"},
+        protected=True,
+        unlocked_cells=("B2",),
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "=A2*2" not in rendered
+        assert "FF085" in rendered
+    assert "## Formula protection evidence" in rendered_markdown
+    assert rendered_sarif["runs"][0]["results"][0]["ruleId"] == "FF085"
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF085",
+            "name": "FF085",
+            "shortDescription": {
+                "text": "A formula cell is explicitly unlocked on a protected worksheet."
             },
         }
     ]

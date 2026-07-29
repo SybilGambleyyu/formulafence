@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.185.0
+        uses: SybilGambleyyu/formulafence@v0.186.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -104,17 +104,21 @@ or after the normal change review:
 values, and low for text markers; `FF083` is a medium-severity formula outlier;
 and `FF084` is a medium-severity simple numeric aggregate whose direct local
 one-dimensional range stops before two or more contiguous literal numeric
-cells. The copied-formula signal requires two matching immediate formula peers
-and a third contiguous supporting peer. `FF084` accepts only a pure
+cells; `FF085` is a medium-severity formula cell with an explicit direct
+unlocked assignment on an actively protected worksheet. The copied-formula
+signal requires two matching immediate formula peers and a third contiguous
+supporting peer. `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
 range, ignores array territory and nonnumeric or one-cell gaps, and never
-calculates a workbook. JSON, Markdown, and SARIF evidence contains locations
-and static range coordinates, not formula text. Use `--fail-on medium` only
-when intentional exceptions have an established review path. The default
-10,000-finding cap is fail closed; adjust it only with an explicit positive
-`--max-formula-pattern-findings` value. `FF084` examines at most 128 gap cells
-by default; use an explicit `--max-aggregate-omission-gap-cells` value of at
-least two to select another bounded window.
+calculates a workbook. `FF085` does not guess at row, column, default-style, or
+allowed-edit-range protection precedence. JSON, Markdown, and SARIF evidence
+contains locations and static range coordinates, not formula text. Use
+`--fail-on medium` only when intentional exceptions have an established review
+path. The default 10,000-finding cap is fail closed; adjust it only with an
+explicit positive `--max-formula-pattern-findings` value. `FF084` examines at
+most 128 gap cells by default; use an explicit
+`--max-aggregate-omission-gap-cells` value of at least two to select another
+bounded window.
 
 ## Shared external-workbook-link, formula-action, Python-in-Excel, custom-function, runtime, registration, XLM-evaluation, XLM-action, XLM-GET.CELL, XLM-environment-information, and native environment-information artifacts
 
@@ -311,7 +315,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.185.0
+  uses: SybilGambleyyu/formulafence@v0.186.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -469,7 +473,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.185.0/formulafence-0.185.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.186.0/formulafence-0.186.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

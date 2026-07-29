@@ -5,6 +5,38 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct unlocked-formula lint — 2026-07-28
+
+Microsoft documents an **Unlocked cells containing formulas** error-checking
+rule: a formula can be edited or overwritten when it is not locked for
+protection. Its [formula-error guidance](https://support.microsoft.com/en-US/Excel/detect-formula-errors-in-excel)
+and dedicated [Unprotected Formula explanation](https://support.microsoft.com/en-US/Excel/why-do-i-get-an-unprotected-formula-message-in-excel)
+emphasize that locking takes effect only after worksheet protection is enabled.
+`FF085` therefore reports only the most explicit static subset: an ordinary
+formula with a direct cell `locked=false` assignment on a worksheet whose stored
+protection is active. It does not claim a row, column, default style, or
+allowed-edit range has a particular effective precedence.
+
+Controlled fixtures prove a direct unlocked formula emits medium `FF085`, has
+only `direct_cell` protection evidence, crosses the shared finding cap, reaches
+the medium CI gate but not the high gate, and never emits formula text in JSON,
+Markdown, or SARIF. A direct unlocked assignment on an unprotected sheet and a
+column-level unlock on a protected sheet remain intentionally quiet.
+
+The final candidate produced no `FF085` finding in the 419 safely readable
+generated FormulaFence fixtures. The ten public ExceLint workbooks, finance
+ledger, and compatibility workbook contain no actively protected worksheet, so
+they likewise produce no candidate. This is expected sparse evidence rather
+than a prevalence claim: the rule is designed to identify a specific stored
+control failure, not to guess workbook authoring intent.
+
+The release-versioned 0.186.0 source tree passed **1,336 tests in 92.40
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check`, installed into separate fresh
+environments with declared dependencies, reported `FormulaFence 0.186.0`, and
+reproduced a controlled `FF085` finding without rendering its formula text. A
+medium gate returned exit `1`; the high-only gate returned `0`.
+
 ## Bounded aggregate-range omission lint — 2026-07-28
 
 `FF084` follows the narrow class behind Excel's documented formula-error check

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.186.0 — 2026-07-28
+
+- Add medium-severity `FF085` to `formulafence lint`: it reports an ordinary
+  formula with an explicit direct-cell `locked=false` assignment on an actively
+  protected worksheet, retaining only its location and the `direct_cell`
+  protection scope.
+- Keep protection inference deliberately narrow. Row, column, default-style,
+  and allowed-edit-range precedence remain quiet until FormulaFence can model
+  their complete effective state without guessing. JSON, Markdown, and SARIF
+  remain formula-free; the shared 10,000-finding cap stays fail closed.
+
 ## 0.185.0 — 2026-07-28
 
 - Add `FF084`, a static, single-workbook review signal for a pure local

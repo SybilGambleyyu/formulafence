@@ -4,6 +4,7 @@ import json
 
 import pytest
 from openpyxl import Workbook
+from openpyxl.styles import Protection
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -220,6 +221,21 @@ def test_lint_aggregate_omission_is_medium_and_uses_its_gap_bound(tmp_path) -> N
         )
         == 0
     )
+
+
+def test_lint_direct_unlocked_formula_is_medium(tmp_path) -> None:
+    workbook_path = tmp_path / "protected.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["A2"] = 10
+    worksheet["B2"] = "=A2*2"
+    worksheet["B2"].protection = Protection(locked=False)
+    worksheet.protection.sheet = True
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "medium"]) == 1
 
 
 def test_lint_defaults_its_bounded_finding_limit() -> None:

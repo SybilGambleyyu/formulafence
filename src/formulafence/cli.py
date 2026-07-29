@@ -362,7 +362,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     lint = commands.add_parser(
         "lint",
-        help="Find conservative copied-formula and aggregate-range interruptions",
+        help="Find conservative formula, aggregate-range, and protection risks",
     )
     lint.add_argument("workbook", type=Path)
     _add_dependency_edge_limit_argument(lint)

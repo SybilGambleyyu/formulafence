@@ -6302,7 +6302,8 @@ def lint_to_markdown(
             "The lint reports an interrupted copy pattern only with two matching immediate "
             "peers and a third contiguous supporting peer. It also reports a pure local "
             "numeric aggregate only when it stops before a short contiguous numeric run. "
-            "It does not evaluate formulas or expose formula text.",
+            "It reports a formula as unlocked only for an explicit direct cell assignment "
+            "on a protected worksheet. It does not evaluate formulas or expose formula text.",
             "",
             "## Findings",
             "",
@@ -6361,6 +6362,18 @@ def lint_to_markdown(
                     count=_markdown_escape(evidence["omitted_cell_count"]),
                 )
             )
+    protection_evidence = [
+        finding["location"]
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF085"
+    ]
+    if protection_evidence:
+        lines.extend(["## Formula protection evidence", ""])
+        for location in protection_evidence:
+            lines.append(
+                "- {location}: direct cell protection marks this formula cell as unlocked."
+                .format(location=_markdown_code(location or "workbook"))
+            )
     return lines.render()
 
 
@@ -6370,6 +6383,7 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF082": "A blank or non-formula cell interrupts a stable copied-formula pattern.",
         "FF083": "A formula differs from a stable copied-formula pattern.",
         "FF084": "A simple numeric aggregate stops before adjacent numeric cells.",
+        "FF085": "A formula cell is explicitly unlocked on a protected worksheet.",
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

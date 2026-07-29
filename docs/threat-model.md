@@ -23,10 +23,13 @@ financial correctness or replace model review.
   at least two literal numeric cells before the aggregate formula. It ignores
   short/ambiguous patterns, computed/multi-range/named/external/3-D aggregate
   expressions, nonnumeric gaps, tokenizer failures, and all declared or
-  unclassified array-formula territory. Incomplete array metadata makes the
-  command fail closed. Its JSON, Markdown, and SARIF evidence contains only
-  locations, peer coordinates, and static range coordinates, never formula
-  text or cell values.
+  unclassified array-formula territory. Its formula-protection signal accepts
+  only an explicit direct-cell unlocked assignment for an ordinary formula on
+  an active worksheet-protection declaration; it does not infer row, column,
+  default-style, or allowed-edit-range precedence. Incomplete array metadata
+  makes the command fail closed. Its JSON, Markdown, and SARIF evidence
+  contains only locations, peer coordinates, and static range coordinates,
+  never formula text or cell values.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not
@@ -404,8 +407,10 @@ are explicit static dependencies, not proof of runtime evaluation. A
 formula-pattern finding means both immediate peers have the same relative
 formula fingerprint while the changed middle cell does not. An aggregate-range
 finding means an accepted static aggregate range ends before a short contiguous
-run of numeric literals. Either is a focused review prompt, not proof that a
-formula should change or an error will occur at calculation time.
+run of numeric literals. A formula-protection finding means a stored direct
+cell style makes an ordinary formula editable despite active sheet protection.
+Each is a focused review prompt, not proof that a formula should change or an
+error will occur at calculation time.
 
 For a portfolio `FF079`, the same distinction applies across candidate
 workbooks: it records that a changed source cell can reach a formula through a

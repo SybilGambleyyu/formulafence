@@ -301,6 +301,41 @@ def _aggregate_omission_candidate(
     )
 
 
+def _direct_unlocked_formula_locations(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+) -> tuple[CellKey, ...]:
+    """Return ordinary formulas explicitly unlocked on an active worksheet.
+
+    Excel's error checker warns about unlocked formula cells because they can be
+    overwritten.  FormulaFence accepts only direct cell protection assignments
+    on an actively protected worksheet.  It deliberately does not try to infer
+    an effective style from row, column, default, or allowed-edit-range state:
+    those broader cases need a complete precedence model before they are safe
+    to present as an actionable review finding.
+    """
+    protected_sheets = {
+        protection.sheet
+        for protection in snapshot.sheet_protections
+        if protection.enabled and protection.sheet_type == "worksheet"
+    }
+    locations: list[CellKey] = []
+    for assignment in sorted(
+        snapshot.cell_protection_assignments,
+        key=lambda item: item.sort_key(),
+    ):
+        if (
+            assignment.scope != "cell"
+            or assignment.locked
+            or assignment.sheet not in protected_sheets
+        ):
+            continue
+        location = (assignment.sheet, assignment.target)
+        if _eligible_formula(snapshot, location, array_ranges_by_sheet):
+            locations.append(location)
+    return tuple(locations)
+
+
 def _candidate_message(kind: str) -> tuple[str, str, str]:
     """Return the rule, severity, and reviewer-facing message for a pattern kind."""
     if kind == "blank_gap":
@@ -514,6 +549,26 @@ def lint_snapshot(
                     "omitted_range": display_location((location[0], candidate.omitted_range)),
                     "omitted_cell_count": candidate.omitted_cell_count,
                 },
+            )
+        )
+    for location in _direct_unlocked_formula_locations(
+        snapshot,
+        array_ranges_by_sheet,
+    ):
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF085",
+                severity="medium",
+                message=(
+                    "A formula cell is explicitly unlocked on a protected worksheet."
+                ),
+                location=location,
+                details={"protection_scope": "direct_cell"},
             )
         )
     findings.sort(

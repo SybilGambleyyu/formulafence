@@ -11,7 +11,13 @@ from typing import Any
 
 from formulafence import __version__
 from formulafence.formulas import inspect_formula
-from formulafence.models import DiffReport, Finding, FormulaFenceError, display_location
+from formulafence.models import (
+    DiffReport,
+    Finding,
+    FormulaFenceError,
+    FormulaLintReport,
+    display_location,
+)
 from formulafence.portfolio import PortfolioReport
 
 DEFAULT_MAX_REPORT_BYTES = 32 * 1024 * 1024
@@ -6273,6 +6279,129 @@ def report_to_sarif(
     if redact_formula_environment_information:
         payload = redact_formula_environment_information_material(payload)
     return payload
+
+
+def lint_to_markdown(
+    report: FormulaLintReport,
+    *,
+    max_bytes: int | None = None,
+) -> str:
+    """Render a bounded, formula-free local copy-pattern lint review."""
+    payload = report.to_dict()
+    workbook = payload["workbook"]
+    summary = payload["summary"]
+    lines = _BoundedLines(
+        [
+            "# FormulaFence formula-pattern lint",
+            "",
+            f"- **Workbook:** {_markdown_code(workbook['path'])}",
+            f"- **Formula cells:** {workbook['formula_cells']}",
+            f"- **Findings:** {summary['finding_count']}",
+            f"- **Highest severity:** `{summary['highest_severity']}`",
+            "",
+            "The lint reports only an interrupted copy pattern with two matching immediate "
+            "peers and a third contiguous supporting peer. It does not evaluate formulas "
+            "or expose formula text.",
+            "",
+            "## Findings",
+            "",
+            "| Severity | Rule | Location | Finding |",
+            "| --- | --- | --- | --- |",
+        ],
+        max_bytes=max_bytes,
+    )
+    if not payload["findings"]:
+        lines.append("| note | — | — | No high-confidence copied-formula interruptions found. |")
+    else:
+        for finding in payload["findings"]:
+            lines.append(
+                "| {severity} | `{rule_id}` | {location} | {message} |".format(
+                    severity=_markdown_escape(finding["severity"]),
+                    rule_id=_markdown_escape(finding["rule_id"]),
+                    location=_markdown_code(finding["location"] or "workbook"),
+                    message=_markdown_escape(finding["message"]),
+                )
+            )
+    lines.append("")
+
+    evidence_lines = [
+        (finding["location"], evidence)
+        for finding in payload["findings"]
+        for evidence in finding.get("details", {}).get("pattern_evidence", [])
+    ]
+    if evidence_lines:
+        lines.extend(["## Pattern evidence", ""])
+        for location, evidence in evidence_lines:
+            lines.append(
+                "- {location}: matching {orientation} formulas {preceding} and "
+                "{following}, supported by {supporting}.".format(
+                    location=_markdown_code(location or "workbook"),
+                    orientation=_markdown_escape(evidence["orientation"]),
+                    preceding=_markdown_code(evidence["preceding_formula"]),
+                    following=_markdown_code(evidence["following_formula"]),
+                    supporting=_markdown_code(evidence["supporting_formula"]),
+                )
+            )
+    return lines.render()
+
+
+def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
+    """Return single-workbook formula-pattern findings in SARIF 2.1.0."""
+    descriptions = {
+        "FF082": "A blank or non-formula cell interrupts a stable copied-formula pattern.",
+        "FF083": "A formula differs from a stable copied-formula pattern.",
+    }
+    rule_ids = sorted({finding.rule_id for finding in report.findings})
+    rules = [
+        {
+            "id": rule_id,
+            "name": rule_id,
+            "shortDescription": {
+                "text": descriptions.get(rule_id, "FormulaFence formula-pattern lint finding")
+            },
+        }
+        for rule_id in rule_ids
+    ]
+    results: list[dict[str, Any]] = []
+    for finding in report.findings:
+        result: dict[str, Any] = {
+            "ruleId": finding.rule_id,
+            "level": _SARIF_LEVELS.get(finding.severity, "warning"),
+            "message": {"text": finding.message},
+            "properties": {"severity": finding.severity, **finding.details},
+        }
+        if finding.location is not None:
+            result["locations"] = [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": str(report.workbook.path)},
+                    },
+                    "logicalLocations": [
+                        {
+                            "kind": "excel-cell",
+                            "name": display_location(finding.location),
+                        }
+                    ],
+                }
+            ]
+        results.append(result)
+    return {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "FormulaFence",
+                        "version": __version__,
+                        "informationUri": "https://github.com/SybilGambleyyu/formulafence",
+                        "rules": rules,
+                    }
+                },
+                "results": results,
+            }
+        ],
+    }
 
 
 def _markdown_code(value: object) -> str:

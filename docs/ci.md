@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.183.0
+        uses: SybilGambleyyu/formulafence@v0.184.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -83,6 +83,32 @@ or browser network requests. The Action intentionally does not embed HTML in
 the job summary; download or open the uploaded artifact instead. The same
 sharing-redaction inputs apply before an HTML artifact leaves the trusted review
 boundary.
+
+## Single-workbook formula lint
+
+The composite Action intentionally compares a baseline and candidate. In a job
+where FormulaFence is already installed, run the single-workbook lint directly
+to catch high-confidence interruptions in copied formula blocks before or after
+the normal change review:
+
+```yaml
+- name: Lint copied formulas
+  run: >-
+    formulafence lint build/model.xlsx
+    --format sarif
+    --output reports/formula-lint.sarif
+    --fail-on high
+```
+
+`FF082` is high for blank/stored-error interruptions, medium for numeric/manual
+values, and low for text markers; `FF083` is a medium-severity formula outlier.
+The command reports only when two matching immediate formula peers and a third
+contiguous supporting peer establish the same relative-copy pattern. It never
+recalculates a workbook or exposes formula text in its JSON, Markdown, or SARIF
+evidence. Use `--fail-on medium` only when intentional formula exceptions have
+an established review path. The default 10,000-target cap is a fail-closed
+bound; adjust it only with an explicit positive
+`--max-formula-pattern-findings` value.
 
 ## Shared external-workbook-link, formula-action, Python-in-Excel, custom-function, runtime, registration, XLM-evaluation, XLM-action, XLM-GET.CELL, XLM-environment-information, and native environment-information artifacts
 
@@ -279,7 +305,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.183.0
+  uses: SybilGambleyyu/formulafence@v0.184.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -437,7 +463,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.183.0/formulafence-0.183.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.184.0/formulafence-0.184.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

@@ -15,10 +15,13 @@ from formulafence.diff import (
     compare_snapshots,
     report_severities,
 )
+from formulafence.lint import DEFAULT_MAX_FORMULA_PATTERN_FINDINGS, lint_snapshot
 from formulafence.models import SEVERITY_ORDER, FormulaFenceError
 from formulafence.output import (
     DEFAULT_MAX_REPORT_BYTES,
     as_json,
+    lint_to_markdown,
+    lint_to_sarif,
     portfolio_to_html,
     portfolio_to_markdown,
     portfolio_to_sarif,
@@ -304,6 +307,18 @@ def _add_profile_record_limit_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_formula_pattern_finding_limit_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--max-formula-pattern-findings",
+        type=_positive_integer,
+        default=DEFAULT_MAX_FORMULA_PATTERN_FINDINGS,
+        help=(
+            "Fail closed before formula-pattern lint retains more than this many "
+            "high-confidence target cells"
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="formulafence",
@@ -321,6 +336,23 @@ def build_parser() -> argparse.ArgumentParser:
     _add_formula_defined_name_state_limit_argument(profile)
     _add_report_byte_limit_argument(profile)
     _add_output_arguments(profile, ("json", "markdown"))
+
+    lint = commands.add_parser(
+        "lint",
+        help="Find high-confidence interruptions in copied formula patterns",
+    )
+    lint.add_argument("workbook", type=Path)
+    _add_dependency_edge_limit_argument(lint)
+    _add_formula_defined_name_state_limit_argument(lint)
+    _add_formula_pattern_finding_limit_argument(lint)
+    _add_report_byte_limit_argument(lint)
+    _add_output_arguments(lint, ("json", "markdown", "sarif"))
+    lint.add_argument(
+        "--fail-on",
+        choices=_FAIL_LEVELS,
+        default="none",
+        help="Exit 1 when a formula-pattern finding reaches this severity",
+    )
 
     diff = commands.add_parser("diff", help="Compare two workbooks semantically")
     diff.add_argument("before", type=Path, help="Approved or baseline workbook")
@@ -587,6 +619,33 @@ def _run_profile(arguments: argparse.Namespace) -> int:
     )
     _emit(content, arguments.output)
     return 0
+
+
+def _run_lint(arguments: argparse.Namespace) -> int:
+    _ensure_output_safe(arguments.output, arguments.workbook)
+    report = lint_snapshot(
+        load_snapshot(
+            arguments.workbook,
+            max_dependency_edges=arguments.max_dependency_edges,
+            max_formula_defined_name_states=(
+                arguments.max_formula_defined_name_states
+            ),
+        ),
+        max_formula_pattern_findings=arguments.max_formula_pattern_findings,
+    )
+    if arguments.format == "json":
+        content = as_json(report.to_dict(), max_bytes=arguments.max_report_bytes)
+    elif arguments.format == "sarif":
+        content = as_json(lint_to_sarif(report), max_bytes=arguments.max_report_bytes)
+    else:
+        content = lint_to_markdown(report, max_bytes=arguments.max_report_bytes)
+    _emit(content, arguments.output)
+    return int(
+        _threshold_failed(
+            [finding.severity for finding in report.findings],
+            arguments.fail_on,
+        )
+    )
 
 
 def _run_comparison(arguments: argparse.Namespace, enforce_policy: bool) -> int:
@@ -961,6 +1020,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.command == "profile":
             return _run_profile(arguments)
+        if arguments.command == "lint":
+            return _run_lint(arguments)
         if arguments.command == "diff":
             return _run_comparison(arguments, enforce_policy=False)
         if arguments.command == "check":

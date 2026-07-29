@@ -9,6 +9,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 import formulafence.cli as cli_module
 import formulafence.policy as policy_module
 from formulafence.cli import main
+from formulafence.lint import DEFAULT_MAX_FORMULA_PATTERN_FINDINGS
 from formulafence.models import WorkbookSnapshot
 from formulafence.output import DEFAULT_MAX_REPORT_BYTES
 from formulafence.workbook import (
@@ -139,6 +140,64 @@ def test_profile_does_not_expose_cell_values(tmp_path) -> None:
     profile = output.read_text(encoding="utf-8")
     assert "Calculated revenue" not in profile
     assert '"formula_cells"' in profile
+
+
+def test_lint_emits_sarif_and_can_fail_a_ci_threshold(tmp_path) -> None:
+    workbook_path = tmp_path / "model.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["A2"] = 1
+    worksheet["B2"] = "=A2*2"
+    worksheet["D2"] = "=C2*2"
+    worksheet["E2"] = "=D2*2"
+    workbook.save(workbook_path)
+    output = tmp_path / "lint.sarif"
+
+    assert (
+        main(
+            [
+                "lint",
+                str(workbook_path),
+                "--format",
+                "sarif",
+                "--fail-on",
+                "high",
+                "--output",
+                str(output),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    result = payload["runs"][0]["results"][0]
+    assert result["ruleId"] == "FF082"
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!C2"
+    assert "=A2*2" not in json.dumps(payload)
+
+
+def test_lint_high_threshold_leaves_manual_numeric_value_for_review(tmp_path) -> None:
+    workbook_path = tmp_path / "model.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["A2"] = 1
+    worksheet["B2"] = "=A2*2"
+    worksheet["C2"] = 99
+    worksheet["D2"] = "=C2*2"
+    worksheet["E2"] = "=D2*2"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "medium"]) == 1
+
+
+def test_lint_defaults_its_bounded_finding_limit() -> None:
+    arguments = cli_module.build_parser().parse_args(["lint", "model.xlsx"])
+
+    assert arguments.max_formula_pattern_findings == DEFAULT_MAX_FORMULA_PATTERN_FINDINGS
+    assert arguments.max_report_bytes == DEFAULT_MAX_REPORT_BYTES
 
 
 def test_profile_dependency_edge_limit_fails_before_writing_an_output(tmp_path, capsys) -> None:

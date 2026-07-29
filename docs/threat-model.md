@@ -14,6 +14,13 @@ financial correctness or replace model review.
   evidence rather than executable page content. The report still reflects the
   sharing boundary selected by the caller; HTML is not a general secret scrubber.
 - It loads formulas as text with `data_only=False`; it does not calculate them.
+- The single-workbook formula-pattern lint compares only already-loaded relative
+  formula fingerprints. It reports an interruption only after two matching
+  immediate peers plus a third contiguous peer support the same copied pattern;
+  it intentionally ignores short/ambiguous runs and all declared or unclassified
+  array-formula territory. Incomplete array metadata makes the command fail
+  closed. Its JSON, Markdown, and SARIF evidence contains locations and peer
+  coordinates, never formula text.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not

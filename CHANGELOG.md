@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.184.0 — 2026-07-28
+
+- Add `formulafence lint WORKBOOK`, a conservative single-workbook audit for
+  interruptions inside copied formula blocks. It emits `FF082` for blank,
+  stored-error, manual-value, or text interruptions and `FF083` for a formula
+  outlier only when two matching immediate peers and a third contiguous peer
+  establish the same relative-copy fingerprint.
+- Make the CI gate deliberate: blanks and stored errors are high, manual values
+  and formula outliers are medium, and text markers are low. JSON, Markdown,
+  and SARIF reports retain only affected and peer coordinates, never formula
+  text; array territory, tokenizer failures, short patterns, incomplete array
+  metadata, oversized candidate sets, and oversized artifacts all fail closed
+  or remain quiet as appropriate.
+
 ## 0.183.0 — 2026-07-28
 
 - Let bounded worksheet readers reuse a private snapshot XML root after they

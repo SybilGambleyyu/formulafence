@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.183.0/formulafence-0.183.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.184.0/formulafence-0.184.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -51,6 +51,9 @@ formulafence check baseline.xlsx candidate.xlsx --policy formulafence.yml --form
 # Self-contained browser review artifact
 formulafence check baseline.xlsx candidate.xlsx --policy formulafence.yml --format html --output review.html
 
+# Lint one workbook for high-confidence copied-formula interruptions.
+formulafence lint candidate.xlsx --fail-on high --format sarif --output formula-lint.sarif
+
 # Compare a recursively matched portfolio of workbooks.
 formulafence portfolio approved-models build/models --policy formulafence.yml --output portfolio-report.md
 ```
@@ -58,6 +61,27 @@ formulafence portfolio approved-models build/models --policy formulafence.yml --
 FormulaFence is not yet published to PyPI; the direct release URL above avoids
 an ambiguous package-name install. See [GitHub Releases](https://github.com/SybilGambleyyu/formulafence/releases)
 for the current version.
+
+### Formula-pattern lint
+
+`formulafence lint WORKBOOK` is a deliberately conservative, single-workbook
+check for copy-paste mistakes that a version diff cannot see. It reports a cell
+only when the immediately preceding and following formulas have the same
+relative-copy fingerprint and a third contiguous peer repeats that fingerprint.
+That produces two reviewable signals:
+
+- `FF082`: a non-formula interruption. Blanks and stored error values are high;
+  numeric/manual values are medium; textual markers are low.
+- `FF083` (medium): a formula differs from the otherwise stable copied block.
+
+Use `--fail-on high` to gate blank/error interruptions, or `--fail-on medium`
+to also require review of manual-value and formula exceptions. JSON, Markdown,
+and SARIF output show the affected cell and the peer coordinates, but not
+formula text. The lint does not calculate formulas, intentionally skips short
+or ambiguous sequences and array-formula territory, and fails closed if array
+metadata is incomplete.
+It retains at most 10,000 target cells by default; use
+`--max-formula-pattern-findings` to choose another positive reviewed bound.
 
 ### GitHub Actions
 
@@ -75,7 +99,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.183.0
+  uses: SybilGambleyyu/formulafence@v0.184.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -695,6 +719,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
+| Formula-pattern lint | Conservative blank/error, manual-value, text-marker, and formula-outlier candidates inside a single workbook's copied blocks, with three local matching peers required before it reports |
 | Portfolio control | Recursive, relative-path workbook matching with per-file semantic reports, explicit additions/removals, bounded static cross-workbook impact evidence, unreadable-file evidence, bounded inventory/traversal, and consolidated JSON/Markdown/HTML/SARIF for CI |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function candidates, worksheet and formula-defined code-resource registration calls, formula-defined XLM `REGISTER`/`EVALUATE` calls, XLM macro-sheet programs and automatic-macro bindings, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |

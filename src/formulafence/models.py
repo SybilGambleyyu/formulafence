@@ -5252,6 +5252,43 @@ class DiffReport:
         }
 
 
+@dataclass
+class FormulaLintReport:
+    """One conservative, single-workbook formula-pattern review result.
+
+    This report intentionally keeps a lint separate from a two-workbook
+    semantic diff. Its findings identify only strong local copy-pattern
+    evidence; they do not assert that a workbook calculates correctly.
+    """
+
+    workbook: WorkbookSnapshot
+    findings: list[Finding]
+
+    def severity_counts(self) -> dict[str, int]:
+        counts = {severity: 0 for severity in SEVERITY_ORDER}
+        for finding in self.findings:
+            counts[finding.severity] = counts.get(finding.severity, 0) + 1
+        return {severity: count for severity, count in counts.items() if count}
+
+    @property
+    def highest_severity(self) -> str:
+        if not self.findings:
+            return "note"
+        return max(self.findings, key=lambda finding: SEVERITY_ORDER[finding.severity]).severity
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "1.0",
+            "workbook": self.workbook.summary(),
+            "summary": {
+                "finding_count": len(self.findings),
+                "highest_severity": self.highest_severity,
+                "findings_by_severity": self.severity_counts(),
+            },
+            "findings": [finding.to_dict() for finding in self.findings],
+        }
+
+
 class FormulaFenceError(Exception):
     """Base class for errors that should be presented cleanly by the CLI."""
 

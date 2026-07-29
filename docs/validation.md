@@ -5,6 +5,50 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Conservative formula-pattern lint — 2026-07-28
+
+The new single-workbook `lint` command uses FormulaFence's existing
+relative-copy fingerprint but adopts a stricter signal than the two-workbook
+`FF006` change check. It reports only an interior target for which the immediate
+preceding and following formulas match and one additional contiguous formula
+repeats that pattern. Controlled fixtures cover a blank gap, a hard-coded
+numeric gap, a text-marker gap, a stored-error gap, and a formula outlier.
+Blank/stored-error gaps emit high `FF082`, numeric manual values medium
+`FF082`, text markers low `FF082`, and the outlier medium `FF083`. A
+two-peer-only sequence remains quiet.
+
+The tests also prove that declared/unclassified array territory is never used as
+peer evidence, incomplete array metadata returns a fail-closed error, the
+distinct-target cap stops before retaining an overage, `--fail-on high` returns
+CI exit `1`, and JSON, Markdown, and SARIF artifacts contain target/peer
+coordinates but not the controlled formula spelling.
+
+Before implementation, the same three-peer rule produced no candidates across
+40 varied local workbook fixtures (25 containing formulas), the 10-formula
+`ref2-56737.xlsx` compatibility file, a 820-formula finance ledger fixture, a
+zero-formula named-sheet-view fixture, and a controlled 512-sheet workbook
+with one formula per sheet. This is not a claim that those workbooks are error
+free: the lint intentionally chooses false-negative tolerance over a broad
+spreadsheet-smell report.
+
+A subsequent 48,037-formula public-debt workbook from
+[ExceLint's public test data](https://github.com/ExceLint/ExceLint/tree/master/ExceLintTests/TestData)
+produced 50 three-peer interruptions: 43 textual `n.a.` markers, six
+numeric year seeds, and one whitespace marker. That evidence exposed the risk
+of treating every manual exception as a high-confidence defect, so only blank
+or stored-error gaps remain high-severity CI candidates. Numeric/manual values
+and formula outliers are medium; text markers are low but retain their peer
+coordinates for local review. The recalibrated run retained all 50 locations as
+44 low / six medium findings: `--fail-on high` returned `0`, while
+`--fail-on medium` returned `1`.
+
+The versioned 0.184.0 candidate passed **1,322 tests in 92.88 seconds** with
+Ruff, bytecode compilation, and `git diff --check` clean. Its wheel and source
+distribution passed `twine check`; each installed into a fresh environment with
+its declared dependencies, reported `FormulaFence 0.184.0`, and reproduced a
+controlled `FF082` high-gate failure without rendering the fixture's formula
+text in SARIF or Markdown.
+
 ## Bounded reader-payload XML root reuse — 2026-07-28
 
 Version 0.183.0 removes four remaining repeated worksheet parses inside one

@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.190.0
+        uses: SybilGambleyyu/formulafence@v0.191.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -89,7 +89,7 @@ boundary.
 The composite Action intentionally compares a baseline and candidate. In a job
 where FormulaFence is already installed, run the single-workbook lint directly
 to catch conservative copied-formula, aggregate-range, protection,
-calculation-freshness, direct-circular-reference, explicit-broken-reference,
+calculation-freshness, static-circular-reference, explicit-broken-reference,
 and saved-result risks before or after the normal change review:
 
 ```yaml
@@ -102,32 +102,39 @@ and saved-result risks before or after the normal change review:
 ```
 
 `FF082` is high for blank/stored-error interruptions, medium for numeric/manual
-values, and low for text markers; `FF083` is a medium-severity formula outlier;
-and `FF084` is a medium-severity simple numeric aggregate whose direct local
+values, and low for text markers. `FF083` is a medium-severity formula outlier;
+`FF084` is a medium-severity simple numeric aggregate whose direct local
 one-dimensional range stops before two or more contiguous literal numeric
 cells; `FF085` is a medium-severity formula cell with an explicit direct
 unlocked assignment on an actively protected worksheet; and `FF086` is a
 medium-severity formula workbook that explicitly records `calcMode=manual` and
-`calcCompleted=false`; and `FF087` is a high-severity ordinary formula whose
+`calcCompleted=false`. `FF087` is a high-severity ordinary formula whose
 resolved scalar static dependency returns to its own cell while calculation
-iteration is disabled; and `FF088` is a critical-severity stored formula whose
-tokenized syntax contains an explicit `#REF!` error operand; and `FF089` is a
+iteration is disabled; `FF088` is a critical-severity stored formula whose
+tokenized syntax contains an explicit `#REF!` error operand; `FF089` is a
 high-severity formula whose well-formed saved result is a broken-reference
-error. The copied-formula signal requires two matching immediate formula peers
-and a third contiguous supporting peer. `FF084` accepts only a pure
+error; and `FF090` is a high-severity ordinary formula in a multi-cell static
+circular-reference component while calculation iteration is disabled. The
+copied-formula signal requires two matching immediate formula peers and a third
+contiguous supporting peer. `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
 range, ignores array territory and nonnumeric or one-cell gaps, and never
 calculates a workbook. `FF085` does not guess at row, column, default-style, or
 allowed-edit-range protection precedence. `FF086` stays quiet for manual mode
 alone, automatic calculation, a completed save, an omitted completion marker,
 or a formula-free workbook; it does not claim any saved result is incorrect.
-`FF087` stays quiet when `iterate=true`, and does not infer indirect cycles or
-range, dynamic, spill, explicit-intersection, or array-formula semantics.
-`FF088` accepts only the tokenizer's actual error operand: text literals,
-quoted worksheet names, and tokenization failures stay quiet. JSON, Markdown,
-and SARIF evidence contains locations, static range coordinates, limited
-calculation-status metadata, the direct-static scope, and the saved-result
-fact, not formula text or cached values. `FF089` accepts only an exact saved
+`FF087` remains the direct self-reference boundary. `FF090` accepts only a
+component of at least two eligible ordinary formula cells connected by resolved
+scalar static dependencies; it never expands ranges or evaluates a workbook.
+Both stay quiet when `iterate=true`; `FF090` also excludes dynamic-reference,
+3-D, spill, explicit-intersection, array-formula, and tokenizer-failure
+territory. `FF088` accepts only the tokenizer's actual error operand: text
+literals, quoted worksheet names, and tokenization failures stay quiet. JSON,
+Markdown, and
+SARIF evidence contains locations, static range coordinates, limited
+calculation-status metadata, direct- or multi-cell-static scope, a multi-cell
+component size, and the saved-result fact, not formula text or cached values.
+`FF089` accepts only an exact saved
 `#REF!` formula result, skips a location already covered by `FF088`, and is a
 last-saved display fact rather than proof of a current calculation result.
 Other saved error kinds and missing or malformed cache records stay quiet. Use
@@ -333,7 +340,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.190.0
+  uses: SybilGambleyyu/formulafence@v0.191.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -491,7 +498,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.190.0/formulafence-0.190.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.191.0/formulafence-0.191.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

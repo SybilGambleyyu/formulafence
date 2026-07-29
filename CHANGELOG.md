@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.191.0 — 2026-07-28
+
+- Add high-severity `FF090` to `formulafence lint`: it reports an ordinary
+  formula in a proven multi-cell static circular-reference component when
+  workbook calculation iteration is disabled.
+- Reuse only FormulaFence's resolved scalar static dependency graph, with an
+  iterative strongly connected-component traversal. Direct self references
+  remain under `FF087`; ranges are not expanded or used to close a cycle, and
+  dynamic-reference, 3-D, spill, explicit-intersection, array, and
+  tokenizer-failure territory remains quiet. JSON, Markdown, and SARIF retain
+  only each affected location, the disabled-iteration fact, scope, and
+  component size—never
+  formula text, peer edges, or cached values.
+
 ## 0.190.0 — 2026-07-28
 
 - Add high-severity `FF089` to `formulafence lint`: it reports a formula only

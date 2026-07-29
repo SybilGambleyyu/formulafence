@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from numbers import Real
 
@@ -383,6 +384,138 @@ def _direct_self_reference_locations(
     return tuple(locations)
 
 
+def _multi_cell_static_cycle_locations(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    direct_self_reference_locations: set[CellKey],
+    *,
+    max_formula_pattern_findings: int,
+    existing_finding_count: int,
+) -> tuple[tuple[CellKey, int], ...]:
+    """Return ordinary formula members of proven multi-cell static cycles.
+
+    ``reverse_dependencies`` retains only resolved scalar A1 edges; ranges are
+    held in a separate index. Strongly connected components are therefore an
+    exact static circular-reference fact for the ordinary formulas represented
+    here, not an attempted calculation. The stored edge direction is the
+    reverse of formula evaluation, but reversing every edge leaves strongly
+    connected components unchanged.
+
+    The iterative Tarjan traversal deliberately reuses the existing graph
+    rather than materializing an inverse or expanded range graph. Dynamic-
+    reference, spill, explicit-intersection, three-dimensional, array, and
+    tokenizer-failure territory stays outside this narrow signal. Direct self-reference
+    members remain under FF087 and are omitted here to avoid duplicate prompts.
+    """
+    if snapshot.calculation_settings.get("iterate") is True:
+        return ()
+
+    locations = tuple(
+        location
+        for location in sorted(snapshot.cells, key=_location_sort_key)
+        if (
+            _eligible_formula(snapshot, location, array_ranges_by_sheet)
+            and location not in snapshot.dynamic_reference_functions
+            and location not in snapshot.three_d_reference_tokens
+            and location not in snapshot.spill_reference_tokens
+            and location not in snapshot.implicit_intersection_tokens
+        )
+    )
+    if len(locations) < 2:
+        return ()
+
+    location_indexes = {location: index for index, location in enumerate(locations)}
+    discovery_indexes = [-1] * len(locations)
+    low_links = [0] * len(locations)
+    on_component_stack = bytearray(len(locations))
+    component_stack: list[int] = []
+    findings: list[tuple[CellKey, int]] = []
+    next_discovery_index = 0
+
+    # ``reverse_dependencies`` maps a scalar source cell to its formula
+    # dependents. Cyclic components are invariant under that reversal, so it
+    # can serve as Tarjan's outgoing adjacency without allocating another graph.
+    for root_index, root_location in enumerate(locations):
+        if discovery_indexes[root_index] != -1:
+            continue
+        discovery_indexes[root_index] = next_discovery_index
+        low_links[root_index] = next_discovery_index
+        next_discovery_index += 1
+        component_stack.append(root_index)
+        on_component_stack[root_index] = 1
+        traversal: list[tuple[int, Iterator[CellKey]]] = [
+            (root_index, iter(snapshot.reverse_dependencies.get(root_location, ())))
+        ]
+
+        while traversal:
+            current_index, dependents = traversal[-1]
+            try:
+                dependent_location = next(dependents)
+            except StopIteration:
+                traversal.pop()
+                if traversal:
+                    parent_index = traversal[-1][0]
+                    low_links[parent_index] = min(
+                        low_links[parent_index], low_links[current_index]
+                    )
+                if low_links[current_index] != discovery_indexes[current_index]:
+                    continue
+
+                component: list[int] = []
+                while component_stack:
+                    member_index = component_stack.pop()
+                    on_component_stack[member_index] = 0
+                    component.append(member_index)
+                    if member_index == current_index:
+                        break
+                if len(component) < 2:
+                    continue
+                for member_index in component:
+                    location = locations[member_index]
+                    if location in direct_self_reference_locations:
+                        continue
+                    if (
+                        existing_finding_count + len(findings)
+                        >= max_formula_pattern_findings
+                    ):
+                        raise FormulaFenceError(
+                            "Formula lint exceeds "
+                            "max_formula_pattern_findings="
+                            f"{max_formula_pattern_findings}."
+                        ) from None
+                    findings.append((location, len(component)))
+                continue
+
+            dependent_index = location_indexes.get(dependent_location)
+            if dependent_index is None:
+                continue
+            if discovery_indexes[dependent_index] == -1:
+                discovery_indexes[dependent_index] = next_discovery_index
+                low_links[dependent_index] = next_discovery_index
+                next_discovery_index += 1
+                component_stack.append(dependent_index)
+                on_component_stack[dependent_index] = 1
+                traversal.append(
+                    (
+                        dependent_index,
+                        iter(
+                            snapshot.reverse_dependencies.get(
+                                dependent_location,
+                                (),
+                            )
+                        ),
+                    )
+                )
+            elif on_component_stack[dependent_index]:
+                low_links[current_index] = min(
+                    low_links[current_index], discovery_indexes[dependent_index]
+                )
+
+    return tuple(
+        sorted(findings, key=lambda finding: _location_sort_key(finding[0]))
+    )
+
+
 def _explicit_broken_reference_locations(snapshot: WorkbookSnapshot) -> tuple[CellKey, ...]:
     """Return formula locations whose tokenizer exposed a ``#REF!`` operand.
 
@@ -464,11 +597,11 @@ def lint_snapshot(
     a pure local numeric aggregate is reported only when it stops before a
     short, contiguous numeric run on the same row or column. It also reports
     an explicitly unlocked formula on a protected sheet, an explicit incomplete
-    manual-calculation state for a formula workbook, and a direct static
-    self-reference while iteration is disabled, an explicit broken reference
-    operand, and a saved broken-reference result. It never evaluates formulas,
-    and rejects incomplete array metadata before claiming ordinary-cell
-    coverage.
+    manual-calculation state for a formula workbook, direct and multi-cell
+    static circular references while iteration is disabled, an explicit broken
+    reference operand, and a saved broken-reference result. It never evaluates
+    formulas, and rejects incomplete array metadata before claiming ordinary-
+    cell coverage.
     """
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
@@ -675,10 +808,11 @@ def lint_snapshot(
                 },
             )
         )
-    for location in _direct_self_reference_locations(
+    direct_self_reference_locations = _direct_self_reference_locations(
         snapshot,
         array_ranges_by_sheet,
-    ):
+    )
+    for location in direct_self_reference_locations:
         if len(findings) >= max_formula_pattern_findings:
             raise FormulaFenceError(
                 "Formula lint exceeds "
@@ -696,6 +830,29 @@ def lint_snapshot(
                 details={
                     "calculation_iteration_enabled": False,
                     "reference_scope": "direct_static",
+                },
+            )
+        )
+    for location, cycle_member_count in _multi_cell_static_cycle_locations(
+        snapshot,
+        array_ranges_by_sheet,
+        set(direct_self_reference_locations),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+        existing_finding_count=len(findings),
+    ):
+        findings.append(
+            Finding(
+                rule_id="FF090",
+                severity="high",
+                message=(
+                    "A formula participates in a static multi-cell circular reference "
+                    "while calculation iteration is disabled."
+                ),
+                location=location,
+                details={
+                    "calculation_iteration_enabled": False,
+                    "reference_scope": "multi_cell_static",
+                    "cycle_member_count": cycle_member_count,
                 },
             )
         )

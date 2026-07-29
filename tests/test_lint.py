@@ -408,6 +408,140 @@ def test_lint_reports_direct_static_self_reference_when_iteration_is_disabled(
     }
 
 
+def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {"B2": "=C2+1", "C2": "=B2+1", "D2": "=B2+1"},
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [
+        ("FF090", "high", ("Model", "B2")),
+        ("FF090", "high", ("Model", "C2")),
+    ]
+    assert [finding.details for finding in report.findings] == [
+        {
+            "calculation_iteration_enabled": False,
+            "reference_scope": "multi_cell_static",
+            "cycle_member_count": 2,
+        },
+        {
+            "calculation_iteration_enabled": False,
+            "reference_scope": "multi_cell_static",
+            "cycle_member_count": 2,
+        },
+    ]
+
+
+def test_lint_reports_cross_sheet_static_multi_cell_cycle(tmp_path: Path) -> None:
+    workbook = Workbook()
+    model = workbook.active
+    model.title = "Model"
+    inputs = workbook.create_sheet("Inputs")
+    model["B2"] = "=Inputs!B2+1"
+    inputs["B2"] = "=Model!B2+1"
+    path = tmp_path / "cross-sheet-cycle.xlsx"
+    workbook.save(path)
+
+    report = lint_snapshot(load_snapshot(path))
+
+    assert [
+        (finding.rule_id, finding.location) for finding in report.findings
+    ] == [
+        ("FF090", ("Inputs", "B2")),
+        ("FF090", ("Model", "B2")),
+    ]
+    assert {finding.details["cycle_member_count"] for finding in report.findings} == {2}
+
+
+def test_lint_handles_a_deep_static_multi_cell_cycle_iteratively(tmp_path: Path) -> None:
+    cycle_size = 1_025
+    cells = {
+        f"A{row}": f"=A{row + 1}+1" if row < cycle_size else "=A1+1"
+        for row in range(1, cycle_size + 1)
+    }
+
+    report = lint_snapshot(_snapshot(tmp_path, cells))
+
+    assert len(report.findings) == cycle_size
+    assert {finding.rule_id for finding in report.findings} == {"FF090"}
+    assert {finding.details["cycle_member_count"] for finding in report.findings} == {
+        cycle_size
+    }
+
+
+def test_lint_keeps_iterative_or_ambiguous_multi_cell_cycles_quiet(
+    tmp_path: Path,
+) -> None:
+    iterative = _snapshot(
+        tmp_path,
+        {"B2": "=C2+1", "C2": "=B2+1"},
+        calculation_iteration_enabled=True,
+    )
+    dynamic = _snapshot(
+        tmp_path,
+        {"A1": 1, "B2": "=C2+OFFSET(A1,0,0)", "C2": "=B2+1"},
+    )
+    range_expression = _snapshot(
+        tmp_path,
+        {"B2": "=SUM(C2:C3)", "C2": "=B2+1", "C3": 1},
+    )
+    array_territory = _snapshot(tmp_path, {"B2": "=C2+1", "C2": "=B2+1"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+    three_d = _snapshot(tmp_path, {"B2": "=C2+1", "C2": "=B2+1"})
+    three_d.three_d_reference_tokens[("Model", "B2")] = ("Model:Other!C2",)
+    spill = _snapshot(tmp_path, {"B2": "=C2+1", "C2": "=B2+1"})
+    spill.spill_reference_tokens[("Model", "B2")] = ("C2#",)
+    implicit_intersection = _snapshot(tmp_path, {"B2": "=C2+1", "C2": "=B2+1"})
+    implicit_intersection.implicit_intersection_tokens[("Model", "B2")] = ("@C2",)
+    tokenization_failure = _snapshot(tmp_path, {"B2": "=C2+1", "C2": "=B2+1"})
+    tokenization_failure.tokenization_failure_cells.add(("Model", "B2"))
+
+    assert lint_snapshot(iterative).findings == []
+    assert lint_snapshot(dynamic).findings == []
+    assert lint_snapshot(range_expression).findings == []
+    assert lint_snapshot(array_territory).findings == []
+    assert lint_snapshot(three_d).findings == []
+    assert lint_snapshot(spill).findings == []
+    assert lint_snapshot(implicit_intersection).findings == []
+    assert lint_snapshot(tokenization_failure).findings == []
+
+
+def test_lint_deduplicates_direct_self_reference_inside_multi_cell_cycle(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(tmp_path, {"B2": "=B2+C2", "C2": "=B2+1"})
+
+    report = lint_snapshot(snapshot)
+    assert [
+        (finding.rule_id, finding.location) for finding in report.findings
+    ] == [
+        ("FF087", ("Model", "B2")),
+        ("FF090", ("Model", "C2")),
+    ]
+    assert report.findings[1].details == {
+        "calculation_iteration_enabled": False,
+        "reference_scope": "multi_cell_static",
+        "cycle_member_count": 2,
+    }
+
+
 def test_lint_keeps_iteration_and_dynamic_or_range_self_forms_quiet(
     tmp_path: Path,
 ) -> None:
@@ -710,6 +844,23 @@ def test_lint_shares_its_finding_cap_with_direct_self_references(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_shares_its_finding_cap_with_multi_cell_static_cycles(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=C2+1",
+            "C2": "=B2+1",
+            "D2": "=E2+1",
+            "E2": "=D2+1",
+        },
+    )
+
+    with pytest.raises(FormulaFenceError, match="max_formula_pattern_findings=1"):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_shares_its_finding_cap_with_broken_references(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -880,6 +1031,44 @@ def test_lint_direct_self_reference_renderers_keep_formula_text_out(
                 "text": (
                     "A formula directly references its own cell while calculation "
                     "iteration is disabled."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_multi_cell_static_cycle_renderers_keep_formula_text_out(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(tmp_path, {"B2": "=C2+1", "C2": "=B2+1"})
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "=C2+1" not in rendered
+        assert "=B2+1" not in rendered
+        assert "FF090" in rendered
+    assert "## Static circular-reference evidence" in rendered_markdown
+    assert "a static multi-cell dependency component has 2 formula cells" in rendered_markdown
+    assert [
+        result["locations"][0]["logicalLocations"][0]["name"]
+        for result in rendered_sarif["runs"][0]["results"]
+    ] == ["Model!B2", "Model!C2"]
+    assert {
+        result["properties"]["cycle_member_count"]
+        for result in rendered_sarif["runs"][0]["results"]
+    } == {2}
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF090",
+            "name": "FF090",
+            "shortDescription": {
+                "text": (
+                    "A formula participates in a static multi-cell circular reference "
+                    "while calculation iteration is disabled."
                 )
             },
         }

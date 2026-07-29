@@ -6390,18 +6390,28 @@ def lint_to_markdown(
                 )
             )
     circular_reference_evidence = [
-        finding["location"]
+        (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
-        if finding["rule_id"] == "FF087"
+        if finding["rule_id"] in {"FF087", "FF090"}
     ]
     if circular_reference_evidence:
         lines.extend(["## Static circular-reference evidence", ""])
-        for location in circular_reference_evidence:
-            lines.append(
-                "- {location}: a resolved direct static formula dependency returns to "
-                "the same cell while calculation iteration is disabled."
-                .format(location=_markdown_code(location or "workbook"))
-            )
+        for rule_id, location, evidence in circular_reference_evidence:
+            if rule_id == "FF087":
+                lines.append(
+                    "- {location}: a resolved direct static formula dependency returns to "
+                    "the same cell while calculation iteration is disabled."
+                    .format(location=_markdown_code(location or "workbook"))
+                )
+            else:
+                lines.append(
+                    "- {location}: a static multi-cell dependency component has {count} "
+                    "formula cells while calculation iteration is disabled."
+                    .format(
+                        location=_markdown_code(location or "workbook"),
+                        count=_markdown_escape(evidence["cycle_member_count"]),
+                    )
+                )
     broken_reference_evidence = [
         finding["location"]
         for finding in payload["findings"]
@@ -6442,6 +6452,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         ),
         "FF088": "Formula contains an explicit broken #REF! reference.",
         "FF089": "A formula's saved result is a broken-reference error.",
+        "FF090": (
+            "A formula participates in a static multi-cell circular reference while "
+            "calculation iteration is disabled."
+        ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

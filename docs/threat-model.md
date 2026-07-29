@@ -33,13 +33,17 @@ financial correctness or replace model review.
   alone or claim a particular result is mathematically wrong. Its direct
   circular-reference signal accepts only an ordinary formula with a resolved
   scalar static dependency directly back to itself while workbook `iterate` is
-  absent or false (the OOXML default). It stays quiet for enabled iteration,
-  indirect cycles, static ranges, dynamic references, spill references,
-  explicit intersection, and all array territory. Incomplete array metadata
-  makes the command fail closed. Its JSON, Markdown, and SARIF evidence
-  contains only locations, peer coordinates, static range coordinates, the two
-  calculation-status flags, and direct-static scope, never formula text, cell
-  values, or cached results.
+  absent or false (the OOXML default). Its separate multi-cell signal accepts
+  only a strongly connected component of at least two eligible ordinary formula
+  cells in that same resolved scalar graph. It does not expand a range or
+  evaluate a formula to close a cycle. Both signals stay quiet for enabled
+  iteration; the multi-cell signal also excludes dynamic-reference, 3-D, spill,
+  explicit-intersection, tokenizer-failure, and all array territory. Incomplete
+  array metadata makes the command fail closed. Its JSON, Markdown, and SARIF
+  evidence contains only locations, peer coordinates where copied-pattern
+  evidence needs them, static range coordinates, the two calculation-status
+  flags, direct- or multi-cell-static scope, and a multi-cell component size,
+  never formula text, cell values, or cached results.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not
@@ -422,14 +426,17 @@ cell style makes an ordinary formula editable despite active sheet protection.
 A calculation-freshness finding means a formula workbook records manual mode
 and incomplete calculation before save. A direct-circular-reference finding
 means FormulaFence's resolved scalar static dependency returns to its own
-ordinary formula cell while calculation iteration is disabled. An
-explicit-broken-reference finding means a stored formula tokenized an actual
-`#REF!` error operand, rather than merely containing those characters as text.
-A saved-broken-reference finding means a well-formed formula cache recorded a
-broken-reference error at its last calculation; the literal-formula finding
-takes precedence at the same location. Each is a focused review prompt, not
-proof that a formula should change, a cached result is current, or an error will
-occur at calculation time.
+ordinary formula cell while calculation iteration is disabled. A multi-cell
+static-circular-reference finding means the formula belongs to a component of
+at least two ordinary formula cells connected through those resolved scalar
+dependencies; its reported component size never reveals formulas or peer-edge
+details. An explicit-broken-reference finding means a stored formula tokenized
+an actual `#REF!` error operand, rather than merely containing those characters
+as text. A saved-broken-reference finding means a well-formed formula cache
+recorded a broken-reference error at its last calculation; the literal-formula
+finding takes precedence at the same location. Each is a focused review prompt,
+not proof that a formula should change, a cached result is current, or an error
+will occur at calculation time.
 
 For a portfolio `FF079`, the same distinction applies across candidate
 workbooks: it records that a changed source cell can reach a formula through a

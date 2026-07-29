@@ -5,6 +5,49 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Multi-cell static circular-reference lint — 2026-07-28
+
+Microsoft's [circular-reference guidance](https://support.microsoft.com/en-US/Excel/remove-or-allow-a-circular-reference-in-excel)
+defines a circular reference as direct **or indirect**, and documents iterative
+calculation as the deliberate exception. Microsoft's
+[calculation guidance](https://support.microsoft.com/en-US/Excel/change-formula-recalculation-iteration-or-precision-in-excel)
+likewise says Excel cannot calculate a formula that refers to itself directly or
+indirectly by default. `FF090` therefore reports an ordinary formula only when
+it belongs to a static component containing at least two formula cells and the
+stored workbook setting leaves `iterate` absent or false. It is high severity
+because the file records the default that rejects circular calculation; it does
+not evaluate a formula or claim what a recalculation would display.
+
+The detector traverses FormulaFence's existing resolved scalar dependency index
+iteratively, so it neither expands ranges nor builds another dependency graph.
+Direct self references remain the separate `FF087` signal and are not repeated
+as `FF090`. Enabled iteration, dynamic-reference, 3-D, spill,
+explicit-intersection, array, and tokenizer-failure territory stays quiet.
+Findings retain only the affected location, disabled-iteration fact,
+`multi_cell_static` scope, and the component size—never formula text, peer
+edges, values, or cached results.
+
+Controlled fixtures cover same-sheet and cross-sheet two-cell cycles, a tail
+that merely points into a cycle, a direct-self-reference de-duplication case,
+enabled iteration, dynamic-reference and range expressions, array territory,
+the shared finding cap, JSON/Markdown/SARIF redaction, high-versus-critical CLI
+gates, and a 1,025-cell component to prove the traversal does not rely on
+Python call stack depth.
+
+The independent public scan ran the full lint against the ten public ExceLint
+workbooks plus the 820-formula finance ledger: 11 workbooks and 50,357 formula
+cells. It emitted zero `FF090` findings. This is a prevalence check, not proof
+that those workbooks lack runtime-, range-, or metadata-dependent circular
+references.
+
+The release-versioned 0.191.0 source tree passed **1,365 tests in 95.77
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check`, installed into separate fresh
+environments with declared dependencies, and reported `FormulaFence 0.191.0`.
+Each reproduced a two-cell `FF090` component without rendering either formula:
+the high gate returned `1`, the critical gate returned `0`, and both findings
+retained only their locations and component size.
+
 ## Saved broken-reference result lint — 2026-07-28
 
 Microsoft's [SpreadsheetML formula guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-formulas)

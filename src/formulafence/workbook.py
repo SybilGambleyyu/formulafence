@@ -34134,6 +34134,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                     result_type = "missing"
                     result_value = "missing"
                     is_broken_reference_error = False
+                    is_divide_by_zero_error = False
                     value_is_blank = (
                         value_element is None
                         or value_element.text is None
@@ -34173,6 +34174,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                         result_type = "error"
                         result_value = value_element.text or ""
                         is_broken_reference_error = result_value.casefold() == "#ref!"
+                        is_divide_by_zero_error = result_value.casefold() == "#div/0!"
                         cached_result_cell_count += 1
                         error_cached_result_count += 1
                     elif cell_type == "str":
@@ -34190,6 +34192,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                         unrecognized_cached_result_count += 1
                         result_type = "unrecognized"
                         is_broken_reference_error = False
+                        is_divide_by_zero_error = False
 
                     result_signature = _formula_cached_result_signature(
                         result_type,
@@ -34201,6 +34204,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                             coordinate=coordinate,
                             result_type=result_type,
                             is_broken_reference_error=is_broken_reference_error,
+                            is_divide_by_zero_error=is_divide_by_zero_error,
                             result_signature=result_signature,
                         )
                     )

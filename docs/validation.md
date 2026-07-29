@@ -5,6 +5,75 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Saved division-by-zero result lint — 2026-07-28
+
+Microsoft's [#DIV/0! guidance](https://support.microsoft.com/en-US/Excel/how-to-correct-a-div-0-error)
+states that Excel displays the error when a number is divided by zero or a
+blank cell. `FF106` reports only an exact saved `#DIV/0!` result attached to a
+well-formed formula cell. It is a record of the last saved display state, not a
+formula evaluation or a claim that the current result is unchanged.
+
+The rule reuses FormulaFence's private formula-cache reader. It accepts only a
+valid SpreadsheetML formula cache classified as this exact error, retains no
+formula text or cached value, and emits only a cell location plus a
+`saved_formula_result` scope. Other saved error kinds, missing or malformed
+cache records, and locations where `FF105` already proves a direct literal zero
+divisor stay quiet.
+
+An aggregate raw OOXML survey of the public verified
+[SpreadsheetBench](https://github.com/RUCKBReasoning/SpreadsheetBench) release
+loaded all 800 initial/golden workbook artifacts. It observed 68,770 formula
+cells, 3,433 saved formula errors, and 42 saved division-by-zero errors. The
+same survey over the full 5,464-artifact SpreadsheetBench v0.1 release
+observed 1,264,371 formula cells, 31,119 saved formula errors, and 473 saved
+division-by-zero errors across 48 workbook artifacts. Those 473 errors appear
+in both sides of the public task material: 261 in input artifacts and 212 in
+answer artifacts. The benchmark is built from real-world spreadsheet scenarios,
+but these are public evaluation artifacts; the counts are evidence of saved
+visible error states, not a claim that every one is an unintended production
+defect.
+
+A separate public compatibility survey loaded 463 of 469 OOXML-readable
+workbooks, observed 60,866 formula cells and 1,322 saved formula errors, and
+found 1,233 saved division-by-zero errors. That population is concentrated in
+compatibility test resources, so it is reported as a compatibility signal rather
+than treated as an independent prevalence estimate.
+
+The exact FormulaFence production cache reader replayed all 5,464 full
+SpreadsheetBench artifacts with zero parser warnings. It saw the same 1,264,371
+formula cells and 31,119 cached errors, and classified all 473
+division-by-zero entries as FF106 candidates without retaining their formulas,
+locations, or cached values. The production safe-loader replay over the 469
+compatibility workbooks loaded 454, rejected 15 at established safety
+boundaries, inspected 60,823 formula cells, and found 1,233 saved-error
+candidates. A separate safe-loader replay over verified SpreadsheetBench loaded
+796 workbooks, rejected four, inspected 68,497 formula cells, and found 42
+candidates. The full production lint replay over the compatibility corpus
+emitted 11 `FF105` findings and 1,227 `FF106` findings: six saved-error
+candidates were deliberately suppressed because `FF105` already proves their
+direct literal zero divisor. The full production lint replay over verified
+SpreadsheetBench loaded 796 workbooks, rejected four at established safety
+boundaries, inspected 68,497 formula cells, emitted zero `FF105` findings and
+42 `FF106` findings, and had zero lint rejections.
+
+A focused saved-result lint/CLI/output selection passed **6 tests**. It covers
+exact saved division-by-zero recognition, quiet non-target errors, suppression
+when `FF105` already provides a direct cause, high-severity CLI gates, and
+JSON/Markdown/SARIF redaction of formula and cached-result material.
+
+The release-versioned 0.208.0 source tree passed **1,491 tests in 97.96
+seconds**. `git diff --check`, `ruff check src tests`, and
+`python -m compileall -q src tests` also completed cleanly.
+
+Fresh virtual environments installed both the wheel and source distribution,
+reported `FormulaFence 0.208.0`, and linted a generated saved-result workbook
+as one high-severity `FF106` finding. The JSON and SARIF output checks confirmed
+that neither the formula nor the cached `#DIV/0!` value was emitted. `twine
+check` passed for both artifacts. SHA-256: wheel
+`a4a85649a5b21341c1313d0354ae22e09d45db48ecb9e345c6bf08e7c4ef0f8c`;
+source distribution
+`b64d625d4c5e2d82cb31d5e69549fdc27c3e43c421947afca57da86ac2f606f4`.
+
 ## Direct literal zero-divisor lint — 2026-07-28
 
 Microsoft's [#DIV/0! guidance](https://support.microsoft.com/en-US/Excel/how-to-correct-a-div-0-error)

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.208.0 — 2026-07-28
+
+- Add high-severity `FF106` to `formulafence lint`: it reports a formula only
+  when its well-formed saved result is an exact division-by-zero error. The
+  finding records the last saved display state and does not evaluate a formula
+  or claim its current result is unchanged.
+- Keep the cache boundary narrow and private: other saved error kinds, missing
+  or malformed cache records, and locations already covered by `FF105` stay
+  quiet. JSON, Markdown, and SARIF retain only the affected location and a
+  saved-result scope, never formula text, an error value, or a cached value.
+
 ## 0.207.0 — 2026-07-28
 
 - Add high-severity `FF105` to `formulafence lint`: it reports an infix

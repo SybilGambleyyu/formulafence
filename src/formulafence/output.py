@@ -6740,6 +6740,18 @@ def lint_to_markdown(
                 "- {location}: the stored formula-result cache records a broken-reference "
                 "error.".format(location=_markdown_code(location or "workbook"))
             )
+    saved_divide_by_zero_evidence = [
+        finding["location"]
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF106"
+    ]
+    if saved_divide_by_zero_evidence:
+        lines.extend(["## Saved division-by-zero evidence", ""])
+        for location in saved_divide_by_zero_evidence:
+            lines.append(
+                "- {location}: the stored formula-result cache records a division-by-zero "
+                "error.".format(location=_markdown_code(location or "workbook"))
+            )
     return lines.render()
 
 
@@ -6811,6 +6823,7 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
             "literal character position or count."
         ),
         "FF105": "A division expression uses a direct literal zero divisor.",
+        "FF106": "A formula's saved result is a division-by-zero error.",
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

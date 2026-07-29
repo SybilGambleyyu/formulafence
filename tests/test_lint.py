@@ -2218,15 +2218,46 @@ def test_lint_reports_a_saved_broken_reference_formula_result(tmp_path: Path) ->
     assert report.findings[0].details == {}
 
 
+def test_lint_reports_a_saved_divide_by_zero_formula_result(tmp_path: Path) -> None:
+    snapshot = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "saved-divide-by-zero.xlsx",
+            error_formula="=Inputs!A1/Inputs!A2",
+            error_result="#DIV/0!",
+        )
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF106", "high", ("Report", "B5"))]
+    assert report.findings[0].details == {"evidence_scope": "saved_formula_result"}
+
+
 def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
     tmp_path: Path,
 ) -> None:
-    other_error = load_snapshot(make_formula_cached_result_model(tmp_path / "other.xlsx"))
+    other_error = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "other.xlsx",
+            error_formula="=NA()",
+            error_result="#N/A",
+        )
+    )
     static_reference = load_snapshot(
         make_formula_cached_result_model(
             tmp_path / "static-reference.xlsx",
             error_formula="=#REF!",
             error_result="#REF!",
+        )
+    )
+    direct_zero_divisor = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "direct-zero-divisor.xlsx",
+            error_formula="=Inputs!A1/0",
+            error_result="#DIV/0!",
         )
     )
 
@@ -2235,6 +2266,10 @@ def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
         (finding.rule_id, finding.severity, finding.location)
         for finding in lint_snapshot(static_reference).findings
     ] == [("FF088", "critical", ("Report", "B5"))]
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in lint_snapshot(direct_zero_divisor).findings
+    ] == [("FF105", "high", ("Report", "B5"))]
 
 
 def test_lint_keeps_short_or_non_numeric_aggregate_gaps_quiet(tmp_path: Path) -> None:
@@ -2745,6 +2780,44 @@ def test_lint_saved_broken_reference_renderers_keep_cache_data_out(
             "name": "FF089",
             "shortDescription": {
                 "text": "A formula's saved result is a broken-reference error."
+            },
+        }
+    ]
+
+
+def test_lint_saved_divide_by_zero_renderers_keep_cache_data_out(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "saved-divide-by-zero.xlsx",
+            error_formula="=Inputs!A1/Inputs!A2",
+            error_result="#DIV/0!",
+        )
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "=Inputs!A1/Inputs!A2" not in rendered
+        assert "#DIV/0!" not in rendered
+        assert "FF106" in rendered
+    assert "## Saved division-by-zero evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Report!B5"
+    assert result["properties"] == {
+        "severity": "high",
+        "evidence_scope": "saved_formula_result",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF106",
+            "name": "FF106",
+            "shortDescription": {
+                "text": "A formula's saved result is a division-by-zero error."
             },
         }
     ]

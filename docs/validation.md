@@ -5,6 +5,53 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct-literal `CHOOSE` index lint — 2026-07-28
+
+Microsoft's [CHOOSE reference](https://support.microsoft.com/en-us/excel/functions/choose-function)
+states that `index_num` selects from one through 254 value arguments and that
+an index below 1 or above the last supplied value returns `#VALUE!`.
+FormulaFence therefore adds high-severity `FF097` only when that index error is
+statically provable without evaluating a formula.
+
+`FF097` accepts unqualified native `CHOOSE`, optionally preceded by Excel's
+display-only `@`, with an index and one through 254 nonempty comma-separated
+value arguments. The index must be one direct bare nonnegative decimal literal;
+the detector reports it only when it is zero or lexically exceeds the supplied
+value-argument count. It does not inspect or resolve selected values. Computed,
+signed, decimal, array, and dynamic indexes; malformed calls; explicit broken
+references; array territory; and arbitrary namespaces remain quiet. Controlled
+fixtures cover zero, leading zeros, 254-value bounds, very long literal
+indices, nested calls, `@`, valid values, computed/signed/decimal/array
+indices, omitted arguments, malformed arity, explicit broken references,
+custom and `_xlfn` namespaces, array territory, high-versus-critical CLI
+behavior, shared-cap behavior, generic-outlier replacement, and
+JSON/Markdown/SARIF redaction.
+
+The full-lint replay of 12 public
+[ExceLint fixtures](https://github.com/ExceLint/ExceLint/tree/e8a8efd252a090945be8683ed42cfd714e8bb4b1),
+69 public [Calamine test workbooks](https://github.com/tafia/calamine/tree/f059beb13f733923f229c2977cb469443d3ddf07/tests),
+384 public [ClosedXML workbook resources](https://github.com/ClosedXML/ClosedXML/tree/6762b849342809be95467cdfbe426a64ad11d2bd/ClosedXML.Tests/Resource),
+and four public [DataAnalystPortfolioProjects workbooks](https://github.com/PriyankaJhaTheDeveloper/DataAnalystPortfolioProjects/tree/7e69f79079f2655878387deb6a15e86d85d60d39)
+saw 469 workbooks, loaded 454, rejected 15 at existing safety boundaries, and
+inspected 60,823 formula cells. It observed 30 native `CHOOSE` calls, all in
+the DataAnalystPortfolioProjects workbooks; every observed index was computed
+rather than a bare integer literal, so all 30 correctly remained outside the
+rule and the replay emitted zero `FF097` findings. This is a compatibility and
+false-positive boundary check, not a claim about every unreported formula.
+
+A focused helper/lint/CLI/output run passed **208 tests in 9.52 seconds**
+before release-wide validation. It exercises the structural rule without
+calculating a workbook or exposing source formulas or value arguments in
+rendered evidence.
+
+The release-versioned 0.199.0 source tree passed **1,424 tests in 95.99
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check` and each installed into a separate
+fresh environment with declared dependencies, reporting `FormulaFence 0.199.0`.
+Both reproduced one redacted `FF097` finding aggregating two literal-index
+errors: the critical gate returned `0`, the high gate returned `1`, and SARIF
+contained neither source-sheet nor source-value spellings.
+
 ## Direct-static legacy lookup return-index lint — 2026-07-28
 
 Microsoft's [VLOOKUP reference](https://support.microsoft.com/en-us/excel/functions/vlookup-function)

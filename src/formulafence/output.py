@@ -6522,6 +6522,25 @@ def lint_to_markdown(
                     call_count=_markdown_escape(evidence["lookup_call_count"]),
                 )
             )
+    choose_literal_index_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF097"
+    ]
+    if choose_literal_index_evidence:
+        lines.extend(["## CHOOSE literal-index evidence", ""])
+        for location, evidence in choose_literal_index_evidence:
+            lines.append(
+                "- {location}: {index_count} direct literal-index CHOOSE calls across "
+                "{call_count} calls use out-of-range value-argument indices."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    index_count=_markdown_escape(
+                        evidence["out_of_range_literal_index_count"]
+                    ),
+                    call_count=_markdown_escape(evidence["choose_call_count"]),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6607,6 +6626,9 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF096": (
             "A VLOOKUP or HLOOKUP call uses a literal return index outside its "
             "direct static table range."
+        ),
+        "FF097": (
+            "A CHOOSE call uses a literal index outside its available value arguments."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

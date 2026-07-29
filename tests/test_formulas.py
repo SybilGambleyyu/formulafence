@@ -4,6 +4,7 @@ from formulafence.formulas import (
     _EXCEL_UNQUALIFIED_NATIVE_FUNCTIONS,
     ParsedReference,
     StructuredTable,
+    choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
     extract_references,
     formula_fingerprint,
@@ -250,6 +251,47 @@ def test_lookup_return_index_mismatches_keep_ambiguous_forms_quiet() -> None:
 
     for formula in quiet_formulas:
         assert lookup_return_index_mismatches(formula) == ()
+
+
+def test_choose_literal_index_mismatch_count_finds_direct_native_calls() -> None:
+    assert choose_literal_index_mismatch_count("=CHOOSE(0,A2)") == 1
+    assert choose_literal_index_mismatch_count("=CHOOSE(3,A2,B2)") == 1
+    assert choose_literal_index_mismatch_count("=@CHOOSE(0003,A2,B2)") == 1
+    assert choose_literal_index_mismatch_count(
+        "=CHOOSE(9999999999999999999999999999,A2)"
+    ) == 1
+    assert choose_literal_index_mismatch_count(
+        '=IFERROR(CHOOSE(0,A2)+CHOOSE(4,"one","two","three"),0)'
+    ) == 2
+
+    values = ",".join(f"A{index}" for index in range(1, 255))
+    assert choose_literal_index_mismatch_count(f"=CHOOSE(254,{values})") == 0
+    assert choose_literal_index_mismatch_count(f"=CHOOSE(255,{values})") == 1
+
+
+def test_choose_literal_index_mismatch_count_keeps_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=CHOOSE(1,A2)",
+        "=CHOOSE(2,A2,B2)",
+        "=CHOOSE(001,A2)",
+        "=CHOOSE(A2,A2,B2)",
+        "=CHOOSE(1+2,A2,B2)",
+        "=CHOOSE(+3,A2,B2)",
+        "=CHOOSE(-1,A2,B2)",
+        "=CHOOSE(3.0,A2,B2)",
+        "=CHOOSE({1,2},A2,B2)",
+        "=CHOOSE(0,)",
+        "=CHOOSE(3,A2,)",
+        "=CHOOSE(,A2)",
+        "=CHOOSE(1,A2,,A3)",
+        "=CHOOSE(1)",
+        "=CHOOSE(0,A2,#REF!)",
+        "=Vendor.CHOOSE(3,A2,B2)",
+        "=_xlfn.CHOOSE(3,A2,B2)",
+    )
+
+    for formula in quiet_formulas:
+        assert choose_literal_index_mismatch_count(formula) == 0
 
 
 def test_extract_references_keeps_external_workbooks_separate() -> None:

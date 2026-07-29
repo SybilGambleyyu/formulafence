@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.198.0/formulafence-0.198.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.199.0/formulafence-0.199.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -111,13 +111,15 @@ these produce fifteen reviewable findings:
   incompatible matrix dimensions.
 - `FF096` (high): a native `VLOOKUP` or `HLOOKUP` call uses a literal return
   index outside its direct static table range.
+- `FF097` (high): a native `CHOOSE` call uses a literal index outside its
+  available value arguments.
 
 Use `--fail-on critical` to gate explicit broken-reference operands, or
 `--fail-on high` to also gate blank/error interruptions and direct static
 self-references, multi-cell static cycles, direct conditional-aggregate or
 `SUMPRODUCT` range-shape mismatches, direct static `MMULT` matrix-dimension
-mismatches, direct static legacy-lookup return-index mismatches, and saved
-broken-reference results.
+mismatches, direct static legacy-lookup return-index mismatches, direct static
+`CHOOSE` literal-index mismatches, and saved broken-reference results.
 Use `--fail-on medium` to additionally require review of manual-value,
 formula-outlier, aggregate-range, explicit formula-protection,
 incomplete-manual-calculation, error-checking-suppression, and Table
@@ -181,6 +183,15 @@ explicit-broken-reference, and array-formula territory stay quiet. Its evidence
 retains only the affected location, number of qualifying calls, and number of
 out-of-range literal return indices—never a formula, range spelling, or source
 sheet identity.
+`FF097` accepts only native `CHOOSE` calls (optionally with `@`) with a direct
+bare nonnegative decimal index and one through 254 nonempty value arguments.
+It reports only when that index is zero or exceeds the supplied value-argument
+count, without inspecting selected values. Computed, signed, decimal, array,
+or dynamic indices; malformed calls; explicit-broken-reference operands;
+array-formula territory; and arbitrary namespaces stay quiet. Its evidence
+retains only the affected location, number of qualifying calls, and number of
+out-of-range literal indices—never a formula, value argument, or source sheet
+identity.
 `FF090`
 uses only a strongly connected component of
 resolved scalar static dependencies with at least two eligible ordinary formula
@@ -227,7 +238,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.198.0
+  uses: SybilGambleyyu/formulafence@v0.199.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx

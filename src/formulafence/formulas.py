@@ -2156,16 +2156,17 @@ def _direct_static_a1_range_shape(
     )
 
 
-def _direct_positive_integer_literal(
+def _direct_nonnegative_integer_literal(
     tokens: Sequence[object], start: int, end: int
 ) -> str | None:
-    """Return one direct positive integer literal without evaluating it.
+    """Return one direct nonnegative integer literal without evaluating it.
 
     The normalized decimal string deliberately avoids converting an
     arbitrarily long formula token to ``int``. Callers can compare it against
     their bounded structural limit lexically. Unary signs, decimal notation,
     arithmetic, names, and references remain outside this narrow static
-    contract.
+    contract. ``0`` remains distinguishable for callers whose function
+    contract gives zero a special meaning.
     """
     meaningful = [
         position
@@ -2184,7 +2185,15 @@ def _direct_positive_integer_literal(
     if not value.isascii() or not value.isdecimal():
         return None
     normalized = value.lstrip("0")
-    return normalized or None
+    return normalized or "0"
+
+
+def _direct_positive_integer_literal(
+    tokens: Sequence[object], start: int, end: int
+) -> str | None:
+    """Return one direct positive integer literal without evaluating it."""
+    value = _direct_nonnegative_integer_literal(tokens, start, end)
+    return value if value not in {None, "0"} else None
 
 
 def _positive_integer_literal_exceeds(value: str, limit: int) -> bool:
@@ -2405,6 +2414,61 @@ def lookup_return_index_mismatches(formula: str) -> tuple[str, ...]:
         if _positive_integer_literal_exceeds(index_literal, table_limit):
             mismatches.append(function_name)
     return tuple(mismatches)
+
+
+def choose_literal_index_mismatch_count(formula: str) -> int:
+    """Count provable literal-index bounds errors in native ``CHOOSE`` calls.
+
+    This scans formula tokens only; it does not resolve names, inspect value
+    arguments, calculate a formula, or infer values. A call is deliberately
+    ignored unless it is an unqualified native ``CHOOSE`` (optionally preceded
+    by ``@``), has an index and one through 254 nonempty value arguments, and
+    supplies a direct nonnegative integer literal as its index. A finding is
+    returned only when that literal is zero or exceeds the number of supplied
+    value arguments. Dynamic indexes, signed or decimal notation, arithmetic,
+    array indexes, malformed calls, explicit broken references, and arbitrary
+    namespaces remain outside the finding boundary.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return 0
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return 0
+
+    mismatch_count = 0
+    for position, token in enumerate(tokens):
+        if _unqualified_native_function_name(token) != "CHOOSE":
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if not 2 <= len(arguments) <= 255 or any(
+            not any(
+                not _is_whitespace(tokens[argument_position])
+                for argument_position in range(start, end)
+            )
+            for start, end in arguments
+        ):
+            continue
+        index_literal = _direct_nonnegative_integer_literal(tokens, *arguments[0])
+        if index_literal is None:
+            continue
+        value_argument_count = len(arguments) - 1
+        if index_literal == "0" or _positive_integer_literal_exceeds(
+            index_literal,
+            value_argument_count,
+        ):
+            mismatch_count += 1
+    return mismatch_count
 
 
 def _function_lookup_key(token: object) -> str:

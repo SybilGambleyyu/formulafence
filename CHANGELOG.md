@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.199.0 — 2026-07-28
+
+- Add high-severity `FF097` to `formulafence lint`: it reports an unqualified
+  native `CHOOSE` call only when a direct bare decimal index is zero or exceeds
+  the number of its supplied value arguments.
+- Keep the rule deliberately narrow and private: computed, signed, decimal,
+  array, or dynamic indices; malformed calls; explicit broken references;
+  array territory; and arbitrary namespaces stay quiet. Output retains only
+  aggregate call and out-of-range-literal-index counts.
+
 ## 0.198.0 — 2026-07-28
 
 - Add high-severity `FF096` to `formulafence lint`: it reports an unqualified

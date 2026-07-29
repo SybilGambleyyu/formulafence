@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.198.0
+        uses: SybilGambleyyu/formulafence@v0.199.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -127,7 +127,8 @@ high-severity native `SUMPRODUCT` call whose direct static array arguments have
 different dimensions. `FF095` is a high-severity native `MMULT` call whose
 direct static arrays have incompatible matrix dimensions. `FF096` is a
 high-severity native `VLOOKUP` or `HLOOKUP` call whose literal return index is
-outside its direct static table range. The
+outside its direct static table range. `FF097` is a high-severity native
+`CHOOSE` call whose literal index is outside its available value arguments. The
 copied-formula signal requires two matching immediate formula peers and a third
 contiguous supporting peer. `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
@@ -173,6 +174,13 @@ table values. Names, Tables, external/3-D, full-row, union, computed/dynamic,
 spill, implicit-intersection, malformed, nonliteral or nonpositive-index,
 explicit-broken-reference, and array territory remain outside that boundary. It
 emits only a location and aggregate call/out-of-range-literal-index counts.
+`FF097` accepts only unqualified native `CHOOSE` (optionally with `@`) with a
+direct bare nonnegative decimal index and one through 254 nonempty value
+arguments. It reports only when that index is zero or exceeds the supplied
+value-argument count, without inspecting values. Computed, signed, decimal,
+array, or dynamic indexes; malformed calls; explicit-broken-reference operands;
+array territory; and arbitrary namespaces remain outside that boundary. It
+emits only a location and aggregate call/out-of-range-literal-index counts.
 `FF090` accepts only a component of at least two
 eligible ordinary formula cells connected by resolved scalar static
 dependencies; it never expands ranges or evaluates a workbook. Both stay quiet
@@ -184,10 +192,12 @@ SARIF evidence contains locations, static range coordinates, limited
 calculation-status metadata, direct- or multi-cell-static scope, a multi-cell
 component size, saved-result facts, aggregate error-checking suppression
 counts, Table exception kinds, conditional-aggregate mismatch counts,
-`SUMPRODUCT` mismatch counts, `MMULT` incompatible-matrix-pair counts, and
-legacy-lookup out-of-range-literal-index counts, not formula text, cached
+`SUMPRODUCT` mismatch counts, `MMULT` incompatible-matrix-pair counts,
+legacy-lookup out-of-range-literal-index counts, and `CHOOSE`
+out-of-range-literal-index counts, not formula text, cached
 values, ignored-error target ranges, direct conditional-aggregate,
-`SUMPRODUCT`, `MMULT`, or legacy-lookup ranges, Table identities, or Table
+`SUMPRODUCT`, `MMULT`, legacy-lookup ranges, or `CHOOSE` value arguments, Table
+identities, or Table
 master formulas.
 `FF089` accepts only an exact saved `#REF!` formula result, skips a location
 already covered by `FF088`, and is a last-saved display fact rather than proof
@@ -395,7 +405,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.198.0
+  uses: SybilGambleyyu/formulafence@v0.199.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -553,7 +563,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.198.0/formulafence-0.198.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.199.0/formulafence-0.199.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

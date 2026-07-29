@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.188.0 — 2026-07-28
+
+- Add high-severity `FF087` to `formulafence lint`: it reports an ordinary
+  formula only when FormulaFence's resolved scalar static dependency returns
+  directly to that same formula cell while workbook calculation iteration is
+  disabled (including the omitted OOXML default).
+- Keep circular-reference inference deliberately narrow. Enabled iteration,
+  indirect cycles, static ranges, dynamic references, spill references,
+  explicit intersection, and array territory remain quiet. JSON, Markdown, and
+  SARIF retain only the formula location, disabled-iteration fact, and
+  direct-static scope—never formula text or cached values.
+
 ## 0.187.0 — 2026-07-28
 
 - Add medium-severity `FF086` to `formulafence lint`: it reports a workbook

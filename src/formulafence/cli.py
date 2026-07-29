@@ -362,7 +362,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     lint = commands.add_parser(
         "lint",
-        help="Find conservative formula, aggregate-range, protection, and calculation risks",
+        help=(
+            "Find conservative formula, aggregate-range, protection, calculation, and "
+            "direct-circular-reference risks"
+        ),
     )
     lint.add_argument("workbook", type=Path)
     _add_dependency_edge_limit_argument(lint)

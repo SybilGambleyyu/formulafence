@@ -26,6 +26,7 @@ def _snapshot(
     unlocked_cells: tuple[str, ...] = (),
     calculation_mode: str | None = None,
     calculation_completed: bool | None = None,
+    calculation_iteration_enabled: bool | None = None,
 ):
     workbook = Workbook()
     worksheet = workbook.active
@@ -39,6 +40,8 @@ def _snapshot(
         workbook.calculation.calcMode = calculation_mode
     if calculation_completed is not None:
         workbook.calculation.calcCompleted = calculation_completed
+    if calculation_iteration_enabled is not None:
+        workbook.calculation.iterate = calculation_iteration_enabled
     path = tmp_path / "model.xlsx"
     workbook.save(path)
     return load_snapshot(path)
@@ -386,6 +389,56 @@ def test_lint_keeps_completed_or_non_manual_calculation_states_quiet(tmp_path: P
     assert lint_snapshot(formula_free_manual).findings == []
 
 
+def test_lint_reports_direct_static_self_reference_when_iteration_is_disabled(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(tmp_path, {"B2": "=B2+1"})
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF087", "high", ("Model", "B2"))]
+    assert report.findings[0].details == {
+        "calculation_iteration_enabled": False,
+        "reference_scope": "direct_static",
+    }
+
+
+def test_lint_keeps_iteration_and_dynamic_or_range_self_forms_quiet(
+    tmp_path: Path,
+) -> None:
+    iterative = _snapshot(
+        tmp_path,
+        {"B2": "=B2+1"},
+        calculation_iteration_enabled=True,
+    )
+    dynamic = _snapshot(tmp_path, {"A1": "=OFFSET(A1,1,0)", "A2": 10})
+    spill = _snapshot(tmp_path, {"A1": "=A1#"})
+    implicit_intersection = _snapshot(tmp_path, {"A1": "=@A1"})
+    range_expression = _snapshot(tmp_path, {"A1": "=SUM(A1:A2)", "A2": 10})
+    array_territory = _snapshot(tmp_path, {"A1": "=A1+1"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="A1",
+            ref="A1",
+            min_column=1,
+            min_row=1,
+            max_column=1,
+            max_row=1,
+        ),
+    )
+
+    assert lint_snapshot(iterative).findings == []
+    assert lint_snapshot(dynamic).findings == []
+    assert lint_snapshot(spill).findings == []
+    assert lint_snapshot(implicit_intersection).findings == []
+    assert lint_snapshot(range_expression).findings == []
+    assert lint_snapshot(array_territory).findings == []
+
+
 def test_lint_keeps_short_or_non_numeric_aggregate_gaps_quiet(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -584,6 +637,18 @@ def test_lint_shares_its_finding_cap_with_incomplete_manual_calculation(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_shares_its_finding_cap_with_direct_self_references(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {"B2": "=B2+1", "C2": "=C2+1"},
+    )
+
+    with pytest.raises(FormulaFenceError, match="max_formula_pattern_findings=1"):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_renderers_keep_formula_text_out_of_review_artifacts(tmp_path: Path) -> None:
     snapshot = _snapshot(
         tmp_path,
@@ -710,6 +775,41 @@ def test_lint_incomplete_manual_calculation_renderers_keep_formula_text_out(
             "name": "FF086",
             "shortDescription": {
                 "text": "A formula workbook was saved with incomplete manual calculation."
+            },
+        }
+    ]
+
+
+def test_lint_direct_self_reference_renderers_keep_formula_text_out(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(tmp_path, {"B2": "=B2+1"})
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "=B2+1" not in rendered
+        assert "FF087" in rendered
+    assert "## Static circular-reference evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "calculation_iteration_enabled": False,
+        "reference_scope": "direct_static",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF087",
+            "name": "FF087",
+            "shortDescription": {
+                "text": (
+                    "A formula directly references its own cell while calculation "
+                    "iteration is disabled."
+                )
             },
         }
     ]

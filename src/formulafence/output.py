@@ -6389,6 +6389,19 @@ def lint_to_markdown(
                     mode=_markdown_escape(evidence["calculation_mode"])
                 )
             )
+    circular_reference_evidence = [
+        finding["location"]
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF087"
+    ]
+    if circular_reference_evidence:
+        lines.extend(["## Static circular-reference evidence", ""])
+        for location in circular_reference_evidence:
+            lines.append(
+                "- {location}: a resolved direct static formula dependency returns to "
+                "the same cell while calculation iteration is disabled."
+                .format(location=_markdown_code(location or "workbook"))
+            )
     return lines.render()
 
 
@@ -6400,6 +6413,9 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF084": "A simple numeric aggregate stops before adjacent numeric cells.",
         "FF085": "A formula cell is explicitly unlocked on a protected worksheet.",
         "FF086": "A formula workbook was saved with incomplete manual calculation.",
+        "FF087": (
+            "A formula directly references its own cell while calculation iteration is disabled."
+        ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

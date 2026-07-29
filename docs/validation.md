@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct static self-reference lint — 2026-07-28
+
+Microsoft's [calculation guidance](https://support.microsoft.com/en-US/Excel/change-formula-recalculation-iteration-or-precision-in-excel)
+states that Excel cannot calculate a formula that refers to its own cell,
+directly or indirectly, by default; iterative calculation is the explicit
+exception. SpreadsheetML's [`calcPr` definition](https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_calcPr_topic_ID0EWJ63.html)
+defines `iterate=false` as the default and says the engine stops when it
+encounters a circular reference. `FF087` therefore reports only an ordinary
+formula whose already-resolved **scalar static** dependency returns directly to
+its own cell while `iterate` is absent or false. It is high severity because
+the stored default asks Excel not to calculate circular references; it never
+evaluates the formula or exposes its text or any cached value.
+
+The boundary deliberately excludes `iterate=true`, indirect cycles, range
+expressions (including `SUM(A1:A2)` in `A1`), dynamic references such as
+`OFFSET`, spill references, explicit intersection, and all array territory.
+Those forms need evaluation semantics or a broader dependency model, so silence
+is safer than guessing. Controlled fixtures cover a matching scalar
+self-reference, enabled iteration, dynamic/spill/range exclusions, the shared
+finding cap, JSON/Markdown/SARIF redaction, and critical-versus-high CLI gates.
+
+The candidate lint scanned 438 generated `.xlsx`/`.xlsm` fixtures successfully.
+None enabled iteration; across 1,588 formula cells, it produced zero `FF087`
+findings. The independent public scan covered the ten public ExceLint
+workbooks, an 820-formula finance ledger, and a 10-formula compatibility
+workbook—12 workbooks and 50,367 formula cells in total. Two workbooks stored
+`iterate=true`; the candidate produced zero `FF087` findings across all twelve.
+This is a prevalence check, not evidence that the models are free of indirect
+or runtime-dependent circular references.
+
+The release-versioned 0.188.0 source tree passed **1,346 tests in 92.97
+seconds**, Ruff, bytecode compilation, and `git diff --check`. Its wheel and
+source distribution passed `twine check`, installed into separate fresh
+environments with declared dependencies, reported `FormulaFence 0.188.0`, and
+reproduced a controlled `FF087` finding without rendering formula text. A
+critical-only gate returned exit `0`; the high gate returned `1`.
+
 ## Incomplete manual-calculation lint — 2026-07-28
 
 Excel's [calculation guidance](https://support.microsoft.com/en-US/Excel/change-formula-recalculation-iteration-or-precision-in-excel)

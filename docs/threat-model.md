@@ -30,11 +30,16 @@ financial correctness or replace model review.
   signal accepts only a workbook with at least one formula whose stored
   calculation properties explicitly combine `calcMode=manual` and
   `calcCompleted=false`; it does not infer a stale result from manual mode
-  alone or claim a particular result is mathematically wrong. Incomplete array
-  metadata makes the command fail closed. Its JSON, Markdown, and SARIF
-  evidence contains only locations, peer coordinates, static range coordinates,
-  and those two calculation-status flags, never formula text, cell values, or
-  cached results.
+  alone or claim a particular result is mathematically wrong. Its direct
+  circular-reference signal accepts only an ordinary formula with a resolved
+  scalar static dependency directly back to itself while workbook `iterate` is
+  absent or false (the OOXML default). It stays quiet for enabled iteration,
+  indirect cycles, static ranges, dynamic references, spill references,
+  explicit intersection, and all array territory. Incomplete array metadata
+  makes the command fail closed. Its JSON, Markdown, and SARIF evidence
+  contains only locations, peer coordinates, static range coordinates, the two
+  calculation-status flags, and direct-static scope, never formula text, cell
+  values, or cached results.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not
@@ -415,9 +420,11 @@ finding means an accepted static aggregate range ends before a short contiguous
 run of numeric literals. A formula-protection finding means a stored direct
 cell style makes an ordinary formula editable despite active sheet protection.
 A calculation-freshness finding means a formula workbook records manual mode
-and incomplete calculation before save. Each is a focused review prompt, not
-proof that a formula should change, a cached result is stale, or an error will
-occur at calculation time.
+and incomplete calculation before save. A direct-circular-reference finding
+means FormulaFence's resolved scalar static dependency returns to its own
+ordinary formula cell while calculation iteration is disabled. Each is a
+focused review prompt, not proof that a formula should change, a cached result
+is stale, or an error will occur at calculation time.
 
 For a portfolio `FF079`, the same distinction applies across candidate
 workbooks: it records that a changed source cell can reach a formula through a

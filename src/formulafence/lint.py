@@ -352,6 +352,37 @@ def _has_incomplete_manual_calculation(snapshot: WorkbookSnapshot) -> bool:
     )
 
 
+def _direct_self_reference_locations(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+) -> tuple[CellKey, ...]:
+    """Return exact static self references when OOXML iteration is disabled.
+
+    The workbook ``iterate`` calculation property defaults to false.  A direct
+    scalar dependency back to its own ordinary formula cell is therefore a
+    circular reference Excel will not attempt to calculate by default.  This
+    deliberately does not try to infer indirect cycles or interpret a range,
+    dynamic reference, spill, or explicit-intersection expression: each needs
+    more evaluation semantics than this lint promises.
+    """
+    if snapshot.calculation_settings.get("iterate") is True:
+        return ()
+
+    locations: list[CellKey] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if not _eligible_formula(snapshot, location, array_ranges_by_sheet):
+            continue
+        if (
+            location in snapshot.dynamic_reference_functions
+            or location in snapshot.spill_reference_tokens
+            or location in snapshot.implicit_intersection_tokens
+        ):
+            continue
+        if location in snapshot.reverse_dependencies.get(location, ()):
+            locations.append(location)
+    return tuple(locations)
+
+
 def _candidate_message(kind: str) -> tuple[str, str, str]:
     """Return the rule, severity, and reviewer-facing message for a pattern kind."""
     if kind == "blank_gap":
@@ -399,10 +430,11 @@ def lint_snapshot(
     rather than treating a general spreadsheet smell as an error. Separately,
     a pure local numeric aggregate is reported only when it stops before a
     short, contiguous numeric run on the same row or column. It also reports
-    an explicitly unlocked formula on a protected sheet and an explicit
-    incomplete manual-calculation state for a formula workbook. It never
-    evaluates formulas, and rejects incomplete array metadata before claiming
-    ordinary-cell coverage.
+    an explicitly unlocked formula on a protected sheet, an explicit incomplete
+    manual-calculation state for a formula workbook, and a direct static
+    self-reference while iteration is disabled. It never evaluates formulas,
+    and rejects incomplete array metadata before claiming ordinary-cell
+    coverage.
     """
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
@@ -606,6 +638,30 @@ def lint_snapshot(
                 details={
                     "calculation_mode": "manual",
                     "calculation_completed_before_save": False,
+                },
+            )
+        )
+    for location in _direct_self_reference_locations(
+        snapshot,
+        array_ranges_by_sheet,
+    ):
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF087",
+                severity="high",
+                message=(
+                    "A formula directly references its own cell while calculation "
+                    "iteration is disabled."
+                ),
+                location=location,
+                details={
+                    "calculation_iteration_enabled": False,
+                    "reference_scope": "direct_static",
                 },
             )
         )

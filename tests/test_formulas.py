@@ -8,6 +8,7 @@ from formulafence.formulas import (
     approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
+    date_function_literal_code_mismatch_counts,
     direct_sum_argument_reference_groups,
     direct_zero_divisor_count,
     extract_references,
@@ -474,6 +475,61 @@ def test_mod_literal_zero_divisor_count_keeps_ambiguous_forms_quiet() -> None:
 
     for formula in quiet_formulas:
         assert mod_literal_zero_divisor_count(formula) == 0
+
+
+def test_date_function_literal_code_mismatch_counts_find_direct_native_calls() -> None:
+    assert date_function_literal_code_mismatch_counts("=YEARFRAC(A2,B2,5)") == (
+        1,
+        1,
+        0,
+        0,
+    )
+    assert date_function_literal_code_mismatch_counts("=@WEEKDAY(A2,0)") == (
+        1,
+        0,
+        1,
+        0,
+    )
+    assert date_function_literal_code_mismatch_counts("=WEEKNUM(A2,-1)") == (
+        1,
+        0,
+        0,
+        1,
+    )
+    huge_literal = "9" * 5000
+    assert date_function_literal_code_mismatch_counts(
+        f"=IFERROR(YEARFRAC(A2,B2,{huge_literal})+WEEKDAY(C2,18)+WEEKNUM(D2,99),0)"
+    ) == (3, 1, 1, 1)
+
+
+def test_date_function_literal_code_mismatch_counts_keep_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=YEARFRAC(A2,B2,0)",
+        "=@YEARFRAC(A2,B2,-0)",
+        "=YEARFRAC(A2,B2,4)",
+        "=WEEKDAY(A2,1)",
+        "=WEEKDAY(A2,17)",
+        "=WEEKNUM(A2,1)",
+        "=WEEKNUM(A2,21)",
+        "=YEARFRAC(A2,B2,C2)",
+        "=WEEKDAY(A2,B2)",
+        "=WEEKNUM(A2,B2)",
+        "=YEARFRAC(A2,B2,5.0)",
+        "=WEEKDAY(A2,0E0)",
+        "=WEEKNUM(A2,(0))",
+        "=YEARFRAC(A2,B2,2^3)",
+        "=WEEKDAY(A2,0%)",
+        "=WEEKNUM(A2,--1)",
+        "=YEARFRAC(A2,B2,)",
+        "=WEEKDAY(A2)",
+        "=WEEKNUM(A2,0,1)",
+        "=YEARFRAC(A2,B2,#REF!)",
+        "=Vendor.YEARFRAC(A2,B2,5)",
+        "=_xlfn.WEEKDAY(A2,0)",
+    )
+
+    for formula in quiet_formulas:
+        assert date_function_literal_code_mismatch_counts(formula) == (0, 0, 0, 0)
 
 
 def test_direct_sum_argument_reference_groups_find_qualifying_native_calls() -> None:

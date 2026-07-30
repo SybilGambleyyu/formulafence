@@ -456,6 +456,18 @@ def test_lint_mod_literal_zero_divisor_is_high(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
 
 
+def test_lint_date_function_literal_code_is_high(tmp_path) -> None:
+    workbook_path = tmp_path / "date-function-literal-code.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["B2"] = "=WEEKNUM(C2,0)"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
+
+
 def test_lint_direct_sum_overlap_is_high(tmp_path) -> None:
     workbook_path = tmp_path / "direct-sum-overlap.xlsx"
     workbook = Workbook()

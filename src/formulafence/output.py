@@ -6762,6 +6762,41 @@ def lint_to_markdown(
                     verb="uses" if divisor_count == 1 else "use",
                 )
             )
+    date_function_literal_code_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF113"
+    ]
+    if date_function_literal_code_evidence:
+        lines.extend(["## Date-function literal-code evidence", ""])
+        for location, evidence in date_function_literal_code_evidence:
+            call_count = evidence["date_function_call_count"]
+            yearfrac_basis_count = evidence["unsupported_yearfrac_basis_count"]
+            weekday_return_type_count = evidence[
+                "unsupported_weekday_return_type_count"
+            ]
+            weeknum_return_type_count = evidence[
+                "unsupported_weeknum_return_type_count"
+            ]
+            lines.append(
+                "- {location}: {call_count} date-function {call_noun} {verb} "
+                "unsupported direct literal codes ({yearfrac_basis_count} YEARFRAC "
+                "basis, {weekday_return_type_count} WEEKDAY return type, "
+                "{weeknum_return_type_count} WEEKNUM return type)."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    call_count=_markdown_escape(call_count),
+                    call_noun="call" if call_count == 1 else "calls",
+                    verb="uses" if call_count == 1 else "use",
+                    yearfrac_basis_count=_markdown_escape(yearfrac_basis_count),
+                    weekday_return_type_count=_markdown_escape(
+                        weekday_return_type_count
+                    ),
+                    weeknum_return_type_count=_markdown_escape(
+                        weeknum_return_type_count
+                    ),
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6941,6 +6976,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
             "or option, or omits a required second reference."
         ),
         "FF112": "A MOD call uses a direct literal zero divisor.",
+        "FF113": (
+            "A YEARFRAC, WEEKDAY, or WEEKNUM call uses an unsupported direct "
+            "literal code."
+        ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

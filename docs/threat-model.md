@@ -91,6 +91,16 @@ financial correctness or replace model review.
   stay outside the boundary. It emits only a location plus aggregate
   zero-divisor-call count; formulas, literal values, numerators, and references
   remain private.
+  Its date-function literal-code signal accepts only unqualified native
+  `YEARFRAC`, `WEEKDAY`, and `WEEKNUM` spellings (optionally with `@`) with an
+  explicitly supplied code slot: exactly three nonempty arguments for
+  `YEARFRAC`, or exactly two for `WEEKDAY` and `WEEKNUM`. It inspects only a
+  direct signed decimal integer code and reports one outside the documented
+  function-specific set. It neither evaluates dates nor code expressions and
+  does not read any value. Computed, reference, decimal/scientific, array, malformed,
+  explicit-broken-reference, namespaced, and all array territory stay outside
+  the boundary. It emits only a location plus aggregate function/error-class
+  counts; formulas, literal values, dates, and references remain private.
   Its `MMULT` matrix-dimension signal accepts only the unqualified native
   spelling (optionally with `@`) with exactly two comma-separated arguments,
   each one bounded, internal direct A1 cell/range or whole-column reference.
@@ -195,8 +205,8 @@ financial correctness or replace model review.
   counts, `INDEX` out-of-range-literal-index counts, approximate-lookup
   unsorted-direct-numeric-vector counts, XLOOKUP/XMATCH unsupported-literal-
   mode counts, direct-SUM overlapping-pair and qualifying-call counts,
-  AGGREGATE literal-argument error-class and native-MOD zero-divisor-call
-  counts, direct-
+  AGGREGATE literal-argument error-class, native-MOD zero-divisor-call, and
+  date-function unsupported-code error-class counts, direct-
   or multi-cell-
   static scope, and a multi-cell component size, never formula text, cell
   values, cached results, ignored-error target ranges, direct conditional-
@@ -204,6 +214,7 @@ financial correctness or replace model review.
   `RANDBETWEEN` literal values, `SUBTOTAL` function-code or reference material,
   `INDEX` position values or direct array ranges, approximate-lookup key values
   or table ranges, AGGREGATE literal values or references, MOD arguments,
+  date-function code values or dates,
   direct-SUM range
   spellings or values, Table identities, or
   Table master formulas.

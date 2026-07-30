@@ -95,7 +95,7 @@ static-circular-reference, conditional-aggregate and `SUMPRODUCT` range-shape,
 `RANDBETWEEN` literal-bound, `SUBTOTAL` function-code, `INDEX` literal-position,
 `LARGE`/`SMALL` literal-rank, `LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH`
 literal-argument, direct literal `AGGREGATE` code/arity, native `MOD` direct
-literal zero-divisor, explicit-broken-reference,
+literal zero-divisor, native date-function literal codes, explicit-broken-reference,
 and saved-result risks before or after the normal change review:
 
 ```yaml
@@ -155,7 +155,9 @@ arguments overlap, so at least one cell is included more than once. `FF111` is
 a high-severity native `AGGREGATE` call whose direct literal function number or
 option is outside its documented domain, or whose functions 14–19 omit the
 required second reference. `FF112` is a high-severity native `MOD` call whose
-direct literal divisor is zero. The
+direct literal divisor is zero. `FF113` is a high-severity native `YEARFRAC`,
+`WEEKDAY`, or `WEEKNUM` call whose explicitly supplied direct literal code is
+outside its documented domain. The
 copied-formula signal requires two matching immediate formula peers
 and a third contiguous supporting peer.
 `FF084` accepts only a pure
@@ -302,6 +304,16 @@ evaluates the number argument nor reads a value. Computed, reference,
 decimal/scientific, array, malformed, explicit-broken-reference, array
 territory, and arbitrary namespace forms stay quiet. It emits only a location
 plus an aggregate zero-divisor-call count.
+`FF113` accepts only native `YEARFRAC`, `WEEKDAY`, or `WEEKNUM` (optionally
+with `@`) with their explicitly supplied code slot present: exactly three
+nonempty arguments for `YEARFRAC`, or exactly two for `WEEKDAY` and `WEEKNUM`.
+It inspects only a direct signed decimal integer code and reports one outside
+the documented YEARFRAC basis, WEEKDAY return-type, or WEEKNUM return-type
+set. It does not evaluate dates or code expressions, and it does not read a
+value. Computed, reference,
+decimal/scientific, array, malformed, explicit-broken-reference, array
+territory, and arbitrary namespace forms stay quiet. It emits only a location
+plus aggregate function/error-class counts.
 `FF106` accepts only a well-formed stored formula-result cache whose exact
 private error classification is division by zero. It neither calculates nor
 inspects a formula, retains no cached value, and does not infer that the
@@ -313,7 +325,7 @@ only a location and saved-result scope.
 private error classification is numeric. It neither calculates nor inspects a
 formula, retains no cached value, and does not infer that the current result is
 unchanged. Other saved error kinds, missing or malformed cache records, and
-locations already covered by `FF098` or `FF103` stay quiet. It emits only a
+locations already covered by `FF098`, `FF103`, or `FF113` stay quiet. It emits only a
 location and saved-result scope.
 `FF108` accepts only a well-formed stored formula-result cache whose exact
 private error classification is a name error. It neither calculates nor
@@ -345,7 +357,8 @@ counts, `SUBTOTAL` unsupported-literal-function-code counts, and `INDEX`
 out-of-range-literal-index counts, and approximate-lookup unsorted-direct-
 numeric-vector counts, LARGE/SMALL invalid-literal-rank counts, and
 text-function invalid-literal-argument counts, direct-zero-divisor and native
-MOD zero-divisor counts, direct-SUM overlapping-pair and overlapping-call
+MOD zero-divisor counts, date-function unsupported-code error-class counts,
+direct-SUM overlapping-pair and overlapping-call
 counts, AGGREGATE
 literal-argument error-class counts, and saved-result
 scopes, not formula text, cached values,
@@ -354,7 +367,8 @@ ignored-error target ranges, direct conditional-aggregate, `SUMPRODUCT`,
 values, `SUBTOTAL` function-code/reference material, `INDEX` position values
 or direct array ranges, approximate-lookup key values or table ranges,
 LARGE/SMALL ranks or direct arrays, text-function literal values or text
-operands, zero-divisor literal spellings, numerators, or MOD arguments, AGGREGATE
+operands, zero-divisor literal spellings, numerators, or MOD arguments,
+date-function code values or dates, AGGREGATE
 literal
 values or references, direct-SUM range
 spellings or values, Table identities, or Table master formulas. `FF089`
@@ -363,7 +377,7 @@ covered by `FF088`; `FF106` separately
 accepts an exact saved division-by-zero error and skips a location already
 covered by `FF105` or `FF112`; `FF107` separately accepts an exact saved
 numeric error and
-skips a location already covered by `FF098` or `FF103`; `FF108` separately
+skips a location already covered by `FF098`, `FF103`, or `FF113`; `FF108` separately
 accepts an exact saved name error; `FF109` separately accepts an exact saved
 value error and skips a location already covered by `FF093`. All five are
 last-saved display facts rather than proof of a current calculation result.

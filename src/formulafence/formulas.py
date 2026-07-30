@@ -389,6 +389,16 @@ _MODERN_LOOKUP_MATCH_MODE_CODES = frozenset(
 _MODERN_LOOKUP_SEARCH_MODE_CODES = frozenset(
     {(True, "2"), (True, "1"), (False, "1"), (False, "2")}
 )
+# These date-function options are documented discrete integer codes. Keep the
+# normalized signed-literal representation so contracts remain safe for
+# arbitrarily long literals without converting them to Python integers.
+_YEARFRAC_BASIS_CODES = frozenset((False, str(code)) for code in range(5))
+_WEEKDAY_RETURN_TYPE_CODES = frozenset(
+    (False, str(code)) for code in (1, 2, 3, 11, 12, 13, 14, 15, 16, 17)
+)
+_WEEKNUM_RETURN_TYPE_CODES = frozenset(
+    (False, str(code)) for code in (1, 2, 11, 12, 13, 14, 15, 16, 17, 21)
+)
 
 
 @dataclass(frozen=True)
@@ -3168,6 +3178,90 @@ def mod_literal_zero_divisor_count(formula: str) -> int:
         if divisor is not None and divisor[1] == "0":
             mismatch_count += 1
     return mismatch_count
+
+
+def date_function_literal_code_mismatch_counts(
+    formula: str,
+) -> tuple[int, int, int, int]:
+    """Return direct static invalid-code counts for native date functions.
+
+    The returned tuple is ``(call_count, invalid_yearfrac_basis_count,
+    invalid_weekday_return_type_count, invalid_weeknum_return_type_count)``.
+    This token-only helper recognizes exact unqualified native ``YEARFRAC``,
+    ``WEEKDAY``, and ``WEEKNUM`` calls, optionally preceded by Excel's
+    display-only ``@`` operator. It inspects only a direct signed decimal
+    integer in the explicitly supplied code slot: a third argument for
+    YEARFRAC or a second argument for WEEKDAY and WEEKNUM. It does not
+    evaluate dates or codes, nor inspect referenced values. Computed,
+    reference, decimal, scientific, array, malformed, explicit-broken-
+    reference, and arbitrary namespace forms stay outside this narrow
+    contract.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return (0, 0, 0, 0)
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return (0, 0, 0, 0)
+
+    call_count = 0
+    invalid_yearfrac_basis_count = 0
+    invalid_weekday_return_type_count = 0
+    invalid_weeknum_return_type_count = 0
+    for position, token in enumerate(tokens):
+        function_name = _unqualified_native_function_name(token)
+        if function_name == "YEARFRAC":
+            expected_argument_count = 3
+            code_argument_index = 2
+            supported_codes = _YEARFRAC_BASIS_CODES
+        elif function_name == "WEEKDAY":
+            expected_argument_count = 2
+            code_argument_index = 1
+            supported_codes = _WEEKDAY_RETURN_TYPE_CODES
+        elif function_name == "WEEKNUM":
+            expected_argument_count = 2
+            code_argument_index = 1
+            supported_codes = _WEEKNUM_RETURN_TYPE_CODES
+        else:
+            continue
+
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if len(arguments) != expected_argument_count or any(
+            not any(
+                not _is_whitespace(tokens[argument_position])
+                for argument_position in range(start, end)
+            )
+            for start, end in arguments
+        ):
+            continue
+        code = _direct_signed_integer_literal(tokens, *arguments[code_argument_index])
+        if code is None or code in supported_codes:
+            continue
+
+        call_count += 1
+        if function_name == "YEARFRAC":
+            invalid_yearfrac_basis_count += 1
+        elif function_name == "WEEKDAY":
+            invalid_weekday_return_type_count += 1
+        else:
+            invalid_weeknum_return_type_count += 1
+
+    return (
+        call_count,
+        invalid_yearfrac_basis_count,
+        invalid_weekday_return_type_count,
+        invalid_weeknum_return_type_count,
+    )
 
 
 def index_literal_position_mismatch_count(formula: str) -> int:

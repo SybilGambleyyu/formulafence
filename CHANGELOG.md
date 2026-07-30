@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.215.0 — 2026-07-28
+
+- Add high-severity `FF113` to `formulafence lint`: it reports an exact native
+  `YEARFRAC`, `WEEKDAY`, or `WEEKNUM` call only when its explicitly supplied
+  code slot is a direct signed decimal integer outside Microsoft's documented
+  domain, which yields `#NUM!`.
+- Keep the boundary narrow and private: `YEARFRAC` must have exactly three
+  nonempty arguments, while `WEEKDAY` and `WEEKNUM` must have exactly two, and
+  no explicit broken-reference operand may be present. Computed, reference,
+  decimal/scientific, array, malformed, array-territory, and arbitrary namespace
+  forms stay quiet. A same-location `FF113` supersedes saved-result `FF107`.
+  JSON, Markdown, and SARIF retain only the affected location and aggregate
+  function/error-class counts, never formula text, literal values, or references.
+
 ## 0.214.0 — 2026-07-28
 
 - Add high-severity `FF112` to `formulafence lint`: it reports an exact native

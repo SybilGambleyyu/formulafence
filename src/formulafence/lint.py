@@ -20,6 +20,7 @@ from formulafence.formulas import (
     approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
+    date_function_literal_code_mismatch_counts,
     direct_sum_argument_reference_groups,
     direct_zero_divisor_count,
     index_literal_position_mismatch_count,
@@ -1171,6 +1172,60 @@ def _mod_literal_zero_divisor_candidates(
     return tuple(candidates)
 
 
+def _date_function_literal_code_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int, int, int, int], ...]:
+    """Return cells with unsupported direct literal date-function codes.
+
+    The formula helper accepts only exact native YEARFRAC, WEEKDAY, and
+    WEEKNUM calls with complete documented arity and a direct signed integer
+    in the relevant code slot. It neither evaluates dates nor reads cell
+    values. This workbook layer limits results to ordinary inspectable formula
+    cells outside array territory and retains only aggregate error-class
+    counts, never formula text, literal values, references, or results.
+    """
+    candidates: list[tuple[CellKey, int, int, int, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        (
+            date_function_call_count,
+            invalid_yearfrac_basis_count,
+            invalid_weekday_return_type_count,
+            invalid_weeknum_return_type_count,
+        ) = date_function_literal_code_mismatch_counts(formula)
+        if not date_function_call_count:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append(
+            (
+                location,
+                date_function_call_count,
+                invalid_yearfrac_basis_count,
+                invalid_weekday_return_type_count,
+                invalid_weeknum_return_type_count,
+            )
+        )
+    return tuple(candidates)
+
+
 def _range_intersects_array_territory(
     snapshot: WorkbookSnapshot,
     *,
@@ -2007,6 +2062,29 @@ def lint_snapshot(
         ),
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
+    date_function_literal_code_candidates = _date_function_literal_code_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=(
+            len(conditional_aggregate_candidates)
+            + len(sumproduct_candidates)
+            + len(mmult_candidates)
+            + len(lookup_candidates)
+            + len(choose_candidates)
+            + len(randbetween_candidates)
+            + len(subtotal_candidates)
+            + len(index_candidates)
+            + len(approximate_lookup_candidates)
+            + len(modern_lookup_mode_candidates)
+            + len(large_small_rank_candidates)
+            + len(text_literal_argument_candidates)
+            + len(direct_zero_divisor_candidates)
+            + len(direct_sum_overlap_candidates)
+            + len(aggregate_literal_argument_candidates)
+            + len(mod_literal_zero_divisor_candidates)
+        ),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
     structural_formula_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
@@ -2047,6 +2125,9 @@ def lint_snapshot(
     )
     structural_formula_locations.update(
         location for location, _ in mod_literal_zero_divisor_candidates
+    )
+    structural_formula_locations.update(
+        location for location, _, _, _, _ in date_function_literal_code_candidates
     )
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
@@ -2141,6 +2222,7 @@ def lint_snapshot(
                     + len(direct_sum_overlap_candidates)
                     + len(aggregate_literal_argument_candidates)
                     + len(mod_literal_zero_divisor_candidates)
+                    + len(date_function_literal_code_candidates)
                     >= max_formula_pattern_findings
                 ):
                     raise FormulaFenceError(
@@ -2575,6 +2657,43 @@ def lint_snapshot(
             )
         )
 
+    for (
+        location,
+        date_function_call_count,
+        invalid_yearfrac_basis_count,
+        invalid_weekday_return_type_count,
+        invalid_weeknum_return_type_count,
+    ) in date_function_literal_code_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF113",
+                severity="high",
+                message=(
+                    "A YEARFRAC, WEEKDAY, or WEEKNUM call uses an unsupported "
+                    "direct literal code."
+                ),
+                location=location,
+                details={
+                    "date_function_call_count": date_function_call_count,
+                    "unsupported_yearfrac_basis_count": (
+                        invalid_yearfrac_basis_count
+                    ),
+                    "unsupported_weekday_return_type_count": (
+                        invalid_weekday_return_type_count
+                    ),
+                    "unsupported_weeknum_return_type_count": (
+                        invalid_weeknum_return_type_count
+                    ),
+                    "evidence_scope": "date_function_direct_literal_codes",
+                },
+            )
+        )
+
     for location in sorted(snapshot.cells, key=_location_sort_key):
         if not _eligible_formula(snapshot, location, array_ranges_by_sheet):
             continue
@@ -2797,6 +2916,9 @@ def lint_snapshot(
     static_numeric_error_location_set = {
         location for location, _ in randbetween_candidates
     } | {location for location, _ in large_small_rank_candidates}
+    static_numeric_error_location_set.update(
+        location for location, _, _, _, _ in date_function_literal_code_candidates
+    )
     for location in _saved_numeric_error_result_locations(snapshot):
         if location in static_numeric_error_location_set:
             continue

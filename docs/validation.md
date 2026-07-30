@@ -5,6 +5,51 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Native date-function literal-code lint — 2026-07-28
+
+Microsoft's [YEARFRAC reference](https://support.microsoft.com/en-us/excel/functions/yearfrac-function)
+defines bases 0–4 and states that a basis below 0 or above 4 returns `#NUM!`.
+Its [WEEKDAY reference](https://support.microsoft.com/en-us/excel/functions/weekday-function)
+defines return types 1, 2, 3, and 11–17 and states that an out-of-table value
+returns `#NUM!`. Its [WEEKNUM reference](https://support.microsoft.com/en-us/excel/functions/weeknum-function)
+defines return types 1, 2, 11–17, and 21 and likewise states that an
+out-of-table value returns `#NUM!`. `FF113` therefore reports only an
+unqualified native `YEARFRAC` call (optionally with `@`) with exactly three
+nonempty arguments, or native `WEEKDAY`/`WEEKNUM` calls with exactly two,
+when the explicitly supplied code is a direct signed decimal integer outside
+the relevant documented set. It does not evaluate dates or codes, or read a
+referenced value, and it deliberately leaves computed, reference,
+decimal/scientific, array, malformed, explicit-broken-reference,
+array-territory, and arbitrary namespace forms quiet.
+
+An aggregate-only raw OOXML survey of public SpreadsheetBench v0.1 expanded
+ordinary shared-formula instances without retaining formula material. Across
+5,464 workbook artifacts it inspected 1,200,528 ordinary formula instances,
+including 24 direct signed integer `YEARFRAC` bases, 210 `WEEKDAY` return
+types, and 138 `WEEKNUM` return types; all 372 were within the documented
+sets. A separate two-stage production replay streamed 709,797 ordinary stored
+formula cells from 7,865 bounded worksheet XML parts, selected 27 workbooks
+with 99 direct signed integer code slots (6 `YEARFRAC`, 90 `WEEKDAY`, and 3
+`WEEKNUM`), loaded and linted every candidate through FormulaFence's ordinary
+safe reader with zero lint rejections, and emitted zero `FF113` findings. This
+is a strict-boundary false-positive check, not a claim that the public
+workbooks contain no defects. Both probes emitted aggregate counters only: no
+workbook path, formula, coordinate, reference, value, or literal spelling was
+retained or printed.
+
+Focused helper, lint, CLI, and output coverage exercises native and `@` forms;
+multiple calls in one cell; integer-sign normalization; quiet valid,
+computed, reference, decimal/scientific, array, malformed, broken-reference,
+and namespace forms; array territory; generic-outlier replacement; shared
+finding caps; saved-result deduplication; high-severity CLI gating; and
+JSON/Markdown/SARIF redaction.
+
+The release-versioned 0.215.0 source tree passed **1,534 tests in 117.99
+seconds**. `git diff --check`, `ruff check .`, and `python -m compileall -q src
+tests` also completed cleanly. The built wheel and source distribution passed
+`twine check`, then each installed into a fresh environment with the declared
+dependencies and passed an import/helper smoke check.
+
 ## Native `MOD` literal-zero-divisor lint — 2026-07-28
 
 Microsoft's [MOD reference](https://support.microsoft.com/en-us/excel/mod-function)

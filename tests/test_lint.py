@@ -2377,6 +2377,111 @@ def test_lint_mod_literal_zero_divisor_candidates_share_the_structural_cap(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_reports_direct_date_function_literal_code_errors(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "F2": (
+                "=IFERROR(YEARFRAC(A2,B2,5)+@WEEKDAY(C2,0)+WEEKNUM(D2,99),0)"
+            ),
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF113", "high", ("Model", "F2"))]
+    assert report.findings[0].details == {
+        "date_function_call_count": 3,
+        "unsupported_yearfrac_basis_count": 1,
+        "unsupported_weekday_return_type_count": 1,
+        "unsupported_weeknum_return_type_count": 1,
+        "evidence_scope": "date_function_direct_literal_codes",
+    }
+
+
+def test_lint_date_function_literal_code_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=YEARFRAC(B2,C2,4)",
+            "A3": "=WEEKDAY(B3,17)",
+            "A4": "=WEEKNUM(B4,21)",
+            "A5": "=YEARFRAC(B5,C5,D5)",
+            "A6": "=WEEKDAY(B6,C6)",
+            "A7": "=WEEKNUM(B7,0.0)",
+            "A8": "=YEARFRAC(B8,C8,2^3)",
+            "A9": "=WEEKDAY(B9,0%)",
+            "A10": "=WEEKNUM(B10,--1)",
+            "A11": "=YEARFRAC(B11,C11,)",
+            "A12": "=WEEKDAY(B12,#REF!)",
+            "A13": "=Vendor.WEEKNUM(B13,0)",
+        },
+    )
+
+    assert "FF113" not in {finding.rule_id for finding in lint_snapshot(snapshot).findings}
+
+    array_territory = _snapshot(tmp_path, {"B2": "=WEEKDAY(C2,0)"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF113" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_date_function_literal_code_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=YEARFRAC(C2,D2,1)",
+            "B3": "=YEARFRAC(C3,D3,5)",
+            "B4": "=YEARFRAC(C4,D4,1)",
+            "B5": "=YEARFRAC(C5,D5,1)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF113", "high", ("Model", "B3"))]
+
+
+def test_lint_date_function_literal_code_candidates_share_the_structural_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": "=SUM(C2:C4,C4:C6)",
+            "F2": "=WEEKNUM(C2,0)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -2701,6 +2806,13 @@ def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
             error_result="#NUM!",
         )
     )
+    invalid_date_function_code = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "invalid-date-function-code.xlsx",
+            error_formula="=WEEKDAY(Inputs!A1,0)",
+            error_result="#NUM!",
+        )
+    )
     conditional_aggregate_value_error = load_snapshot(
         make_formula_cached_result_model(
             tmp_path / "conditional-aggregate-value-error.xlsx",
@@ -2730,6 +2842,10 @@ def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
         (finding.rule_id, finding.severity, finding.location)
         for finding in lint_snapshot(invalid_large_rank).findings
     ] == [("FF103", "high", ("Report", "B5"))]
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in lint_snapshot(invalid_date_function_code).findings
+    ] == [("FF113", "high", ("Report", "B5"))]
     assert [
         (finding.rule_id, finding.severity, finding.location)
         for finding in lint_snapshot(conditional_aggregate_value_error).findings
@@ -4207,6 +4323,53 @@ def test_lint_mod_literal_zero_divisor_renderers_keep_values_private(
             "name": "FF112",
             "shortDescription": {
                 "text": "A MOD call uses a direct literal zero divisor."
+            },
+        }
+    ]
+
+
+def test_lint_date_function_literal_code_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Private Inputs"
+    model = workbook.create_sheet("Model")
+    model["B2"] = '=WEEKDAY(\'Private Inputs\'!$C$2,0)+N("confidential")'
+    path = tmp_path / "private-date-function-literal-code.xlsx"
+    workbook.save(path)
+
+    report = lint_snapshot(load_snapshot(path))
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2" not in rendered
+        assert "confidential" not in rendered
+        assert "WEEKDAY('Private Inputs'" not in rendered
+        assert "FF113" in rendered
+    assert "## Date-function literal-code evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "date_function_call_count": 1,
+        "unsupported_yearfrac_basis_count": 0,
+        "unsupported_weekday_return_type_count": 1,
+        "unsupported_weeknum_return_type_count": 0,
+        "evidence_scope": "date_function_direct_literal_codes",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF113",
+            "name": "FF113",
+            "shortDescription": {
+                "text": (
+                    "A YEARFRAC, WEEKDAY, or WEEKNUM call uses an unsupported "
+                    "direct literal code."
+                )
             },
         }
     ]

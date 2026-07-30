@@ -34,12 +34,17 @@ def _snapshot(
     calculation_mode: str | None = None,
     calculation_completed: bool | None = None,
     calculation_iteration_enabled: bool | None = None,
+    additional_sheets: dict[str, dict[str, object]] | None = None,
 ):
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "Model"
     for coordinate, value in cells.items():
         worksheet[coordinate] = value
+    for title, sheet_cells in (additional_sheets or {}).items():
+        additional_worksheet = workbook.create_sheet(title)
+        for coordinate, value in sheet_cells.items():
+            additional_worksheet[coordinate] = value
     for coordinate in unlocked_cells:
         worksheet[coordinate].protection = Protection(locked=False)
     worksheet.protection.sheet = protected
@@ -2011,6 +2016,138 @@ def test_lint_direct_zero_divisor_candidates_share_the_finding_cap(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_reports_direct_sum_argument_range_overlaps(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "F2": (
+                "=SUM(C2:D4,D4:E6)+SUM(F2:F4,F3:F5)+SUM(G2:G4,H2:H4)"
+                "+SUM(I2:I4,I3:I5,I4:I6)"
+            ),
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF110", "high", ("Model", "F2"))]
+    assert report.findings[0].details == {
+        "direct_sum_call_count": 3,
+        "overlapping_direct_range_pair_count": 5,
+        "evidence_scope": "sum_direct_a1_range_overlap",
+    }
+    single_finding_report = lint_snapshot(
+        snapshot,
+        max_formula_pattern_findings=1,
+    )
+    assert [finding.rule_id for finding in single_finding_report.findings] == ["FF110"]
+
+
+def test_lint_direct_sum_overlap_rule_skips_ambiguous_or_nonoverlapping_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=SUM(B2:B4,C2:C4)",
+            "A3": "=SUM('Inputs'!B2:B4,B2:B4)",
+            "A4": "=SUM(B2:B4,1)",
+            "A5": "=SUM(B:B,B:B)",
+            "A6": "=SUM(NamedRange,B2:B4)",
+            "A7": "=SUM(Table1[Amount],B2:B4)",
+            "A8": "=SUM([Inputs.xlsx]Data!B2:B4,B2:B4)",
+            "A9": "=Vendor.SUM(B2:B4,B2:B4)",
+            "A10": "=SUM(B2:B4,#REF!)",
+            "A11": "=SUM(B2:B4,B3:B5,)",
+            "A12": "=SUM(B2:B4+0,B3:B5)",
+            "A13": "=SUM(Ghost!B2:B4,Ghost!B3:B5)",
+            "A14": "=SUM(B2:B4,B3:B5,Ghost!B2:B4)",
+        },
+        additional_sheets={"Inputs": {"B2": 1, "B3": 2, "B4": 3}},
+    )
+
+    assert "FF110" not in {finding.rule_id for finding in lint_snapshot(snapshot).findings}
+
+    array_territory = _snapshot(tmp_path, {"B2": "=SUM(C2:C4,C4:C6)"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF110" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_direct_sum_overlap_resolves_sheet_names_case_insensitively(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {"B2": "=SUM(inputs!C2:C4,inputs!C4:C6)"},
+        additional_sheets={"Inputs": {"C2": 1, "C3": 2, "C4": 3, "C5": 4, "C6": 5}},
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [finding.rule_id for finding in report.findings] == ["FF110"]
+    assert report.findings[0].details == {
+        "direct_sum_call_count": 1,
+        "overlapping_direct_range_pair_count": 1,
+        "evidence_scope": "sum_direct_a1_range_overlap",
+    }
+
+
+def test_lint_direct_sum_overlap_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=SUM(C2:C4,D2:D4)",
+            "B3": "=SUM(C3:C5,C5:C7)",
+            "B4": "=SUM(C4:C6,D4:D6)",
+            "B5": "=SUM(C5:C7,D5:D7)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF110", "high", ("Model", "B3"))]
+
+
+def test_lint_direct_sum_overlap_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=SUM(C2:C4,C4:C6)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -3693,6 +3830,55 @@ def test_lint_direct_zero_divisor_renderers_keep_values_private(
             "name": "FF105",
             "shortDescription": {
                 "text": "A division expression uses a direct literal zero divisor."
+            },
+        }
+    ]
+
+
+def test_lint_direct_sum_overlap_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Private Inputs"
+    model = workbook.create_sheet("Model")
+    model["B2"] = (
+        "=SUM('Private Inputs'!$C$2:$C$4,'Private Inputs'!$C$4:$C$5)"
+        '+N("confidential")'
+    )
+    path = tmp_path / "private-direct-sum-overlap.xlsx"
+    workbook.save(path)
+
+    report = lint_snapshot(load_snapshot(path))
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2:$C$4" not in rendered
+        assert "confidential" not in rendered
+        assert "SUM('Private Inputs'" not in rendered
+        assert "FF110" in rendered
+    assert "## Direct SUM overlap evidence" in rendered_markdown
+    assert "1 overlapping direct static range pair across 1 SUM call" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "direct_sum_call_count": 1,
+        "overlapping_direct_range_pair_count": 1,
+        "evidence_scope": "sum_direct_a1_range_overlap",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF110",
+            "name": "FF110",
+            "shortDescription": {
+                "text": (
+                    "A SUM call uses direct static ranges that overlap, so at least "
+                    "one cell is included more than once."
+                )
             },
         }
     ]

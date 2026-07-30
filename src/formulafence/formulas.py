@@ -2667,6 +2667,66 @@ def approximate_lookup_direct_table_references(
     return tuple(references)
 
 
+def direct_sum_argument_reference_groups(
+    formula: str,
+) -> tuple[tuple[ParsedReference, ...], ...]:
+    """Return qualifying native ``SUM`` calls' direct static argument groups.
+
+    The helper accepts only an unqualified native ``SUM`` spelling (optionally
+    preceded by ``@``) with two through 255 nonempty arguments, where every
+    argument is one bounded direct internal A1 cell or range reference. Each
+    returned group preserves the private parsed references for one call so a
+    workbook-aware caller can compare same-sheet overlap without exposing a
+    formula or range spelling. Literals, names, Tables, external or 3-D
+    references, unions, computed/dynamic/spill forms, malformed calls, and
+    explicit broken references stay outside the contract.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return ()
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return ()
+
+    groups: list[tuple[ParsedReference, ...]] = []
+    for position, token in enumerate(tokens):
+        if _unqualified_native_function_name(token) != "SUM":
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if not 2 <= len(arguments) <= 255 or any(
+            not any(
+                not _is_whitespace(tokens[argument_position])
+                for argument_position in range(start, end)
+            )
+            for start, end in arguments
+        ):
+            continue
+        references: list[ParsedReference] = []
+        for start, end in arguments:
+            reference = _direct_static_a1_range_reference(
+                tokens,
+                start,
+                end,
+                allow_whole_columns=False,
+            )
+            if reference is None:
+                break
+            references.append(reference)
+        else:
+            groups.append(tuple(references))
+    return tuple(groups)
+
+
 def modern_lookup_literal_mode_mismatch_count(formula: str) -> int:
     """Count unsupported direct mode literals in native XLOOKUP/XMATCH calls.
 

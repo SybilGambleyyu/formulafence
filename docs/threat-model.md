@@ -59,6 +59,19 @@ financial correctness or replace model review.
   references, and all array territory stay outside the boundary. It emits only
   a location plus aggregate call and mismatched-array counts; formulas, range
   spellings, and source sheets remain private.
+  Its direct `SUM` overlap signal accepts only the unqualified native spelling
+  (optionally with `@`) with two through 255 nonempty arguments, each one a
+  bounded internal direct A1 cell/range reference whose sheet resolves in the
+  workbook. It compares only finite same-sheet rectangles and reports only when
+  at least one argument pair intersects, proving that a stored cell is included
+  more than once. It neither reads values nor calculates a formula or decides
+  whether the inclusion was intended. Names, Tables, external/3-D, whole-column,
+  full-row, or union references, computed or dynamic expressions, spills,
+  argument-level implicit intersection, malformed formulas, explicit broken
+  references, unresolved sheets, and all array territory stay outside the
+  boundary. It emits only a location plus aggregate qualifying-call and
+  overlapping-pair counts; formulas, range spellings, source sheets, and values
+  remain private.
   Its `MMULT` matrix-dimension signal accepts only the unqualified native
   spelling (optionally with `@`) with exactly two comma-separated arguments,
   each one bounded, internal direct A1 cell/range or whole-column reference.
@@ -162,13 +175,15 @@ financial correctness or replace model review.
   inverted-literal-bound counts, `SUBTOTAL` unsupported-literal-function-code
   counts, `INDEX` out-of-range-literal-index counts, approximate-lookup
   unsorted-direct-numeric-vector counts, XLOOKUP/XMATCH unsupported-literal-
-  mode counts, direct- or multi-cell-
+  mode counts, direct-SUM overlapping-pair and qualifying-call counts, direct-
+  or multi-cell-
   static scope, and a multi-cell component size, never formula text, cell
   values, cached results, ignored-error target ranges, direct conditional-
   aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup ranges, `CHOOSE` values,
   `RANDBETWEEN` literal values, `SUBTOTAL` function-code or reference material,
   `INDEX` position values or direct array ranges, approximate-lookup key values
-  or table ranges, Table identities, or Table master formulas.
+  or table ranges, direct-SUM range spellings or values, Table identities, or
+  Table master formulas.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web
   Add-in or custom-function code, or worksheet ActiveX/OLE code; it does not

@@ -7,6 +7,7 @@ from formulafence.formulas import (
     approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
+    direct_sum_argument_reference_groups,
     direct_zero_divisor_count,
     extract_references,
     formula_fingerprint,
@@ -440,6 +441,52 @@ def test_direct_zero_divisor_count_keeps_larger_or_ambiguous_forms_quiet() -> No
 
     for formula in quiet_formulas:
         assert direct_zero_divisor_count(formula) == 0
+
+
+def test_direct_sum_argument_reference_groups_find_qualifying_native_calls() -> None:
+    groups = direct_sum_argument_reference_groups(
+        "=SUM(A2:A4,A4:A6)+@SUM('Input Sheet'!B2:B4,'Input Sheet'!B4:B6)"
+    )
+
+    assert [
+        [(reference.sheet, reference.raw) for reference in group]
+        for group in groups
+    ] == [
+        [(None, "A2:A4"), (None, "A4:A6")],
+        [
+            ("Input Sheet", "'Input Sheet'!B2:B4"),
+            ("Input Sheet", "'Input Sheet'!B4:B6"),
+        ],
+    ]
+    maximum_arity_groups = direct_sum_argument_reference_groups(
+        "=SUM(" + ",".join("A1" for _ in range(255)) + ")"
+    )
+    assert len(maximum_arity_groups) == 1
+    assert len(maximum_arity_groups[0]) == 255
+
+
+def test_direct_sum_argument_reference_groups_keep_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=SUM(A2:A4)",
+        "=SUM(A2:A4,1)",
+        "=SUM(A:A,B:B)",
+        "=SUM(2:4,3:5)",
+        "=SUM(NamedRange,A2:A4)",
+        "=SUM(Table1[Amount],A2:A4)",
+        "=SUM([Inputs.xlsx]Data!A2:A4,B2:B4)",
+        "=SUM(Sheet1:Sheet3!A2:A4,B2:B4)",
+        "=SUM(A2:A4,#REF!)",
+        "=Vendor.SUM(A2:A4,A4:A6)",
+        "=SUM(A2:A4,A4:A6,)",
+        "=SUM(A2:A4+0,A4:A6)",
+        "=SUM(@A2:A4,A4:A6)",
+        "=SUM(A2#,A4:A6)",
+        "=SUM(A2:A4",
+        "=SUM(" + ",".join("A1" for _ in range(256)) + ")",
+    )
+
+    for formula in quiet_formulas:
+        assert direct_sum_argument_reference_groups(formula) == ()
 
 
 def test_index_literal_position_mismatch_count_finds_direct_native_calls() -> None:

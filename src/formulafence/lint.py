@@ -19,6 +19,7 @@ from formulafence.formulas import (
     approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
+    direct_sum_argument_reference_groups,
     direct_zero_divisor_count,
     index_literal_position_mismatch_count,
     large_small_literal_rank_mismatch_count,
@@ -962,6 +963,119 @@ def _approximate_lookup_sort_candidates(
     return tuple(candidates)
 
 
+def _direct_sum_overlap_pair_count(
+    references: tuple[ParsedReference, ...],
+    origin_sheet: str,
+    sheet_lookup: dict[str, str],
+) -> int:
+    """Return overlapping pairs from one qualifying private direct SUM group.
+
+    The formula-level helper already excludes dynamic and non-A1 arguments.
+    This workbook-aware layer resolves only an exact ordinary worksheet before
+    comparing finite rectangular bounds. If any sheet identity is unavailable,
+    it stays quiet rather than guessing whether two references share a sheet.
+    """
+    resolved: list[tuple[str, int, int, int, int]] = []
+    for reference in references:
+        sheet = sheet_lookup.get((reference.sheet or origin_sheet).casefold())
+        if (
+            sheet is None
+            or reference.min_column is None
+            or reference.min_row is None
+            or reference.max_column is None
+            or reference.max_row is None
+        ):
+            return 0
+        resolved.append(
+            (
+                sheet,
+                reference.min_column,
+                reference.min_row,
+                reference.max_column,
+                reference.max_row,
+            )
+        )
+
+    overlap_pair_count = 0
+    for position, (sheet, min_column, min_row, max_column, max_row) in enumerate(
+        resolved
+    ):
+        for (
+            other_sheet,
+            other_min_column,
+            other_min_row,
+            other_max_column,
+            other_max_row,
+        ) in resolved[position + 1 :]:
+            if sheet != other_sheet:
+                continue
+            if (
+                min_column <= other_max_column
+                and other_min_column <= max_column
+                and min_row <= other_max_row
+                and other_min_row <= max_row
+            ):
+                overlap_pair_count += 1
+    return overlap_pair_count
+
+
+def _direct_sum_overlap_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int, int], ...]:
+    """Return native direct SUM calls whose same-sheet ranges overlap.
+
+    A candidate requires every SUM argument to be one direct bounded internal
+    A1 cell/range reference. FormulaFence compares only those rectangle bounds,
+    never values or calculation results. Each overlap proves that at least one
+    stored cell is included by more than one argument in that SUM call.
+    """
+    sheet_lookup = {sheet.casefold(): sheet for sheet in snapshot.sheets}
+    candidates: list[tuple[CellKey, int, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        reference_groups = direct_sum_argument_reference_groups(formula)
+        if not reference_groups:
+            continue
+        overlap_pair_counts = tuple(
+            _direct_sum_overlap_pair_count(
+                references,
+                location[0],
+                sheet_lookup,
+            )
+            for references in reference_groups
+        )
+        overlap_pair_count = sum(overlap_pair_counts)
+        if not overlap_pair_count:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append(
+            (
+                location,
+                sum(pair_count > 0 for pair_count in overlap_pair_counts),
+                overlap_pair_count,
+            )
+        )
+    return tuple(candidates)
+
+
 def _range_intersects_array_territory(
     snapshot: WorkbookSnapshot,
     *,
@@ -1549,9 +1663,10 @@ def lint_snapshot(
     visibly unsorted direct numeric key vectors, unsupported direct literal
     XLOOKUP/XMATCH mode codes, direct literal ``LARGE``/``SMALL`` ranks outside
     static-array capacity, impossible direct literal ``LEFT``/``RIGHT``/``MID``/
-    ``FIND``/``SEARCH`` arguments, direct literal zero divisors, direct and
-    multi-cell static circular references while iteration is disabled, an explicit broken
-    reference operand, and saved broken-reference, division-by-zero, or
+    ``FIND``/``SEARCH`` arguments, direct literal zero divisors, direct static
+    ``SUM`` argument-range overlaps, direct and multi-cell static circular
+    references while iteration is disabled, an explicit broken reference
+    operand, and saved broken-reference, division-by-zero, or
     numeric-error, name-error, or value-error results. It never evaluates
     formulas, and rejects incomplete array metadata before claiming
     ordinary-cell coverage.
@@ -1733,6 +1848,26 @@ def lint_snapshot(
         ),
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
+    direct_sum_overlap_candidates = _direct_sum_overlap_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=(
+            len(conditional_aggregate_candidates)
+            + len(sumproduct_candidates)
+            + len(mmult_candidates)
+            + len(lookup_candidates)
+            + len(choose_candidates)
+            + len(randbetween_candidates)
+            + len(subtotal_candidates)
+            + len(index_candidates)
+            + len(approximate_lookup_candidates)
+            + len(modern_lookup_mode_candidates)
+            + len(large_small_rank_candidates)
+            + len(text_literal_argument_candidates)
+            + len(direct_zero_divisor_candidates)
+        ),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
     structural_formula_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
@@ -1764,6 +1899,9 @@ def lint_snapshot(
     )
     structural_formula_locations.update(
         location for location, _ in direct_zero_divisor_candidates
+    )
+    structural_formula_locations.update(
+        location for location, _, _ in direct_sum_overlap_candidates
     )
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
@@ -1855,6 +1993,7 @@ def lint_snapshot(
                     + len(large_small_rank_candidates)
                     + len(text_literal_argument_candidates)
                     + len(direct_zero_divisor_candidates)
+                    + len(direct_sum_overlap_candidates)
                     >= max_formula_pattern_findings
                 ):
                     raise FormulaFenceError(
@@ -2204,6 +2343,35 @@ def lint_snapshot(
                 details={
                     "direct_zero_divisor_count": direct_zero_divisor_expression_count,
                     "evidence_scope": "infix_division_direct_signed_integer_zero",
+                },
+            )
+        )
+
+    for (
+        location,
+        direct_sum_call_count,
+        overlapping_direct_range_pair_count,
+    ) in direct_sum_overlap_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF110",
+                severity="high",
+                message=(
+                    "A SUM call uses direct static ranges that overlap, so at least "
+                    "one cell is included more than once."
+                ),
+                location=location,
+                details={
+                    "direct_sum_call_count": direct_sum_call_count,
+                    "overlapping_direct_range_pair_count": (
+                        overlapping_direct_range_pair_count
+                    ),
+                    "evidence_scope": "sum_direct_a1_range_overlap",
                 },
             )
         )

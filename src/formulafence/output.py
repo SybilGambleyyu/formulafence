@@ -6693,6 +6693,29 @@ def lint_to_markdown(
                     ),
                 )
             )
+    direct_sum_overlap_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF110"
+    ]
+    if direct_sum_overlap_evidence:
+        lines.extend(["## Direct SUM overlap evidence", ""])
+        for location, evidence in direct_sum_overlap_evidence:
+            pair_count = evidence["overlapping_direct_range_pair_count"]
+            call_count = evidence["direct_sum_call_count"]
+            lines.append(
+                "- {location}: {pair_count} overlapping direct static range {pair_noun} "
+                "across {call_count} SUM {call_noun} {verb} that at least one cell is "
+                "included more than once."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    pair_count=_markdown_escape(pair_count),
+                    pair_noun="pair" if pair_count == 1 else "pairs",
+                    call_count=_markdown_escape(call_count),
+                    call_noun="call" if call_count == 1 else "calls",
+                    verb="shows" if pair_count == 1 else "show",
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6863,6 +6886,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF107": "A formula's saved result is a numeric error.",
         "FF108": "A formula's saved result is a name error.",
         "FF109": "A formula's saved result is a value error.",
+        "FF110": (
+            "A SUM call uses direct static ranges that overlap, so at least one "
+            "cell is included more than once."
+        ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

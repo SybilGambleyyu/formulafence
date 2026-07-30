@@ -5,6 +5,69 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct SUM overlap lint — 2026-07-28
+
+Microsoft documents that [`SUM`](https://support.microsoft.com/en-us/excel/functions/sum-function)
+adds numbers, cell references, and ranges, with up to 255 arguments. `FF110`
+therefore reports a narrower, directly provable condition: a native `SUM` call
+has two through 255 direct, bounded, internal A1 cell/range arguments and at
+least two same-sheet rectangles intersect. That proves at least one stored cell
+is included by more than one argument in that call. It does not read values,
+calculate the formula, or decide whether the inclusion was intended.
+
+The parser accepts only unqualified native `SUM` (including Excel's optional
+implicit-intersection `@`) when every argument meets that boundary and every
+referenced sheet resolves in the loaded workbook. It leaves literals, names,
+Tables, external and 3-D references, whole columns or full rows, unions, computed or dynamic
+expressions, spill forms, argument-level implicit-intersection forms, malformed
+calls, explicit broken references, array territory, and unresolved sheets quiet.
+Findings retain only their affected
+location, the count of qualifying `SUM` calls with an overlap, the count of
+overlapping argument-range pairs, and a fixed evidence scope; formulas, range
+spellings, source sheet names, and values are never emitted.
+
+The public [SpreadsheetBench-2](https://github.com/RUCKBReasoning/SpreadsheetBench-2)
+release includes a formula-debugging category built from authentic business
+spreadsheets; its accompanying [paper](https://arxiv.org/abs/2606.29955)
+describes the task as formula debugging/error correction. An exact aggregate
+scan using the shipped direct-reference parser and worksheet-resolution boundary
+loaded eight corrected golden workbooks (two were rejected at established
+workbook-safety boundaries). It examined 185 qualifying direct `SUM` calls and
+found zero overlapping pairs. The corresponding eight double-counting injection
+inputs all safely loaded, contained the same 185 qualifying calls, and produced
+seven overlapping pairs across seven formula cells. The scan retained and
+reported aggregate counters only, not formulas, workbook identities,
+coordinates, ranges, or values.
+
+An additional full SpreadsheetBench v0.1 aggregate inventory saw 5,464
+workbook artifacts, loaded 5,446, and rejected 18 at established workbook-load
+boundaries. Across 1,262,653 formula cells, it counted 226 calls meeting the
+formula-only direct-argument boundary. This contextual inventory is not used to
+state FF110 prevalence: only the final ordinary-lint replay below applies the
+complete worksheet-resolution boundary. Both studies retained only aggregate
+counters, not workbook content.
+
+A final exact FormulaFence production replay used the shipped parser to select
+candidate workbooks and then ran the ordinary bounded lint. It saw the same
+5,464 artifacts, safely loaded 5,446, rejected 18 at established workbook-load
+boundaries, and inspected 1,262,653 formula cells. All 226 qualifying direct
+`SUM` calls occurred in 42 candidate workbooks; all 42 linted successfully with
+zero lint rejections. The ordinary production path emitted zero `FF110`
+findings, qualifying-call counts, or overlapping-pair counts. This is evidence
+that the strict static condition is absent from this public corpus, not a claim
+that its workbooks have no spreadsheet defects or that every real overlap would
+be unintended.
+
+A focused direct-SUM selection passed **10 tests**. It covers native and `@`
+calls, the documented 255-argument maximum, direct overlap geometry, known
+cross-sheet, case-insensitive sheet-name, and unknown-sheet boundaries, quiet
+ambiguous forms, array territory, generic-outlier replacement, shared finding
+caps, high-severity CLI gates, and JSON/Markdown/SARIF redaction.
+
+The release-versioned 0.212.0 source tree passed **1,509 tests in 98.39
+seconds**. `git diff --check`, `ruff check .`, and
+`python -m compileall -q src tests` also completed cleanly.
+
 ## Saved value-error result lint — 2026-07-28
 
 Microsoft's [#VALUE! guidance](https://support.microsoft.com/en-us/excel/how-to-correct-a-value-error)

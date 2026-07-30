@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.211.0
+        uses: SybilGambleyyu/formulafence@v0.212.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -149,7 +149,9 @@ a direct literal zero. `FF106` is a high-severity formula whose saved result is
 a division-by-zero error. `FF107` is a high-severity formula whose saved result
 is a numeric error. `FF108` is a high-severity formula whose saved result is a
 name error. `FF109` is a high-severity formula whose saved result is a value
-error. The copied-formula signal requires two matching immediate formula peers
+error. `FF110` is a high-severity native `SUM` call whose direct static range
+arguments overlap, so at least one cell is included more than once. The
+copied-formula signal requires two matching immediate formula peers
 and a third contiguous supporting peer.
 `FF084` accepts only a pure
 `SUM`/`AVERAGE`/`MIN`/`MAX`/`COUNT` expression with one direct same-sheet A1
@@ -269,6 +271,17 @@ does not inspect or calculate either side of the division. Parenthesized,
 powered, postfix-percent, computed, reference, decimal/scientific,
 repeated-sign, malformed, explicit-broken-reference, and array-territory forms
 stay quiet. It emits only a location and aggregate direct-zero-divisor count.
+`FF110` accepts only an unqualified native `SUM` call (optionally with `@`) with
+two through 255 nonempty arguments, each one bounded direct internal A1
+cell/range reference. It resolves every referenced sheet against the workbook,
+then reports only a same-sheet pair of rectangles that intersects, proving that
+at least one cell is included by more than one argument. It neither reads values
+nor calculates a formula or decides whether the inclusion was intended. Names,
+Tables, external/3-D, whole-column, or full-row references, unions, computed/dynamic/spill/
+argument-level implicit-intersection forms, malformed or explicit-broken-reference formulas,
+array territory, unknown sheets, and arbitrary namespaces remain quiet. It
+emits only a location plus aggregate overlapping-pair and overlapping-call
+counts.
 `FF106` accepts only a well-formed stored formula-result cache whose exact
 private error classification is division by zero. It neither calculates nor
 inspects a formula, retains no cached value, and does not infer that the
@@ -310,16 +323,18 @@ out-of-range-literal-index counts, and `RANDBETWEEN` inverted-literal-bound
 counts, `SUBTOTAL` unsupported-literal-function-code counts, and `INDEX`
 out-of-range-literal-index counts, and approximate-lookup unsorted-direct-
 numeric-vector counts, LARGE/SMALL invalid-literal-rank counts, and
-text-function invalid-literal-argument counts, direct-zero-divisor counts, and
-saved-result scopes, not formula text, cached values,
+text-function invalid-literal-argument counts, direct-zero-divisor counts,
+direct-SUM overlapping-pair and overlapping-call counts, and saved-result
+scopes, not formula text, cached values,
 ignored-error target ranges, direct conditional-aggregate, `SUMPRODUCT`,
 `MMULT`, legacy-lookup ranges, `CHOOSE` value arguments, `RANDBETWEEN` literal
 values, `SUBTOTAL` function-code/reference material, `INDEX` position values
 or direct array ranges, approximate-lookup key values or table ranges,
 LARGE/SMALL ranks or direct arrays, text-function literal values or text
-operands, zero-divisor literal spellings or numerators, Table identities, or
-Table master formulas. `FF089` accepts only an exact saved `#REF!` formula
-result and skips a location already covered by `FF088`; `FF106` separately
+operands, zero-divisor literal spellings or numerators, direct-SUM range
+spellings or values, Table identities, or Table master formulas. `FF089`
+accepts only an exact saved `#REF!` formula result and skips a location already
+covered by `FF088`; `FF106` separately
 accepts an exact saved division-by-zero error and skips a location already
 covered by `FF105`; `FF107` separately accepts an exact saved numeric error and
 skips a location already covered by `FF098` or `FF103`; `FF108` separately
@@ -529,7 +544,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.211.0
+  uses: SybilGambleyyu/formulafence@v0.212.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -687,7 +702,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.211.0/formulafence-0.211.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.212.0/formulafence-0.212.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

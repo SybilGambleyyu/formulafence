@@ -40,7 +40,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.211.0/formulafence-0.211.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.212.0/formulafence-0.212.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -70,8 +70,9 @@ error-checking-suppression, Excel Table calculated-column, static-circular-refer
 conditional-aggregate and `SUMPRODUCT` range-shape, `MMULT` matrix-dimension,
 legacy-lookup return-index and approximate-sort, `RANDBETWEEN` literal-bound,
 `SUBTOTAL` function-code, `INDEX` literal-position, `LARGE`/`SMALL` literal-rank,
-`LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH` literal-argument, direct literal zero-divisor,
-explicit-broken-reference, and saved-result risks that a version diff cannot see. It reports a copied-formula
+`LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH` literal-argument, direct static `SUM`
+argument-range-overlap, direct literal zero-divisor, explicit-broken-reference,
+and saved-result risks that a version diff cannot see. It reports a copied-formula
 interruption only
 when the immediately preceding and following formulas have the same
 relative-copy fingerprint and a third contiguous peer repeats that fingerprint.
@@ -82,11 +83,12 @@ direct conditional-aggregate and `SUMPRODUCT` range-shape, direct static
 `MMULT` matrix-dimension, direct static legacy-lookup return-index, direct
 literal `RANDBETWEEN` bounds, direct literal `SUBTOTAL` function codes, direct
 literal `INDEX` row/column positions, direct literal `LARGE`/`SMALL` ranks,
-direct literal `LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH` arguments, direct literal
-zero divisors, saved division-by-zero, numeric-error, name-error, and
+direct literal `LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH` arguments, direct static
+`SUM` argument-range overlaps, direct literal zero divisors, saved
+division-by-zero, numeric-error, name-error, and
 value-error results,
 explicit-broken-reference, and saved broken-reference-result signals. Together
-these produce twenty-eight reviewable findings:
+these produce twenty-nine reviewable findings:
 
 - `FF082`: a non-formula interruption. Blanks and stored error values are high;
   numeric/manual values are medium; textual markers are low.
@@ -141,6 +143,8 @@ these produce twenty-eight reviewable findings:
 - `FF107` (high): a formula's saved result is a numeric error.
 - `FF108` (high): a formula's saved result is a name error.
 - `FF109` (high): a formula's saved result is a value error.
+- `FF110` (high): a native `SUM` call uses direct static ranges that overlap,
+  so at least one cell is included more than once.
 
 Use `--fail-on critical` to gate explicit broken-reference operands, or
 `--fail-on high` to also gate blank/error interruptions and direct static
@@ -152,7 +156,8 @@ mismatches, direct literal `SUBTOTAL` function-code mismatches, direct literal
 `INDEX` row/column-position mismatches, approximate legacy-lookup sort
 mismatches, direct literal modern-lookup mode-code mismatches, direct literal
 `LARGE`/`SMALL` rank mismatches, direct literal text-argument mismatches,
-direct literal zero-divisor mismatches, saved division-by-zero results, and
+direct static `SUM` argument-range overlaps, direct literal zero-divisor
+mismatches, saved division-by-zero results, and
 saved numeric-error, name-error, value-error, and broken-reference results.
 Use `--fail-on medium` to additionally require review of manual-value,
 formula-outlier, aggregate-range, explicit formula-protection,
@@ -309,6 +314,18 @@ repeated-sign, malformed, explicit-broken-reference, and array-territory forms
 stay quiet. Its evidence retains only the affected location and aggregate
 direct-zero-divisor count—never a formula, numerator, literal spelling, or
 source sheet identity.
+`FF110` accepts only an unqualified native `SUM` call (optionally with `@`) with
+two through 255 nonempty arguments, each one bounded direct internal A1
+cell/range reference. FormulaFence resolves every referenced sheet against the
+workbook, then reports only a same-sheet pair of rectangles that intersects, so
+at least one cell is included by more than one argument. It does not inspect
+cell values, calculate a formula, or decide whether that inclusion was
+intentional. Names, Tables, external/3-D, whole-column, or full-row references, unions,
+computed/dynamic/spill or argument-level implicit-intersection forms, malformed or
+explicit-broken-reference formulas, array territory, unknown sheets, and
+arbitrary namespaces remain quiet. Its evidence retains only the affected
+location and aggregate overlapping-pair and overlapping-call counts—never a
+formula, range spelling, value, or source-sheet identity.
 `FF106` accepts only a well-formed stored formula-result cache whose exact
 private error classification is division by zero. It does not calculate the
 formula, inspect its formula text, retain its cached value, or infer that the
@@ -354,14 +371,16 @@ inverted-literal-bound counts, `SUBTOTAL` unsupported-literal-function-code
 counts, `INDEX` out-of-range-literal-index counts, and approximate-lookup
 unsorted-direct-numeric-vector counts, and XLOOKUP/XMATCH unsupported-literal-
 mode counts, LARGE/SMALL invalid-literal-rank counts, text-function
-invalid-literal-argument counts, direct-zero-divisor counts, and saved-result
-scopes—never formula text, cached values, ignored-error target ranges, direct
+invalid-literal-argument counts, direct-zero-divisor counts, direct-SUM
+overlapping-pair and overlapping-call counts, and saved-result scopes—never
+formula text, cached values, ignored-error target ranges, direct
 conditional-aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup range spellings,
 `INDEX` position values or direct array ranges, approximate-lookup key values
 or table ranges, LARGE/SMALL rank values or direct array ranges, text-function
 literal values or text operands, zero-divisor literal spellings or numerators,
-or Table master formulas. `FF089` accepts only a valid saved formula-result
-cache whose exact error is `#REF!`; `FF106` separately accepts an exact saved
+direct-SUM range spellings or values, or Table master formulas. `FF089` accepts
+only a valid saved formula-result cache whose exact error is `#REF!`; `FF106`
+separately accepts an exact saved
 division-by-zero error; `FF107` separately accepts an exact saved numeric
 error; `FF108` separately accepts an exact saved name error; and `FF109`
 separately accepts an exact saved value error. Missing or malformed cache
@@ -394,7 +413,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.211.0
+  uses: SybilGambleyyu/formulafence@v0.212.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1014,7 +1033,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Formula lint | Conservative blank/error, manual-value, text-marker, and formula-outlier candidates inside a single workbook's copied blocks; narrowly scoped simple aggregate ranges that stop before a contiguous numeric gap; direct static conditional-aggregate range-shape mismatches for `SUMIFS`, `COUNTIFS`, `AVERAGEIFS`, `MAXIFS`, and `MINIFS`, direct static `SUMPRODUCT` array-shape mismatches, direct static `MMULT` inner-dimension mismatches, direct static `VLOOKUP`/`HLOOKUP` out-of-range literal return indices, direct literal `XLOOKUP`/`XMATCH` unsupported mode codes, and direct literal `LARGE`/`SMALL` impossible ranks; explicit direct unlocks on protected formula cells; and formula workbooks explicitly saved with incomplete manual calculation; copied-pattern findings require three local matching peers |
+| Formula lint | Conservative blank/error, manual-value, text-marker, and formula-outlier candidates inside a single workbook's copied blocks; narrowly scoped simple aggregate ranges that stop before a contiguous numeric gap; direct static conditional-aggregate range-shape mismatches for `SUMIFS`, `COUNTIFS`, `AVERAGEIFS`, `MAXIFS`, and `MINIFS`, direct static `SUMPRODUCT` array-shape mismatches, direct static `MMULT` inner-dimension mismatches, direct static `SUM` argument-range overlaps, direct static `VLOOKUP`/`HLOOKUP` out-of-range literal return indices, direct literal `XLOOKUP`/`XMATCH` unsupported mode codes, and direct literal `LARGE`/`SMALL` impossible ranks; explicit direct unlocks on protected formula cells; and formula workbooks explicitly saved with incomplete manual calculation; copied-pattern findings require three local matching peers |
 | Portfolio control | Recursive, relative-path workbook matching with per-file semantic reports, explicit additions/removals, bounded static cross-workbook impact evidence, unreadable-file evidence, bounded inventory/traversal, and consolidated JSON/Markdown/HTML/SARIF for CI |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function candidates, worksheet and formula-defined code-resource registration calls, formula-defined XLM `REGISTER`/`EVALUATE` calls, XLM macro-sheet programs and automatic-macro bindings, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |

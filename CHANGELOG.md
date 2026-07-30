@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.212.0 — 2026-07-28
+
+- Add high-severity `FF110` to `formulafence lint`: it reports only a native
+  `SUM` call whose direct static internal A1 range arguments overlap, proving
+  that at least one cell is included more than once. The finding does not read
+  values, calculate formulas, or decide whether that inclusion was intended.
+- Keep the boundary narrow and private: every `SUM` argument must be one bounded
+  internal A1 cell/range reference and the referenced sheets must resolve in the
+  workbook. Names, Tables, external/3-D, whole-column, or full-row references, unions,
+  computed/dynamic/spill forms, malformed calls, array territory, and unknown
+  sheets stay quiet. JSON, Markdown, and SARIF retain only the affected
+  location plus aggregate overlapping-pair and overlapping-call counts.
+
 ## 0.211.0 — 2026-07-28
 
 - Add high-severity `FF109` to `formulafence lint`: it reports a formula only

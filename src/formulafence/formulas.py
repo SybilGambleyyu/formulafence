@@ -2162,6 +2162,22 @@ def _native_modern_lookup_function_name(token: object) -> str | None:
     return _OOXML_FUTURE_MODERN_LOOKUP_FUNCTION_NAMES.get(function_name)
 
 
+def _native_aggregate_function_name(token: object) -> str | None:
+    """Return one exact native or OOXML-future ``AGGREGATE`` spelling.
+
+    ``AGGREGATE`` was added after the original XLSX formula specification, so
+    valid workbook XML can use its exact ``_xlfn.AGGREGATE`` future-function
+    serialization. Static argument checks may trust that documented spelling,
+    but must not fold arbitrary dotted namespaces into Excel's function.
+    """
+    function_name = _unqualified_native_function_name(token)
+    if function_name == "AGGREGATE":
+        return function_name
+    if function_name == "_XLFN.AGGREGATE":
+        return "AGGREGATE"
+    return None
+
+
 def _direct_static_a1_range_reference(
     tokens: Sequence[object],
     start: int,
@@ -2394,6 +2410,87 @@ _SUBTOTAL_FUNCTION_NUMBERS = frozenset(
         "111",
     }
 )
+
+
+def aggregate_literal_argument_mismatch_counts(formula: str) -> tuple[int, int, int, int]:
+    """Return direct static ``AGGREGATE`` argument-error counts.
+
+    The returned tuple is ``(call_count, invalid_function_num_count,
+    invalid_option_count, missing_required_ref2_count)``. This scans tokens
+    only; it neither evaluates the aggregation nor reads referenced values. A
+    call is deliberately ignored unless it is exact native ``AGGREGATE``
+    (optionally preceded by ``@``) or its exact OOXML ``_xlfn``
+    serialization, has three through 255 nonempty arguments, and has no
+    explicit broken-reference operand. It reports only direct signed decimal
+    integer literals: a function number outside 1–19, an option outside 0–7,
+    or a direct 14–19 function number with only its required first reference.
+    Computed, reference, decimal, scientific, array, malformed, explicit-
+    broken-reference, and arbitrary namespace forms remain outside this narrow
+    static contract.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return (0, 0, 0, 0)
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return (0, 0, 0, 0)
+
+    call_count = 0
+    invalid_function_num_count = 0
+    invalid_option_count = 0
+    missing_required_ref2_count = 0
+    for position, token in enumerate(tokens):
+        if _native_aggregate_function_name(token) is None:
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if not 3 <= len(arguments) <= 255 or any(
+            not any(
+                not _is_whitespace(tokens[argument_position])
+                for argument_position in range(start, end)
+            )
+            for start, end in arguments
+        ):
+            continue
+
+        function_num = _direct_signed_integer_literal(tokens, *arguments[0])
+        options = _direct_signed_integer_literal(tokens, *arguments[1])
+        invalid_function_num = function_num is not None and (
+            _compare_signed_integer_literals(function_num, (False, "1")) < 0
+            or _compare_signed_integer_literals(function_num, (False, "19")) > 0
+        )
+        invalid_option = options is not None and (
+            _compare_signed_integer_literals(options, (False, "0")) < 0
+            or _compare_signed_integer_literals(options, (False, "7")) > 0
+        )
+        missing_required_ref2 = (
+            function_num is not None
+            and _compare_signed_integer_literals(function_num, (False, "14")) >= 0
+            and _compare_signed_integer_literals(function_num, (False, "19")) <= 0
+            and len(arguments) == 3
+        )
+        if not (invalid_function_num or invalid_option or missing_required_ref2):
+            continue
+        call_count += 1
+        invalid_function_num_count += invalid_function_num
+        invalid_option_count += invalid_option
+        missing_required_ref2_count += missing_required_ref2
+
+    return (
+        call_count,
+        invalid_function_num_count,
+        invalid_option_count,
+        missing_required_ref2_count,
+    )
 
 
 def conditional_aggregate_range_shape_mismatches(

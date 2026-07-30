@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.213.0 — 2026-07-28
+
+- Add high-severity `FF111` to `formulafence lint`: it reports an exact native
+  `AGGREGATE` call (including the documented OOXML `_xlfn.AGGREGATE`
+  serialization) only when a direct signed integer function number is outside
+  1–19, a direct signed integer option is outside 0–7, or functions 14–19 omit
+  their required second reference.
+- Keep the boundary narrow and private: calls must have three through 255
+  nonempty arguments and no explicit broken-reference operand. Computed,
+  reference, decimal/scientific, array, malformed, array-territory, and
+  arbitrary namespace forms stay quiet. JSON, Markdown, and SARIF retain only
+  the affected location and aggregate error-class counts, never formula text,
+  literal values, or references.
+
 ## 0.212.0 — 2026-07-28
 
 - Add high-severity `FF110` to `formulafence lint`: it reports only a native

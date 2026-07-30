@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Direct AGGREGATE literal-argument lint — 2026-07-28
+
+Microsoft's [AGGREGATE reference](https://support.microsoft.com/en-us/excel/functions/aggregate-function)
+defines `function_num` as 1–19, lists options 0–7, permits 2 through 253
+reference-form numeric arguments, and says functions 14–19 return `#VALUE!`
+when the required second reference is absent. Microsoft's
+[XLSX function specification](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/5d1b6d44-6fc1-4ecd-8fef-0b27406cc2bf)
+also lists `_xlfn.AGGREGATE` as an exact future-function serialization.
+`FF111` therefore reports only a native `AGGREGATE` or exact `_xlfn.AGGREGATE`
+call with three through 255 nonempty arguments when a direct signed decimal
+integer function number is outside 1–19, a direct signed decimal integer option
+is outside 0–7, or a direct 14–19 function number has only its first reference. It does
+not calculate a formula or inspect references, values, or cached results.
+
+The public SpreadsheetBench v0.1 replay streamed 5,464 workbook artifacts and
+7,865 bounded worksheet XML parts, inspecting 782,140 formula cells without
+retaining formula material. It found 111 candidate workbooks containing 6,549
+structurally qualifying native or `_xlfn` calls. All 111 then passed the
+ordinary FormulaFence safe loader and lint path with zero lint rejections and
+zero `FF111` findings: no unsupported function number, option, or missing
+required second-reference evidence. This is a strict-boundary false-positive
+check, not a claim that the public workbooks contain no defects.
+
+The public SpreadsheetBench-2 Debugging collection independently scanned 110
+workbooks and 2,288 bounded worksheet XML parts (444,258 formula cells), with
+zero qualifying `AGGREGATE` calls across its labeled mutation categories. Both
+corpus probes emitted aggregate counters only; they retained no workbook path,
+formula, coordinate, reference, value, or literal spelling.
+
+A focused selection passed **9 tests** for native, `@`, and exact `_xlfn`
+forms; multiple error classes in one cell; arbitrary-length literal safety;
+documented arity bounds; quiet dynamic and malformed forms; array territory;
+generic-outlier replacement; shared finding caps; high-severity CLI gates; and
+JSON/Markdown/SARIF redaction. The release-versioned 0.213.0 source tree passed
+**1,518 tests in 99.31 seconds**. `git diff --check`, `ruff check .`, and
+`python -m compileall -q src tests` also completed cleanly.
+
 ## Direct SUM overlap lint — 2026-07-28
 
 Microsoft documents that [`SUM`](https://support.microsoft.com/en-us/excel/functions/sum-function)

@@ -2148,6 +2148,135 @@ def test_lint_direct_sum_overlap_candidates_share_the_finding_cap(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_reports_direct_aggregate_literal_argument_errors(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "F2": (
+                "=IFERROR(AGGREGATE(0,8,A2)+_xlfn.AGGREGATE(14,6,A3)"
+                "+AGGREGATE(20,6,A4),0)"
+            ),
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF111", "high", ("Model", "F2"))]
+    assert report.findings[0].details == {
+        "aggregate_call_count": 3,
+        "unsupported_literal_function_num_count": 2,
+        "unsupported_literal_option_count": 1,
+        "missing_required_ref2_count": 1,
+        "evidence_scope": "aggregate_direct_literal_codes_and_ref2_arity",
+    }
+    single_finding_report = lint_snapshot(
+        snapshot,
+        max_formula_pattern_findings=1,
+    )
+    assert [finding.rule_id for finding in single_finding_report.findings] == ["FF111"]
+
+
+def test_lint_aggregate_literal_argument_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=AGGREGATE(1,0,B2)",
+            "A3": "=_xlfn.AGGREGATE(19,7,B3,1)",
+            "A4": "=AGGREGATE(B4,6,C4)",
+            "A5": "=AGGREGATE(1,B5,C5)",
+            "A6": "=AGGREGATE(1+19,6,B6)",
+            "A7": "=AGGREGATE(1,6+2,B7)",
+            "A8": "=AGGREGATE(1,,B8)",
+            "A9": "=AGGREGATE(14,6,B9,)",
+            "A10": "=AGGREGATE(1,6,B10,#REF!)",
+            "A11": "=Vendor.AGGREGATE(0,8,B11)",
+        },
+    )
+
+    assert "FF111" not in {finding.rule_id for finding in lint_snapshot(snapshot).findings}
+
+    array_territory = _snapshot(tmp_path, {"B2": "=AGGREGATE(0,8,C2)"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF111" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_aggregate_literal_argument_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=AGGREGATE(9,6,C2)",
+            "B3": "=AGGREGATE(0,6,C3)",
+            "B4": "=AGGREGATE(9,6,C4)",
+            "B5": "=AGGREGATE(9,6,C5)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF111", "high", ("Model", "B3"))]
+
+
+def test_lint_aggregate_literal_argument_candidates_share_the_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=A2*2",
+            "B4": "=A4*2",
+            "B5": "=A5*2",
+            "E2": "=AGGREGATE(0,6,C2)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
+def test_lint_aggregate_literal_argument_candidates_share_the_structural_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": "=SUM(C2:C4,C4:C6)",
+            "F2": "=AGGREGATE(0,6,C2)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -3878,6 +4007,53 @@ def test_lint_direct_sum_overlap_renderers_keep_values_private(
                 "text": (
                     "A SUM call uses direct static ranges that overlap, so at least "
                     "one cell is included more than once."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_aggregate_literal_argument_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Private Inputs"
+    model = workbook.create_sheet("Model")
+    model["B2"] = '=AGGREGATE(0,8,\'Private Inputs\'!$C$2)+N("confidential")'
+    path = tmp_path / "private-aggregate-literal-argument.xlsx"
+    workbook.save(path)
+
+    report = lint_snapshot(load_snapshot(path))
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2" not in rendered
+        assert "confidential" not in rendered
+        assert "AGGREGATE(0,8" not in rendered
+        assert "FF111" in rendered
+    assert "## AGGREGATE literal-argument evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "aggregate_call_count": 1,
+        "unsupported_literal_function_num_count": 1,
+        "unsupported_literal_option_count": 1,
+        "missing_required_ref2_count": 0,
+        "evidence_scope": "aggregate_direct_literal_codes_and_ref2_arity",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF111",
+            "name": "FF111",
+            "shortDescription": {
+                "text": (
+                    "An AGGREGATE call uses an unsupported direct literal function "
+                    "number or option, or omits a required second reference."
                 )
             },
         }

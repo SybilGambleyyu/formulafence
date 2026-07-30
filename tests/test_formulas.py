@@ -4,6 +4,7 @@ from formulafence.formulas import (
     _EXCEL_UNQUALIFIED_NATIVE_FUNCTIONS,
     ParsedReference,
     StructuredTable,
+    aggregate_literal_argument_mismatch_counts,
     approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
@@ -649,6 +650,67 @@ def test_subtotal_literal_function_num_mismatch_count_keeps_ambiguous_forms_quie
 
     for formula in quiet_formulas:
         assert subtotal_literal_function_num_mismatch_count(formula) == 0
+
+
+def test_aggregate_literal_argument_mismatch_counts_find_direct_native_calls() -> None:
+    assert aggregate_literal_argument_mismatch_counts("=AGGREGATE(0,6,A2)") == (
+        1,
+        1,
+        0,
+        0,
+    )
+    assert aggregate_literal_argument_mismatch_counts("=@_xlfn.AGGREGATE(20,8,A2)") == (
+        1,
+        1,
+        1,
+        0,
+    )
+    assert aggregate_literal_argument_mismatch_counts("=AGGREGATE(14,6,A2)") == (
+        1,
+        0,
+        0,
+        1,
+    )
+    assert aggregate_literal_argument_mismatch_counts(
+        "=IFERROR(AGGREGATE(-1,-1,A2)+_xlfn.AGGREGATE(14,6,A3),0)"
+    ) == (2, 1, 1, 1)
+    huge_literal = "9" * 5000
+    assert aggregate_literal_argument_mismatch_counts(
+        f"=AGGREGATE({huge_literal},6,A2)"
+    ) == (1, 1, 0, 0)
+
+
+def test_aggregate_literal_argument_mismatch_counts_keep_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=AGGREGATE(1,0,A2)",
+        "=_xlfn.AGGREGATE(19,7,A2,1)",
+        "=@AGGREGATE(+1,-0,A2)",
+        "=AGGREGATE(A1,6,A2)",
+        "=AGGREGATE(1,A1,A2)",
+        "=AGGREGATE(1+19,6,A2)",
+        "=AGGREGATE(1,6+2,A2)",
+        "=AGGREGATE(1.0,6,A2)",
+        "=AGGREGATE(1,6E0,A2)",
+        "=AGGREGATE({1},6,A2)",
+        "=AGGREGATE(1,{6},A2)",
+        "=AGGREGATE(14,6,A2,1)",
+        "=AGGREGATE(1,,A2)",
+        "=AGGREGATE(14,6,A2,)",
+        "=AGGREGATE(14,6)",
+        "=AGGREGATE(1,6,A2,#REF!)",
+        "=Vendor.AGGREGATE(0,8,A2)",
+        "=_xlws.AGGREGATE(0,8,A2)",
+    )
+
+    for formula in quiet_formulas:
+        assert aggregate_literal_argument_mismatch_counts(formula) == (0, 0, 0, 0)
+
+    maximum_arity = "=AGGREGATE(0,6," + ",".join("A2" for _ in range(253)) + ")"
+    too_many_arguments = "=AGGREGATE(0,6," + ",".join(
+        "A2" for _ in range(254)
+    ) + ")"
+    assert aggregate_literal_argument_mismatch_counts(maximum_arity) == (1, 1, 0, 0)
+    assert aggregate_literal_argument_mismatch_counts(too_many_arguments) == (0, 0, 0, 0)
 
 
 def test_extract_references_keeps_external_workbooks_separate() -> None:

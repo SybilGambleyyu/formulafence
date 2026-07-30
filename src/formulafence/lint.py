@@ -16,6 +16,7 @@ from formulafence.formulas import (
     MAX_EXCEL_COLUMN,
     MAX_EXCEL_ROW,
     ParsedReference,
+    aggregate_literal_argument_mismatch_counts,
     approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
     conditional_aggregate_range_shape_mismatches,
@@ -1076,6 +1077,58 @@ def _direct_sum_overlap_candidates(
     return tuple(candidates)
 
 
+def _aggregate_literal_argument_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int, int, int, int], ...]:
+    """Return direct static ``AGGREGATE`` argument errors.
+
+    The formula helper accepts only native or exact OOXML-future AGGREGATE
+    spellings with valid nonempty argument structure. This workbook layer adds
+    ordinary inspectable-cell context and retains aggregate error-class counts,
+    never formula text, literal values, references, or calculated results.
+    """
+    candidates: list[tuple[CellKey, int, int, int, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        (
+            aggregate_call_count,
+            invalid_function_num_count,
+            invalid_option_count,
+            missing_required_ref2_count,
+        ) = aggregate_literal_argument_mismatch_counts(formula)
+        if not aggregate_call_count:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append(
+            (
+                location,
+                aggregate_call_count,
+                invalid_function_num_count,
+                invalid_option_count,
+                missing_required_ref2_count,
+            )
+        )
+    return tuple(candidates)
+
+
 def _range_intersects_array_territory(
     snapshot: WorkbookSnapshot,
     *,
@@ -1664,7 +1717,8 @@ def lint_snapshot(
     XLOOKUP/XMATCH mode codes, direct literal ``LARGE``/``SMALL`` ranks outside
     static-array capacity, impossible direct literal ``LEFT``/``RIGHT``/``MID``/
     ``FIND``/``SEARCH`` arguments, direct literal zero divisors, direct static
-    ``SUM`` argument-range overlaps, direct and multi-cell static circular
+    ``SUM`` argument-range overlaps, direct literal ``AGGREGATE`` argument
+    errors, direct and multi-cell static circular
     references while iteration is disabled, an explicit broken reference
     operand, and saved broken-reference, division-by-zero, or
     numeric-error, name-error, or value-error results. It never evaluates
@@ -1868,6 +1922,27 @@ def lint_snapshot(
         ),
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
+    aggregate_literal_argument_candidates = _aggregate_literal_argument_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=(
+            len(conditional_aggregate_candidates)
+            + len(sumproduct_candidates)
+            + len(mmult_candidates)
+            + len(lookup_candidates)
+            + len(choose_candidates)
+            + len(randbetween_candidates)
+            + len(subtotal_candidates)
+            + len(index_candidates)
+            + len(approximate_lookup_candidates)
+            + len(modern_lookup_mode_candidates)
+            + len(large_small_rank_candidates)
+            + len(text_literal_argument_candidates)
+            + len(direct_zero_divisor_candidates)
+            + len(direct_sum_overlap_candidates)
+        ),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
     structural_formula_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
@@ -1902,6 +1977,9 @@ def lint_snapshot(
     )
     structural_formula_locations.update(
         location for location, _, _ in direct_sum_overlap_candidates
+    )
+    structural_formula_locations.update(
+        location for location, _, _, _, _ in aggregate_literal_argument_candidates
     )
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
@@ -1994,6 +2072,7 @@ def lint_snapshot(
                     + len(text_literal_argument_candidates)
                     + len(direct_zero_divisor_candidates)
                     + len(direct_sum_overlap_candidates)
+                    + len(aggregate_literal_argument_candidates)
                     >= max_formula_pattern_findings
                 ):
                     raise FormulaFenceError(
@@ -2372,6 +2451,39 @@ def lint_snapshot(
                         overlapping_direct_range_pair_count
                     ),
                     "evidence_scope": "sum_direct_a1_range_overlap",
+                },
+            )
+        )
+
+    for (
+        location,
+        aggregate_call_count,
+        invalid_function_num_count,
+        invalid_option_count,
+        missing_required_ref2_count,
+    ) in aggregate_literal_argument_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF111",
+                severity="high",
+                message=(
+                    "An AGGREGATE call uses an unsupported direct literal function "
+                    "number or option, or omits a required second reference."
+                ),
+                location=location,
+                details={
+                    "aggregate_call_count": aggregate_call_count,
+                    "unsupported_literal_function_num_count": (
+                        invalid_function_num_count
+                    ),
+                    "unsupported_literal_option_count": invalid_option_count,
+                    "missing_required_ref2_count": missing_required_ref2_count,
+                    "evidence_scope": "aggregate_direct_literal_codes_and_ref2_arity",
                 },
             )
         )

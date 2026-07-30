@@ -6716,6 +6716,33 @@ def lint_to_markdown(
                     verb="shows" if pair_count == 1 else "show",
                 )
             )
+    aggregate_literal_argument_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF111"
+    ]
+    if aggregate_literal_argument_evidence:
+        lines.extend(["## AGGREGATE literal-argument evidence", ""])
+        for location, evidence in aggregate_literal_argument_evidence:
+            call_count = evidence["aggregate_call_count"]
+            function_num_count = evidence["unsupported_literal_function_num_count"]
+            option_count = evidence["unsupported_literal_option_count"]
+            missing_ref2_count = evidence["missing_required_ref2_count"]
+            lines.append(
+                "- {location}: {call_count} AGGREGATE {call_noun} have unsupported "
+                "direct literal function numbers or options, or omit required second "
+                "references ({function_num_count} function-number, {option_count} "
+                "option, {missing_ref2_count} ref2 {error_noun})."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    call_count=_markdown_escape(call_count),
+                    call_noun="call" if call_count == 1 else "calls",
+                    function_num_count=_markdown_escape(function_num_count),
+                    option_count=_markdown_escape(option_count),
+                    missing_ref2_count=_markdown_escape(missing_ref2_count),
+                    error_noun="error" if missing_ref2_count == 1 else "errors",
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6889,6 +6916,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF110": (
             "A SUM call uses direct static ranges that overlap, so at least one "
             "cell is included more than once."
+        ),
+        "FF111": (
+            "An AGGREGATE call uses an unsupported direct literal function number "
+            "or option, or omits a required second reference."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

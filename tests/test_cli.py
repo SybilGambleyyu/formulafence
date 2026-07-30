@@ -357,6 +357,18 @@ def test_lint_subtotal_literal_function_num_mismatch_is_high(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
 
 
+def test_lint_aggregate_literal_argument_mismatch_is_high(tmp_path) -> None:
+    workbook_path = tmp_path / "aggregate-literal-argument.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["B2"] = "=AGGREGATE(14,6,C2)"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
+
+
 def test_lint_index_literal_position_mismatch_is_high(tmp_path) -> None:
     workbook_path = tmp_path / "index-literal-position.xlsx"
     workbook = Workbook()

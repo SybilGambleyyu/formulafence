@@ -72,6 +72,17 @@ financial correctness or replace model review.
   boundary. It emits only a location plus aggregate qualifying-call and
   overlapping-pair counts; formulas, range spellings, source sheets, and values
   remain private.
+  Its `AGGREGATE` literal-argument signal accepts only native spelling
+  (optionally with `@`) plus the exact OOXML `_xlfn.AGGREGATE` serialization,
+  with three through 255 nonempty arguments. It inspects only direct signed
+  decimal integers in function-number and option positions, then reports a
+  function number outside 1–19, an option outside 0–7, or a direct 14–19
+  function number with only the first reference. It neither reads references
+  or values nor calculates a formula. Computed, reference, decimal/scientific,
+  array, malformed, explicit-broken-reference, arbitrary namespace, and all
+  array territory stay outside the boundary. It emits only a location plus
+  aggregate error-class counts; formulas, literal values, and references remain
+  private.
   Its `MMULT` matrix-dimension signal accepts only the unqualified native
   spelling (optionally with `@`) with exactly two comma-separated arguments,
   each one bounded, internal direct A1 cell/range or whole-column reference.
@@ -175,14 +186,16 @@ financial correctness or replace model review.
   inverted-literal-bound counts, `SUBTOTAL` unsupported-literal-function-code
   counts, `INDEX` out-of-range-literal-index counts, approximate-lookup
   unsorted-direct-numeric-vector counts, XLOOKUP/XMATCH unsupported-literal-
-  mode counts, direct-SUM overlapping-pair and qualifying-call counts, direct-
+  mode counts, direct-SUM overlapping-pair and qualifying-call counts,
+  AGGREGATE literal-argument error-class counts, direct-
   or multi-cell-
   static scope, and a multi-cell component size, never formula text, cell
   values, cached results, ignored-error target ranges, direct conditional-
   aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup ranges, `CHOOSE` values,
   `RANDBETWEEN` literal values, `SUBTOTAL` function-code or reference material,
   `INDEX` position values or direct array ranges, approximate-lookup key values
-  or table ranges, direct-SUM range spellings or values, Table identities, or
+  or table ranges, AGGREGATE literal values or references, direct-SUM range
+  spellings or values, Table identities, or
   Table master formulas.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX
   callbacks, DDE, external links, Power Query, Power Pivot/DAX, Office Web

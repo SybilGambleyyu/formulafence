@@ -83,6 +83,14 @@ financial correctness or replace model review.
   array territory stay outside the boundary. It emits only a location plus
   aggregate error-class counts; formulas, literal values, and references remain
   private.
+  Its `MOD` literal-zero-divisor signal accepts only the unqualified native
+  spelling (optionally with `@`) with exactly two nonempty arguments and a
+  direct signed decimal integer zero divisor. It neither evaluates the number
+  argument nor reads any value. Computed, reference, decimal/scientific, array,
+  malformed, explicit-broken-reference, namespaced, and all array territory
+  stay outside the boundary. It emits only a location plus aggregate
+  zero-divisor-call count; formulas, literal values, numerators, and references
+  remain private.
   Its `MMULT` matrix-dimension signal accepts only the unqualified native
   spelling (optionally with `@`) with exactly two comma-separated arguments,
   each one bounded, internal direct A1 cell/range or whole-column reference.
@@ -187,14 +195,16 @@ financial correctness or replace model review.
   counts, `INDEX` out-of-range-literal-index counts, approximate-lookup
   unsorted-direct-numeric-vector counts, XLOOKUP/XMATCH unsupported-literal-
   mode counts, direct-SUM overlapping-pair and qualifying-call counts,
-  AGGREGATE literal-argument error-class counts, direct-
+  AGGREGATE literal-argument error-class and native-MOD zero-divisor-call
+  counts, direct-
   or multi-cell-
   static scope, and a multi-cell component size, never formula text, cell
   values, cached results, ignored-error target ranges, direct conditional-
   aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup ranges, `CHOOSE` values,
   `RANDBETWEEN` literal values, `SUBTOTAL` function-code or reference material,
   `INDEX` position values or direct array ranges, approximate-lookup key values
-  or table ranges, AGGREGATE literal values or references, direct-SUM range
+  or table ranges, AGGREGATE literal values or references, MOD arguments,
+  direct-SUM range
   spellings or values, Table identities, or
   Table master formulas.
 - It never executes VBA, XLM macro sheets, Python-in-Excel scripts, RibbonX

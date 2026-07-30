@@ -3123,6 +3123,53 @@ def direct_zero_divisor_count(formula: str) -> int:
     return mismatch_count
 
 
+def mod_literal_zero_divisor_count(formula: str) -> int:
+    """Count direct literal zero divisors in native ``MOD`` calls.
+
+    This token-only helper recognizes only an unqualified native ``MOD`` call
+    (optionally preceded by Excel's display-only ``@``) with exactly two
+    nonempty arguments and one direct signed decimal integer zero as its
+    divisor. It neither evaluates the number argument nor inspects any cell
+    value. Computed, reference, decimal, scientific, array, malformed,
+    explicit-broken-reference, and arbitrary namespace forms stay outside the
+    contract.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return 0
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return 0
+
+    mismatch_count = 0
+    for position, token in enumerate(tokens):
+        if _unqualified_native_function_name(token) != "MOD":
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        if len(arguments) != 2 or any(
+            not any(
+                not _is_whitespace(tokens[argument_position])
+                for argument_position in range(start, end)
+            )
+            for start, end in arguments
+        ):
+            continue
+        divisor = _direct_signed_integer_literal(tokens, *arguments[1])
+        if divisor is not None and divisor[1] == "0":
+            mismatch_count += 1
+    return mismatch_count
+
+
 def index_literal_position_mismatch_count(formula: str) -> int:
     """Count provable literal-position bounds errors in native ``INDEX`` calls.
 

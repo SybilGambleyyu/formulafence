@@ -19,6 +19,7 @@ from formulafence.formulas import (
     large_small_literal_rank_mismatch_count,
     lookup_return_index_mismatches,
     mmult_dimension_mismatch_count,
+    mod_literal_zero_divisor_count,
     modern_lookup_literal_mode_mismatch_count,
     parse_external_link_indexed_defined_name_reference,
     parse_external_link_indexed_sheet_defined_name_reference,
@@ -442,6 +443,37 @@ def test_direct_zero_divisor_count_keeps_larger_or_ambiguous_forms_quiet() -> No
 
     for formula in quiet_formulas:
         assert direct_zero_divisor_count(formula) == 0
+
+
+def test_mod_literal_zero_divisor_count_finds_direct_native_calls() -> None:
+    assert mod_literal_zero_divisor_count("=MOD(A2,0)") == 1
+    assert mod_literal_zero_divisor_count("=@MOD(A2,-0)") == 1
+    assert mod_literal_zero_divisor_count("=MOD(A2, + 000)") == 1
+    assert mod_literal_zero_divisor_count("=IFERROR(MOD(A2,0)+MOD(B2,-0),0)") == 2
+    assert mod_literal_zero_divisor_count(f"=MOD(A2,{'0' * 5000})") == 1
+
+
+def test_mod_literal_zero_divisor_count_keeps_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=MOD(A2,1)",
+        "=MOD(A2,A3)",
+        "=MOD(A2,0.0)",
+        "=MOD(A2,0E0)",
+        "=MOD(A2,(0))",
+        "=MOD(A2,0^1)",
+        "=MOD(A2,0%)",
+        "=MOD(A2,--0)",
+        "=MOD(A2,+(-0))",
+        "=MOD(A2,0,1)",
+        "=MOD(A2,)",
+        "=MOD(A2,#REF!)",
+        "=Vendor.MOD(A2,0)",
+        "=_xlfn.MOD(A2,0)",
+        "=QUOTIENT(A2,0)",
+    )
+
+    for formula in quiet_formulas:
+        assert mod_literal_zero_divisor_count(formula) == 0
 
 
 def test_direct_sum_argument_reference_groups_find_qualifying_native_calls() -> None:

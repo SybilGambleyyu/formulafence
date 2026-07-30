@@ -6743,6 +6743,25 @@ def lint_to_markdown(
                     error_noun="error" if missing_ref2_count == 1 else "errors",
                 )
             )
+    mod_literal_zero_divisor_evidence = [
+        (finding["location"], finding["details"])
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF112"
+    ]
+    if mod_literal_zero_divisor_evidence:
+        lines.extend(["## MOD direct zero-divisor evidence", ""])
+        for location, evidence in mod_literal_zero_divisor_evidence:
+            divisor_count = evidence["mod_literal_zero_divisor_count"]
+            lines.append(
+                "- {location}: {divisor_count} MOD {call_noun} {verb} a direct "
+                "literal zero divisor."
+                .format(
+                    location=_markdown_code(location or "workbook"),
+                    divisor_count=_markdown_escape(divisor_count),
+                    call_noun="call" if divisor_count == 1 else "calls",
+                    verb="uses" if divisor_count == 1 else "use",
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6921,6 +6940,7 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
             "An AGGREGATE call uses an unsupported direct literal function number "
             "or option, or omits a required second reference."
         ),
+        "FF112": "A MOD call uses a direct literal zero divisor.",
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

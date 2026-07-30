@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.214.0 — 2026-07-28
+
+- Add high-severity `FF112` to `formulafence lint`: it reports an exact native
+  `MOD` call only when its required divisor argument is a direct signed decimal
+  integer zero, which Microsoft documents as a `#DIV/0!` result.
+- Keep the boundary narrow and private: calls must have exactly two nonempty
+  arguments and no explicit broken-reference operand. Computed, reference,
+  decimal/scientific, array, malformed, array-territory, and arbitrary namespace
+  forms stay quiet. A same-location `FF112` supersedes saved-result `FF106`.
+  JSON, Markdown, and SARIF retain only the affected location and aggregate
+  zero-divisor-call count, never formula text, literal values, or references.
+
 ## 0.213.0 — 2026-07-28
 
 - Add high-severity `FF111` to `formulafence lint`: it reports an exact native

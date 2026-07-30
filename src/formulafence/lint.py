@@ -26,6 +26,7 @@ from formulafence.formulas import (
     large_small_literal_rank_mismatch_count,
     lookup_return_index_mismatches,
     mmult_dimension_mismatch_count,
+    mod_literal_zero_divisor_count,
     modern_lookup_literal_mode_mismatch_count,
     parse_reference_token,
     randbetween_literal_bound_mismatch_count,
@@ -1129,6 +1130,47 @@ def _aggregate_literal_argument_candidates(
     return tuple(candidates)
 
 
+def _mod_literal_zero_divisor_candidates(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+    *,
+    existing_finding_count: int,
+    max_formula_pattern_findings: int,
+) -> tuple[tuple[CellKey, int], ...]:
+    """Return cells with a direct literal zero divisor in native ``MOD``.
+
+    The formula helper accepts only an exact native two-argument MOD call with
+    a direct signed integer zero divisor. It does not evaluate the number
+    argument or inspect any value; computed, reference, decimal, scientific,
+    array, malformed, explicit-broken-reference, and namespaced forms remain
+    outside the contract. This layer limits results to ordinary inspectable
+    formula cells outside array territory and retains only an aggregate count.
+    """
+    candidates: list[tuple[CellKey, int]] = []
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        mismatch_count = mod_literal_zero_divisor_count(formula)
+        if not mismatch_count:
+            continue
+        if (
+            existing_finding_count + len(candidates)
+            >= max_formula_pattern_findings
+        ):
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        candidates.append((location, mismatch_count))
+    return tuple(candidates)
+
+
 def _range_intersects_array_territory(
     snapshot: WorkbookSnapshot,
     *,
@@ -1943,6 +1985,28 @@ def lint_snapshot(
         ),
         max_formula_pattern_findings=max_formula_pattern_findings,
     )
+    mod_literal_zero_divisor_candidates = _mod_literal_zero_divisor_candidates(
+        snapshot,
+        array_ranges_by_sheet,
+        existing_finding_count=(
+            len(conditional_aggregate_candidates)
+            + len(sumproduct_candidates)
+            + len(mmult_candidates)
+            + len(lookup_candidates)
+            + len(choose_candidates)
+            + len(randbetween_candidates)
+            + len(subtotal_candidates)
+            + len(index_candidates)
+            + len(approximate_lookup_candidates)
+            + len(modern_lookup_mode_candidates)
+            + len(large_small_rank_candidates)
+            + len(text_literal_argument_candidates)
+            + len(direct_zero_divisor_candidates)
+            + len(direct_sum_overlap_candidates)
+            + len(aggregate_literal_argument_candidates)
+        ),
+        max_formula_pattern_findings=max_formula_pattern_findings,
+    )
     structural_formula_locations = {
         location
         for location, _, _ in conditional_aggregate_candidates
@@ -1980,6 +2044,9 @@ def lint_snapshot(
     )
     structural_formula_locations.update(
         location for location, _, _, _, _ in aggregate_literal_argument_candidates
+    )
+    structural_formula_locations.update(
+        location for location, _ in mod_literal_zero_divisor_candidates
     )
     candidates: dict[CellKey, _FormulaPatternCandidate] = {}
 
@@ -2073,6 +2140,7 @@ def lint_snapshot(
                     + len(direct_zero_divisor_candidates)
                     + len(direct_sum_overlap_candidates)
                     + len(aggregate_literal_argument_candidates)
+                    + len(mod_literal_zero_divisor_candidates)
                     >= max_formula_pattern_findings
                 ):
                     raise FormulaFenceError(
@@ -2488,6 +2556,25 @@ def lint_snapshot(
             )
         )
 
+    for location, mod_zero_divisor_count in mod_literal_zero_divisor_candidates:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF112",
+                severity="high",
+                message="A MOD call uses a direct literal zero divisor.",
+                location=location,
+                details={
+                    "mod_literal_zero_divisor_count": mod_zero_divisor_count,
+                    "evidence_scope": "mod_direct_signed_integer_zero_divisor",
+                },
+            )
+        )
+
     for location in sorted(snapshot.cells, key=_location_sort_key):
         if not _eligible_formula(snapshot, location, array_ranges_by_sheet):
             continue
@@ -2687,6 +2774,9 @@ def lint_snapshot(
     direct_zero_divisor_location_set = {
         location for location, _ in direct_zero_divisor_candidates
     }
+    direct_zero_divisor_location_set.update(
+        location for location, _ in mod_literal_zero_divisor_candidates
+    )
     for location in _saved_divide_by_zero_result_locations(snapshot):
         if location in direct_zero_divisor_location_set:
             continue

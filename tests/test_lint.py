@@ -2277,6 +2277,106 @@ def test_lint_aggregate_literal_argument_candidates_share_the_structural_cap(
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
 
 
+def test_lint_reports_mod_direct_literal_zero_divisors(tmp_path: Path) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "F2": "=IFERROR(MOD(A2,0)+@MOD(B2,-0)+MOD(C2,2),0)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF112", "high", ("Model", "F2"))]
+    assert report.findings[0].details == {
+        "mod_literal_zero_divisor_count": 2,
+        "evidence_scope": "mod_direct_signed_integer_zero_divisor",
+    }
+
+
+def test_lint_mod_literal_zero_divisor_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "A2": "=MOD(B2,1)",
+            "A3": "=MOD(B3,C3)",
+            "A4": "=MOD(B4,0.0)",
+            "A5": "=MOD(B5,0E0)",
+            "A6": "=MOD(B6,(0))",
+            "A7": "=MOD(B7,0^1)",
+            "A8": "=MOD(B8,0%)",
+            "A9": "=MOD(B9,--0)",
+            "A10": "=MOD(B10,0,1)",
+            "A11": "=MOD(B11,#REF!)",
+            "A12": "=Vendor.MOD(B12,0)",
+            "A13": "=QUOTIENT(B13,0)",
+        },
+    )
+
+    assert "FF112" not in {finding.rule_id for finding in lint_snapshot(snapshot).findings}
+
+    array_territory = _snapshot(tmp_path, {"B2": "=MOD(C2,0)"})
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF112" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_mod_literal_zero_divisor_rule_replaces_generic_outlier(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=MOD(C2,1)",
+            "B3": "=MOD(C3,0)",
+            "B4": "=MOD(C4,1)",
+            "B5": "=MOD(C5,1)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF112", "high", ("Model", "B3"))]
+
+
+def test_lint_mod_literal_zero_divisor_candidates_share_the_structural_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": "=SUM(C2:C4,C4:C6)",
+            "F2": "=MOD(C2,0)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -2580,6 +2680,13 @@ def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
             error_result="#DIV/0!",
         )
     )
+    mod_literal_zero_divisor = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "mod-literal-zero-divisor.xlsx",
+            error_formula="=MOD(Inputs!A1,-0)",
+            error_result="#DIV/0!",
+        )
+    )
     inverted_randbetween = load_snapshot(
         make_formula_cached_result_model(
             tmp_path / "inverted-randbetween.xlsx",
@@ -2611,6 +2718,10 @@ def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
         (finding.rule_id, finding.severity, finding.location)
         for finding in lint_snapshot(direct_zero_divisor).findings
     ] == [("FF105", "high", ("Report", "B5"))]
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in lint_snapshot(mod_literal_zero_divisor).findings
+    ] == [("FF112", "high", ("Report", "B5"))]
     assert [
         (finding.rule_id, finding.severity, finding.location)
         for finding in lint_snapshot(inverted_randbetween).findings
@@ -4055,6 +4166,47 @@ def test_lint_aggregate_literal_argument_renderers_keep_values_private(
                     "An AGGREGATE call uses an unsupported direct literal function "
                     "number or option, or omits a required second reference."
                 )
+            },
+        }
+    ]
+
+
+def test_lint_mod_literal_zero_divisor_renderers_keep_values_private(
+    tmp_path: Path,
+) -> None:
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Private Inputs"
+    model = workbook.create_sheet("Model")
+    model["B2"] = '=MOD(\'Private Inputs\'!$C$2,-0)+N("confidential")'
+    path = tmp_path / "private-mod-literal-zero-divisor.xlsx"
+    workbook.save(path)
+
+    report = lint_snapshot(load_snapshot(path))
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "Private Inputs" not in rendered
+        assert "$C$2" not in rendered
+        assert "confidential" not in rendered
+        assert "MOD('Private Inputs'" not in rendered
+        assert "FF112" in rendered
+    assert "## MOD direct zero-divisor evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Model!B2"
+    assert result["properties"] == {
+        "severity": "high",
+        "mod_literal_zero_divisor_count": 1,
+        "evidence_scope": "mod_direct_signed_integer_zero_divisor",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF112",
+            "name": "FF112",
+            "shortDescription": {
+                "text": "A MOD call uses a direct literal zero divisor."
             },
         }
     ]

@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Native `MOD` literal-zero-divisor lint — 2026-07-28
+
+Microsoft's [MOD reference](https://support.microsoft.com/en-us/excel/mod-function)
+defines `MOD(number, divisor)`, marks both arguments required, and states that a
+zero divisor returns `#DIV/0!`. `FF112` therefore reports only an unqualified
+native `MOD` call (optionally with `@`) with exactly two nonempty arguments and
+a direct signed decimal integer zero divisor. It neither evaluates the number
+argument nor reads a referenced value, and it deliberately leaves computed,
+reference, decimal/scientific, array, malformed, explicit-broken-reference,
+array-territory, and arbitrary namespace forms quiet.
+
+An aggregate-only raw OOXML survey of public SpreadsheetBench v0.1 streamed
+5,464 workbook artifacts and 7,865 bounded worksheet XML parts, inspecting
+709,797 ordinary stored formula cells without retaining formula material. It
+found 721 structurally valid native `MOD` calls, including 640 direct signed
+integer divisors and zero direct literal zero divisors. A separate two-stage
+production replay selected the 36 candidate workbooks containing those 721
+calls, loaded and linted every candidate through FormulaFence's ordinary safe
+reader with zero lint rejections, and emitted zero `FF112` findings. This is a
+strict-boundary false-positive check, not a claim that the public workbooks
+contain no defects. Both probes emitted aggregate counters only: no workbook
+path, formula, coordinate, reference, value, or literal spelling was retained
+or printed.
+
+A focused helper/lint/CLI/output selection passed **8 tests**. It covers native
+and `@` forms; multiple calls in one cell; integer-sign normalization; quiet
+computed, reference, decimal/scientific, array, malformed, broken-reference,
+and namespace forms; array territory; generic-outlier replacement; shared
+finding caps; saved-result deduplication; high-severity CLI gating; and
+JSON/Markdown/SARIF redaction. The release-versioned 0.214.0 source tree
+passed **1,526 tests in 99.64 seconds**. `git diff --check`, `ruff check .`,
+and `python -m compileall -q src tests` also completed cleanly.
+
 ## Direct AGGREGATE literal-argument lint — 2026-07-28
 
 Microsoft's [AGGREGATE reference](https://support.microsoft.com/en-us/excel/functions/aggregate-function)

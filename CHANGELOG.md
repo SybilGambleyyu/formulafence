@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.216.1 — 2026-08-01
+
+- Correct the README and CI-guide quick-start snippets to point to the current
+  release artifact and GitHub Action tag. The examples now install and run the
+  same FormulaFence version documented by the release notes.
+
 ## 0.216.0 — 2026-08-01
 
 - Add medium-severity `FF114` to `formulafence lint`: it emits one bounded

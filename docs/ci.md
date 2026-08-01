@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.213.0
+        uses: SybilGambleyyu/formulafence@v0.216.1
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -604,7 +604,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.213.0
+  uses: SybilGambleyyu/formulafence@v0.216.1
   with:
     baseline: models/approved
     candidate: build/models
@@ -762,7 +762,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.213.0/formulafence-0.213.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.216.1/formulafence-0.216.1-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx
